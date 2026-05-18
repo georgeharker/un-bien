@@ -37,3 +37,10 @@ adiciona o slash command `/remote-pi`. Embarca o SDK do Pi
 - Não comitar `dist/` (já no .gitignore raiz)
 - Não criptografar/descriptografar de forma custom — usar libsodium
 - Não introduzir dependência que não seja ESM-friendly
+
+## Modo orquestrado
+
+Se receber um prompt começando com `[ORCH:<task-id>]`, leia
+`../.orchestration/INSTRUCTIONS.md` antes de qualquer outra ação. Esse marker
+indica que outro agente está coordenando o trabalho e tem regras específicas
+(onde escrever resultado, não comitar, etc).
