@@ -43,3 +43,10 @@ ciphertext entre app e pi-extension. **Nunca decifra payload.**
 - Não logar conteúdo de mensagens
 - Não adicionar persistência de payload — relay é stateless
 - Não comitar `target/` (já no .gitignore raiz)
+
+## Modo orquestrado
+
+Se receber um prompt começando com `[ORCH:<task-id>]`, leia
+`../.orchestration/INSTRUCTIONS.md` antes de qualquer outra ação. Esse marker
+indica que outro agente está coordenando o trabalho e tem regras específicas
+(onde escrever resultado, não comitar, etc).
