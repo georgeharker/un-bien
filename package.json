@@ -1,0 +1,37 @@
+{
+  "name": "pi-extension",
+  "version": "0.1.0",
+  "description": "Remote Pi — extensão para o Pi coding agent com slash command /remote-pi",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "dev": "tsx src/index.ts"
+  },
+  "keywords": [
+    "pi",
+    "remote-control",
+    "coding-agent"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "^11.1.2",
+      "onFail": "download"
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^25.8.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.22.0",
+    "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "@mariozechner/pi-coding-agent": "^0.73.1",
+    "ws": "^8.20.1"
+  }
+}
