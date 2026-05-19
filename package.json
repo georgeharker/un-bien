@@ -8,7 +8,9 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "test": "vitest run",
+    "pi": "tsc && REMOTE_PI_RELAY=ws://192.168.1.50:3000 pi --no-extensions -e $(pwd)/dist/index.js"
   },
   "keywords": [
     "pi",
@@ -24,14 +26,26 @@
       "onFail": "download"
     }
   },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@google/genai",
+      "esbuild",
+      "koffi",
+      "protobufjs"
+    ]
+  },
   "devDependencies": {
     "@types/node": "^25.8.0",
     "@types/ws": "^8.18.1",
     "tsx": "^4.22.0",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
   },
   "dependencies": {
     "@mariozechner/pi-coding-agent": "^0.73.1",
+    "@noble/ed25519": "^3.1.0",
+    "keytar": "^7.9.0",
+    "qrcode-terminal": "^0.12.0",
     "ws": "^8.20.1"
   }
 }

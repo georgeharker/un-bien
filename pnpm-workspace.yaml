@@ -1,0 +1,6 @@
+allowBuilds:
+  '@google/genai': true
+  esbuild: true
+  keytar: true
+  koffi: true
+  protobufjs: true
