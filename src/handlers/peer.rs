@@ -12,9 +12,14 @@ use crate::auth::challenge::{
     challenge_line, gen_nonce, parse_hello, verify_auth, HELLO_TIMEOUT_MS,
 };
 use crate::peers::registry::PeerRegistry;
+use crate::presence::PresenceManager;
 use crate::protocol::outer::{OuterEnvelope, parse_line};
 
-pub async fn handle_peer(stream: TcpStream, registry: Arc<PeerRegistry>) {
+pub async fn handle_peer(
+    stream: TcpStream,
+    registry: Arc<PeerRegistry>,
+    presence: Arc<PresenceManager>,
+) {
     let peer_addr = stream
         .peer_addr()
         .map(|a| a.to_string())
@@ -86,7 +91,7 @@ pub async fn handle_peer(stream: TcpStream, registry: Arc<PeerRegistry>) {
     info!(peer = %peer_short, addr = %peer_addr, "authenticated");
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
-    let conn_id = registry.register(peer_id.clone(), tx);
+    let conn_id = registry.register(peer_id.clone(), tx).await;
 
     // ── 4. Routing loop ───────────────────────────────────────────────────
     loop {
@@ -102,6 +107,60 @@ pub async fn handle_peer(stream: TcpStream, registry: Arc<PeerRegistry>) {
                             Ok(t) => t.to_string(),
                             Err(_) => continue, // binary/ping — ignore
                         };
+
+                        // Parse as JSON to check for presence control frames.
+                        let frame: serde_json::Value = match serde_json::from_str(&text) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                warn!(peer = %peer_short, err = %e, "invalid json, dropping");
+                                continue;
+                            }
+                        };
+
+                        // Frames with a top-level "type" are handled by the relay itself.
+                        if let Some(t) = frame.get("type").and_then(|v| v.as_str()) {
+                            let peers: Vec<String> = frame
+                                .get("peers")
+                                .and_then(|v| v.as_array())
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|v| v.as_str().map(String::from))
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+
+                            match t {
+                                "subscribe_presence" => {
+                                    presence.subscribe(peer_id.clone(), peers).await;
+                                }
+                                "unsubscribe_presence" => {
+                                    presence.unsubscribe(&peer_id, peers).await;
+                                }
+                                "presence_check" => {
+                                    let states = presence
+                                        .snapshot(&peers, |p| registry.is_online(p))
+                                        .await;
+                                    let resp = serde_json::json!({
+                                        "type": "presence",
+                                        "states": states,
+                                    })
+                                    .to_string();
+                                    if sink.send(Message::text(resp)).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                _ => {
+                                    warn!(
+                                        peer = %peer_short,
+                                        frame_type = %t,
+                                        "unknown control frame type, dropping"
+                                    );
+                                }
+                            }
+                            continue; // do not fall through to envelope path
+                        }
+
+                        // No "type" field → treat as outer envelope (opaque routing).
                         match parse_line(&text) {
                             Err(e) => {
                                 warn!(peer = %peer_short, err = %e, "invalid envelope, dropping");
@@ -109,9 +168,8 @@ pub async fn handle_peer(stream: TcpStream, registry: Arc<PeerRegistry>) {
                             Ok(env) => {
                                 let ct_len = env.ct.len();
                                 let dest = env.peer;
-                                let dest_tail = dest[dest.len().saturating_sub(8)..].to_string();
-                                // Rewrite peer = sender so the recipient knows who sent it.
-                                // Semantics (per protocol.md): outbound peer = dest, inbound peer = sender.
+                                let dest_tail =
+                                    dest[dest.len().saturating_sub(8)..].to_string();
                                 let rewritten = OuterEnvelope {
                                     peer: peer_id.clone(),
                                     ct: env.ct,
@@ -144,6 +202,6 @@ pub async fn handle_peer(stream: TcpStream, registry: Arc<PeerRegistry>) {
         }
     }
 
-    registry.unregister(&peer_id, conn_id);
+    registry.unregister(&peer_id, conn_id).await;
     info!(peer = %peer_short, addr = %peer_addr, "disconnected");
 }
