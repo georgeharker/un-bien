@@ -1,6 +1,10 @@
-import type { PeerChannel } from "../session/agent_bridge.js";
 import type { ClientMessage, ServerMessage } from "../protocol/types.js";
 import type { RelayClient } from "./relay_client.js";
+
+/** Sink for ServerMessage outbound to the remote app. */
+export interface PeerChannel {
+  send(msg: ServerMessage): void;
+}
 
 /**
  * Outer envelope shape forwarded by the relay.

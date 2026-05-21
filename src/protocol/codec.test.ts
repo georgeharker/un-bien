@@ -10,19 +10,23 @@ const fixtureDir = fileURLToPath(
 const SERVER_TYPE_FILES = new Set([
   "pair_ok.jsonl",
   "pair_error.jsonl",
+  "user_input.jsonl",
   "agent_stream.jsonl",
+  "agent_message.jsonl",
   "tool_request.jsonl",
   "tool_result.jsonl",
   "error.jsonl",
   "cancelled.jsonl",
   "pong.jsonl",
+  "bye.jsonl",
+  "session_history.jsonl",
 ]);
 
 describe("fixtures", () => {
   const files = readdirSync(fixtureDir).filter((f) => f.endsWith(".jsonl"));
 
-  test("13 fixture files present", () => {
-    expect(files).toHaveLength(13);
+  test("24 fixture files present", () => {
+    expect(files).toHaveLength(24);
   });
 
   for (const file of files) {

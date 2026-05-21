@@ -3,13 +3,17 @@ import type { ClientMessage, ServerMessage } from "./types.js";
 const SERVER_TYPES = new Set<ServerMessage["type"]>([
   "pair_ok",
   "pair_error",
+  "user_input",
   "agent_chunk",
   "agent_done",
+  "agent_message",
   "tool_request",
   "tool_result",
   "error",
   "cancelled",
   "pong",
+  "bye",
+  "session_history",
 ]);
 
 export class DecodeError extends Error {
