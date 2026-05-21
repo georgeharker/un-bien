@@ -62,22 +62,31 @@ vi.mock("./pairing/storage.js", async (importOriginal) => {
   };
 });
 
-// ── Mock settings ─────────────────────────────────────────────────────────────
+// ── Mock config (no real fs writes) ───────────────────────────────────────────
 
 let _savedRelayUrl: string | null = null;
 const _setRelayCalls: string[] = [];
 
-vi.mock("./settings.js", async (importOriginal) => {
-  const orig = await importOriginal<typeof import("./settings.js")>();
+vi.mock("./config.js", async (importOriginal) => {
+  const orig = await importOriginal<typeof import("./config.js")>();
   return {
     ...orig,
-    getRelayUrl: vi.fn().mockImplementation(async () =>
-      _savedRelayUrl ?? orig.DEFAULT_RELAY_URL,
-    ),
-    setRelayUrl: vi.fn().mockImplementation(async (url: string) => {
-      _setRelayCalls.push(url);
-      _savedRelayUrl = url;
+    loadConfig: vi.fn().mockImplementation(() => ({
+      ...(_savedRelayUrl ? { relay: _savedRelayUrl } : {}),
+    })),
+    saveConfig: vi.fn().mockImplementation((patch: { relay?: string }) => {
+      _setRelayCalls.push(patch.relay ?? "");
+      if (patch.relay !== undefined) _savedRelayUrl = patch.relay;
     }),
+    resolveRelayUrl: vi.fn().mockImplementation(() => {
+      const env = process.env["REMOTE_PI_RELAY"];
+      if (env && env.length > 0) return { url: env, source: "env" as const };
+      if (_savedRelayUrl && _savedRelayUrl.length > 0) {
+        return { url: _savedRelayUrl, source: "config" as const };
+      }
+      return { url: orig.kDefaultRelayUrl, source: "default" as const };
+    }),
+    // isValidRelayUrl + kDefaultRelayUrl come from orig (...spread)
   };
 });
 
@@ -178,7 +187,7 @@ describe("extension default export", () => {
     expect(typeof extension).toBe("function");
   });
 
-  test("registers all 7 commands", () => {
+  test("registers all 8 commands", () => {
     const { pi, registeredCommands } = makeMockPi();
     (extension as ExtensionFactory)(pi);
     expect(registeredCommands).toContain("remote-pi");
@@ -187,13 +196,14 @@ describe("extension default export", () => {
     expect(registeredCommands).toContain("remote-pi stop");
     expect(registeredCommands).toContain("remote-pi list");
     expect(registeredCommands).toContain("remote-pi revoke");
-    expect(registeredCommands).toContain("remote-pi add-relay");
+    expect(registeredCommands).toContain("remote-pi set-relay");
+    expect(registeredCommands).toContain("remote-pi config");
   });
 
-  test("registers exactly 7 commands", () => {
+  test("registers exactly 8 commands", () => {
     const { pi, registeredCommands } = makeMockPi();
     (extension as ExtensionFactory)(pi);
-    expect(registeredCommands).toHaveLength(7);
+    expect(registeredCommands).toHaveLength(8);
   });
 });
 
@@ -883,77 +893,130 @@ describe("tool visibility", () => {
   });
 });
 
-// ── /remote-pi add-relay ──────────────────────────────────────────────────────
+// ── /remote-pi set-relay + /remote-pi config ──────────────────────────────────
 
-describe("/remote-pi add-relay", () => {
+describe("/remote-pi set-relay + config", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     _savedRelayUrl = null;
     _setRelayCalls.length = 0;
+    delete process.env["REMOTE_PI_RELAY"];
     relayRef.current = null;
     const stop = captureHandler("remote-pi stop");
     await stop("", makeMockCtx());
   });
 
-  test("empty arg → usage warning, nothing saved", async () => {
-    const addRelay = captureHandler("remote-pi add-relay");
+  test("set-relay empty arg → usage warning, nothing saved", async () => {
+    const setRelay = captureHandler("remote-pi set-relay");
     const ctx = makeMockCtx();
-    await addRelay("", ctx);
+    await setRelay("", ctx);
 
     expect(ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("Usage: /remote-pi add-relay"),
+      expect.stringContaining("Usage: /remote-pi set-relay"),
       "warning",
     );
     expect(_setRelayCalls).toHaveLength(0);
   });
 
-  test("invalid URL (no ws scheme) → validation warning", async () => {
-    const addRelay = captureHandler("remote-pi add-relay");
+  test("set-relay rejects http:// scheme", async () => {
+    const setRelay = captureHandler("remote-pi set-relay");
     const ctx = makeMockCtx();
-    await addRelay("http://foo:3000", ctx);
+    await setRelay("http://foo:3000", ctx);
 
     expect(ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("Invalid relay URL"),
-      "warning",
+      expect.stringContaining("Invalid URL"),
+      "error",
     );
     expect(_setRelayCalls).toHaveLength(0);
   });
 
-  test("malformed URL → validation warning", async () => {
-    const addRelay = captureHandler("remote-pi add-relay");
+  test("set-relay rejects malformed URL", async () => {
+    const setRelay = captureHandler("remote-pi set-relay");
     const ctx = makeMockCtx();
-    await addRelay("not a url at all", ctx);
+    await setRelay("not a url at all", ctx);
 
     expect(ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("Invalid relay URL"),
-      "warning",
+      expect.stringContaining("Invalid URL"),
+      "error",
     );
     expect(_setRelayCalls).toHaveLength(0);
   });
 
-  test("valid ws:// URL → setRelayUrl called + success notify", async () => {
-    const addRelay = captureHandler("remote-pi add-relay");
+  test("set-relay persists ws:// URL via saveConfig", async () => {
+    const setRelay = captureHandler("remote-pi set-relay");
     const ctx = makeMockCtx();
-    await addRelay("ws://192.168.1.10:3000", ctx);
+    await setRelay("ws://192.168.1.10:3000", ctx);
 
     expect(_setRelayCalls).toEqual(["ws://192.168.1.10:3000"]);
     expect(ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("Relay saved: ws://192.168.1.10:3000"),
+      expect.stringContaining("Relay set to ws://192.168.1.10:3000"),
       "info",
     );
   });
 
-  test("valid wss:// URL is accepted", async () => {
-    const addRelay = captureHandler("remote-pi add-relay");
+  test("set-relay accepts wss://", async () => {
+    const setRelay = captureHandler("remote-pi set-relay");
     const ctx = makeMockCtx();
-    await addRelay("wss://relay.example.com", ctx);
+    await setRelay("wss://relay.example.com", ctx);
 
     expect(_setRelayCalls).toEqual(["wss://relay.example.com"]);
   });
 
+  test("resolveRelayUrl: env > config > default", async () => {
+    const cfg = await import("./config.js");
+    const { resolveRelayUrl, kDefaultRelayUrl } = cfg;
+
+    // 1) Nothing set → default
+    expect(resolveRelayUrl()).toEqual({ url: kDefaultRelayUrl, source: "default" });
+
+    // 2) Config set, no env → config
+    _savedRelayUrl = "ws://config.test";
+    expect(resolveRelayUrl()).toEqual({ url: "ws://config.test", source: "config" });
+
+    // 3) Env set → env wins over config
+    process.env["REMOTE_PI_RELAY"] = "wss://env.test";
+    expect(resolveRelayUrl()).toEqual({ url: "wss://env.test", source: "env" });
+    delete process.env["REMOTE_PI_RELAY"];
+  });
+
+  test("/remote-pi config shows effective URL + source (config)", async () => {
+    const setRelay = captureHandler("remote-pi set-relay");
+    await setRelay("ws://10.0.0.5:4000", makeMockCtx());
+
+    const config = captureHandler("remote-pi config");
+    const ctx = makeMockCtx();
+    await config("", ctx);
+
+    const text = (ctx.ui.notify.mock.calls[0]![0]) as string;
+    expect(text).toContain("Relay: ws://10.0.0.5:4000");
+    expect(text).toContain("Source: config");
+  });
+
+  test("/remote-pi config shows default source when nothing set", async () => {
+    const config = captureHandler("remote-pi config");
+    const ctx = makeMockCtx();
+    await config("", ctx);
+
+    const text = (ctx.ui.notify.mock.calls[0]![0]) as string;
+    expect(text).toContain("Source: default");
+    expect(text).toContain("wss://relay.remote-pi.dev");
+  });
+
+  test("/remote-pi config shows env source when REMOTE_PI_RELAY set", async () => {
+    process.env["REMOTE_PI_RELAY"] = "wss://from-env.test";
+    const config = captureHandler("remote-pi config");
+    const ctx = makeMockCtx();
+    await config("", ctx);
+
+    const text = (ctx.ui.notify.mock.calls[0]![0]) as string;
+    expect(text).toContain("Source: env");
+    expect(text).toContain("wss://from-env.test");
+    delete process.env["REMOTE_PI_RELAY"];
+  });
+
   test("saved URL is used by _cmdStart on next connect", async () => {
-    const addRelay = captureHandler("remote-pi add-relay");
-    await addRelay("ws://10.0.0.5:4000", makeMockCtx());
+    const setRelay = captureHandler("remote-pi set-relay");
+    await setRelay("ws://10.0.0.5:4000", makeMockCtx());
 
     const start = captureHandler("remote-pi start");
     const ctx = makeMockCtx();
@@ -964,6 +1027,28 @@ describe("/remote-pi add-relay", () => {
       expect.stringContaining("ws://10.0.0.5:4000"),
       "info",
     );
+    // Also surfaces source in the connect notify
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("source: config"),
+      "info",
+    );
+  });
+});
+
+// ── QR no longer carries `r` (relay URL) ──────────────────────────────────────
+
+describe("QR payload (no r field)", () => {
+  test("buildQRUri produces URI with t + epk + n only", async () => {
+    const { buildQRUri } = await import("./pairing/qr.js");
+    const epk = Buffer.alloc(32, 0x42);
+    const uri = buildQRUri("token-abc", epk, "feature/x");
+    expect(uri.startsWith("remotepi://pair?")).toBe(true);
+    const url = new URL(uri.replace("remotepi:", "https:"));
+    expect(url.searchParams.get("t")).toBe("token-abc");
+    expect(url.searchParams.get("epk")).toBeTruthy();
+    expect(url.searchParams.get("n")).toBe("feature/x");
+    expect(url.searchParams.get("r")).toBeNull();   // ← key assertion
+    expect(uri).not.toContain("r=");
   });
 });
 

@@ -1,9 +1,5 @@
-import { execSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import qrTerminal from "qrcode-terminal";
-
-const QR_TMP = "/tmp/remote-pi-qr.txt";
 
 const TOKEN_TTL_MS = 60_000;
 
@@ -56,38 +52,29 @@ export const qrSession = new QRSession();
 export function buildQRUri(
   token: string,
   longtermEdPk: Uint8Array, // Ed25519 — only peer ID after E2E rollback
-  relayUrl: string,
   sessionName: string,
 ): string {
+  // `r` (relay URL) removed in plano 14 — relay now comes from app config /
+  // pi-ext env|config|default chain. Keeps QR ~30-50 chars shorter.
   const epkB64 = Buffer.from(longtermEdPk).toString("base64url");
   const params = new URLSearchParams({
     t: token,
     epk: epkB64,
-    r: relayUrl,
     n: sessionName.slice(0, 80),
   });
   return `remotepi://pair?${params.toString()}`;
 }
 
+/**
+ * Renders the QR + URI in the Pi TUI's output pane via stderr. `ctx.ui.notify`
+ * collapses multi-line content into a single toast, so for ASCII art we need
+ * the raw stderr capture that the Pi TUI exposes as scrollable log. Post
+ * plano 14 the QR carries only `t/epk/n`, fits comfortably in the panel
+ * without needing a separate Terminal window.
+ */
 export function displayQR(uri: string): void {
   qrTerminal.generate(uri, { small: true }, (qrcode) => {
-    const content = `\n📱 Scan to pair:\n\n${qrcode}\n${uri}\n`;
-
-    // Write to tmp file and open a dedicated Terminal window so the QR
-    // is never clipped by the Pi TUI panel.
-    try {
-      writeFileSync(QR_TMP, content, "utf8");
-      execSync(
-        `osascript -e 'tell application "Terminal" to do script "printf \\"\\\\033[2J\\\\033[H\\"; cat ${QR_TMP}; echo"'`,
-        { stdio: "ignore" },
-      );
-    } catch {
-      // Fallback: write to stderr (may be clipped in Pi TUI)
-      process.stderr.write(content);
-    }
-
-    // Always print the URI to stderr so it's accessible in the Pi panel
-    process.stderr.write(`\n📱 QR: ${uri}\n`);
+    process.stderr.write(`\n📱 Scan to pair:\n\n${qrcode}\n${uri}\n`);
   });
 }
 
@@ -98,7 +85,6 @@ export function displayQR(uri: string): void {
  */
 export function startQRRotation(
   longtermEdPk: Uint8Array,
-  relayUrl: string,
   sessionName: string,
 ): () => void {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -107,7 +93,7 @@ export function startQRRotation(
   const rotate = () => {
     if (stopped) return;
     const { token, expiresAt } = qrSession.issueToken();
-    const uri = buildQRUri(token, longtermEdPk, relayUrl, sessionName);
+    const uri = buildQRUri(token, longtermEdPk, sessionName);
     displayQR(uri);
     console.log(
       `⏱  Renews at ${new Date(expiresAt).toLocaleTimeString()} — waiting for scan…`,

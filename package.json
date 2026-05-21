@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
-    "pi": "tsc && REMOTE_PI_RELAY=ws://192.168.1.50:3000 pi --no-extensions -e $(pwd)/dist/index.js"
+    "pi": "tsc && REMOTE_PI_RELAY=ws://192.168.31.240:3000 pi --no-extensions -e $(pwd)/dist/index.js"
   },
   "keywords": [
     "pi",

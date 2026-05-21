@@ -18,6 +18,26 @@ adiciona o slash command `/remote-pi`. Embarca o SDK do Pi
 - `pnpm build` — `tsc`, gera `dist/`
 - `pnpm dev` — `tsx src/index.ts`, executa direto sem build
 
+## Configuração do relay
+
+Ordem de resolução (precedência):
+
+1. `process.env.REMOTE_PI_RELAY` — escape hatch pra CI/ops
+2. `~/.pi/remote/config.json` (`{ "relay": "..." }`) — persistido via
+   `/remote-pi set-relay <url>`
+3. `kDefaultRelayUrl` (`wss://relay.remote-pi.dev`) — produção
+
+Slash commands:
+
+- `/remote-pi set-relay <ws://… | wss://…>` — grava URL em
+  `~/.pi/remote/config.json`. Validação rejeita `http://`, `https://`,
+  string vazia e URLs malformadas.
+- `/remote-pi config` — mostra a URL efetiva atual + de qual fonte vem
+  (`env`/`config`/`default`).
+
+`_cmdStart` chama `resolveRelayUrl()` e exibe o `source` no notify
+("Connecting to relay <url> (source: …)") pra QA validar.
+
 ## Dependências importantes
 
 - `@mariozechner/pi-coding-agent` — SDK do Pi (`AgentSession`, `SessionManager`, `ModelRegistry`)

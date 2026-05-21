@@ -54,11 +54,11 @@ import type {
 import { RelayClient } from "./transport/relay_client.js";
 import { PlainPeerChannel } from "./transport/peer_channel.js";
 import {
-  DEFAULT_RELAY_URL,
-  getRelayUrl,
-  setRelayUrl,
-  validateRelayUrl,
-} from "./settings.js";
+  kDefaultRelayUrl,
+  resolveRelayUrl,
+  saveConfig,
+  isValidRelayUrl,
+} from "./config.js";
 
 // ── State machine ─────────────────────────────────────────────────────────────
 
@@ -550,7 +550,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         const shortPrefix = prefix === "revoke" ? "" : prefix.slice("revoke ".length);
         return _shortidCompletions(shortPrefix, "revoke ");
       }
-      return ["start", "pair", "stop", "list", "revoke", "add-relay"]
+      return ["start", "pair", "stop", "list", "revoke", "set-relay", "config"]
         .filter((o) => o.startsWith(prefix))
         .map((o) => ({ value: o, label: o }));
     },
@@ -561,9 +561,10 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       else if (sub === "pair")              { await _cmdPair(ctx); }
       else if (sub === "stop")              { await _cmdStop(ctx); }
       else if (sub === "list")              { await _cmdList(ctx); }
+      else if (sub === "config")            { _cmdConfig(ctx); }
       else if (sub.startsWith("revoke"))    { await _cmdRevoke(sub.slice("revoke".length).trim(), ctx); }
-      else if (sub.startsWith("add-relay")) { await _cmdAddRelay(sub.slice("add-relay".length).trim(), ctx); }
-      else                                  { await _cmdStatus(ctx); }
+      else if (sub.startsWith("set-relay")) { _cmdSetRelay(sub.slice("set-relay".length).trim(), ctx); }
+      else                                  { _cmdStatus(ctx); }
     },
   });
 
@@ -576,9 +577,13 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     getArgumentCompletions: async (prefix) => _shortidCompletions(prefix),
     handler: async (args, ctx) => { _lastCtx = ctx; await _cmdRevoke(args.trim(), ctx); },
   });
-  pi.registerCommand("remote-pi add-relay", {
-    description: "Save relay URL to ~/.pi/remote/settings.json",
-    handler: async (args, ctx) => { _lastCtx = ctx; await _cmdAddRelay(args.trim(), ctx); },
+  pi.registerCommand("remote-pi set-relay", {
+    description: "Set custom relay URL (persisted in ~/.pi/remote/config.json)",
+    handler: async (args, ctx) => { _lastCtx = ctx; _cmdSetRelay(args.trim(), ctx); },
+  });
+  pi.registerCommand("remote-pi config", {
+    description: "Show effective relay URL and source",
+    handler: async (_, ctx) => { _lastCtx = ctx; _cmdConfig(ctx); },
   });
 };
 
@@ -586,8 +591,8 @@ export default extension;
 
 // ── Command implementations ───────────────────────────────────────────────────
 
-async function _cmdStatus(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
-  const relayUrl = _relayUrl ?? (await getRelayUrl());
+function _cmdStatus(ctx: Pick<ExtensionContext, "ui">): void {
+  const relayUrl = _relayUrl ?? resolveRelayUrl().url;
   let msg: string;
   if      (_state === "idle")   msg = `[remote-pi] state: idle — relay=${relayUrl}. Run /remote-pi start to connect.`;
   else if (_state === "started") msg = `[remote-pi] state: started (peer=${_peerShort || "?"}, relay=${relayUrl}) — run /remote-pi pair to show QR`;
@@ -604,9 +609,9 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
   const edKp = await getOrCreateEd25519Keypair();
   _cachedEd25519 = edKp;
 
-  const relayUrl = await getRelayUrl();
+  const { url: relayUrl, source } = resolveRelayUrl();
   const myShort = Buffer.from(edKp.publicKey).toString("base64").slice(0, 8);
-  ctx.ui.notify(`[remote-pi] Connecting to relay ${relayUrl}…`, "info");
+  ctx.ui.notify(`[remote-pi] Connecting to relay ${relayUrl} (source: ${source})…`, "info");
 
   const relay = new RelayClient(relayUrl, edKp);
   try {
@@ -650,10 +655,9 @@ async function _cmdPair(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
   const edKp = _cachedEd25519!;
   const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : "";
   const sessionName = cwd.split("/").slice(-2).join("/") || "remote";
-  const relayUrl = _relayUrl ?? (await getRelayUrl());
 
   const { token, expiresAt } = qrSession.issueToken();
-  const qrUri = buildQRUri(token, edKp.publicKey, relayUrl, sessionName);
+  const qrUri = buildQRUri(token, edKp.publicKey, sessionName);
   displayQR(qrUri);
 
   ctx.ui.notify(
@@ -737,25 +741,35 @@ async function _shortidCompletions(
     .map((x) => ({ value: `${valuePrefix}${x.shortid}`, label: `${x.shortid} (${x.name})` }));
 }
 
-async function _cmdAddRelay(arg: string, ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+function _cmdSetRelay(arg: string, ctx: Pick<ExtensionContext, "ui">): void {
   const url = arg.trim();
   if (!url) {
     ctx.ui.notify(
-      `[remote-pi] Usage: /remote-pi add-relay <url> (ex: ws://192.168.1.10:3000). Default is ${DEFAULT_RELAY_URL}.`,
+      "[remote-pi] Usage: /remote-pi set-relay <ws:// or wss:// url>",
       "warning",
     );
     return;
   }
-  const v = validateRelayUrl(url);
-  if (!v.ok) {
-    ctx.ui.notify(`[remote-pi] Invalid relay URL: ${v.reason}`, "warning");
+  if (!isValidRelayUrl(url)) {
+    ctx.ui.notify(
+      `[remote-pi] Invalid URL: ${url}. Must start with ws:// or wss://`,
+      "error",
+    );
     return;
   }
-  await setRelayUrl(url);
-  const suffix = _state === "idle"
-    ? ""
-    : " (restart with /remote-pi stop then /remote-pi start to take effect)";
-  ctx.ui.notify(`[remote-pi] Relay saved: ${url}${suffix}`, "info");
+  saveConfig({ relay: url });
+  ctx.ui.notify(
+    `[remote-pi] Relay set to ${url}. Run /remote-pi start (or restart) to apply.`,
+    "info",
+  );
+}
+
+function _cmdConfig(ctx: Pick<ExtensionContext, "ui">): void {
+  const { url, source } = resolveRelayUrl();
+  ctx.ui.notify(
+    `[remote-pi] Relay: ${url}\n  Source: ${source}`,
+    "info",
+  );
 }
 
 // ── routeClientMessage ────────────────────────────────────────────────────────
@@ -940,25 +954,26 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         console.log(`Revoked: ${peer.name} (${peer.remote_epk.slice(0, 8)}…)`);
       }
     }
-  } else if (subcmd === "add-relay") {
+  } else if (subcmd === "set-relay") {
     const url = (cliArgs[0] ?? "").trim();
     if (!url) {
-      console.log(`Usage: add-relay <url> (default: ${DEFAULT_RELAY_URL})`);
+      console.log(`Usage: set-relay <url> (default: ${kDefaultRelayUrl})`);
+    } else if (!isValidRelayUrl(url)) {
+      console.log(`Invalid URL: ${url}. Must start with ws:// or wss://`);
     } else {
-      const v = validateRelayUrl(url);
-      if (!v.ok) console.log(`Invalid URL: ${v.reason}`);
-      else {
-        await setRelayUrl(url);
-        console.log(`Relay saved: ${url}`);
-      }
+      saveConfig({ relay: url });
+      console.log(`Relay set to ${url}`);
     }
+  } else if (subcmd === "config") {
+    const { url, source } = resolveRelayUrl();
+    console.log(`Relay: ${url}\n  Source: ${source}`);
   } else {
     const edKp = await getOrCreateEd25519Keypair();
     const sessionName = process.cwd().split("/").slice(-2).join("/");
-    const relayUrl = await getRelayUrl();
-    console.log(`[remote-pi] relay: ${relayUrl}`);
+    const { url: relayUrl, source } = resolveRelayUrl();
+    console.log(`[remote-pi] relay: ${relayUrl} (source: ${source})`);
     void cliArgs;
-    const stop = startQRRotation(edKp.publicKey, relayUrl, sessionName);
+    const stop = startQRRotation(edKp.publicKey, sessionName);
     process.once("SIGINT", () => { stop(); process.exit(0); });
   }
 }
