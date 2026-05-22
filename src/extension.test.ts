@@ -1026,7 +1026,7 @@ describe("/remote-pi set-relay + config", () => {
 
     const text = (ctx.ui.notify.mock.calls[0]![0]) as string;
     expect(text).toContain("Source: default");
-    expect(text).toContain("wss://relay.remote-pi.dev");
+    expect(text).toContain("wss://relay-rp1.jacobmoura.work");
   });
 
   test("/remote-pi config shows env source when REMOTE_PI_RELAY set", async () => {

@@ -5,7 +5,7 @@ import os from "node:os";
 const CONFIG_DIR = path.join(os.homedir(), ".pi", "remote");
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 
-export const kDefaultRelayUrl = "wss://relay.remote-pi.dev";
+export const kDefaultRelayUrl = "wss://relay-rp1.jacobmoura.work";
 
 export type RemotePiConfig = { relay?: string };
 
