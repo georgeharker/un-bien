@@ -51,8 +51,9 @@ import type {
   ServerMessage,
   SessionHistoryEvent,
 } from "./protocol/types.js";
-import { RelayClient } from "./transport/relay_client.js";
+import { RelayClient, RoomAlreadyOpenError } from "./transport/relay_client.js";
 import { PlainPeerChannel } from "./transport/peer_channel.js";
+import { roomIdForCwd } from "./rooms.js";
 import {
   kDefaultRelayUrl,
   resolveRelayUrl,
@@ -70,6 +71,14 @@ let _relayUrl: string | null = null;  // URL used by current _relay connection
 let _peerChannel: PlainPeerChannel | null = null;
 let _appPeerId: string | null = null;  // active app peer ID (Ed25519 pk base64 std)
 let _peerShort = "";
+let _myRoomId: string | null = null;   // this Pi's room id (derived from cwd)
+let _myRoomMeta: { name: string; cwd: string; model?: string } | null = null;
+let _currentModel: string | undefined = undefined;  // last-known model name
+
+/** Friendly model name for room_meta (plano 18). undefined when SDK has none yet. */
+function _currentModelName(): string | undefined {
+  return _currentModel;
+}
 
 // Epoch ms when the state machine entered 'started' (last /remote-pi start).
 // Used by session_sync to let the app detect Pi restarts (and force a full
@@ -102,6 +111,11 @@ export function _getMessageBufferForTest(): unknown[] {
 /** Test-only override of session started timestamp. */
 export function _setSessionStartedAtForTest(ts: number | null): void {
   _sessionStartedAt = ts;
+}
+
+/** Test-only: reset the cached model name (between tests). */
+export function _setCurrentModelForTest(name: string | undefined): void {
+  _currentModel = name;
 }
 
 // Per-turn messaging state
@@ -252,7 +266,13 @@ async function _attemptReconnect(): Promise<void> {
   const relay = new RelayClient(url, edKp);
 
   try {
-    await relay.connect();
+    // Replay the same room identity from _cmdStart. Without this the relay
+    // would log this WS as a default-room peer and the app would see a
+    // phantom "legacy session" appear (regression of plano 17 + 18).
+    await relay.connect({
+      ...(_myRoomId ? { roomId: _myRoomId } : {}),
+      ...(_myRoomMeta ? { roomMeta: _myRoomMeta } : {}),
+    });
   } catch {
     if (_getState() === "idle") return;
     _scheduleReconnect();
@@ -317,6 +337,7 @@ function _promoteToPaired(
   const channel = new PlainPeerChannel(
     relay,
     appPeerId,
+    _myRoomId ?? undefined,
     (msg) => routeClientMessage(msg, _lastCtx ?? _noopCtx),
     () => _onPeerDisconnect(),
   );
@@ -457,6 +478,11 @@ async function _handlePairRequest(
     in_reply_to: inner.id,
     session_name: sessionName,
     session_started_at: _sessionStartedAt ?? Date.now(),
+    // App uses this to address subsequent inner messages to the right room
+    // when this Pi runs alongside others with the same epk. Defensive fallback
+    // to roomIdForCwd(cwd) covers the edge case where pair_request lands
+    // before _cmdStart could set _myRoomId (shouldn't happen in practice).
+    room_id: _myRoomId ?? roomIdForCwd(cwd),
   });
 }
 
@@ -485,6 +511,28 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     const turnId = `local_${randomUUID()}`;
     _currentTurnId = turnId;
     _peerChannel.send({ type: "user_input", id: turnId, text: event.text });
+  });
+
+  // Track active model so the app can show it in the SessionTile (plano 18).
+  // SDK fires model_select on settings load + every user switch. We cache the
+  // friendly name and broadcast a room_meta_update so the relay can fan it
+  // out to subscribed apps without needing a new pair.
+  pi.on("model_select", (event) => {
+    const m = event?.model as { name?: string; id?: string } | undefined;
+    const modelName = m?.name ?? m?.id;
+    if (!modelName) return;
+    _currentModel = modelName;
+    // Keep the cached room_meta fresh so a future reconnect carries the
+    // current model in its hello (otherwise the post-reconnect hello would
+    // ship the stale model that was active at _cmdStart time).
+    if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, model: modelName };
+    if (!_relay || !_myRoomId) return;
+    console.error(`[remote-pi] model_select → ${modelName}`);
+    _relay.sendControl({
+      type: "room_meta_update",
+      room_id: _myRoomId,
+      meta: { model: modelName },
+    });
   });
 
   pi.on("message_update", (event) => {
@@ -600,7 +648,7 @@ function _cmdStatus(ctx: Pick<ExtensionContext, "ui">): void {
   ctx.ui.notify(msg, "info");
 }
 
-async function _cmdStart(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
   if (_state !== "idle") {
     ctx.ui.notify("[remote-pi] Already started.", "warning");
     return;
@@ -611,12 +659,41 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
 
   const { url: relayUrl, source } = resolveRelayUrl();
   const myShort = Buffer.from(edKp.publicKey).toString("base64").slice(0, 8);
-  ctx.ui.notify(`[remote-pi] Connecting to relay ${relayUrl} (source: ${source})…`, "info");
+
+  // Derive room from cwd so N parallel `pi -e` in different directories can
+  // share the same Ed25519 identity without colliding on the relay.
+  const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd();
+  const roomId = roomIdForCwd(cwd);
+  const sessionName = cwd.split("/").slice(-2).join("/") || "remote";
+
+  // Initial model from ctx (ExtensionContext.model is the SDK's current
+  // selection — set by user settings or last-used). May be undefined on
+  // first boot before any model_select; that's fine, room_meta omits the
+  // field then.
+  const ctxModelName = (ctx as Partial<ExtensionContext> & { model?: { name?: string; id?: string } }).model;
+  if (ctxModelName) _currentModel = ctxModelName.name ?? ctxModelName.id ?? undefined;
+
+  const roomMeta: { name: string; cwd: string; model?: string } = { name: sessionName, cwd };
+  const modelName = _currentModelName();
+  if (modelName) roomMeta.model = modelName;
+  // Persist so _attemptReconnect can replay the same hello payload — without
+  // this, reconnect issues a bare hello and the relay creates a "default room"
+  // entry that surfaces in the app as a phantom legacy session.
+  _myRoomMeta = roomMeta;
+
+  ctx.ui.notify(`[remote-pi] Connecting to relay ${relayUrl} (source: ${source}, room: ${roomId})…`, "info");
 
   const relay = new RelayClient(relayUrl, edKp);
   try {
-    await relay.connect();
+    await relay.connect({ roomId, roomMeta });
   } catch (err) {
+    if (err instanceof RoomAlreadyOpenError) {
+      ctx.ui.notify(
+        "[remote-pi] Already running in this cwd. Stop the other terminal first.",
+        "error",
+      );
+      return;
+    }
     ctx.ui.notify(`[remote-pi] relay connect failed: ${String(err)}`, "error");
     return;
   }
@@ -624,6 +701,7 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
   _relay = relay;
   _relayUrl = relayUrl;
   _peerShort = myShort;
+  _myRoomId = roomId;
   _state = "started";
   // Set _sessionStartedAt ONLY on first /remote-pi start since process boot.
   // Subsequent start cycles (after stop) preserve the original epoch so the
@@ -657,7 +735,8 @@ async function _cmdPair(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
   const sessionName = cwd.split("/").slice(-2).join("/") || "remote";
 
   const { token, expiresAt } = qrSession.issueToken();
-  const qrUri = buildQRUri(token, edKp.publicKey, sessionName);
+  const roomId = _myRoomId ?? roomIdForCwd(cwd);
+  const qrUri = buildQRUri(token, edKp.publicKey, sessionName, roomId);
   displayQR(qrUri);
 
   ctx.ui.notify(
@@ -971,9 +1050,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const edKp = await getOrCreateEd25519Keypair();
     const sessionName = process.cwd().split("/").slice(-2).join("/");
     const { url: relayUrl, source } = resolveRelayUrl();
-    console.log(`[remote-pi] relay: ${relayUrl} (source: ${source})`);
+    const roomId = roomIdForCwd(process.cwd());
+    console.log(`[remote-pi] relay: ${relayUrl} (source: ${source}), room: ${roomId}`);
     void cliArgs;
-    const stop = startQRRotation(edKp.publicKey, sessionName);
+    const stop = startQRRotation(edKp.publicKey, sessionName, roomId);
     process.once("SIGINT", () => { stop(); process.exit(0); });
   }
 }

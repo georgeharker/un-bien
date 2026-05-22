@@ -15,18 +15,30 @@ import type { ExtensionAPI, ExtensionFactory } from "@mariozechner/pi-coding-age
 const relayRef: { current: MockRelay | null } = { current: null };
 const relayInstances: MockRelay[] = [];
 // Tests can swap this to inject failing connects across all future instances.
-let _defaultConnectImpl: () => Promise<void> = async () => undefined;
+// Receives the `options` arg so tests can assert what was passed in.
+let _defaultConnectImpl: (opts?: unknown) => Promise<void> = async () => undefined;
 
 class MockRelay extends EventEmitter {
   static OPEN = 1;
   readyState = MockRelay.OPEN;
-  connect = vi.fn().mockImplementation(() => _defaultConnectImpl());
-  send    = vi.fn();
-  close   = vi.fn();
+  connect     = vi.fn().mockImplementation((opts?: unknown) => _defaultConnectImpl(opts));
+  send        = vi.fn();
+  sendControl = vi.fn();
+  close       = vi.fn();
   constructor() { super(); relayRef.current = this; relayInstances.push(this); }
 }
 
-vi.mock("./transport/relay_client.js", () => ({ RelayClient: MockRelay }));
+class MockRoomAlreadyOpenError extends Error {
+  constructor(public readonly roomId: string | undefined) {
+    super(`room ${roomId} already open`);
+    this.name = "RoomAlreadyOpenError";
+  }
+}
+
+vi.mock("./transport/relay_client.js", () => ({
+  RelayClient: MockRelay,
+  RoomAlreadyOpenError: MockRoomAlreadyOpenError,
+}));
 
 // ── Mock storage ──────────────────────────────────────────────────────────────
 
@@ -126,6 +138,7 @@ const {
   _setSessionStartedAtForTest,
   _hasPendingReconnect,
   _getMessageBufferForTest,
+  _setCurrentModelForTest,
 } = await import("./index.js");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -527,9 +540,9 @@ describe("contract fixtures: pair_*", () => {
     }
   });
 
-  test("all 24 fixture files present", () => {
+  test("all 31 fixture files present", () => {
     const files = readdirSync(fixtureDir).filter((f) => f.endsWith(".jsonl"));
-    expect(files).toHaveLength(24);
+    expect(files).toHaveLength(31);
   });
 });
 
@@ -1037,8 +1050,8 @@ describe("/remote-pi set-relay + config", () => {
 
 // ── QR no longer carries `r` (relay URL) ──────────────────────────────────────
 
-describe("QR payload (no r field)", () => {
-  test("buildQRUri produces URI with t + epk + n only", async () => {
+describe("QR payload (no r field, with rm)", () => {
+  test("buildQRUri produces URI with t + epk + n (no r)", async () => {
     const { buildQRUri } = await import("./pairing/qr.js");
     const epk = Buffer.alloc(32, 0x42);
     const uri = buildQRUri("token-abc", epk, "feature/x");
@@ -1047,8 +1060,133 @@ describe("QR payload (no r field)", () => {
     expect(url.searchParams.get("t")).toBe("token-abc");
     expect(url.searchParams.get("epk")).toBeTruthy();
     expect(url.searchParams.get("n")).toBe("feature/x");
-    expect(url.searchParams.get("r")).toBeNull();   // ← key assertion
+    expect(url.searchParams.get("r")).toBeNull();   // ← key assertion: no relay URL
     expect(uri).not.toContain("r=");
+  });
+
+  test("buildQRUri includes rm=<12-char roomId> when provided", async () => {
+    const { buildQRUri } = await import("./pairing/qr.js");
+    const epk = Buffer.alloc(32, 0x42);
+    const uri = buildQRUri("token-abc", epk, "feature/x", "aB12CD34eF56");
+    const url = new URL(uri.replace("remotepi:", "https:"));
+    expect(url.searchParams.get("rm")).toBe("aB12CD34eF56");
+    expect(url.searchParams.get("rm")).toMatch(/^[A-Za-z0-9_-]{12}$/);
+  });
+
+  test("buildQRUri without roomId omits rm field (backward-compat)", async () => {
+    const { buildQRUri } = await import("./pairing/qr.js");
+    const epk = Buffer.alloc(32, 0x42);
+    const uri = buildQRUri("token-abc", epk, "feature/x");
+    const url = new URL(uri.replace("remotepi:", "https:"));
+    expect(url.searchParams.get("rm")).toBeNull();
+  });
+});
+
+// ── rooms: _cmdStart sends roomId/roomMeta; PeerChannel includes room ────────
+
+describe("rooms wiring", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    _knownPeers.length = 0;
+    _addedPeers.length = 0;
+    _removedPeers.length = 0;
+    _consumeCalls.length = 0;
+    _setRelayCalls.length = 0;
+    _savedRelayUrl = null;
+    _tokenStatus = "ok";
+    relayRef.current = null;
+    relayInstances.length = 0;
+    _defaultConnectImpl = async () => undefined;
+    delete process.env["REMOTE_PI_RELAY"];
+    const qr = await import("./pairing/qr.js");
+    (qr.qrSession.consumeToken as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (token: string) => {
+        _consumeCalls.push(token);
+        return _tokenStatus;
+      },
+    );
+    const stop = captureHandler("remote-pi stop");
+    await stop("", makeMockCtx());
+  });
+
+  test("_cmdStart calls relay.connect with roomId and roomMeta derived from cwd", async () => {
+    const capturedOpts: unknown[] = [];
+    _defaultConnectImpl = async (opts?: unknown) => {
+      capturedOpts.push(opts);
+    };
+
+    const start = captureHandler("remote-pi start");
+    await start("", makeMockCtx("/tmp/remote-pi-test-room"));
+
+    expect(capturedOpts).toHaveLength(1);
+    const opts = capturedOpts[0] as { roomId?: string; roomMeta?: { name: string; cwd: string } };
+    expect(opts.roomId).toBeTruthy();
+    expect(opts.roomId).toMatch(/^[A-Za-z0-9_-]{12}$/);
+    expect(opts.roomMeta?.cwd).toBe("/tmp/remote-pi-test-room");
+    expect(opts.roomMeta?.name).toContain("remote-pi-test-room");
+  });
+
+  test("_cmdStart with different cwds uses different roomIds", async () => {
+    const capturedOpts: Array<{ roomId?: string }> = [];
+    _defaultConnectImpl = async (opts?: unknown) => {
+      capturedOpts.push(opts as { roomId?: string });
+    };
+
+    const start = captureHandler("remote-pi start");
+    await start("", makeMockCtx("/tmp/remote-pi-A"));
+
+    const stop = captureHandler("remote-pi stop");
+    await stop("", makeMockCtx());
+
+    await start("", makeMockCtx("/tmp/remote-pi-B"));
+
+    expect(capturedOpts).toHaveLength(2);
+    expect(capturedOpts[0]!.roomId).not.toBe(capturedOpts[1]!.roomId);
+  });
+
+  test("RoomAlreadyOpenError from relay → ui.notify error, state stays idle", async () => {
+    _defaultConnectImpl = async () => {
+      throw new MockRoomAlreadyOpenError("AbCdEfGhIjKl");
+    };
+
+    const start = captureHandler("remote-pi start");
+    const ctx = makeMockCtx("/tmp/remote-pi-dup");
+    await start("", ctx);
+
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("Already running in this cwd"),
+      "error",
+    );
+    expect(_getState()).toBe("idle");
+  });
+
+  test("PeerChannel outer envelope omits `room` field (defensive, until W1.A/C ready)", async () => {
+    const start = captureHandler("remote-pi start");
+    await start("", makeMockCtx("/tmp/remote-pi-room-test"));
+
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "peer-room-test",
+      ct: Buffer.from(JSON.stringify({
+        type: "pair_request", id: "req-1", token: "test-token", device_name: "Phone",
+      })).toString("base64"),
+    }));
+    await vi.waitFor(() => expect(_getState()).toBe("paired"), { timeout: 2000 });
+
+    // Trigger a channel-sent frame via ping (post-pair).
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "peer-room-test",
+      ct: Buffer.from(JSON.stringify({ type: "ping", id: "p1" })).toString("base64"),
+    }));
+    await new Promise((r) => setTimeout(r, 30));
+
+    const sent = relayRef.current!.send.mock.calls.map((c) => c[0] as string);
+    const allFrames = sent.map((line) => JSON.parse(line) as { peer: string; room?: string; ct: string });
+    const channelFrames = allFrames.filter((o) => o.peer === "peer-room-test");
+    expect(channelFrames.length).toBeGreaterThan(0);
+    // Defensive: no frame should carry `room` until downstream is ready.
+    for (const f of channelFrames) {
+      expect(f.room).toBeUndefined();
+    }
   });
 });
 
@@ -1324,6 +1462,17 @@ describe("session sync", () => {
     expect(typeof tsField).toBe("number");
     expect(tsField).toBeGreaterThanOrEqual(beforePair);
     expect(tsField).toBeLessThanOrEqual(afterPair);
+  });
+
+  test("pair_ok carries room_id so the app can address subsequent inners", async () => {
+    await _pairForTest("peer-ss-room");
+
+    const sent = relayRef.current!.send.mock.calls.map((c) => c[0] as string);
+    const pairOks = sent.map(decodeSentCt).filter((d) => d.inner.type === "pair_ok");
+    expect(pairOks).toHaveLength(1);
+    const roomId = pairOks[0]!.inner["room_id"] as unknown;
+    expect(typeof roomId).toBe("string");
+    expect(roomId as string).toMatch(/^[A-Za-z0-9_-]{12}$/);
   });
 });
 
@@ -1792,6 +1941,191 @@ describe("cumulative buffer", () => {
       // After reconnect, still preserved
       await vi.advanceTimersByTimeAsync(1_000);
       expect(_getMessageBufferForTest()).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ── model meta in room_meta + model_select hook ──────────────────────────────
+
+describe("model meta", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    _knownPeers.length = 0;
+    _addedPeers.length = 0;
+    _removedPeers.length = 0;
+    _consumeCalls.length = 0;
+    _setRelayCalls.length = 0;
+    _savedRelayUrl = null;
+    _tokenStatus = "ok";
+    relayRef.current = null;
+    relayInstances.length = 0;
+    _defaultConnectImpl = async () => undefined;
+    delete process.env["REMOTE_PI_RELAY"];
+    _setCurrentModelForTest(undefined);
+    const qr = await import("./pairing/qr.js");
+    (qr.qrSession.consumeToken as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (token: string) => {
+        _consumeCalls.push(token);
+        return _tokenStatus;
+      },
+    );
+    const stop = captureHandler("remote-pi stop");
+    await stop("", makeMockCtx());
+  });
+
+  test("hello carries `model` in room_meta when ctx.model is set", async () => {
+    const capturedOpts: Array<{ roomMeta?: { model?: string; name?: string; cwd?: string } }> = [];
+    _defaultConnectImpl = async (opts?: unknown) => {
+      capturedOpts.push(opts as { roomMeta?: { model?: string; name?: string; cwd?: string } });
+    };
+
+    const start = captureHandler("remote-pi start");
+    const ctx = {
+      ui: { notify: vi.fn() },
+      cwd: "/tmp/remote-pi-model-test",
+      abort: vi.fn(),
+      model: { id: "claude-sonnet-4-5", name: "claude-sonnet-4.5" },
+    } as unknown as ReturnType<typeof makeMockCtx>;
+    await start("", ctx);
+
+    expect(capturedOpts).toHaveLength(1);
+    expect(capturedOpts[0]!.roomMeta?.model).toBe("claude-sonnet-4.5");
+    expect(capturedOpts[0]!.roomMeta?.name).toBeTruthy();
+    expect(capturedOpts[0]!.roomMeta?.cwd).toBe("/tmp/remote-pi-model-test");
+  });
+
+  test("hello omits `model` when ctx.model is undefined (SDK didn't load any)", async () => {
+    const capturedOpts: Array<{ roomMeta?: { model?: string } }> = [];
+    _defaultConnectImpl = async (opts?: unknown) => {
+      capturedOpts.push(opts as { roomMeta?: { model?: string } });
+    };
+
+    const start = captureHandler("remote-pi start");
+    await start("", makeMockCtx("/tmp/remote-pi-no-model"));
+
+    expect(capturedOpts).toHaveLength(1);
+    expect(capturedOpts[0]!.roomMeta?.model).toBeUndefined();
+  });
+
+  test("pi.on('model_select') fires room_meta_update via relay.sendControl", async () => {
+    const start = captureHandler("remote-pi start");
+    await start("", makeMockCtx("/tmp/remote-pi-model-switch"));
+
+    const onModelSelect = captureEventHandler("model_select");
+    onModelSelect({
+      type: "model_select",
+      model: { id: "gpt-4o-2024-08-06", name: "gpt-4o" },
+    });
+
+    const sendControlCalls = relayRef.current!.sendControl.mock.calls.map((c) => c[0] as {
+      type: string;
+      room_id?: string;
+      meta?: { model?: string };
+    });
+    const updates = sendControlCalls.filter((f) => f.type === "room_meta_update");
+    expect(updates).toHaveLength(1);
+    expect(updates[0]!.meta?.model).toBe("gpt-4o");
+    expect(updates[0]!.room_id).toMatch(/^[A-Za-z0-9_-]{12}$/);
+  });
+
+  test("model_select with no model.name falls back to model.id", async () => {
+    const start = captureHandler("remote-pi start");
+    await start("", makeMockCtx("/tmp/remote-pi-model-fallback"));
+
+    const onModelSelect = captureEventHandler("model_select");
+    onModelSelect({
+      type: "model_select",
+      model: { id: "internal-fallback-id" },  // no name
+    });
+
+    const updates = relayRef.current!.sendControl.mock.calls
+      .map((c) => c[0] as { type: string; meta?: { model?: string } })
+      .filter((f) => f.type === "room_meta_update");
+    expect(updates).toHaveLength(1);
+    expect(updates[0]!.meta?.model).toBe("internal-fallback-id");
+  });
+
+  test("model_select with no model (undefined) is silently ignored", async () => {
+    const start = captureHandler("remote-pi start");
+    await start("", makeMockCtx("/tmp/remote-pi-model-noop"));
+
+    const sendControlBefore = relayRef.current!.sendControl.mock.calls.length;
+    const onModelSelect = captureEventHandler("model_select");
+    onModelSelect({ type: "model_select" });  // event arrived but model field missing
+
+    expect(relayRef.current!.sendControl.mock.calls.length).toBe(sendControlBefore);
+  });
+
+  test("reconnect replays the same room_id + room_meta from _cmdStart (no phantom 'legacy session')", async () => {
+    vi.useFakeTimers();
+    try {
+      const capturedOpts: Array<{ roomId?: string; roomMeta?: { name?: string; cwd?: string; model?: string } }> = [];
+      _defaultConnectImpl = async (opts?: unknown) => {
+        capturedOpts.push(opts as typeof capturedOpts[number]);
+      };
+
+      const start = captureHandler("remote-pi start");
+      const ctx = {
+        ui: { notify: vi.fn() },
+        cwd: "/tmp/remote-pi-reconnect-room",
+        abort: vi.fn(),
+        model: { id: "claude-sonnet-4-5", name: "claude-sonnet-4.5" },
+      } as unknown as ReturnType<typeof makeMockCtx>;
+      await start("", ctx);
+
+      expect(capturedOpts).toHaveLength(1);
+      const initialRoomId = capturedOpts[0]!.roomId!;
+      expect(capturedOpts[0]!.roomMeta?.model).toBe("claude-sonnet-4.5");
+
+      // Drop relay → reconnect path fires
+      relayInstances[0]!.emit("close");
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      // Second connect call must carry the same roomId + roomMeta (CRITICAL:
+      // without this fix the reconnect issued a bare hello and the relay
+      // bucketed it as a default-room peer.)
+      expect(capturedOpts).toHaveLength(2);
+      expect(capturedOpts[1]!.roomId).toBe(initialRoomId);
+      expect(capturedOpts[1]!.roomMeta?.cwd).toBe("/tmp/remote-pi-reconnect-room");
+      expect(capturedOpts[1]!.roomMeta?.model).toBe("claude-sonnet-4.5");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("reconnect after model_select carries the updated model in room_meta", async () => {
+    vi.useFakeTimers();
+    try {
+      const capturedOpts: Array<{ roomMeta?: { model?: string } }> = [];
+      _defaultConnectImpl = async (opts?: unknown) => {
+        capturedOpts.push(opts as { roomMeta?: { model?: string } });
+      };
+
+      const start = captureHandler("remote-pi start");
+      const ctx = {
+        ui: { notify: vi.fn() },
+        cwd: "/tmp/remote-pi-reconnect-model",
+        abort: vi.fn(),
+        model: { id: "claude-sonnet-4-5", name: "claude-sonnet-4.5" },
+      } as unknown as ReturnType<typeof makeMockCtx>;
+      await start("", ctx);
+
+      // User switches model
+      const onModelSelect = captureEventHandler("model_select");
+      onModelSelect({
+        type: "model_select",
+        model: { id: "gpt-4o-2024-08-06", name: "gpt-4o" },
+      });
+
+      // Relay drops → reconnect uses the NEW model in its hello
+      relayInstances[0]!.emit("close");
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(capturedOpts).toHaveLength(2);
+      expect(capturedOpts[0]!.roomMeta?.model).toBe("claude-sonnet-4.5");  // initial
+      expect(capturedOpts[1]!.roomMeta?.model).toBe("gpt-4o");             // post-switch
     } finally {
       vi.useRealTimers();
     }

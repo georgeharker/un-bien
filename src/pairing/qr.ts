@@ -53,6 +53,13 @@ export function buildQRUri(
   token: string,
   longtermEdPk: Uint8Array, // Ed25519 — only peer ID after E2E rollback
   sessionName: string,
+  /**
+   * Pi room id (12 chars, base64url) derived from cwd. App routes pair_request
+   * to this room so the relay delivers it to the right Pi instance among N
+   * paralelos com mesmo epk. Adicionado no fix do plano 17 (sem `rm` o app
+   * cai em room=main e o relay drops com "dest not found").
+   */
+  roomId?: string,
 ): string {
   // `r` (relay URL) removed in plano 14 — relay now comes from app config /
   // pi-ext env|config|default chain. Keeps QR ~30-50 chars shorter.
@@ -62,6 +69,7 @@ export function buildQRUri(
     epk: epkB64,
     n: sessionName.slice(0, 80),
   });
+  if (roomId) params.set("rm", roomId);
   return `remotepi://pair?${params.toString()}`;
 }
 
@@ -86,6 +94,7 @@ export function displayQR(uri: string): void {
 export function startQRRotation(
   longtermEdPk: Uint8Array,
   sessionName: string,
+  roomId?: string,
 ): () => void {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
@@ -93,7 +102,7 @@ export function startQRRotation(
   const rotate = () => {
     if (stopped) return;
     const { token, expiresAt } = qrSession.issueToken();
-    const uri = buildQRUri(token, longtermEdPk, sessionName);
+    const uri = buildQRUri(token, longtermEdPk, sessionName, roomId);
     displayQR(uri);
     console.log(
       `⏱  Renews at ${new Date(expiresAt).toLocaleTimeString()} — waiting for scan…`,

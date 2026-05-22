@@ -25,8 +25,8 @@ const SERVER_TYPE_FILES = new Set([
 describe("fixtures", () => {
   const files = readdirSync(fixtureDir).filter((f) => f.endsWith(".jsonl"));
 
-  test("24 fixture files present", () => {
-    expect(files).toHaveLength(24);
+  test("31 fixture files present", () => {
+    expect(files).toHaveLength(31);
   });
 
   for (const file of files) {

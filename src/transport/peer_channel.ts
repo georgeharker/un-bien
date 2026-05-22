@@ -8,13 +8,18 @@ export interface PeerChannel {
 
 /**
  * Outer envelope shape forwarded by the relay.
- * { "peer": "<sender_peer_id>", "ct": "<base64 JSON do inner>" }
+ * { "peer": "<sender_peer_id>", "room"?: "<room_id>", "ct": "<base64 JSON inner>" }
  *
  * Post rollback (plano 06): `ct` is base64(JSON.stringify(inner)) — no cipher,
  * no MAC. Relay continues opaque (never JSON.parses ct).
+ *
+ * `room` (plano 17): identifies which Pi room sent the envelope. Lets the
+ * relay multiplex N peers with the same Ed25519 pubkey but distinct cwds.
+ * Optional for backward-compat with single-room relays.
  */
 interface OuterEnvelope {
   peer: string;
+  room?: string;
   ct: string;
 }
 
@@ -22,10 +27,13 @@ interface OuterEnvelope {
  * Plaintext PeerChannel backed by a RelayClient WebSocket.
  *
  * Usage (after pair_request handshake completes):
- *   const channel = new PlainPeerChannel(relay, appPeerId, onMsg, onDisconnect?)
+ *   const channel = new PlainPeerChannel(relay, appPeerId, myRoomId, onMsg)
  *   channel.send(serverMessage)          // base64-encodes JSON, routes via relay
  *   // incoming relay messages destined for appPeerId are auto-decoded
  *   // and delivered via onMessage callback
+ *
+ * `myRoomId` is the *local* Pi's room id — sent on every outbound envelope
+ * so the app can correlate which Pi sent it (multi-pi support, plano 17).
  */
 export class PlainPeerChannel implements PeerChannel {
   private readonly _unsubscribe: () => void;
@@ -33,6 +41,12 @@ export class PlainPeerChannel implements PeerChannel {
   constructor(
     private readonly relay: RelayClient,
     private readonly remotePeerId: string,
+    /**
+     * This Pi's room id. Currently NOT injected in the outer envelope
+     * (defensive — relay/app not yet ready). Kept in the constructor for
+     * forward-compat so callers don't need to change again when we re-enable.
+     */
+    myRoomId: string | undefined,
     private readonly onMessage: (msg: ClientMessage) => void,
     /** Called when this specific peer connection is considered lost. */
     _onDisconnect?: () => void,
@@ -41,12 +55,17 @@ export class PlainPeerChannel implements PeerChannel {
     relay.on("message", listener);
     this._unsubscribe = () => relay.off("message", listener);
     void _onDisconnect;
+    void myRoomId;  // intentionally unused — see send() comment
   }
 
   // ── PeerChannel interface ──────────────────────────────────────────────────
 
   send(msg: ServerMessage): void {
     const ct = Buffer.from(JSON.stringify(msg)).toString("base64");
+    // NOTE: `room` removed from the outer envelope until relay (W1.A) + app
+    // (W1.C) accept the field. Multi-Pi multiplexing already works via
+    // `room_id`/`room_meta` in the WS-level `hello` — outer routing stays by
+    // `peer` alone. Re-add the field once downstream is ready.
     const outer: OuterEnvelope = { peer: this.remotePeerId, ct };
     this.relay.send(JSON.stringify(outer));
   }

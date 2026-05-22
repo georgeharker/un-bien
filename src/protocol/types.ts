@@ -51,7 +51,13 @@ export type SessionHistoryEvent =
     };
 
 export type ServerMessage =
-  | { type: "pair_ok"; in_reply_to: string; session_name: string; session_started_at: number }
+  | {
+      type: "pair_ok";
+      in_reply_to: string;
+      session_name: string;
+      session_started_at: number;
+      room_id: string;
+    }
   | { type: "pair_error"; in_reply_to: string; code: PairErrorCode; message: string }
   | { type: "user_input"; id: string; text: string }
   | { type: "agent_chunk"; in_reply_to: string; delta: string }
