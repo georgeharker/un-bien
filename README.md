@@ -57,6 +57,7 @@ party can observe your traffic.
 docker run -d \
   --name remote-pi-relay \
   -p 3000:3000 \
+  -p 3001:3001 \
   --restart unless-stopped \
   jacobmoura7/remote-pi-relay
 ```
@@ -65,20 +66,26 @@ The relay listens on port `3000` by default. Point your app and `pi-extension` t
 `ws://<your-server-ip>:3000` (or `wss://` if you put it behind a TLS-terminating
 reverse proxy such as Caddy or nginx).
 
+Port `3001` serves an HTTP health check endpoint (`GET /health → 200 OK`), used by
+Docker, load balancers, and uptime monitors.
+
 ### Environment variables
 
 | Variable | Default | Description |
 |---|---|---|
-| `REMOTEPI_RELAY_PORT` | `3000` | TCP port the relay listens on |
+| `REMOTEPI_RELAY_PORT` | `3000` | TCP port for WebSocket connections |
+| `REMOTEPI_HEALTH_PORT` | `3001` | TCP port for the HTTP health check |
 | `RUST_LOG` | _(none)_ | Log level filter — e.g. `info`, `debug`, `warn` |
 
-Example with custom port and logging:
+Example with custom ports and logging:
 
 ```bash
 docker run -d \
   --name remote-pi-relay \
   -p 8080:8080 \
+  -p 8081:8081 \
   -e REMOTEPI_RELAY_PORT=8080 \
+  -e REMOTEPI_HEALTH_PORT=8081 \
   -e RUST_LOG=info \
   --restart unless-stopped \
   jacobmoura7/remote-pi-relay

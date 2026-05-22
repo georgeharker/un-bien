@@ -5,7 +5,6 @@ FROM rust:1-slim-bookworm AS builder
 
 WORKDIR /app
 
-# Copy manifests first so dependency compilation is cached separately
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 
@@ -15,12 +14,18 @@ RUN cargo build --release
 FROM debian:bookworm-slim
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates && \
+    apt-get install -y --no-install-recommends ca-certificates curl && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/relay /usr/local/bin/relay
 
 ENV REMOTEPI_RELAY_PORT=3000
+ENV REMOTEPI_HEALTH_PORT=3001
+
 EXPOSE 3000
+EXPOSE 3001
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -sf http://localhost:${REMOTEPI_HEALTH_PORT}/health
 
 CMD ["relay"]
