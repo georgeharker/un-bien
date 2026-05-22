@@ -4,6 +4,8 @@
 > superpowers: agents that talk to each other on the same machine, and a mobile
 > app that drives Pi from your phone.
 
+**Homepage:** <https://remote-pi.jacobmoura.work>
+
 `/remote-pi` is a single slash command that wires both at once. Run it; the
 first time it asks a couple of questions and you are done.
 
@@ -14,7 +16,7 @@ first time it asks a couple of questions and you are done.
 Install the extension (one-time):
 
 ```bash
-pi install npm:@jacobmoura7/remote-pi
+pi install npm:remote-pi
 ```
 
 Then in any Pi terminal:
@@ -96,7 +98,7 @@ App downloads:
 - **App Store** — *coming soon*
 
 Until the public releases land, follow
-[the repo](https://github.com/jacobmoura7/remote-pi) for build/beta info.
+[the repo](https://github.com/jacobaraujo7/remote_pi) for build/beta info.
 
 ---
 
@@ -105,7 +107,7 @@ Until the public releases land, follow
 Requirements: Node 20+, Pi (the host coding agent).
 
 ```bash
-pi install npm:@jacobmoura7/remote-pi
+pi install npm:remote-pi
 ```
 
 The extension self-registers the `/remote-pi` slash command and deploys an
@@ -191,7 +193,7 @@ You have two options:
 
 ### Option A — Use the community relay
 
-`wss://relay.remote-pi.dev` (default). Zero setup. Good for trying things
+`wss://relay-rp1.jacobmoura.work` (default). Zero setup. Good for trying things
 out or for casual use.
 
 Caveats:
@@ -210,7 +212,7 @@ keypair authentication, layering a VPN on top means **only your devices** can
 even reach the WebSocket port — defense in depth.
 
 Quick Docker outline (see the
-[relay README](https://github.com/jacobmoura7/remote-pi/blob/main/relay/README.md#self-hosted-relay-recommended-for-privacy)
+[relay README](https://github.com/jacobaraujo7/remote_pi/blob/main/relay/README.md#self-hosted-relay-recommended-for-privacy)
 for the full setup, environment variables, and reverse-proxy guidance):
 
 ```bash
@@ -218,7 +220,7 @@ docker run -d \
   --name remote-pi-relay \
   -p 3000:3000 \
   --restart unless-stopped \
-  ghcr.io/jacobmoura7/remote-pi-relay:latest
+  ghcr.io/jacobaraujo7/remote-pi-relay:latest
 ```
 
 Bind the container to your VPN interface, terminate TLS in a reverse proxy,
@@ -237,7 +239,7 @@ order (highest precedence first):
 
 1. `REMOTE_PI_RELAY` environment variable (CI / one-off overrides)
 2. `~/.pi/remote/config.json`
-3. The built-in default (`wss://relay.remote-pi.dev`)
+3. The built-in default (`wss://relay-rp1.jacobmoura.work`)
 
 Verify the active URL and its source with:
 
@@ -372,10 +374,11 @@ other terminal first.
 
 ## Links
 
-- Source: <https://github.com/jacobmoura7/remote-pi>
+- Homepage: <https://remote-pi.jacobmoura.work>
+- Source: <https://github.com/jacobaraujo7/remote_pi>
 - Pi coding agent: <https://github.com/earendil-works/pi>
-- Relay (self-hosting guide): <https://github.com/jacobmoura7/remote-pi/blob/main/relay/README.md>
-- Issues / bugs: <https://github.com/jacobmoura7/remote-pi/issues>
+- Relay (self-hosting guide): <https://github.com/jacobaraujo7/remote_pi/blob/main/relay/README.md>
+- Issues / bugs: <https://github.com/jacobaraujo7/remote_pi/issues>
 
 ---
 

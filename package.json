@@ -1,6 +1,6 @@
 {
   "name": "remote-pi",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Mobile remote control and local agent mesh for the Pi coding agent. Pair your phone via QR over a relay, watch tool calls in real time, run multi-Pi sessions over a local Unix Domain Socket broker, and let agents talk to each other through structured request/reply.",
   "type": "module",
   "main": "dist/index.js",
@@ -10,7 +10,6 @@
     "typecheck": "tsc --noEmit",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
-    "pi": "tsc && REMOTE_PI_RELAY=ws://192.168.31.240:3000 pi --no-extensions -e $(pwd)/dist/index.js",
     "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build"
   },
   "keywords": [
@@ -29,18 +28,20 @@
     "websocket"
   ],
   "pi": {
-    "extensions": ["./dist"]
+    "extensions": [
+      "./dist"
+    ]
   },
-  "author": "Jacob Moura <jacobmoura7@github>",
+  "author": "Jacob Moura <jacobmoura7@gmail.com>",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jacobmoura7/remote-pi.git",
+    "url": "git+https://github.com/jacobaraujo7/remote_pi.git",
     "directory": "pi-extension"
   },
-  "homepage": "https://github.com/jacobmoura7/remote-pi#readme",
+  "homepage": "https://remote-pi.jacobmoura.work",
   "bugs": {
-    "url": "https://github.com/jacobmoura7/remote-pi/issues"
+    "url": "https://github.com/jacobaraujo7/remote_pi/issues"
   },
   "files": [
     "dist",
