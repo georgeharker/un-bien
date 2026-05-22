@@ -21,9 +21,10 @@ async fn main() -> anyhow::Result<()> {
     info!("relay listening on {addr}");
 
     let presence = Arc::new(relay::PresenceManager::new());
-    let registry = Arc::new(relay::PeerRegistry::new(presence.clone()));
+    let rooms = Arc::new(relay::RoomManager::new());
+    let registry = Arc::new(relay::PeerRegistry::new(presence.clone(), rooms.clone()));
 
-    relay::serve(listener, registry, presence, async {
+    relay::serve(listener, registry, presence, rooms, async {
         tokio::signal::ctrl_c()
             .await
             .expect("failed to install ctrl_c handler");

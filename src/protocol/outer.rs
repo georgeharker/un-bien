@@ -3,9 +3,16 @@
 
 use serde::{Deserialize, Serialize};
 
+fn default_room() -> String {
+    "main".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OuterEnvelope {
     pub peer: String,
+    /// Optional sub-channel (plano 17). Absent in legacy frames → "main".
+    #[serde(default = "default_room")]
+    pub room: String,
     pub ct: String, // base64 — nunca decodificado aqui
 }
 
@@ -42,7 +49,15 @@ mod tests {
         let line = r#"{"peer":"abc","ct":"AAA="}"#;
         let env = parse_line(line).unwrap();
         assert_eq!(env.peer, "abc");
+        assert_eq!(env.room, "main"); // defaults to "main" when absent
         assert_eq!(env.ct, "AAA=");
+    }
+
+    #[test]
+    fn parses_envelope_with_room() {
+        let line = r#"{"peer":"abc","room":"aB12CD34eF56","ct":"AAA="}"#;
+        let env = parse_line(line).unwrap();
+        assert_eq!(env.room, "aB12CD34eF56");
     }
 
     #[test]

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use ed25519_dalek::{Signer, SigningKey};
 use futures_util::{SinkExt, StreamExt};
-use relay::{serve, PeerRegistry, PresenceManager};
+use relay::{serve, PeerRegistry, PresenceManager, RoomManager};
 use serde_json::json;
 use tokio::net::TcpListener;
 use tokio_tungstenite::{
@@ -21,14 +21,19 @@ pub async fn start_relay() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let presence = Arc::new(PresenceManager::new());
-    let registry = Arc::new(PeerRegistry::new(presence.clone()));
-    tokio::spawn(serve(listener, registry, presence, std::future::pending::<()>()));
+    let rooms = Arc::new(RoomManager::new());
+    let registry = Arc::new(PeerRegistry::new(presence.clone(), rooms.clone()));
+    tokio::spawn(serve(listener, registry, presence, rooms, std::future::pending::<()>()));
     port
 }
 
-/// Connects to the relay and completes the full auth handshake using a caller-supplied key.
+/// Connects using a caller-supplied key and room_id, completes the full auth handshake.
 /// Returns (ws_stream, peer_id_b64).
-pub async fn connect_and_auth_with_key(port: u16, sk: &SigningKey) -> (WsStream, String) {
+pub async fn connect_and_auth_with_room(
+    port: u16,
+    sk: &SigningKey,
+    room_id: &str,
+) -> (WsStream, String) {
     let url = format!("ws://127.0.0.1:{port}");
     let (mut ws, _) = connect_async(&url).await.unwrap();
 
@@ -36,7 +41,7 @@ pub async fn connect_and_auth_with_key(port: u16, sk: &SigningKey) -> (WsStream,
     let pubkey_b64 = B64.encode(vk.to_bytes());
 
     ws.send(Message::text(
-        json!({"type": "hello", "pubkey": pubkey_b64}).to_string(),
+        json!({"type": "hello", "pubkey": pubkey_b64, "room_id": room_id}).to_string(),
     ))
     .await
     .unwrap();
@@ -54,13 +59,17 @@ pub async fn connect_and_auth_with_key(port: u16, sk: &SigningKey) -> (WsStream,
     .await
     .unwrap();
 
-    // Give server a moment to process auth and register this peer.
     tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
 
     (ws, pubkey_b64)
 }
 
-/// Connects to the relay with a fresh random key.
+/// Connects with a caller-supplied key, defaults to room "main".
+pub async fn connect_and_auth_with_key(port: u16, sk: &SigningKey) -> (WsStream, String) {
+    connect_and_auth_with_room(port, sk, "main").await
+}
+
+/// Connects with a fresh random key, defaults to room "main".
 pub async fn connect_and_auth(port: u16) -> (WsStream, String) {
     let sk = SigningKey::generate(&mut rand::thread_rng());
     connect_and_auth_with_key(port, &sk).await

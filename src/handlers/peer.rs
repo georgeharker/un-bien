@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use futures_util::{SinkExt, StreamExt};
@@ -14,11 +15,13 @@ use crate::auth::challenge::{
 use crate::peers::registry::PeerRegistry;
 use crate::presence::PresenceManager;
 use crate::protocol::outer::{OuterEnvelope, parse_line};
+use crate::rooms::{RoomManager, RoomMeta};
 
 pub async fn handle_peer(
     stream: TcpStream,
     registry: Arc<PeerRegistry>,
     presence: Arc<PresenceManager>,
+    rooms: Arc<RoomManager>,
 ) {
     let peer_addr = stream
         .peer_addr()
@@ -88,13 +91,57 @@ pub async fn handle_peer(
 
     let peer_id = B64.encode(vk.to_bytes());
     let peer_short = peer_id[peer_id.len().saturating_sub(8)..].to_string();
-    info!(peer = %peer_short, addr = %peer_addr, "authenticated");
+
+    // Extract room_id and room_meta from hello (auth handled separately above).
+    let room_meta = {
+        let hello: serde_json::Value =
+            serde_json::from_str(&hello_text).unwrap_or(serde_json::Value::Null);
+        let room_id = hello
+            .get("room_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("main")
+            .to_string();
+        let room_meta_val = hello.get("room_meta");
+        let name = room_meta_val
+            .and_then(|m| m.get("name"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let cwd = room_meta_val
+            .and_then(|m| m.get("cwd"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let model = room_meta_val
+            .and_then(|m| m.get("model"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let started_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        RoomMeta { room_id, name, cwd, model, started_at }
+    };
+    let room_id = room_meta.room_id.clone();
+
+    info!(peer = %peer_short, room = %room_id, addr = %peer_addr, "authenticated");
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
-    let conn_id = registry.register(peer_id.clone(), tx).await;
+    let conn_id = match registry.register(peer_id.clone(), room_meta, tx).await {
+        Ok(id) => id,
+        Err(()) => {
+            warn!(peer = %peer_short, room = %room_id, "room already open, rejecting");
+            let _ = sink
+                .send(Message::text(
+                    serde_json::json!({"type": "error", "code": "room_already_open"})
+                        .to_string(),
+                ))
+                .await;
+            let _ = sink.send(Message::Close(None)).await;
+            return;
+        }
+    };
 
     // ── 4. Routing loop ───────────────────────────────────────────────────
-    loop {
+    'routing: loop {
         tokio::select! {
             item = stream.next() => {
                 match item {
@@ -108,7 +155,7 @@ pub async fn handle_peer(
                             Err(_) => continue, // binary/ping — ignore
                         };
 
-                        // Parse as JSON to check for presence control frames.
+                        // Parse as JSON to check for relay control frames.
                         let frame: serde_json::Value = match serde_json::from_str(&text) {
                             Ok(v) => v,
                             Err(e) => {
@@ -130,6 +177,7 @@ pub async fn handle_peer(
                                 .unwrap_or_default();
 
                             match t {
+                                // ── presence control frames (plano 12) ──
                                 "subscribe_presence" => {
                                     presence.subscribe(peer_id.clone(), peers).await;
                                 }
@@ -149,6 +197,53 @@ pub async fn handle_peer(
                                         break;
                                     }
                                 }
+
+                                // ── rooms control frames (plano 17) ──
+                                "subscribe_rooms" => {
+                                    rooms.subscribe(peer_id.clone(), peers).await;
+                                }
+                                "unsubscribe_rooms" => {
+                                    rooms.unsubscribe(&peer_id, peers).await;
+                                }
+                                "rooms_check" => {
+                                    for target_peer in &peers {
+                                        let active_rooms = registry.rooms_of(target_peer);
+                                        let resp = serde_json::json!({
+                                            "type": "rooms",
+                                            "peer": target_peer,
+                                            "rooms": active_rooms,
+                                        })
+                                        .to_string();
+                                        if sink.send(Message::text(resp)).await.is_err() {
+                                            break 'routing;
+                                        }
+                                    }
+                                }
+
+                                // ── room meta update (plano 18) ──
+                                "room_meta_update" => {
+                                    let target_room = frame
+                                        .get("room_id")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or(&room_id)
+                                        .to_string();
+                                    let model = frame
+                                        .get("meta")
+                                        .and_then(|m| m.get("model"))
+                                        .and_then(|v| v.as_str())
+                                        .map(String::from);
+                                    if !registry
+                                        .update_room_meta(&peer_id, &target_room, model)
+                                        .await
+                                    {
+                                        warn!(
+                                            peer = %peer_short,
+                                            room = %target_room,
+                                            "room_meta_update for unknown (peer, room), dropping"
+                                        );
+                                    }
+                                }
+
                                 _ => {
                                     warn!(
                                         peer = %peer_short,
@@ -160,28 +255,32 @@ pub async fn handle_peer(
                             continue; // do not fall through to envelope path
                         }
 
-                        // No "type" field → treat as outer envelope (opaque routing).
+                        // No "type" field → outer envelope (opaque routing).
                         match parse_line(&text) {
                             Err(e) => {
                                 warn!(peer = %peer_short, err = %e, "invalid envelope, dropping");
                             }
                             Ok(env) => {
                                 let ct_len = env.ct.len();
-                                let dest = env.peer;
+                                let dest_peer = env.peer;
+                                let dest_room = env.room;
                                 let dest_tail =
-                                    dest[dest.len().saturating_sub(8)..].to_string();
+                                    dest_peer[dest_peer.len().saturating_sub(8)..].to_string();
+                                // Rewrite: recipient sees sender's peer_id + sender's room_id.
                                 let rewritten = OuterEnvelope {
                                     peer: peer_id.clone(),
+                                    room: room_id.clone(),
                                     ct: env.ct,
                                 };
                                 let fwd_line = serde_json::to_string(&rewritten)
                                     .expect("OuterEnvelope serialisation is infallible");
-                                if !registry.forward(&dest, Message::text(fwd_line)) {
+                                if !registry.forward(&dest_peer, &dest_room, Message::text(fwd_line)) {
                                     warn!(
                                         from = %peer_short,
                                         dest = %dest_tail,
+                                        room = %dest_room,
                                         bytes = ct_len,
-                                        "dest peer not found, dropping",
+                                        "dest (peer, room) not found, dropping",
                                     );
                                 }
                             }
@@ -202,6 +301,7 @@ pub async fn handle_peer(
         }
     }
 
-    registry.unregister(&peer_id, conn_id).await;
-    info!(peer = %peer_short, addr = %peer_addr, "disconnected");
+    registry.unregister(&peer_id, &room_id, conn_id).await;
+    rooms.unsubscribe_all(&peer_id).await;
+    info!(peer = %peer_short, room = %room_id, addr = %peer_addr, "disconnected");
 }
