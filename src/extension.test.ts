@@ -92,13 +92,13 @@ vi.mock("./config.js", async (importOriginal) => {
     }),
     resolveRelayUrl: vi.fn().mockImplementation(() => {
       const env = process.env["REMOTE_PI_RELAY"];
-      if (env && env.length > 0) return { url: env, source: "env" as const };
+      if (env && env.length > 0) return { url: orig.normalizeRelayUrl(env), source: "env" as const };
       if (_savedRelayUrl && _savedRelayUrl.length > 0) {
-        return { url: _savedRelayUrl, source: "config" as const };
+        return { url: orig.normalizeRelayUrl(_savedRelayUrl), source: "config" as const };
       }
-      return { url: orig.kDefaultRelayUrl, source: "default" as const };
+      return { url: orig.normalizeRelayUrl(orig.kDefaultRelayUrl), source: "default" as const };
     }),
-    // isValidRelayUrl + kDefaultRelayUrl come from orig (...spread)
+    // isValidRelayUrl + kDefaultRelayUrl + normalizeRelayUrl come from orig (...spread)
   };
 });
 
@@ -945,16 +945,28 @@ describe("/remote-pi set-relay + config", () => {
     expect(_setRelayCalls).toHaveLength(0);
   });
 
-  test("set-relay rejects http:// scheme", async () => {
+  test("set-relay normalizes http:// → ws://", async () => {
     const setRelay = captureHandler("remote-pi set-relay");
     const ctx = makeMockCtx();
     await setRelay("http://foo:3000", ctx);
 
+    expect(_setRelayCalls).toEqual(["ws://foo:3000"]);
     expect(ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("Invalid URL"),
-      "error",
+      expect.stringContaining("ws://foo:3000"),
+      "info",
     );
-    expect(_setRelayCalls).toHaveLength(0);
+  });
+
+  test("set-relay normalizes https:// → wss:// (reverse-proxy-friendly)", async () => {
+    const setRelay = captureHandler("remote-pi set-relay");
+    const ctx = makeMockCtx();
+    await setRelay("https://relay.example.tld", ctx);
+
+    expect(_setRelayCalls).toEqual(["wss://relay.example.tld"]);
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("wss://relay.example.tld"),
+      "info",
+    );
   });
 
   test("set-relay rejects malformed URL", async () => {
@@ -991,10 +1003,10 @@ describe("/remote-pi set-relay + config", () => {
 
   test("resolveRelayUrl: env > config > default", async () => {
     const cfg = await import("./config.js");
-    const { resolveRelayUrl, kDefaultRelayUrl } = cfg;
+    const { resolveRelayUrl, kDefaultRelayUrl, normalizeRelayUrl } = cfg;
 
-    // 1) Nothing set → default
-    expect(resolveRelayUrl()).toEqual({ url: kDefaultRelayUrl, source: "default" });
+    // 1) Nothing set → default (normalized: kDefaultRelayUrl is https://, code uses wss://)
+    expect(resolveRelayUrl()).toEqual({ url: normalizeRelayUrl(kDefaultRelayUrl), source: "default" });
 
     // 2) Config set, no env → config
     _savedRelayUrl = "ws://config.test";

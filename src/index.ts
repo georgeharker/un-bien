@@ -81,6 +81,7 @@ import {
   resolveRelayUrl,
   saveConfig,
   isValidRelayUrl,
+  normalizeRelayUrl,
 } from "./config.js";
 
 // ── State machine ─────────────────────────────────────────────────────────────
@@ -1052,24 +1053,26 @@ async function _shortidCompletions(
 }
 
 function _cmdSetRelay(arg: string, ctx: Pick<ExtensionContext, "ui">): void {
-  const url = arg.trim();
-  if (!url) {
+  const raw = arg.trim();
+  if (!raw) {
     ctx.ui.notify(
-      "[remote-pi] Usage: /remote-pi set-relay <ws:// or wss:// url>",
+      "[remote-pi] Usage: /remote-pi set-relay <ws:// | wss:// | http:// | https:// url>",
       "warning",
     );
     return;
   }
-  if (!isValidRelayUrl(url)) {
+  if (!isValidRelayUrl(raw)) {
     ctx.ui.notify(
-      `[remote-pi] Invalid URL: ${url}. Must start with ws:// or wss://`,
+      `[remote-pi] Invalid URL: ${raw}. Must start with ws://, wss://, http:// or https://`,
       "error",
     );
     return;
   }
+  const url = normalizeRelayUrl(raw);
   saveConfig({ relay: url });
+  const note = url === raw ? "" : ` (normalized from ${raw})`;
   ctx.ui.notify(
-    `[remote-pi] Relay set to ${url}. Run /remote-pi start (or restart) to apply.`,
+    `[remote-pi] Relay set to ${url}${note}. Run /remote-pi start (or restart) to apply.`,
     "info",
   );
 }
@@ -1434,14 +1437,15 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       }
     }
   } else if (subcmd === "set-relay") {
-    const url = (cliArgs[0] ?? "").trim();
-    if (!url) {
+    const raw = (cliArgs[0] ?? "").trim();
+    if (!raw) {
       console.log(`Usage: set-relay <url> (default: ${kDefaultRelayUrl})`);
-    } else if (!isValidRelayUrl(url)) {
-      console.log(`Invalid URL: ${url}. Must start with ws:// or wss://`);
+    } else if (!isValidRelayUrl(raw)) {
+      console.log(`Invalid URL: ${raw}. Must start with ws://, wss://, http:// or https://`);
     } else {
+      const url = normalizeRelayUrl(raw);
       saveConfig({ relay: url });
-      console.log(`Relay set to ${url}`);
+      console.log(`Relay set to ${url}${url === raw ? "" : ` (normalized from ${raw})`}`);
     }
   } else if (subcmd === "config") {
     const { url, source } = resolveRelayUrl();

@@ -1,4 +1,8 @@
-# Remote Pi
+<p align="center">
+  <img src="https://raw.githubusercontent.com/jacobaraujo7/remote_pi/main/branding/logo-full.svg" width="160" alt="Remote Pi logo" />
+</p>
+
+<h1 align="center">Remote Pi</h1>
 
 > Extend the [Pi coding agent](https://github.com/earendil-works/pi) with two
 > superpowers: agents that talk to each other on the same machine, and a mobile
@@ -193,8 +197,9 @@ You have two options:
 
 ### Option A — Use the community relay
 
-`wss://relay-rp1.jacobmoura.work` (default). Zero setup. Good for trying things
-out or for casual use.
+`https://relay-rp1.jacobmoura.work` (default). Zero setup. Good for trying
+things out or for casual use. (Internally the extension uses the WebSocket
+form `wss://…` — both schemes point at the same endpoint.)
 
 Caveats:
 
@@ -234,12 +239,18 @@ Once your relay is reachable, tell the extension:
 /remote-pi relay url wss://relay.yourdomain.tld
 ```
 
+You can also paste an `https://` URL — many hosts (Coolify, Fly, Render,
+Vercel-style PaaS) only expose HTTPS endpoints in their dashboards, but
+WebSocket Secure (`wss://`) runs over the same TLS connection on the same
+port. The extension auto-rewrites `https://` → `wss://` and `http://` →
+`ws://` so you can use whatever URL your provider gives you.
+
 This writes `~/.pi/remote/config.json` with `{ "relay": "..." }`. Resolution
 order (highest precedence first):
 
 1. `REMOTE_PI_RELAY` environment variable (CI / one-off overrides)
 2. `~/.pi/remote/config.json`
-3. The built-in default (`wss://relay-rp1.jacobmoura.work`)
+3. The built-in default (`https://relay-rp1.jacobmoura.work`, used as `wss://…`)
 
 Verify the active URL and its source with:
 
@@ -369,6 +380,34 @@ explains this to the LLM automatically.
 agent-network session (UDS broker) and the relay handles each Pi process
 independently. If the relay refuses with `RoomAlreadyOpenError`, stop the
 other terminal first.
+
+---
+
+## Branding
+
+Official brand assets live in
+[`/branding`](https://github.com/jacobaraujo7/remote_pi/tree/main/branding) —
+SVG sources for the logo (full, foreground, background, monochrome) plus a
+banner. See the
+[branding README](https://github.com/jacobaraujo7/remote_pi/blob/main/branding/README.md)
+for palette and export sizes.
+
+<table>
+  <tr>
+    <td align="center">
+      <img src="https://raw.githubusercontent.com/jacobaraujo7/remote_pi/main/branding/logo-full.svg" width="96" alt="logo-full" /><br/>
+      <sub><code>logo-full</code></sub>
+    </td>
+    <td align="center">
+      <img src="https://raw.githubusercontent.com/jacobaraujo7/remote_pi/main/branding/logo-foreground.svg" width="96" alt="logo-foreground" /><br/>
+      <sub><code>logo-foreground</code></sub>
+    </td>
+    <td align="center">
+      <img src="https://raw.githubusercontent.com/jacobaraujo7/remote_pi/main/branding/logo-monochrome.svg" width="96" alt="logo-monochrome" /><br/>
+      <sub><code>logo-monochrome</code></sub>
+    </td>
+  </tr>
+</table>
 
 ---
 
