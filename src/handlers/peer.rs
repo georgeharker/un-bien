@@ -5,7 +5,7 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
-use tokio::time::Duration;
+use tokio::time::{self, Duration};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{info, warn};
 
@@ -141,6 +141,13 @@ pub async fn handle_peer(
     };
 
     // ── 4. Routing loop ───────────────────────────────────────────────────
+    // Send a WS Ping every 25 s so NAT/LB idle timers don't close the connection.
+    // First tick fires after 25 s (not immediately).
+    let mut heartbeat = time::interval_at(
+        time::Instant::now() + Duration::from_secs(25),
+        Duration::from_secs(25),
+    );
+
     'routing: loop {
         tokio::select! {
             item = stream.next() => {
@@ -150,9 +157,14 @@ pub async fn handle_peer(
                         if msg.is_close() {
                             break;
                         }
+                        // Pong frames are keepalive responses — discard silently.
+                        // Ping frames are answered automatically by tungstenite's next().
+                        if msg.is_pong() || msg.is_ping() {
+                            continue;
+                        }
                         let text = match msg.to_text() {
                             Ok(t) => t.to_string(),
-                            Err(_) => continue, // binary/ping — ignore
+                            Err(_) => continue, // binary frame — ignore
                         };
 
                         // Parse as JSON to check for relay control frames.
@@ -296,6 +308,11 @@ pub async fn handle_peer(
                         }
                     }
                     None => break,
+                }
+            }
+            _ = heartbeat.tick() => {
+                if sink.send(Message::Ping(Default::default())).await.is_err() {
+                    break;
                 }
             }
         }
