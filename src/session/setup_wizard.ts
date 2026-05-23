@@ -78,25 +78,25 @@ export async function runSetupWizard(
 }
 
 /**
- * Asks the user for free text. Falls back to `select` with the default as the
- * only option when the SDK doesn't expose `input` (some Pi modes). Re-prompts
- * once on empty/whitespace input; second blank counts as cancel.
+ * Asks the user for free text. The Pi SDK's `ui.input` does not pre-fill the
+ * field with `defaultValue` (the SDK ignores that option), so we surface the
+ * default in the prompt label and treat an empty submission as "accept the
+ * default" — the standard CLI convention. Falls back to `select` when the
+ * SDK doesn't expose `input` at all.
  */
 async function _askText(
   ui: WizardUI,
   title: string,
   defaultValue: string,
 ): Promise<string | null> {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const raw = ui.input
-      ? await ui.input(title, { defaultValue })
-      : await ui.select(`${title} (default: ${defaultValue})`, [defaultValue, CANCEL_TOKEN]);
-    if (raw === undefined) return null;
-    if (raw === CANCEL_TOKEN) return null;
-    const trimmed = raw.trim();
-    if (trimmed.length > 0) return trimmed;
-    ui.notify?.("Value required — cannot be empty.", "warning");
-  }
-  // 2 blanks in a row → treat as cancel
-  return null;
+  const titleWithHint = `${title} (default: ${defaultValue})`;
+  const raw = ui.input
+    ? await ui.input(titleWithHint, { defaultValue })
+    : await ui.select(titleWithHint, [defaultValue, CANCEL_TOKEN]);
+  if (raw === undefined) return null;
+  if (raw === CANCEL_TOKEN) return null;
+  const trimmed = raw.trim();
+  // Empty submission = accept the default. No re-prompt, no warning — the
+  // user explicitly asked for the default by hitting enter.
+  return trimmed.length > 0 ? trimmed : defaultValue;
 }

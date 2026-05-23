@@ -60,16 +60,35 @@ describe("runSetupWizard", () => {
     });
   });
 
-  test("2) empty agent_name → re-prompts once, then 2nd blank cancels", async () => {
-    const ui = makeUI(["   ", "", YES, YES]);
+  test("2) empty submission accepts the default (no re-prompt)", async () => {
+    // Pi SDK's ui.input doesn't pre-fill — pressing enter sends "" — so the
+    // wizard treats empty as "I want the default value". User confirms both
+    // text prompts by pressing enter, then yes/yes.
+    const ui = makeUI(["", "   ", YES, YES]);
     const cfg = await runSetupWizard(ui, {
       agent_name: "foo",
-      session_name: "foo",
+      session_name: "bar",
       auto_start_relay: true,
     });
-    // Both attempts blank → wizard returns null.
-    expect(cfg).toBeNull();
-    expect(ui.notifies.some((n) => n.msg.includes("empty"))).toBe(true);
+    expect(cfg).toEqual({
+      agent_name: "foo",
+      session_name: "bar",
+      auto_start_relay: true,
+    });
+  });
+
+  test("2b) prompt label includes the default as hint", async () => {
+    // SDK won't pre-fill; surface the default in the label instead.
+    const ui = makeUI(["my-agent", "my-session", YES, YES]);
+    await runSetupWizard(ui, {
+      agent_name: "default-name",
+      session_name: "default-session",
+      auto_start_relay: true,
+    });
+    expect(ui.inputCalls.map((c) => c.title)).toEqual([
+      "Agent name: (default: default-name)",
+      "Default session: (default: default-session)",
+    ]);
   });
 
   test("3a) cancel on first prompt → returns null", async () => {
