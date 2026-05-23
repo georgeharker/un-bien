@@ -125,20 +125,9 @@ pub async fn handle_peer(
     info!(peer = %peer_short, room = %room_id, addr = %peer_addr, "authenticated");
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
-    let conn_id = match registry.register(peer_id.clone(), room_meta, tx).await {
-        Ok(id) => id,
-        Err(()) => {
-            warn!(peer = %peer_short, room = %room_id, "room already open, rejecting");
-            let _ = sink
-                .send(Message::text(
-                    serde_json::json!({"type": "error", "code": "room_already_open"})
-                        .to_string(),
-                ))
-                .await;
-            let _ = sink.send(Message::Close(None)).await;
-            return;
-        }
-    };
+    // Plan 23 (Wave 2C): registry now accepts N conns per (peer, room) —
+    // multiple devices of the same Owner key. No fallible path remains.
+    let conn_id = registry.register(peer_id.clone(), room_meta, tx).await;
 
     // ── 4. Routing loop ───────────────────────────────────────────────────
     // Send a WS Ping every 25 s so NAT/LB idle timers don't close the connection.
@@ -191,7 +180,11 @@ pub async fn handle_peer(
                             match t {
                                 // ── presence control frames (plano 12) ──
                                 "subscribe_presence" => {
-                                    presence.subscribe(peer_id.clone(), peers).await;
+                                    presence.subscribe(peer_id.clone(), peers.clone()).await;
+                                    // Backfill: push peer_online for any already-online
+                                    // peers in the list, so subscribers don't have to
+                                    // call presence_check to discover current state.
+                                    registry.backfill_presence(&peer_id, &peers);
                                 }
                                 "unsubscribe_presence" => {
                                     presence.unsubscribe(&peer_id, peers).await;
@@ -286,7 +279,14 @@ pub async fn handle_peer(
                                 };
                                 let fwd_line = serde_json::to_string(&rewritten)
                                     .expect("OuterEnvelope serialisation is infallible");
-                                if !registry.forward(&dest_peer, &dest_room, Message::text(fwd_line)) {
+                                // Skip-sender: pass our own conn_id so multi-device
+                                // Owners don't echo their own outbound messages.
+                                if !registry.forward(
+                                    &dest_peer,
+                                    &dest_room,
+                                    Message::text(fwd_line),
+                                    conn_id,
+                                ) {
                                     warn!(
                                         from = %peer_short,
                                         dest = %dest_tail,

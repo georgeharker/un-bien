@@ -200,63 +200,55 @@ async fn forward_routes_by_room_not_just_peer() {
     assert!(spurious.is_err(), "home room must not receive messages sent to work room");
 }
 
-/// A second connection attempt for the same (peer, room) must be rejected with an error frame.
+/// Plan 23 (Wave 2C): a second connection at the same (peer, room) must now
+/// be ACCEPTED (multi-device Owner-key scenario). No `room_already_open` is sent.
+/// A message from a third party reaches BOTH conns (broadcast).
 #[tokio::test]
-async fn duplicate_room_connection_rejected_over_ws() {
+async fn duplicate_room_connection_accepted_and_both_receive_broadcast() {
     let port = start_relay().await;
     let sk_pi = random_key();
-
-    // First connection succeeds.
-    let (_ws_pi_1, _) = connect_and_auth_with_room(port, &sk_pi, "work").await;
-
-    // Second connection for the same room should receive an error frame.
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-    use ed25519_dalek::Signer;
-    use futures_util::SinkExt;
+    let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
 
-    let url = format!("ws://127.0.0.1:{port}");
-    let (mut ws2, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    // Two conns at the same (peer, room) — both must complete the handshake.
+    let (mut ws_pi_1, _) = connect_and_auth_with_room(port, &sk_pi, "work").await;
+    let (mut ws_pi_2, _) = connect_and_auth_with_room(port, &sk_pi, "work").await;
 
-    let vk = sk_pi.verifying_key();
-    let pubkey_b64 = B64.encode(vk.to_bytes());
-
-    ws2.send(Message::text(
-        json!({"type": "hello", "pubkey": pubkey_b64, "room_id": "work"}).to_string(),
-    ))
-    .await
-    .unwrap();
-
-    let challenge_msg = ws2.next().await.unwrap().unwrap();
-    let cj: serde_json::Value =
-        serde_json::from_str(challenge_msg.to_text().unwrap()).unwrap();
-    let nonce_arr: [u8; 32] = B64.decode(cj["nonce"].as_str().unwrap())
-        .unwrap()
-        .try_into()
+    // A third party (the "app") sends a message to (peer_pi, "work").
+    let (mut ws_app, _) = connect_and_auth(port).await;
+    let ct = "YnJvYWRjYXN0"; // "broadcast" b64
+    ws_app
+        .send(Message::text(
+            json!({"peer": peer_pi, "room": "work", "ct": ct}).to_string(),
+        ))
+        .await
         .unwrap();
-    let sig = sk_pi.sign(&nonce_arr);
-    ws2.send(Message::text(
-        json!({"type": "auth", "sig": B64.encode(sig.to_bytes())}).to_string(),
-    ))
-    .await
-    .unwrap();
 
-    let resp = tokio::time::timeout(
-        tokio::time::Duration::from_millis(200),
-        ws2.next(),
+    // Both Pi conns must receive the forwarded envelope.
+    let r1 = tokio::time::timeout(
+        tokio::time::Duration::from_secs(1),
+        ws_pi_1.next(),
     )
     .await
-    .expect("timed out waiting for rejection")
+    .expect("ws_pi_1 timed out")
+    .unwrap()
+    .unwrap();
+    let r2 = tokio::time::timeout(
+        tokio::time::Duration::from_secs(1),
+        ws_pi_2.next(),
+    )
+    .await
+    .expect("ws_pi_2 timed out")
     .unwrap()
     .unwrap();
 
-    match resp {
-        Message::Text(t) => {
-            let v: serde_json::Value = serde_json::from_str(t.as_str()).unwrap();
-            assert_eq!(v["code"], "room_already_open", "expected room_already_open, got: {v}");
-        }
-        Message::Close(_) => {} // also acceptable — relay may close immediately
-        other => panic!("unexpected frame: {other:?}"),
-    }
+    let v1: serde_json::Value = serde_json::from_str(r1.to_text().unwrap()).unwrap();
+    let v2: serde_json::Value = serde_json::from_str(r2.to_text().unwrap()).unwrap();
+    assert_eq!(v1["ct"], ct, "first conn must receive broadcast");
+    assert_eq!(v2["ct"], ct, "second conn must receive broadcast");
+    // Neither conn should have received `room_already_open`.
+    assert!(v1["code"].is_null());
+    assert!(v2["code"].is_null());
 }
 
 /// Pi connects with room_meta.model → room_announced received by subscriber includes model.

@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Build a multi-platform image and push it to Docker Hub.
+# Version is read from Cargo.toml — bump `version = "..."` there before running.
 #
 # Usage:
-#   ./push-docker.sh              → tags as :latest
-#   ./push-docker.sh v1.2.3       → tags as :v1.2.3 AND :latest
+#   ./push-docker.sh
+#
+# Always tags `:v<cargo-version>` and `:latest`.
 #
 # Requirements:
 #   docker buildx (bundled with modern Docker).
@@ -12,12 +14,30 @@
 set -euo pipefail
 
 IMAGE="jacobmoura7/remote-pi-relay"
-VERSION="${1:-}"
 PLATFORMS="linux/amd64,linux/arm64"
 BUILDER="multiarch"
 
 # Always resolve paths relative to this script so it can be called from anywhere
 cd "$(dirname "$0")"
+
+# Extract the [package] version from Cargo.toml.
+VERSION=$(awk '
+  /^\[package\]/ { in_pkg = 1; next }
+  /^\[/          { in_pkg = 0 }
+  in_pkg && /^version[[:space:]]*=/ {
+    gsub(/[" ]/, "")
+    sub(/^version=/, "")
+    print
+    exit
+  }
+' Cargo.toml)
+
+if [[ -z "$VERSION" ]]; then
+  echo "✗ Could not extract version from Cargo.toml" >&2
+  exit 1
+fi
+
+TAG="v$VERSION"
 
 # The default `docker` driver cannot build multi-platform images in one shot.
 # Ensure a `docker-container` builder exists and is selected. Idempotent.
@@ -27,19 +47,13 @@ if ! docker buildx inspect "$BUILDER" >/dev/null 2>&1; then
 fi
 docker buildx use "$BUILDER"
 
-if [[ -n "$VERSION" ]]; then
-  TAGS="--tag $IMAGE:$VERSION --tag $IMAGE:latest"
-  echo "→ Building $IMAGE:$VERSION + :latest ($PLATFORMS)"
-else
-  TAGS="--tag $IMAGE:latest"
-  echo "→ Building $IMAGE:latest ($PLATFORMS)"
-fi
+echo "→ Building $IMAGE:$TAG + :latest ($PLATFORMS)"
 
-# shellcheck disable=SC2086
 docker buildx build \
   --platform "$PLATFORMS" \
-  $TAGS \
+  --tag "$IMAGE:$TAG" \
+  --tag "$IMAGE:latest" \
   --push \
   .
 
-echo "✓ Done"
+echo "✓ Pushed $IMAGE:$TAG and $IMAGE:latest"

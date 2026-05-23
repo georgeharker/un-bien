@@ -63,7 +63,19 @@ async fn peer_disconnects_pushes_offline_with_since_ts() {
     ))
     .await
     .unwrap();
-    tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+
+    // Backfill (Fix #2) pushes a peer_online for the already-online A —
+    // consume it so the assertion below only sees the peer_offline frame.
+    let backfill = tokio::time::timeout(
+        tokio::time::Duration::from_millis(200),
+        ws_b.next(),
+    )
+    .await
+    .expect("timed out waiting for backfill")
+    .unwrap()
+    .unwrap();
+    let bf: serde_json::Value = serde_json::from_str(backfill.to_text().unwrap()).unwrap();
+    assert_eq!(bf["type"], "peer_online", "expected backfill peer_online, got {bf}");
 
     // A drops its WS (simulates disconnect)
     drop(ws_a);
@@ -154,4 +166,91 @@ async fn presence_check_returns_online_for_connected_peer() {
     assert_eq!(states[0]["peer"], peer_a);
     assert_eq!(states[0]["online"], true, "peer_a should be online");
     assert!(states[0]["since_ts"].is_null(), "since_ts is null when online");
+}
+
+/// Fix #2 — subscribe_presence backfill: if the target peer is ALREADY online
+/// when the subscription is registered, the relay must immediately push
+/// peer_online to the subscriber (no presence_check round-trip needed).
+#[tokio::test]
+async fn subscribe_after_peer_already_online_backfills_peer_online() {
+    let port = start_relay().await;
+    let sk_pi = random_key();
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
+
+    // Pi comes online FIRST.
+    let (_ws_pi, _) = connect_and_auth_with_key(port, &sk_pi).await;
+
+    // App connects later, then subscribes.
+    let (mut ws_app, _) = connect_and_auth(port).await;
+    ws_app
+        .send(Message::text(
+            json!({"type": "subscribe_presence", "peers": [&peer_pi]}).to_string(),
+        ))
+        .await
+        .unwrap();
+
+    // App must receive peer_online via backfill, not having to call presence_check.
+    let msg = tokio::time::timeout(
+        tokio::time::Duration::from_secs(1),
+        ws_app.next(),
+    )
+    .await
+    .expect("timed out waiting for backfilled peer_online")
+    .unwrap()
+    .unwrap();
+
+    let v: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+    assert_eq!(v["type"], "peer_online", "expected backfilled peer_online, got: {v}");
+    assert_eq!(v["peer"], peer_pi);
+}
+
+/// Fix #1 — peer_online fires on EVERY successful register, not just on
+/// the 0→1 transition. Ensures that a fresh connection from a peer always
+/// signals presence even when a zombie/duplicate conn is still in the registry.
+#[tokio::test]
+async fn second_conn_same_peer_still_emits_peer_online() {
+    let port = start_relay().await;
+    let sk_pi = random_key();
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
+
+    // App subscribes first.
+    let (mut ws_app, _) = connect_and_auth(port).await;
+    ws_app
+        .send(Message::text(
+            json!({"type": "subscribe_presence", "peers": [&peer_pi]}).to_string(),
+        ))
+        .await
+        .unwrap();
+    tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+
+    // First Pi conn → first peer_online.
+    let (_ws_pi_1, _) = connect_and_auth_with_key(port, &sk_pi).await;
+    let m1 = tokio::time::timeout(
+        tokio::time::Duration::from_secs(1),
+        ws_app.next(),
+    )
+    .await
+    .expect("missed first peer_online")
+    .unwrap()
+    .unwrap();
+    let v1: serde_json::Value = serde_json::from_str(m1.to_text().unwrap()).unwrap();
+    assert_eq!(v1["type"], "peer_online");
+
+    // Second Pi conn at the SAME (peer, room) — simulates zombie + reconnect.
+    // Plan 23 (Wave 2C) allows this. peer_online must STILL fire so the app
+    // doesn't get stuck in offline state if it missed the first event.
+    let (_ws_pi_2, _) = connect_and_auth_with_key(port, &sk_pi).await;
+    let m2 = tokio::time::timeout(
+        tokio::time::Duration::from_secs(1),
+        ws_app.next(),
+    )
+    .await
+    .expect("missed second peer_online (regression)")
+    .unwrap()
+    .unwrap();
+    let v2: serde_json::Value = serde_json::from_str(m2.to_text().unwrap()).unwrap();
+    assert_eq!(v2["type"], "peer_online", "second register must also emit peer_online, got: {v2}");
+    assert_eq!(v2["peer"], peer_pi);
 }
