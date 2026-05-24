@@ -229,6 +229,54 @@ describe("SelfRevoke.checkOnce — membership encoding variants", () => {
 });
 
 describe("SelfRevoke lifecycle", () => {
+  test("onMembersChanged fires when sibling set changes across sweeps (plan/25 Wave D)", async () => {
+    const ownerKp = generateEd25519Keypair();
+    const myKp = generateEd25519Keypair();
+    const siblingA = generateEd25519Keypair();
+    const siblingB = generateEd25519Keypair();
+    const ownerEpk = Buffer.from(ownerKp.publicKey).toString("base64");
+    const myEpk = Buffer.from(myKp.publicKey).toString("base64");
+    const aEpk = Buffer.from(siblingA.publicKey).toString("base64");
+    const bEpk = Buffer.from(siblingB.publicKey).toString("base64");
+
+    // 1st sweep: members = [me, A]
+    const env1 = makeEnvelope(ownerKp, 1, [myEpk, aEpk]);
+    // 2nd sweep: identical members — no callback
+    const env2 = makeEnvelope(ownerKp, 2, [myEpk, aEpk]);
+    // 3rd sweep: members = [me, A, B] — callback fires
+    const env3 = makeEnvelope(ownerKp, 3, [myEpk, aEpk, bEpk]);
+
+    const get = vi.fn()
+      .mockResolvedValueOnce(env1)
+      .mockResolvedValueOnce(env2)
+      .mockResolvedValueOnce(env3);
+    const storage: SelfRevokeStorage = {
+      listOwnerPubkeys: vi.fn().mockResolvedValue([ownerEpk]),
+      removePeer: vi.fn(),
+    };
+    const onMembersChanged = vi.fn();
+    const revoker = new SelfRevoke({
+      client: { get } as unknown as MeshClient,
+      storage,
+      myPubkey: myKp.publicKey,
+      onMembersChanged,
+    });
+
+    await revoker.checkOnce();
+    expect(onMembersChanged).toHaveBeenCalledTimes(1);
+    const first = onMembersChanged.mock.calls[0]![0] as { pcLabel: string; pcPubkey: string }[];
+    expect(first.map((s) => s.pcPubkey).sort()).toEqual([aEpk].sort());
+
+    await revoker.checkOnce();
+    // No change → callback NOT fired again.
+    expect(onMembersChanged).toHaveBeenCalledTimes(1);
+
+    await revoker.checkOnce();
+    expect(onMembersChanged).toHaveBeenCalledTimes(2);
+    const third = onMembersChanged.mock.calls[1]![0] as { pcLabel: string; pcPubkey: string }[];
+    expect(third.map((s) => s.pcPubkey).sort()).toEqual([aEpk, bEpk].sort());
+  });
+
   test("start() is idempotent and stop() clears the interval", async () => {
     const myKp = generateEd25519Keypair();
     // No owners → checkOnce is a fast no-op. We just verify the interval

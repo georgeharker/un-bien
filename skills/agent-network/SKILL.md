@@ -1,17 +1,17 @@
 ---
 name: agent-network
-description: Use when you (a Pi agent) are running inside a local agent session — i.e., when the Pi footer shows "📡 <session-name>". This skill teaches how to receive messages from other agents, how to reply in a correlatable way, how to ask things of other agents without losing track, and how to act when you don't yet have the context you need.
+description: Use when you (a Pi agent) are running inside a local agent session — i.e., when the Pi footer shows "📡 <session-name>". This skill teaches how to discover who's online (`list_peers`), how to send messages with delivery status (`agent_send` + ACK), how replies arrive in a future turn, how cross-PC addressing works (`<pc_label>:<peer>`), and the retry matrix for the four ACK statuses.
 ---
 
-# Agent Network (skill — message protocol for Pi agents)
+# Agent Network (skill — event-driven message protocol)
 
 You are connected to a **local agent session** over a Unix Domain Socket.
-Other Pi agents running on the same machine, in the same session, can send
-you messages. You can send messages to them too.
+Other Pi agents on the same machine, in the same session, can send you
+messages and you can send messages to them.
 
-This skill teaches how to participate in that network reliably. Read it to
-the end before acting — understanding the protocol avoids silence and
-deadlocks.
+This skill teaches how to participate in that network reliably. Read it
+to the end before acting — the protocol is **event-driven**, not
+request/reply, and getting that wrong leaves coordination broken.
 
 ---
 
@@ -22,8 +22,33 @@ session broker filters before delivery. You will never see messages
 intended for other agents or "broadcast with `exclude_self`".
 
 **Practical consequence**: if a message arrived in your inbox, someone
-wanted your attention. Don't ignore it. Don't assume it was for someone
-else.
+wanted your attention. Don't ignore it.
+
+---
+
+## First thing to do in a new session: `list_peers`
+
+Before you send anything, find out who's actually online. `list_peers` is
+a cheap metadata tool that returns the current inventory:
+
+```
+list_peers()
+→ { peers: ["backend", "frontend", "casa:agent-1", "trab:worker"] }
+```
+
+The reply is **synchronous** (broker resolves in milliseconds — this is
+not a turn of another agent). Use it freely:
+
+- At the start of a session, to see what mesh you're in
+- After receiving `peer_joined` / `peer_left` to refresh
+- Before any `agent_send` whose target name is uncertain
+
+**Entry shape:**
+- `backend` → local peer (this machine, same UDS broker)
+- `casa:agent-1` → cross-PC peer on the Pi labeled `casa` (this Owner's
+  other machine, reached through the relay)
+
+You are excluded from the result — no need to filter yourself out.
 
 ---
 
@@ -43,36 +68,85 @@ Every message has 5 fields:
 
 | Field | Meaning |
 |---|---|
-| `from` | Who sent it. Use this to know who to reply to |
-| `to` | You (or "broadcast", or a list of names including yours) |
-| `id` | Unique identifier of this specific message |
-| `re` | If this message is a REPLY to another, echoes that one's `id`. Otherwise `null` |
-| `body` | Free-form content. String or JSON object, sender's choice |
+| `from` | Who sent it. Use this to know who to reply to. |
+| `to` | You (or "broadcast", or a list of names including yours). |
+| `id` | Unique identifier of this specific message. |
+| `re` | If this message is a REPLY to another, echoes that one's `id`. Otherwise `null`. |
+| `body` | Free-form content. String or JSON object, sender's choice. |
 
 ---
 
-## When you receive a message
+## How sending works: `agent_send` returns an ACK status
 
-Do this in order, don't skip steps:
+`agent_send` is the **only** tool you need to talk to peers. Every
+unicast call returns a status that tells you what happened at the
+recipient. **Always inspect the status — it dictates what to do next.**
 
-1. **Look at `body`** to understand what's being asked
-2. **Look at `from`** to know who to reply to
-3. **Look at `id`** — this is the `correlation_id` you'll need to echo
-4. **Execute the work** described in `body`
-5. **Reply** with a new message:
-   - `to`: the `from` of the original message
-   - `id`: a fresh UUID v7 (your reply has its own identity)
-   - `re`: the `id` of the original message (correlation)
-   - `from`: your name
-   - `body`: your answer
+| Status | What it means | What you do |
+|---|---|---|
+| `received` | Peer was idle, broker handed the envelope over, peer will process it in its upcoming turn. | Move on. The reply (if any) arrives later in your inbox as a normal envelope with `re=<your-send-id>`. |
+| `busy` | Peer is mid-turn — envelope **dropped**. | Retry 2× with backoff (2s, 5s). If still busy, abandon or escalate to the human. You own the retry. |
+| `denied` | Peer explicitly refused the message. | Do NOT retry. Report to the user. |
+| `timeout` | No ACK in 5s. Transport error — broker may be down, peer disappeared mid-handshake. | Treat as transient. Retry once after a longer delay (10s+), then escalate. |
+| `sent` | You used `to: "broadcast"` or an array. There is no single ACK target. | Move on. Broadcasts are fire-and-forget. |
+| `refused` | The tool refused your call locally (e.g., you tried to message yourself, or you're not in a session). | Fix the call. Don't retry the same arguments. |
 
-**Always reply.** If the sender sent something that clearly expects a
-reply (not a broadcast announcement), silence breaks their coordination.
-Even errors must be replied (with `body.status: "error"`).
+`busy` is the most common non-trivial answer. Two **new** messages aimed
+at the same peer in quick succession will see the second one as `busy`
+— the peer can only be processing one turn at a time.
 
-### Concrete example
+**Replies are exempt from busy gating.** A message with `re=<some-id>`
+(an answer to something the recipient asked) is always delivered,
+because it resolves pending state at the recipient rather than starting
+a new turn for them. So if you fan out questions to several peers in
+the same turn, every peer's reply will reach you even when you're still
+processing — they all flow into your inbox for the next turn.
 
-You (name: `backend`) receive:
+---
+
+## How receiving works: replies arrive in a future turn
+
+You **do not block waiting** for a peer's content reply. The model is
+push-based:
+
+1. You call `agent_send` → status `received`.
+2. Your turn continues. You might do other work, or finish.
+3. **Later** — possibly several turns later — the peer finishes its
+   own turn, processes your message, and sends a reply.
+4. The reply lands in your inbox as a normal envelope. You see it on
+   your next turn input, with `re` set to the `id` you sent earlier.
+
+You do not need a wait/poll/sleep. The Pi runtime delivers the reply as
+a new turn input the moment it arrives.
+
+### Concrete walk-through
+
+You (name: `orq`) ask `backend` a question:
+
+```
+agent_send({ to: "backend", body: { q: "what's the JWT shape?" } })
+→ { status: "received", target: "backend" }
+```
+
+You finish your current turn (maybe reply to the user, maybe do other
+sends). Turn ends.
+
+A few seconds later, the runtime hands you a new turn with this input:
+
+```
+[agent-network] message from "backend" (id=<new-id>, re=<your-id>):
+{ "shape": { "sub": "string", "exp": "number", "roles": ["string"] } }
+(This is a reply to a previous message of yours.)
+```
+
+You correlate by looking at `re` — it matches the `id` you got back
+when you originally sent. Now you have your answer. Use it.
+
+---
+
+## How to REPLY when you receive a message
+
+You receive:
 
 ```json
 {
@@ -80,350 +154,255 @@ You (name: `backend`) receive:
   "to": "backend",
   "id": "abc-uuid",
   "re": null,
-  "body": {
-    "task": "Implement the POST /auth/login endpoint",
-    "context_ref": "./contracts/auth.md"
-  }
+  "body": { "task": "Implement POST /auth/login" }
 }
 ```
 
-You do the work. You reply:
+When you have something to say back (an answer, an error, a status),
+you send back another envelope **with `re` set to the original `id`**:
 
-```json
-{
-  "from": "backend",
-  "to": "orchestrator",
-  "id": "xyz-uuid",
-  "re": "abc-uuid",
-  "body": {
-    "status": "done",
-    "summary": "Endpoint implemented per contract",
-    "files_changed": ["src/auth/login.ts", "src/auth/jwt.ts"]
-  }
-}
+```
+agent_send({
+  to: "orchestrator",
+  body: { status: "done", files_changed: [...] },
+  re: "abc-uuid"
+})
 ```
 
-The orchestrator correlates via `re === "abc-uuid"` and knows this was
-the reply to their task. Without `re`, they receive the message but
-can't match it against the question — and wait until timeout.
+The orchestrator correlates the reply via `re === "abc-uuid"`. Without
+`re`, they receive your message but cannot match it against the
+question — and the coordination drifts. **Always echo `re` on a reply.**
 
 ---
 
-## When you need to ask another agent (mid-task)
+## Asking multiple peers at once
 
-Before replying to a task, you may discover you need info from another
-agent. Typical scenario: you are `frontend`, you received a task to
-implement the login screen, but you don't know the exact JWT shape the
-`backend` exposes.
+You frequently need info from several agents before you can proceed.
+You can fire multiple `agent_send` in the same turn — each returns its
+own ACK status. Then your turn ends, and the replies arrive in future
+turns as they come in.
 
-**Correct flow** (synchronous via request/reply):
+```typescript
+// In one turn:
+agent_send({ to: "backend", body: { q: "JWT shape?" } });   // -> received
+agent_send({ to: "frontend", body: { q: "theme tokens?" } }); // -> received
+agent_send({ to: "infra",    body: { q: "ETA for Y?" } });    // -> busy — retry next turn
+```
 
-1. Pause your current task (don't reply to the orchestrator yet)
-2. Send a message to `backend`:
-   ```json
-   {
-     "from": "frontend",
-     "to": "backend",
-     "id": "new-uuid",
-     "re": null,
-     "body": {
-       "question": "What's the exact payload shape of the JWT returned by POST /auth/login?",
-       "context": "needed for FE parsing"
-     }
-   }
-   ```
-3. **Wait for the reply** with `re === "new-uuid"`
-4. Use the received info to complete your original task
-5. Reply to the orchestrator (with `re === "<original task id>"`)
+In a later turn, you might see two of the three replies; the third
+might arrive a turn after that. Track which `id` corresponds to which
+question (the ACK return shape includes `id`, store it).
 
-The transport layer (`agent_request()`) blocks until the reply arrives
-or times out. Use a reasonable timeout (30–60s for simple questions).
+Don't assume replies arrive in send order. Use `re` to identify what
+each reply is for.
 
-### Limits
+### When to retry
 
-- **Ask focused questions**, not disguised delegations. "What's the
-  shape of X?" is fine. "Can you implement Y for me?" is not — that's
-  work the orchestrator should distribute.
-- **Maximum 1 hop**: if you asked B, and B needs to ask C to answer
-  you, B should **fail** with `status: "blocked"` and let the
-  orchestrator re-plan. Don't chain A → B → C → ...
-- **Timeout mandatory**: never wait indefinitely. If no reply in 60s,
-  fail with `status: "blocked"` in your answer to the orchestrator,
-  citing which peer didn't respond.
+A `busy` peer might be free in a few seconds. The skill recommends:
+
+- Try once → `busy` → wait ~2s, try again
+- Still `busy` → wait ~5s, try again
+- Still `busy` → abandon (report to human) or escalate to orchestrator
+
+Retries are **your** responsibility as the sender. The broker does not
+queue messages.
 
 ---
 
-## Asking multiple agents in parallel
+## Cross-PC addressing (`<pc_label>:<peer>`)
 
-You frequently need info from **several agents at once** before you can
-proceed. The transport supports this natively — every `agent_request()`
-returns a `Promise`, and each request has a unique `id` so the pending
-map demuxes replies correctly. **Multiple requests in flight never get
-confused with each other.**
+When the Owner has paired multiple Pis (e.g. "casa" and "trab"), peers
+on the other machine appear in `list_peers` with a prefix:
 
-Don't serialize what can run in parallel. Sequential = sum of all
-latencies. Parallel = max of latencies. With 3 agents at 200ms each:
-serial is 600ms, parallel is 200ms.
-
-### Pattern 1 — wait for all (most common)
-
-```typescript
-const [beAnswer, feAnswer] = await Promise.all([
-  agent_request("backend", { question: "JWT shape?" }),
-  agent_request("frontend", { question: "current theme tokens?" }),
-]);
-// both arrived, you have both answers, continue your work
+```
+{ peers: ["backend", "frontend", "casa:agent-1", "trab:worker"] }
 ```
 
-### Pattern 2 — fan-out structured
+To send to a remote peer, use the prefixed name verbatim:
 
-```typescript
-const peers = ["backend", "frontend", "infra"];
-const answers = await Promise.all(
-  peers.map((p) => agent_request(p, { question: "ETA for Y?" }))
-);
-// answers[i] correlates to peers[i] by array index
+```
+agent_send({ to: "casa:agent-1", body: { ... } })
 ```
 
-### Pattern 3 — race (first answer wins)
+The transport (relay) routes it across the mesh; the cross-PC peer
+receives it as if it were local. Behavior matches single-PC:
+`received | busy | denied | timeout` semantics are identical.
 
-```typescript
-const winner = await Promise.race([
-  agent_request("worker-1", taskBody),
-  agent_request("worker-2", taskBody),
-]);
-// useful for redundant queries; losing requests still finish
-// in the background but their replies are silently dropped
+When you **reply** to a cross-PC message, use the original sender's
+`from` verbatim — it already carries the prefix:
+
+```
+Incoming: { from: "casa:sess-3", to: "agent-1", id: "abc", re: null, ... }
+Reply:    agent_send({ to: "casa:sess-3", body: {...}, re: "abc" })
 ```
 
-### Pattern 4 — tolerant of partial failure
+You do NOT prefix your own outgoing `from` — that rewrite happens at the
+broker layer.
 
-```typescript
-const settled = await Promise.allSettled([
-  agent_request("a", q1, 30_000),
-  agent_request("b", q2, 30_000),
-]);
-const okReplies = settled
-  .filter((r) => r.status === "fulfilled")
-  .map((r) => r.value);
-const failures = settled
-  .filter((r) => r.status === "rejected")
-  .map((r) => r.reason);
-// proceed with what you got; report failures honestly
-```
+**Failure modes specific to cross-PC:**
 
-### Limits (same as 1-on-1 questions)
-
-- **Max 1 hop still applies to fan-out.** You can ask N agents in
-  parallel, but each of them must reply directly to you. They cannot
-  themselves fan-out to satisfy your question. If B needs C and D to
-  answer your question, B replies `status: "blocked"` and the
-  orchestrator re-plans.
-- **Per-request timeout**: each call has its own timer. One slow agent
-  doesn't block the others — `Promise.all` rejects fast on first
-  failure (use `allSettled` if you need tolerance).
-- **Focused questions, not delegations** — same rule as 1-on-1.
-
-### Mental model
-
-The `pending` map inside the transport correlates replies by their `re`
-field against the original `id`s you sent. As long as `id`s are unique
-(UUID v7, guaranteed), N parallel requests stay isolated. You can have
-dozens in flight without confusion — though if you need that many,
-question whether you should be a worker instead of an orchestrator.
+- `denied`: remote PC's broker has no peer by that local name (peer left
+  recently, or your cache is stale → call `list_peers` again)
+- `timeout`: the other PC is offline or the relay is unreachable. The
+  relay also synthesises a `transport_error` envelope (with `from:
+  "_relay"`) for offline/not_authorized/bad_envelope — you'll see it in
+  the inbox as a reply with `re=<your-send-id>` and `body.type:
+  "transport_error"`. Treat exactly like timeout.
 
 ---
 
-## Advanced addressing
+## Broadcast and multicast
 
-### Broadcast
+`to: "broadcast"` delivers to every other peer. `to: ["a", "b"]`
+delivers to the listed names.
 
-`to: "broadcast"` delivers to everyone except the sender. Use rarely:
+- ✅ Announcements: "wave 2 started", "I'm taking the lock on /contracts"
+- ❌ Questions: nobody knows who's supposed to answer — replies will be
+  uncorrelated
 
-- ✅ Announcements: "wave 2 started", "leader changed to X"
-- ❌ Questions: no one replies to broadcasts, because no one knows
-  who's supposed to answer
-
-### Multicast
-
-`to: ["backend", "frontend"]` delivers to the listed recipients. Useful
-for directed notifications, e.g.: "both of you: stop touching
-`contracts/` while I update it".
-
-Each recipient gets the same message (same `id`). If you reply, `re`
-correlates normally.
-
-### Self
-
-You never receive your own messages (even on broadcast). No need to
-filter; the broker does it.
+Broadcast/multicast skip the ACK protocol entirely — the tool returns
+`status: "sent"` immediately. You don't know who received it. If you
+need delivery confirmation, use multiple unicast sends.
 
 ---
 
-## Auto-discovery of who's in the session
+## Staying current: peer_joined / peer_left + `list_peers`
 
-You may receive, at some point after joining, `system` events from the
-broker:
+You may receive, at any time, `system` events from the broker:
 
 ```json
-{
-  "from": "broker",
-  "to": "backend",
-  "id": "uuid",
-  "re": null,
-  "body": {
-    "type": "peer_joined",
-    "name": "frontend",
-    "capabilities": ["typescript", "react"]
-  }
-}
+{ "from": "broker", "to": "backend", "id": "uuid", "re": null,
+  "body": { "type": "peer_joined", "name": "frontend" } }
 ```
 
 ```json
-{
-  "from": "broker",
-  "to": "backend",
-  "id": "uuid",
-  "re": null,
-  "body": {
-    "type": "peer_left",
-    "name": "frontend"
-  }
-}
+{ "from": "broker", "to": "backend", "id": "uuid", "re": null,
+  "body": { "type": "peer_left", "name": "frontend" } }
 ```
 
-Use these events to know who's online. Keep a mental list (or session
-state) of active peers. Don't ask a peer you know is offline.
+Use these to track who's online. Don't ask peers you know are offline.
 
-If you need to list active peers on demand, ask the broker:
+If you missed events (just woke up, or your view feels stale), call
+`list_peers` — it returns the authoritative snapshot in milliseconds.
 
-```json
-{
-  "from": "backend",
-  "to": "broker",
-  "id": "uuid",
-  "re": null,
-  "body": { "type": "list_peers" }
-}
-```
-
-The broker replies with `body: { peers: [...] }`.
+Do **not** send a `list_peers` envelope to the broker via `agent_send`.
+That's the old pre-tool pattern: it worked, but the reply arrived in a
+future turn and the ACK status didn't carry the peer list. The dedicated
+`list_peers` tool is strictly better — synchronous, typed return.
 
 ---
 
 ## Situations where you're in doubt
 
-### "I received a message I don't understand"
+### "I received a task I don't understand"
 
-Reply with `status: "error"` and say what was unclear. Don't go silent.
+Reply with `status: "error"` in the body, echoing the original `id` in
+`re`. Don't go silent.
 
-```json
-{
-  "from": "backend",
-  "to": "<original sender>",
-  "id": "...",
-  "re": "<original id>",
-  "body": {
-    "status": "error",
-    "summary": "I didn't understand the request. The 'task' field is unclear."
-  }
-}
-```
+### "I received a message with `re` set, but I never sent that question"
 
-### "I received a message with `re` set, but I never sent a request"
-
-Probably a late reply to a request that already timed out or was
-cancelled. Ignore silently. Don't reply.
-
-### "I received a message without `re`, but it's clearly a reply"
-
-Treat it as a new message (task). The sender didn't follow protocol —
-you can't correlate it with your original request even if you sent one.
-If genuinely confused, reply asking: "Is this message a reply to
-something? I didn't see a `re`."
+Late reply to something that already wrapped up. Ignore. Don't reply
+to a reply.
 
 ### "I'm in a session but no message ever arrives"
 
-Normal. You only receive when someone addresses you. Keep working in
-solo mode until someone calls. Don't poll the broker periodically.
+Normal. You only receive when someone addresses you. Keep working on
+the current task. Don't poll the broker.
 
-### "The leader died (peer_left event from `broker`)"
+### "I sent something but got `timeout`"
 
-The transport layer will automatically promote another peer to leader.
-You (client) will reconnect transparently in ~500ms. During that
-window, your `send/request` calls may fail — retry once after 1s
-before propagating an error.
+The broker didn't ACK in 5s. Either the broker is restarting (failover)
+or the peer disappeared between registration and delivery. Retry once
+after ~10s; if still timeout, treat as transport failure and escalate.
+
+### "The leader died (peer_left from `broker` for the leader)"
+
+The transport layer automatically promotes another peer to leader. Your
+client reconnects transparently in ~500ms. During that window,
+`agent_send` may return `timeout` — retry once after a beat before
+giving up.
+
+---
+
+## Legacy: `agent_request` is deprecated
+
+You may see references to a tool called `agent_request` that takes a
+target + body and **blocks the entire turn** waiting for the peer's
+content reply. It still works, but emits a deprecation warning on use
+and will be removed.
+
+**Why deprecated:**
+
+- Blocks your turn while a peer thinks → costs tokens and wall time
+- No ACK signal — you can't tell `busy` from `pondering` from `gone`
+- Pairs badly with parallel multi-peer questions
+
+**Migration:** every `agent_request` call becomes an `agent_send`. The
+reply arrives in a future turn (see the walk-through above). Treat the
+inbox as your event loop, not your call stack.
 
 ---
 
 ## Single-page summary
 
-1. You only receive what's addressed to you. Don't filter. Trust the broker.
-2. Every reply carries `re` = `id` of the original message. Without it,
-   the sender can't correlate.
-3. Reply's `to` = question's `from`.
-4. Always reply — success or error — when you receive something that
-   looks like a task.
-5. You can ask other agents mid-task (request/reply, synchronous), but:
-   - Max 1 hop
-   - Always with timeout
-   - Read-only question ("what is X?"), not delegation ("do Y")
-6. **You can ask multiple agents in parallel** with `Promise.all` —
-   each request's `id` keeps replies isolated. Don't serialize what can
-   run in parallel.
-7. Broadcast is for announcements, not questions.
-8. When confused, reply with `status: "error"` instead of staying silent.
+1. **Discover first**: `list_peers()` returns `{peers: string[]}` —
+   locals plus `<pc>:<peer>` cross-PC entries. Synchronous. Self-excluded.
+2. **Send tool**: `agent_send({to, body, re?})`. Returns `{status, ...}`
+   — always inspect.
+3. **Unicast status**: `received | busy | denied | timeout`. Retry on
+   `busy` with backoff; abandon on `denied`; investigate on `timeout`.
+4. **Broadcast/multicast**: status is `sent`. Fire-and-forget.
+5. **Replies**: come back **in a future turn** as a normal inbound
+   envelope with `re=<your-send-id>`. Correlate by `re`.
+6. When YOU reply to a peer, set `re` to their original `id`, and use
+   their `from` verbatim as your `to` (including any `<pc>:` prefix).
+7. You never receive your own messages. The broker filters.
+8. The broker does not queue. If a peer is busy, your message is
+   **dropped** — you own the retry.
+9. `agent_request` is deprecated. Migrate to `agent_send` + inbox.
 
-That skill is everything you need to participate in the session without
-breaking other agents' flow. Re-read it when in doubt.
+That's the whole protocol. Re-read it when in doubt.
 
 ---
 
 ## Mini-FAQ
 
 **Q: Can I send a message to myself?**
-A: No. Both `agent_send` and `agent_request` refuse early with an
-error (`"cannot agent_send to yourself"`) when `to` matches your
-assigned name. The broker also drops unicast self-loops as a second
-line of defense. There's no upside — just do the work directly
-instead of round-tripping through the network.
+A: No. `agent_send` refuses early with `status: "refused"` when `to`
+matches your assigned name. The broker also drops unicast self-loops
+as a second line of defense.
 
-**Q: What happens to messages I sent before the recipient joined?**
-A: The broker drops them with a warning log. There is no persistent
-message queue. If you need delivery guarantees, wait for the
-`peer_joined` event before sending.
+**Q: What if the peer never replies to my message?**
+A: Then you never see a reply. There is no implicit timeout — your
+own send returned `received` (the broker handed it over), the peer
+just chose not to answer. If a reply is important, the agent-network
+skill in the peer's process should make them reply. If they're a
+non-Pi process that just listens, you live with the silence.
 
-**Q: Can I have the same name as another agent?**
-A: No. The broker auto-suffixes (e.g., you asked for `backend`, you
-get `backend#2` in `register_ack`). Use the name the broker gave you
-(`name_assigned`) in all your messages.
+**Q: How many sends can I fire in one turn?**
+A: No hard limit. But if you fire 10+ unicasts, question whether
+you should be a worker instead of an orchestrator. Workers answer
+narrow; orchestrators dispatch wide.
+
+**Q: Is order preserved?**
+A: Per-pair, yes — the broker is FIFO. Across pairs, replies arrive
+whenever the senders finish. Don't assume reply order matches send
+order.
 
 **Q: Can `body` be binary?**
-A: Not directly. Use base64 inside a string if needed. But you're
-probably using this for text/JSON — don't make binary the use case.
-
-**Q: Is there message priority?**
-A: Not in MVP. Order is FIFO of arrival at the broker. If you need
-priority, open an issue.
-
-**Q: How do I discover other peers' capabilities (stack, role)?**
-A: `peer_joined` events carry `capabilities` in `body`. Save them when
-peers enter. Or ask the broker via `list_peers`.
+A: Not directly. Use base64 inside a string if you must. JSON is the
+intended payload.
 
 **Q: Can I disconnect any time?**
 A: Yes. The transport sends `peer_left` automatically when you close.
-Other agents will see you go.
-
-**Q: How many parallel requests is "too many"?**
-A: There's no hard limit, but if you're firing 10+ in parallel,
-question whether you're the wrong layer. Orchestrators dispatch wide;
-workers should answer narrow. If you're a worker fanning out to many
-peers, you may be doing the orchestrator's job.
+Other agents see you go.
 
 ---
 
 ## See also
 
-- [`plan/19-agent-network-rfc.md`](../plan/19-agent-network-rfc.md) — motivation and context
-- [`plan/19-agent-network.md`](../plan/19-agent-network.md) — implementation plan
-- `~/.pi/remote/sessions/<name>/audit.jsonl` — append-only log of everything that passed through the broker (read-only audit). Legacy path preserved (2026-05-21 decision — no storage migration)
+- [`plan/19-agent-network.md`](../plan/19-agent-network.md) — original protocol design
+- [`plan/25-pc-mesh-bootstrap.md`](../plan/25-pc-mesh-bootstrap.md) — ACK protocol motivation + Wave 0 + cross-PC plans
+- `~/.pi/remote/sessions/<name>/audit.jsonl` — append-only log of every
+  envelope that passed through the broker, with `ack_status` per entry
+  for cross-checking what really happened.

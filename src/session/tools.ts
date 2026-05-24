@@ -3,7 +3,9 @@ import { Type } from "typebox";
 import type { SessionPeer } from "./peer.js";
 
 const NOT_IN_SESSION = "Not in a session. Run /remote-pi join first";
-const DEFAULT_TIMEOUT_MS = 30_000;
+const ACK_TIMEOUT_MS = 5_000;
+const LEGACY_REQUEST_TIMEOUT_MS = 30_000;
+const LIST_PEERS_TIMEOUT_MS = 2_000;
 
 interface SendInput {
   to: string;
@@ -17,15 +19,32 @@ interface RequestInput {
   timeout_ms?: number;
 }
 
+type SendStatus = "received" | "busy" | "denied" | "timeout" | "sent" | "refused";
+
+interface SendDetails {
+  status: SendStatus;
+  ok: boolean;
+  error?: string;
+  target?: string;
+}
+
 /**
- * Registers two native tools the Pi LLM can invoke to talk to other agents
- * in the same UDS session (plano 19 transport):
- *   - `agent_send`     — fire-and-forget delivery
- *   - `agent_request`  — request/reply with `re` correlation + timeout
+ * Registers the native tools the Pi LLM uses to talk to other agents in the
+ * same UDS session (plano 19 transport + plan/25 Wave 0 ACK protocol):
  *
- * Both tools are registered unconditionally. When this Pi is not currently
- * joined to a session, the tool returns a structured error string instead
- * of throwing, so the LLM can react and tell the user.
+ *   - `agent_send`     — unified delivery with broker-level ACK. Returns
+ *                        a status so the LLM can decide whether to retry.
+ *                        For unicast targets the broker auto-replies with
+ *                        `received | busy | denied`. For broadcast/multicast
+ *                        the tool is fire-and-forget (status `sent`).
+ *   - `agent_request`  — **deprecated**. Still works (send + block on reply
+ *                        via `re` correlation) but the LLM should migrate
+ *                        to the event-driven send+inbox pattern. Each call
+ *                        emits a one-shot warning to stderr.
+ *
+ * Reply pattern (new world): when you receive a message you want to answer,
+ * send back another envelope with `re=<original-id>`. The original sender
+ * sees that reply in its inbox during a future turn.
  *
  * `getSessionPeer` is a getter (not a captured value) so changes to the
  * underlying `_sessionPeer` module variable are observed live.
@@ -35,13 +54,16 @@ export function registerAgentTools(
   getSessionPeer: () => SessionPeer | null,
 ): void {
   const SendParams = Type.Object({
-    to: Type.String({ description: "Recipient agent name (e.g. 'backend'), 'broadcast', or array of names." }),
+    to: Type.String({
+      description:
+        "Recipient agent name (e.g. 'backend'), 'broadcast', or array of names. " +
+        "Broadcast/multicast are fire-and-forget; unicast returns an ACK status.",
+    }),
     body: Type.Unknown({ description: "Free-form JSON payload. String or object — your choice." }),
     re: Type.Optional(Type.String({
       description:
-        "When you are REPLYING to a message from another agent, set this to that " +
-        "message's `id`. Required for `agent_request` correlation on the other side — " +
-        "without it, the sender's pending request times out. Skip for unsolicited sends.",
+        "Set this to the `id` of an incoming message when you are REPLYING to it. " +
+        "The peer correlates your answer with their original send via this field.",
     })),
   });
 
@@ -53,61 +75,160 @@ export function registerAgentTools(
     })),
   });
 
-  pi.registerTool<typeof SendParams, { ok: boolean; error?: string }>({
+  pi.registerTool<typeof SendParams, SendDetails>({
     name: "agent_send",
     label: "Agent Send",
     description:
-      "Send a message to another Pi agent in the current local session. " +
-      "Two uses: (1) fire-and-forget announcements, status updates, or anything " +
-      "that doesn't need a reply — call without `re`. (2) REPLYING to a question " +
-      "another agent sent you via `agent_request` — call with `re` set to the " +
-      "incoming message's `id`. Without `re`, the requester times out.",
+      "Send a message to another Pi agent in the current local session and " +
+      "wait for the broker's delivery ACK. Returns one of: `received` (peer " +
+      "was idle, will process in its next turn), `busy` (peer mid-turn, " +
+      "message dropped — you own the retry), `denied` (peer refused), " +
+      "`timeout` (no ACK in 5s — treat as transport error), `sent` " +
+      "(broadcast/multicast — no ACK semantics). Use `re` to mark this " +
+      "message as a reply to an incoming envelope's `id`.",
     promptSnippet:
-      "agent_send({to, body, re?}): send/reply to peers. Set `re` to incoming message id when answering an agent_request.",
+      "agent_send({to, body, re?}): unicast → returns {status: received|busy|denied|timeout}. Broadcast/multicast → fire-and-forget ({status:'sent'}).",
     parameters: SendParams,
     execute: async (_toolCallId, params) => {
       const peer = getSessionPeer();
       if (!peer) {
+        const details: SendDetails = { status: "refused", ok: false, error: NOT_IN_SESSION };
         return {
           content: [{ type: "text", text: NOT_IN_SESSION }],
-          details: { ok: false, error: NOT_IN_SESSION },
+          details,
         };
       }
       const { to, body, re } = params as SendInput;
       if (to === peer.name()) {
         const msg = `Refused: cannot agent_send to yourself ("${to}"). Just do the work directly.`;
+        const details: SendDetails = { status: "refused", ok: false, error: msg };
         return {
           content: [{ type: "text", text: msg }],
-          details: { ok: false, error: msg },
+          details,
         };
       }
+
+      const isUnicast = to !== "broadcast";
+
+      // Broadcast: fire-and-forget. Broker doesn't ACK multi-target sends.
+      if (!isUnicast) {
+        try {
+          await peer.send(to, body, re ?? null);
+          const details: SendDetails = { status: "sent", ok: true };
+          return {
+            content: [{ type: "text", text: `Broadcast sent.` }],
+            details,
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          const details: SendDetails = { status: "timeout", ok: false, error: msg };
+          return {
+            content: [{ type: "text", text: `Broadcast failed: ${msg}` }],
+            details,
+          };
+        }
+      }
+
+      // Unicast: wait for broker ACK.
       try {
-        await peer.send(to, body, re ?? null);
-        return {
-          content: [{ type: "text", text: `Sent to ${to}${re ? ` (re=${re})` : ""}.` }],
-          details: { ok: true },
+        const ack = await peer.sendWithAck(to, body, re ?? null, ACK_TIMEOUT_MS);
+        const ok = ack.status === "received";
+        const details: SendDetails = {
+          status: ack.status,
+          ok,
+          target: ack.target,
         };
+        const text = _formatAck(to, ack.status, re);
+        return { content: [{ type: "text", text }], details };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        const details: SendDetails = { status: "timeout", ok: false, error: msg };
         return {
           content: [{ type: "text", text: `Failed to send: ${msg}` }],
-          details: { ok: false, error: msg },
+          details,
         };
       }
     },
   });
 
+  const ListPeersParams = Type.Object({});
+
+  pi.registerTool<typeof ListPeersParams, { peers: string[] }>({
+    name: "list_peers",
+    label: "List Peers",
+    description:
+      "Returns the current peer inventory in this session — local names " +
+      "(no prefix) plus cross-PC peers prefixed `<pc_label>:<peer>`. Use " +
+      "BEFORE `agent_send` whenever you're unsure who's available, or " +
+      "after a `peer_joined` / `peer_left` notification to refresh your " +
+      "mental model. Resolves in milliseconds — this is a metadata query " +
+      "to the broker, not a turn of another agent.",
+    promptSnippet:
+      "list_peers(): returns {peers: string[]} — locals + `<pc>:<peer>` remotes. Cheap; call freely before agent_send.",
+    parameters: ListPeersParams,
+    execute: async (_toolCallId) => {
+      const peer = getSessionPeer();
+      if (!peer) {
+        return {
+          content: [{ type: "text", text: NOT_IN_SESSION }],
+          details: { peers: [] },
+        };
+      }
+      try {
+        // Internal use of the request/reply primitive is fine — broker
+        // replies are synthesised in-process (`_handleBrokerMessage`)
+        // without going through `_route`, so they bypass the ACK and
+        // busy-gate machinery entirely.
+        const reply = await peer.request(
+          "broker",
+          { type: "list_peers" },
+          LIST_PEERS_TIMEOUT_MS,
+        );
+        const body = reply.body as { peers?: unknown } | null;
+        const peers = Array.isArray(body?.peers)
+          ? (body!.peers as unknown[]).filter((p): p is string => typeof p === "string")
+          : [];
+        // Drop self from the list — the caller is the only one who can't
+        // address itself anyway, so listing it is noise.
+        const selfName = peer.name();
+        const filtered = peers.filter((p) => p !== selfName);
+        const text = filtered.length === 0 ? "(no peers)" : filtered.join("\n");
+        return {
+          content: [{ type: "text", text }],
+          details: { peers: filtered },
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text", text: `list_peers failed: ${msg}` }],
+          details: { peers: [] },
+        };
+      }
+    },
+  });
+
+  let _requestDeprecationWarned = false;
+
   pi.registerTool<typeof RequestParams, unknown>({
     name: "agent_request",
-    label: "Agent Request",
+    label: "Agent Request (deprecated)",
     description:
-      "Send a message to another Pi agent and wait for the reply. Resolves to the responder's " +
-      "body field. Use when you need an answer from a peer before continuing your turn. " +
-      "Default timeout 30s; override with `timeout_ms`.",
+      "DEPRECATED — prefer `agent_send` + observing your inbox for the " +
+      "reply (correlated by `re=<your-send-id>`). This tool still works: " +
+      "it sends a message and synchronously blocks until the peer replies " +
+      "or the timeout fires. Default 30s. Will be removed in a future " +
+      "release; migrate to the event-driven pattern in the agent-network skill.",
     promptSnippet:
-      "agent_request({to, body, timeout_ms?}): synchronous request/reply with a peer (returns peer's body or {error}).",
+      "agent_request({to, body, timeout_ms?}): DEPRECATED synchronous request/reply (blocks current turn). Prefer agent_send + inbox observation.",
     parameters: RequestParams,
     execute: async (_toolCallId, params) => {
+      if (!_requestDeprecationWarned) {
+        _requestDeprecationWarned = true;
+        console.error(
+          "[remote-pi] agent_request is deprecated — migrate to agent_send + " +
+          "observe inbox by `re`. See the agent-network skill for the new pattern.",
+        );
+      }
       const peer = getSessionPeer();
       if (!peer) {
         return {
@@ -125,7 +246,7 @@ export function registerAgentTools(
       }
       const timeout = typeof timeout_ms === "number" && timeout_ms > 0
         ? timeout_ms
-        : DEFAULT_TIMEOUT_MS;
+        : LEGACY_REQUEST_TIMEOUT_MS;
       try {
         const reply = await peer.request(to, body, timeout);
         const text = typeof reply.body === "string"
@@ -144,4 +265,20 @@ export function registerAgentTools(
       }
     },
   });
+}
+
+function _formatAck(to: string, status: SendStatus, re: string | null | undefined): string {
+  const reSuffix = re ? ` (re=${re})` : "";
+  switch (status) {
+    case "received":
+      return `Delivered to "${to}"${reSuffix} — peer was idle and will process in its next turn.`;
+    case "busy":
+      return `"${to}" is busy${reSuffix} — message dropped. Retry with backoff or abandon (see agent-network skill).`;
+    case "denied":
+      return `"${to}" denied the message${reSuffix}. Do not retry; report to user.`;
+    case "timeout":
+      return `No ACK from "${to}" within ${ACK_TIMEOUT_MS}ms${reSuffix} — transport error. Investigate or retry later.`;
+    default:
+      return `Sent to "${to}"${reSuffix} — status: ${status}.`;
+  }
 }

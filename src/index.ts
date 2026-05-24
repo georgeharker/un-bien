@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * pi-extension — remote-pi slash commands + AgentBridge wiring
  *
@@ -59,6 +60,10 @@ import { PlainPeerChannel } from "./transport/peer_channel.js";
 import { roomIdForCwd } from "./rooms.js";
 import { SessionPeer } from "./session/peer.js";
 import { registerAgentTools } from "./session/tools.js";
+import { BrokerRemote } from "./session/broker_remote.js";
+import { formatPeerInventory } from "./session/peer_inventory.js";
+import { PiForwardClient } from "./transport/pi_forward_client.js";
+import { discoverSelfLabel, discoverSiblings, fallbackLabel } from "./mesh/siblings.js";
 import {
   ensureGlobalDirs,
   LOCAL_SESSION_NAME,
@@ -67,6 +72,10 @@ import {
   skillsDir,
 } from "./session/global_config.js";
 import { acquireCwdLock, type AcquiredLock } from "./session/cwd_lock.js";
+import { addDaemon, listDaemons, removeDaemon } from "./daemon/registry.js";
+import { callSupervisor, supervisorOnline, SupervisorOfflineError } from "./daemon/client.js";
+import type { DaemonInfo } from "./daemon/control_protocol.js";
+import { installService, uninstallService } from "./daemon/install.js";
 import {
   defaultAgentName,
   effectiveAutoStartRelay,
@@ -128,6 +137,11 @@ let _currentModel: string | undefined = undefined;  // last-known model name
 let _sessionPeer: SessionPeer | null = null;
 let _sessionName: string | null = null;
 let _sessionPeerCount = 0;
+// Plan/25 Wave B/C — cross-PC routing. Instantiated when this Pi has the
+// local broker (leader) AND the relay WS is up. Detached on either side
+// of those preconditions falling away.
+let _brokerRemote: BrokerRemote | null = null;
+let _piForwardClient: PiForwardClient | null = null;
 
 // Cached state of global pairings (`peers.json`). Pairing is per-machine, so a
 // device paired in any Pi process is paired everywhere. Refreshed on boot,
@@ -167,6 +181,63 @@ function _refreshSessionPeerCount(
 /** Friendly model name for room_meta (plano 18). undefined when SDK has none yet. */
 function _currentModelName(): string | undefined {
   return _currentModel;
+}
+
+// ── Cross-PC mesh wiring (plan/25 Wave B/C) ───────────────────────────────────
+
+/**
+ * Bring up the cross-PC router when both prerequisites are met:
+ *   1. local session peer is the leader (we host the Broker)
+ *   2. relay WS is up (`_relay !== null`)
+ *
+ * Idempotent: safe to call from `_cmdStart`, `_cmdJoin`, post-failover
+ * reconnect, etc. Self-heals: if siblings can't be loaded (no mesh blob
+ * yet, network hiccup) we still attach a `BrokerRemote` with an empty
+ * sibling set — push from a remote sibling will populate the cache later.
+ */
+async function _ensureBrokerRemote(): Promise<void> {
+  if (_brokerRemote !== null) return;
+  if (!_sessionPeer || _sessionPeer.currentRole() !== "leader") return;
+  const broker = _sessionPeer.localBroker();
+  if (!broker) return;
+  if (!_relay || !_relayUrl || !_cachedEd25519) return;
+
+  const pi = new PiForwardClient(_relay);
+  _piForwardClient = pi;
+
+  const selfPubkeyB64 = Buffer.from(_cachedEd25519.publicKey).toString("base64");
+  // Best-effort sibling + label discovery — failures are non-fatal.
+  let selfPcLabel = fallbackLabel(selfPubkeyB64);
+  let siblings: { pcLabel: string; pcPubkey: string }[] = [];
+  try {
+    const meshClient = new MeshClient(_relayUrl);
+    const owners = await listOwnerPubkeys();
+    if (owners.length > 0) {
+      const [labelRes, sibs] = await Promise.all([
+        discoverSelfLabel({ client: meshClient, ownerEpks: owners, myPubkey: _cachedEd25519.publicKey }),
+        discoverSiblings({ client: meshClient, ownerEpks: owners, myPubkey: _cachedEd25519.publicKey }),
+      ]);
+      selfPcLabel = labelRes.selfPcLabel;
+      siblings = sibs;
+    }
+  } catch (err) {
+    console.error(`[remote-pi] broker_remote bootstrap: sibling discovery failed: ${String(err)}`);
+  }
+
+  _brokerRemote = new BrokerRemote({
+    broker,
+    pi,
+    selfPcLabel,
+    selfPcPubkey: selfPubkeyB64,
+    siblings,
+  });
+}
+
+function _teardownBrokerRemote(): void {
+  _brokerRemote?.detach();
+  _brokerRemote = null;
+  _piForwardClient?.detach();
+  _piForwardClient = null;
 }
 
 /** Refreshes the Pi TUI footer slots from current module state. Safe no-op when ctx lacks ui. */
@@ -460,6 +531,9 @@ function _goIdle(byeReason?: import("./protocol/types.js").ByeReason): void {
   _selfRevoke?.stop();
   _selfRevoke = null;
 
+  // Cross-PC routing relies on _relay being up; tear it down here too.
+  _teardownBrokerRemote();
+
   // Preserve _sessionStartedAt + _messageBuffer across stop/start cycles.
   // The Pi agent session outlives the relay connection — `message_end` keeps
   // firing for terminal turns even while idle, and the buffer must survive
@@ -497,6 +571,11 @@ function _onRelayClose(): void {
   _currentTurnId = null;
 
   _relay = null;  // _relayUrl preserved for retry
+
+  // Cross-PC routing relies on _relay; bring it down. Will be re-instated
+  // by _attemptReconnect on success.
+  _teardownBrokerRemote();
+
   _state = "started";
   _refreshFooter();
 
@@ -555,6 +634,11 @@ async function _attemptReconnect(): Promise<void> {
 
   relay.on("close", _onRelayClose);
   _stopAutoListener = _installAutoListener(relay);
+
+  // Plan/25 Wave B/C: relay is back; bring cross-PC routing back online.
+  void _ensureBrokerRemote().catch((err) => {
+    console.error(`[remote-pi] _ensureBrokerRemote (post-reconnect) failed: ${String(err)}`);
+  });
 
   // _state stays "started"; peer reconnect (if previously paired) flows
   // through _installAutoListener → _findKnownPeer → _promoteToPaired
@@ -900,6 +984,22 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     _currentTurnId = null;
   });
 
+  // plan/25 Wave 0: notify the local broker of turn lifecycle so it can
+  // ACK incoming agent-network envelopes as `busy` while this peer's LLM is
+  // mid-turn (and `received` once idle). Fire-and-forget — if the broker
+  // can't be reached, the worst case is a bad ACK answer; recovery is the
+  // next turn boundary. Skip silently when no mesh session is joined.
+  pi.on("turn_start", () => {
+    if (!_sessionPeer) return;
+    void _sessionPeer.send("broker", { type: "turn_state", busy: true })
+      .catch(() => { /* best-effort */ });
+  });
+  pi.on("turn_end", () => {
+    if (!_sessionPeer) return;
+    void _sessionPeer.send("broker", { type: "turn_state", busy: false })
+      .catch(() => { /* best-effort */ });
+  });
+
   // ── Commands ──────────────────────────────────────────────────────────────
   //
   // Final surface: 8 commands. Pre-2026-05-23 we had 20 commands covering
@@ -919,6 +1019,13 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         "setup", "status", "stop",
         "pair", "devices", "revoke",
         "set-relay",
+        "peers",  // plan/25 Wave D — local + cross-PC inventory
+        "create", "remove", "daemons",  // daemon registry (plan/26 W1)
+        // Fleet ops use the `daemon` prefix so `/remote-pi stop` keeps
+        // meaning "stop this local Pi" — the local UX shipped in plan/25.
+        "daemon start", "daemon stop", "daemon restart",
+        "daemon send", "daemon status",
+        "install", "uninstall",  // service install (plan/26 W3)
       ]
         .filter((o) => o.startsWith(prefix))
         .map((o) => ({ value: o, label: o }));
@@ -926,15 +1033,26 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     handler: async (args, ctx) => {
       _lastCtx = ctx;
       const sub = args.trim();
-      if      (sub === "")                  { await _cmdRoot(ctx); }
-      else if (sub === "setup")             { await _cmdSetup(ctx); }
-      else if (sub === "status")            { _cmdStatus(ctx); }
-      else if (sub === "stop")              { await _cmdStop(ctx); }
-      else if (sub === "pair")              { await _cmdPair(ctx); }
-      else if (sub === "devices")           { await _cmdList(ctx); }
-      else if (sub.startsWith("revoke"))    { await _cmdRevoke(sub.slice("revoke".length).trim(), ctx); }
-      else if (sub.startsWith("set-relay")) { _cmdSetRelay(sub.slice("set-relay".length).trim(), ctx); }
-      else                                  { await _cmdRoot(ctx); }
+      if      (sub === "")                       { await _cmdRoot(ctx); }
+      else if (sub === "setup")                  { await _cmdSetup(ctx); }
+      else if (sub === "status")                 { _cmdStatus(ctx); }
+      else if (sub === "stop")                   { await _cmdStop(ctx); }
+      else if (sub === "pair")                   { await _cmdPair(ctx); }
+      else if (sub === "devices")                { await _cmdList(ctx); }
+      else if (sub.startsWith("revoke"))         { await _cmdRevoke(sub.slice("revoke".length).trim(), ctx); }
+      else if (sub.startsWith("set-relay"))      { _cmdSetRelay(sub.slice("set-relay".length).trim(), ctx); }
+      else if (sub === "peers")                  { await _cmdPeers(ctx); }
+      else if (sub.startsWith("create"))         { _cmdCreate(sub.slice("create".length).trim(), ctx); }
+      else if (sub.startsWith("remove"))         { _cmdRemove(sub.slice("remove".length).trim(), ctx); }
+      else if (sub === "daemons")                { await _cmdDaemonsList(ctx); }
+      else if (sub === "daemon start")           { await _cmdDaemonStart(ctx); }
+      else if (sub === "daemon stop")            { await _cmdDaemonStop(ctx); }
+      else if (sub === "daemon restart")         { await _cmdDaemonRestart(ctx); }
+      else if (sub === "daemon status")          { await _cmdDaemonStatus(ctx); }
+      else if (sub.startsWith("daemon send"))    { await _cmdDaemonSend(sub.slice("daemon send".length).trim(), ctx); }
+      else if (sub === "install")                { _cmdInstall(ctx); }
+      else if (sub === "uninstall")              { _cmdUninstall(ctx); }
+      else                                       { await _cmdRoot(ctx); }
     },
   });
 
@@ -952,6 +1070,36 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     handler: async (args, ctx) => { _lastCtx = ctx; await _cmdRevoke(args.trim(), ctx); },
   });
   pi.registerCommand("remote-pi set-relay", { description: "Persist a new relay URL to user config", handler: async (args, ctx) => { _lastCtx = ctx; _cmdSetRelay(args.trim(), ctx); } });
+
+  // Plan/25 Wave D
+  pi.registerCommand("remote-pi peers", {
+    description: "List local + cross-PC mesh peers, grouped by PC label",
+    handler: async (_, ctx) => { _lastCtx = ctx; await _cmdPeers(ctx); },
+  });
+
+  // Daemon registry (plan/26 Wave 1) — create + remove. start/stop/send/
+  // status/install/uninstall come in later waves with the supervisor.
+  pi.registerCommand("remote-pi create", {
+    description: "Register a folder as a daemon (will be supervised once `install` runs)",
+    handler: async (args, ctx) => { _lastCtx = ctx; _cmdCreate(args.trim(), ctx); },
+  });
+  pi.registerCommand("remote-pi remove", {
+    description: "Unregister a daemon by id (local config is preserved)",
+    handler: async (args, ctx) => { _lastCtx = ctx; _cmdRemove(args.trim(), ctx); },
+  });
+
+  // Fleet ops via the supervisor (plan/26 W2). `/remote-pi stop` stays as
+  // local stop — fleet stop is `/remote-pi daemon stop`.
+  pi.registerCommand("remote-pi daemons",        { description: "List registered daemons + state", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdDaemonsList(ctx); } });
+  pi.registerCommand("remote-pi daemon start",   { description: "Start every registered daemon", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdDaemonStart(ctx); } });
+  pi.registerCommand("remote-pi daemon stop",    { description: "Stop every running daemon", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdDaemonStop(ctx); } });
+  pi.registerCommand("remote-pi daemon restart", { description: "Restart every registered daemon", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdDaemonRestart(ctx); } });
+  pi.registerCommand("remote-pi daemon status",  { description: "Show fleet runtime status (pid, uptime, restarts)", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdDaemonStatus(ctx); } });
+  pi.registerCommand("remote-pi daemon send",    { description: "Send a prompt to a daemon: `daemon send <id> \"<text>\"`", handler: async (args, ctx) => { _lastCtx = ctx; await _cmdDaemonSend(args.trim(), ctx); } });
+
+  // Service install / uninstall (plan/26 W3)
+  pi.registerCommand("remote-pi install",   { description: "Install pi-supervisord as a system service (systemd/launchd)", handler: async (_, ctx) => { _lastCtx = ctx; _cmdInstall(ctx); } });
+  pi.registerCommand("remote-pi uninstall", { description: "Remove the pi-supervisord system service (daemons registry preserved)", handler: async (_, ctx) => { _lastCtx = ctx; _cmdUninstall(ctx); } });
 };
 
 export default extension;
@@ -992,6 +1140,33 @@ function _cmdStatus(ctx: Pick<ExtensionContext, "ui">): void {
   }
 
   ctx.ui.notify(`[remote-pi]\n  ${meshLine}\n  ${relayLine}`, "info");
+}
+
+/**
+ * Plan/25 Wave D: `/remote-pi peers`.
+ *
+ * Queries the local broker for the aggregated peer inventory (`list_peers`
+ * returns locals + cross-PC entries prefixed with `<pc_label>:`). Formats
+ * the result grouped by source so users can see at a glance who's on
+ * their machine vs. on a paired sibling Pi.
+ */
+async function _cmdPeers(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+  if (!_sessionPeer) {
+    ctx.ui.notify("[remote-pi] Not on the local mesh. Run /remote-pi to join.", "warning");
+    return;
+  }
+  let peers: string[];
+  try {
+    const reply = await _sessionPeer.request("broker", { type: "list_peers" }, 2000);
+    peers = (reply.body as { peers?: string[] } | null)?.peers ?? [];
+  } catch (err) {
+    ctx.ui.notify(`[remote-pi] peers list failed: ${String(err)}`, "error");
+    return;
+  }
+  // Exclude self from the printed list — `list_peers` returns every peer
+  // registered with the broker including the caller, which is noise here.
+  const selfName = _sessionPeer.name();
+  ctx.ui.notify(`[remote-pi] peers:\n${formatPeerInventory(peers, selfName)}`, "info");
 }
 
 /**
@@ -1181,9 +1356,25 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
           _refreshFooter();
         }
       },
+      // Plan/25 Wave D: keep broker_remote's sibling list in sync with
+      // mesh_versions. The poller fires this whenever the union of Pi
+      // members across owners changes — adding/removing a sibling, or
+      // an owner relabeling a nickname. `_brokerRemote` may be null
+      // until `_ensureBrokerRemote` finishes; the callback short-circuits.
+      onMembersChanged: (siblings) => {
+        _brokerRemote?.setSiblings(siblings);
+      },
     });
     _selfRevoke.start();
   }
+
+  // Plan/25 Wave B/C: bring up cross-PC routing if local broker is ready.
+  // No-op when we're a follower (broker_remote needs the local Broker
+  // instance the leader hosts). Best-effort; failures log but don't break
+  // single-PC operation.
+  void _ensureBrokerRemote().catch((err) => {
+    console.error(`[remote-pi] _ensureBrokerRemote failed: ${String(err)}`);
+  });
 
   ctx.ui.notify(`[remote-pi] state: started (peer=${myShort}) — Connected to relay ${relayUrl}`, "info");
 }
@@ -1374,6 +1565,283 @@ function _cmdSetRelay(arg: string, ctx: Pick<ExtensionContext, "ui">): void {
   );
 }
 
+// ── Daemon registry commands (plan/26 Wave 1) ─────────────────────────────────
+
+/**
+ * `/remote-pi create [<cwd>] [--name <name>]`
+ *
+ * Promotes a folder to a daemon entry in `~/.pi/remote/daemons.json`. The
+ * cwd is **always normalized to an absolute realpath** before storage —
+ * `~/Movies`, `./Movies`, `../foo/Movies` all collapse to a single
+ * canonical entry. Relative paths resolve against the Pi process's
+ * current working directory, not the slash-command's `ctx.cwd`.
+ *
+ * Side effects on the cwd's local config (`<cwd>/.pi/remote-pi/config.json`):
+ *   - If the config doesn't exist: created with `auto_start_relay=true`
+ *     (mandatory for daemons) and `agent_name` from `--name` if provided.
+ *   - If the config already exists: left untouched. Re-running `create`
+ *     on an existing daemon is idempotent at this layer; the registry
+ *     itself rejects duplicate cwds.
+ */
+function _cmdCreate(arg: string, ctx: Pick<ExtensionContext, "ui">): void {
+  // Parse `[cwd] [--name "value with spaces" | --name word]` in any order.
+  // The first non-flag token is the cwd; the rest of the line after
+  // `--name` (quoted or unquoted) is the display name.
+  const nameMatch = arg.match(/--name\s+"([^"]+)"|--name\s+(\S+)/);
+  const name = nameMatch ? (nameMatch[1] ?? nameMatch[2]) : undefined;
+  const cwdRaw = arg.replace(/--name\s+"[^"]+"|--name\s+\S+/, "").trim();
+  if (!cwdRaw) {
+    ctx.ui.notify(
+      "[remote-pi] Usage: /remote-pi create <absolute-or-relative-cwd> [--name \"Display name\"]",
+      "warning",
+    );
+    return;
+  }
+
+  let result: { id: string; cwd: string };
+  try {
+    result = addDaemon(cwdRaw);
+  } catch (err) {
+    ctx.ui.notify(`[remote-pi] create failed: ${String(err)}`, "error");
+    return;
+  }
+
+  // Provision local config when missing. Use the existing helpers so the
+  // daemon's first boot sees the same shape as a manually-configured Pi.
+  // `saveLocalConfig` is a partial-merge: if the file already exists with
+  // a different agent_name we DON'T overwrite — user's existing config
+  // wins to avoid surprises.
+  if (!localConfigExists(result.cwd)) {
+    saveLocalConfig(result.cwd, {
+      agent_name: name ?? defaultAgentName(result.cwd),
+      auto_start_relay: true,
+    });
+  }
+
+  const finalName = loadLocalConfig(result.cwd).agent_name ?? defaultAgentName(result.cwd);
+  ctx.ui.notify(
+    `[remote-pi] Daemon registered: id=${result.id} name="${finalName}" cwd=${result.cwd}`,
+    "info",
+  );
+}
+
+/**
+ * `/remote-pi remove <id>`
+ *
+ * Unregisters a daemon by its 8-hex-char id (the same id printed by
+ * `/remote-pi create` and `/remote-pi daemons`). The cwd's local config
+ * stays on disk — re-creating later with the same cwd is a no-op
+ * because the existing config wins.
+ */
+function _cmdRemove(arg: string, ctx: Pick<ExtensionContext, "ui">): void {
+  const id = arg.trim();
+  if (!id) {
+    ctx.ui.notify(
+      "[remote-pi] Usage: /remote-pi remove <id>. Run /remote-pi daemons to see ids.",
+      "warning",
+    );
+    return;
+  }
+
+  let result: { removed: boolean; cwd?: string };
+  try {
+    result = removeDaemon(id);
+  } catch (err) {
+    ctx.ui.notify(`[remote-pi] remove failed: ${String(err)}`, "error");
+    return;
+  }
+
+  if (!result.removed) {
+    // Surface the registered ids for a quick visual diff.
+    const known = listDaemons().map((d) => d.id).join(", ") || "(none)";
+    ctx.ui.notify(
+      `[remote-pi] No daemon with id "${id}". Known ids: ${known}`,
+      "warning",
+    );
+    return;
+  }
+
+  ctx.ui.notify(
+    `[remote-pi] Daemon removed: id=${id} cwd=${result.cwd}. ` +
+    `Local config at ${result.cwd}/.pi/remote-pi/config.json was kept.`,
+    "info",
+  );
+}
+
+// ── Fleet-ops commands (plan/26 W2) — talk to the supervisor over UDS ─────────
+//
+// Every command here is a thin wrapper around `callSupervisor(...)`. When
+// the supervisor isn't running we fall back to a friendly hint instead of
+// the raw error, so the user can't get stuck on "what's wrong?".
+
+function _notifyOffline(ctx: Pick<ExtensionContext, "ui">, err: SupervisorOfflineError): void {
+  ctx.ui.notify(`[remote-pi] ${err.message}`, "warning");
+}
+
+function _formatDaemonTable(daemons: DaemonInfo[]): string {
+  if (daemons.length === 0) return "(no daemons registered)";
+  const rows = daemons.map((d) => {
+    const uptime = d.uptime_s !== undefined ? `${d.uptime_s}s` : "—";
+    const pid = d.pid !== undefined ? String(d.pid) : "—";
+    const restarts = d.restart_count ?? 0;
+    return `  ${d.id}  ${d.state.padEnd(8)}  pid=${pid}  up=${uptime}  restarts=${restarts}  ${d.name}  ${d.cwd}`;
+  });
+  return rows.join("\n");
+}
+
+/**
+ * `/remote-pi daemons` — registry + runtime state in one view. When the
+ * supervisor is offline we still show registry-only output (state =
+ * "stopped" everywhere), so the user can see what's configured even
+ * before `install`.
+ */
+async function _cmdDaemonsList(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+  if (!(await supervisorOnline())) {
+    const registry = listDaemons();
+    if (registry.length === 0) {
+      ctx.ui.notify("[remote-pi] No daemons registered. Run /remote-pi create <cwd>.", "info");
+      return;
+    }
+    const rows = registry.map((d) => {
+      const cfg = loadLocalConfig(d.cwd);
+      const name = cfg.agent_name ?? defaultAgentName(d.cwd);
+      return `  ${d.id}  ${name}  ${d.cwd}  (supervisor offline)`;
+    }).join("\n");
+    ctx.ui.notify(`[remote-pi] Daemons (registry only — run install to bring supervisor up):\n${rows}`, "info");
+    return;
+  }
+  try {
+    const data = await callSupervisor({ op: "list" });
+    ctx.ui.notify(`[remote-pi] Daemons:\n${_formatDaemonTable(data.daemons)}`, "info");
+  } catch (err) {
+    if (err instanceof SupervisorOfflineError) { _notifyOffline(ctx, err); return; }
+    ctx.ui.notify(`[remote-pi] daemons failed: ${String(err)}`, "error");
+  }
+}
+
+async function _cmdDaemonStatus(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+  try {
+    const data = await callSupervisor({ op: "status" });
+    ctx.ui.notify(`[remote-pi] Fleet status:\n${_formatDaemonTable(data.daemons)}`, "info");
+  } catch (err) {
+    if (err instanceof SupervisorOfflineError) { _notifyOffline(ctx, err); return; }
+    ctx.ui.notify(`[remote-pi] status failed: ${String(err)}`, "error");
+  }
+}
+
+async function _cmdDaemonStart(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+  try {
+    const data = await callSupervisor({ op: "start_all" });
+    ctx.ui.notify(
+      `[remote-pi] Started ${data.started.length} daemon(s), ` +
+      `${data.already_running.length} already running.`,
+      "info",
+    );
+  } catch (err) {
+    if (err instanceof SupervisorOfflineError) { _notifyOffline(ctx, err); return; }
+    ctx.ui.notify(`[remote-pi] start failed: ${String(err)}`, "error");
+  }
+}
+
+async function _cmdDaemonStop(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+  try {
+    const data = await callSupervisor({ op: "stop_all" });
+    ctx.ui.notify(
+      `[remote-pi] Stopped ${data.stopped.length} daemon(s), ` +
+      `${data.already_stopped.length} already stopped.`,
+      "info",
+    );
+  } catch (err) {
+    if (err instanceof SupervisorOfflineError) { _notifyOffline(ctx, err); return; }
+    ctx.ui.notify(`[remote-pi] stop failed: ${String(err)}`, "error");
+  }
+}
+
+async function _cmdDaemonRestart(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+  try {
+    const data = await callSupervisor({ op: "restart_all" });
+    ctx.ui.notify(`[remote-pi] Restarted ${data.restarted.length} daemon(s).`, "info");
+  } catch (err) {
+    if (err instanceof SupervisorOfflineError) { _notifyOffline(ctx, err); return; }
+    ctx.ui.notify(`[remote-pi] restart failed: ${String(err)}`, "error");
+  }
+}
+
+/**
+ * `/remote-pi daemon send <id> "<text>"` — injects a prompt into a
+ * running daemon via its RPC stdin. The agent processes the prompt as
+ * if a user typed it; output flows back via the relay/mesh, not here.
+ *
+ * Fire-and-forget at this layer — the CLI just confirms delivery.
+ */
+async function _cmdDaemonSend(arg: string, ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+  // Parse `<id> <text...>` — id is the first token, rest is the prompt.
+  // The text may be quoted; if so, strip the outer quotes. Otherwise
+  // take the entire remainder verbatim.
+  const m = arg.match(/^(\S+)\s+(?:"([^"]*)"|(.*))$/);
+  if (!m) {
+    ctx.ui.notify(
+      "[remote-pi] Usage: /remote-pi daemon send <id> \"<prompt text>\"",
+      "warning",
+    );
+    return;
+  }
+  const id = m[1]!;
+  const text = (m[2] ?? m[3] ?? "").trim();
+  if (!text) {
+    ctx.ui.notify("[remote-pi] daemon send: prompt text is empty.", "warning");
+    return;
+  }
+  try {
+    const data = await callSupervisor({ op: "send", id, text });
+    if (data.delivered) {
+      ctx.ui.notify(`[remote-pi] Sent to ${id}: ${text.slice(0, 60)}${text.length > 60 ? "…" : ""}`, "info");
+    } else {
+      ctx.ui.notify(`[remote-pi] daemon ${id} did not accept the prompt (not running?)`, "warning");
+    }
+  } catch (err) {
+    if (err instanceof SupervisorOfflineError) { _notifyOffline(ctx, err); return; }
+    ctx.ui.notify(`[remote-pi] daemon send failed: ${String(err)}`, "error");
+  }
+}
+
+// ── Install/uninstall the supervisor service (plan/26 W3) ────────────────────
+//
+// Installs `pi-supervisord` as a user-level system service (systemd
+// `--user` unit on Linux, launchd LaunchAgent on macOS). Once installed:
+//   - Supervisor starts at login + survives reboots.
+//   - `remote-pi daemon start/stop/send/...` work without manually
+//     spawning the supervisor.
+// Uninstall is the inverse — leaves the registry (`daemons.json`) intact,
+// so re-installing later picks up where you left off.
+
+function _cmdInstall(ctx: Pick<ExtensionContext, "ui">): void {
+  try {
+    const result = installService();
+    const summary =
+      `[remote-pi] Supervisor service installed (${result.platform}).\n` +
+      `  Unit: ${result.unitPath}\n` +
+      `  Steps:\n${result.log.map((l) => "    " + l).join("\n")}`;
+    ctx.ui.notify(summary, "info");
+  } catch (err) {
+    ctx.ui.notify(`[remote-pi] install failed: ${String(err)}`, "error");
+  }
+}
+
+function _cmdUninstall(ctx: Pick<ExtensionContext, "ui">): void {
+  try {
+    const result = uninstallService();
+    const summary =
+      `[remote-pi] Supervisor service uninstalled (${result.platform}).\n` +
+      `  Unit: ${result.unitPath} (${result.removed ? "removed" : "not present"})\n` +
+      `  Steps:\n${result.log.map((l) => "    " + l).join("\n")}\n` +
+      `  Note: daemons registry (~/.pi/remote/daemons.json) kept — re-install restores everything.`;
+    ctx.ui.notify(summary, "info");
+  } catch (err) {
+    ctx.ui.notify(`[remote-pi] uninstall failed: ${String(err)}`, "error");
+  }
+}
+
 // ── Agent-network commands (plano 19) ─────────────────────────────────────────
 
 function _resolveExtensionDir(): string {
@@ -1447,6 +1915,19 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
     // failover, etc.) — querying list_peers makes the count self-healing.
     if (body && (body.type === "peer_joined" || body.type === "peer_left")) {
       _refreshSessionPeerCount(peer, ctx);
+      // Plan/25 Wave B: push fresh peer list to all siblings so their
+      // remotePeers cache stays current without polling.
+      void peer.request("broker", { type: "list_peers" }, 2000)
+        .then((reply) => {
+          const peers = (reply.body as { peers?: string[] } | null)?.peers;
+          if (Array.isArray(peers) && _brokerRemote) {
+            // Strip remote-prefixed entries — onLocalPeersChanged wants
+            // local-only names (`list_peers` returns aggregated).
+            const local = peers.filter((p) => !p.includes(":"));
+            _brokerRemote.onLocalPeersChanged(local);
+          }
+        })
+        .catch(() => { /* no broker_remote bound yet, or list_peers failed */ });
       return;
     }
     if (env.from === "broker") return;  // other broker control messages — ignore
@@ -1469,8 +1950,25 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
   // After failover (leader died, we re-elected): the new broker's peers map
   // starts fresh, but our cached `_sessionPeerCount` is stale. Re-seed it so
   // surviving peers don't carry the pre-failover count forever.
+  //
+  // Plan/25 Wave D: when this peer was promoted to leader by the failover,
+  // it now hosts a fresh `Broker` instance with no `RemoteRouter` attached.
+  // The previous broker_remote (on the dead leader) is gone with that
+  // process. Recreate ours here. Followers stay no-op (broker_remote only
+  // runs on the leader). Idempotent — _ensureBrokerRemote short-circuits
+  // when one is already wired.
   peer.onReconnect(() => {
     _refreshSessionPeerCount(peer, ctx);
+    if (peer.currentRole() === "leader") {
+      // Tear down any previous instance first — its broker reference is now
+      // stale (it pointed at the broker we hosted before the prior
+      // disconnect). The new broker comes from `peer.localBroker()` after
+      // reconnect.
+      _teardownBrokerRemote();
+      void _ensureBrokerRemote().catch((err) => {
+        console.error(`[remote-pi] _ensureBrokerRemote (post-failover) failed: ${String(err)}`);
+      });
+    }
   });
 
   try {
@@ -1488,6 +1986,12 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
       "info",
     );
     _refreshFooter(ctx);
+    // Plan/25 Wave B/C: try to bring up cross-PC routing now that the
+    // local broker exists. No-op if the relay isn't up yet (will fire
+    // again from `_cmdStart`).
+    void _ensureBrokerRemote().catch((err) => {
+      console.error(`[remote-pi] _ensureBrokerRemote (post-join) failed: ${String(err)}`);
+    });
   } catch (err) {
     ctx.ui.notify(`[remote-pi] join failed: ${String(err)}`, "error");
   }
@@ -1742,6 +2246,47 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       saveConfig({ relay: raw });
       console.log(`Relay set to ${raw}`);
     }
+  } else if (subcmd === "create") {
+    // Standalone: `remote-pi create <cwd> [--name "X"]`. The shell already
+    // split the args and stripped the outer quotes, so an arg like
+    // `Tmp Agent` arrives as a single element with embedded space. Re-add
+    // quotes around any arg containing whitespace so the regex-based
+    // parser (shared with the slash-command path) sees the same shape
+    // as it would from a Pi interactive prompt.
+    const joined = cliArgs.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ");
+    _cmdCreate(joined, {
+      ui: { notify: (msg: string) => console.log(msg) } as unknown as ExtensionContext["ui"],
+    });
+  } else if (subcmd === "remove") {
+    const id = (cliArgs[0] ?? "").trim();
+    _cmdRemove(id, {
+      ui: { notify: (msg: string) => console.log(msg) } as unknown as ExtensionContext["ui"],
+    });
+  } else if (subcmd === "daemons") {
+    // Mirror the slash handler: ask the supervisor when reachable,
+    // fall back to registry-only when not.
+    const stubCtx = { ui: { notify: (msg: string) => console.log(msg) } as unknown as ExtensionContext["ui"] };
+    await _cmdDaemonsList(stubCtx);
+  } else if (subcmd === "daemon") {
+    // `remote-pi daemon <op> [args]`. Reuse the fleet-ops handlers — they
+    // already accept a minimal ctx with `notify`.
+    const op = cliArgs[0] ?? "";
+    const rest = cliArgs.slice(1).map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ");
+    const stubCtx = { ui: { notify: (msg: string) => console.log(msg) } as unknown as ExtensionContext["ui"] };
+    if      (op === "start")   { await _cmdDaemonStart(stubCtx); }
+    else if (op === "stop")    { await _cmdDaemonStop(stubCtx); }
+    else if (op === "restart") { await _cmdDaemonRestart(stubCtx); }
+    else if (op === "status")  { await _cmdDaemonStatus(stubCtx); }
+    else if (op === "send")    { await _cmdDaemonSend(rest, stubCtx); }
+    else {
+      console.log("Usage: remote-pi daemon <start|stop|restart|status|send <id> \"<text>\">");
+    }
+  } else if (subcmd === "install") {
+    const stubCtx = { ui: { notify: (msg: string) => console.log(msg) } as unknown as ExtensionContext["ui"] };
+    _cmdInstall(stubCtx);
+  } else if (subcmd === "uninstall") {
+    const stubCtx = { ui: { notify: (msg: string) => console.log(msg) } as unknown as ExtensionContext["ui"] };
+    _cmdUninstall(stubCtx);
   } else {
     const edKp = await getOrCreateEd25519Keypair();
     const sessionName = process.cwd().split("/").slice(-2).join("/");

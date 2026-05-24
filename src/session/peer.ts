@@ -25,7 +25,24 @@ export interface SessionPeerOptions {
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const ACK_TIMEOUT_MS = 5_000;
 const FAILOVER_RETRY_MS = 100;
+
+export type AckStatus = "received" | "busy" | "denied" | "timeout";
+
+export interface AckResult {
+  status: AckStatus;
+  /** The original envelope id that was awaiting ACK. */
+  id: string;
+  /** Target name reported by broker (when ACK arrived). Undefined on timeout. */
+  target?: string;
+}
+
+interface AckBody {
+  type: "ack";
+  status: "received" | "busy" | "denied";
+  target: string;
+}
 
 export class SessionPeer {
   private readonly opts: SessionPeerOptions;
@@ -35,10 +52,15 @@ export class SessionPeer {
   private broker: Broker | null = null;
   private socket: Socket | null = null;
   private buf = "";
-  /** Map of in-flight request ids → resolver. */
+  /** Map of in-flight request ids → resolver. Used by `request()`. */
   private readonly pending = new Map<string, {
     resolve: (env: Envelope) => void;
     reject: (err: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  /** Map of in-flight send ids → ACK resolver. Used by `sendWithAck()`. */
+  private readonly ackPending = new Map<string, {
+    resolve: (result: AckResult) => void;
     timer: ReturnType<typeof setTimeout>;
   }>();
   private readonly handlers = new Set<MessageHandler>();
@@ -67,6 +89,13 @@ export class SessionPeer {
     return this.role;
   }
 
+  /** Returns the locally-hosted Broker when this peer is the leader, or
+   *  null when it's a follower. Wave 25C uses this to attach the
+   *  cross-PC router. */
+  localBroker(): Broker | null {
+    return this.broker;
+  }
+
   /**
    * Fire-and-forget send. Doesn't await a reply.
    *
@@ -83,6 +112,40 @@ export class SessionPeer {
   ): Promise<void> {
     const env = envelope(this.assignedName, to, body, re);
     await this._writeEnvelope(env);
+  }
+
+  /**
+   * Unicast send + await broker ACK. Returns the ACK status:
+   *   - `received` — peer was idle, envelope delivered, will be processed soon
+   *   - `busy`     — peer mid-turn, envelope dropped; sender is owner of retry
+   *   - `denied`   — peer explicitly refused (reserved; no producer in MVP)
+   *   - `timeout`  — no ACK within `timeoutMs`; treat as transport error
+   *
+   * Only meaningful for unicast non-broadcast addresses. The peer's body-level
+   * reply (if any) is asynchronous and arrives as a normal inbound envelope
+   * carrying `re=<this-send-id>` in a future turn — handled by `onMessage`.
+   */
+  async sendWithAck(
+    to: string,
+    body: unknown,
+    re: string | null = null,
+    timeoutMs: number = ACK_TIMEOUT_MS,
+  ): Promise<AckResult> {
+    const env = envelope(this.assignedName, to, body, re);
+    return new Promise<AckResult>((resolve) => {
+      const timer = setTimeout(() => {
+        this.ackPending.delete(env.id);
+        resolve({ status: "timeout", id: env.id });
+      }, timeoutMs);
+      this.ackPending.set(env.id, { resolve, timer });
+      this._writeEnvelope(env).catch(() => {
+        const slot = this.ackPending.get(env.id);
+        if (!slot) return;
+        clearTimeout(slot.timer);
+        this.ackPending.delete(env.id);
+        resolve({ status: "timeout", id: env.id });
+      });
+    });
   }
 
   /**
@@ -246,7 +309,32 @@ export class SessionPeer {
       throw e;
     }
 
-    // Correlate replies first.
+    // Intercept broker ACKs first. Body shape `{type:"ack", status, target}`
+    // from broker correlates by `re` against pending `sendWithAck` ids. Even
+    // when no `sendWithAck` is waiting (e.g. message was sent via plain
+    // `send()` or legacy `request()`), the ACK envelope must be swallowed
+    // here — otherwise it would match `request()`'s pending map by `re` and
+    // resolve the request with the ACK body instead of the peer's real reply.
+    //
+    // Plan/25 Wave D: cross-PC ACKs arrive with prefixed sender
+    // (`<pcLabel>:broker`) since broker_remote rewrites `from` to include
+    // the source PC label. Accept both forms here so cross-PC senders
+    // resolve their `sendWithAck` Promise instead of timing out.
+    if (env.re && (env.from === "broker" || env.from.endsWith(":broker"))) {
+      const ackBody = env.body as { type?: string; status?: string; target?: string } | null;
+      if (ackBody && ackBody.type === "ack" && typeof ackBody.status === "string") {
+        const slot = this.ackPending.get(env.re);
+        if (slot) {
+          clearTimeout(slot.timer);
+          this.ackPending.delete(env.re);
+          const status = ackBody.status as AckBody["status"];
+          slot.resolve({ status, id: env.re, target: ackBody.target });
+        }
+        return;
+      }
+    }
+
+    // Correlate replies for `request()`.
     if (env.re) {
       const slot = this.pending.get(env.re);
       if (slot) {
@@ -300,5 +388,10 @@ export class SessionPeer {
       slot.reject(new Error("peer leaving"));
     }
     this.pending.clear();
+    for (const slot of this.ackPending.values()) {
+      clearTimeout(slot.timer);
+      slot.resolve({ status: "timeout", id: "" });
+    }
+    this.ackPending.clear();
   }
 }

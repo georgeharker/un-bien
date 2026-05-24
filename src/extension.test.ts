@@ -204,9 +204,10 @@ describe("extension default export", () => {
     expect(typeof extension).toBe("function");
   });
 
-  test("registers the 8 final commands (2026-05-23 simplification)", () => {
+  test("registers the user-facing commands (post plan/26 W3: + install/uninstall)", () => {
     const { pi, registeredCommands } = makeMockPi();
     (extension as ExtensionFactory)(pi);
+    // Local session (plan/25)
     expect(registeredCommands).toContain("remote-pi");
     expect(registeredCommands).toContain("remote-pi setup");
     expect(registeredCommands).toContain("remote-pi status");
@@ -215,13 +216,30 @@ describe("extension default export", () => {
     expect(registeredCommands).toContain("remote-pi devices");
     expect(registeredCommands).toContain("remote-pi revoke");
     expect(registeredCommands).toContain("remote-pi set-relay");
+    // Daemon registry (plan/26 W1)
+    expect(registeredCommands).toContain("remote-pi create");
+    expect(registeredCommands).toContain("remote-pi remove");
+    // Fleet ops (plan/26 W2) — use `daemon` prefix to avoid clashing with
+    // /remote-pi stop (local) since both have very different semantics.
+    expect(registeredCommands).toContain("remote-pi daemons");
+    expect(registeredCommands).toContain("remote-pi daemon start");
+    expect(registeredCommands).toContain("remote-pi daemon stop");
+    expect(registeredCommands).toContain("remote-pi daemon restart");
+    expect(registeredCommands).toContain("remote-pi daemon status");
+    expect(registeredCommands).toContain("remote-pi daemon send");
+    // Service install (plan/26 W3) — systemd / launchd
+    expect(registeredCommands).toContain("remote-pi install");
+    expect(registeredCommands).toContain("remote-pi uninstall");
+    // Cross-PC peer inventory (plan/25 W D)
+    expect(registeredCommands).toContain("remote-pi peers");
   });
 
-  test("registers exactly 8 commands (no deprecated, no removed)", () => {
+  test("no deprecated or removed commands leak back into the surface", () => {
     const { pi, registeredCommands } = makeMockPi();
     (extension as ExtensionFactory)(pi);
-    expect(registeredCommands).toHaveLength(8);
-    // Negative assertions: ensure the removed surface is truly gone.
+    // 8 plan-25 + 2 daemon registry (W1) + 6 fleet ops (W2) + 2 install (W3)
+    // + 1 cross-PC inventory (plan-25 W D).
+    expect(registeredCommands).toHaveLength(19);
     for (const removed of [
       "remote-pi join", "remote-pi leave", "remote-pi rename", "remote-pi sessions",
       "remote-pi relay", "remote-pi relay start", "remote-pi relay stop",

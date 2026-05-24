@@ -54,6 +54,14 @@ export interface SelfRevokeOptions {
    *  any active WS channel for the revoked owner. Receives the base64
    *  (standard) of the Owner pubkey that revoked us. */
   onRevoke?: (ownerEpk: string) => void | Promise<void>;
+  /** Plan/25 Wave D: fired whenever the set of Pi-pubkeys present in any
+   *  Owner's mesh_versions changes (membership added, removed, or
+   *  relabeled). The callback receives the **union** of all current
+   *  Pi-pubkeys across every known Owner, minus this Pi's own pubkey,
+   *  so callers can keep `broker_remote.setSiblings()` in sync without
+   *  re-running discovery themselves. Fires once per `checkOnce()` sweep
+   *  only when the set genuinely differs from the previous sweep. */
+  onMembersChanged?: (siblings: SiblingInfo[]) => void | Promise<void>;
   /** Logging surface — defaults to `console.*`. Tests inject a fake. */
   log?: {
     info(msg: string): void;
@@ -62,7 +70,16 @@ export interface SelfRevokeOptions {
   };
 }
 
+/** Sibling info surfaced by `onMembersChanged`. Stays bit-identical to the
+ *  shape `BrokerRemote.setSiblings` accepts so callers can pass through. */
+export interface SiblingInfo {
+  pcLabel: string;
+  pcPubkey: string;
+}
+
 const DEFAULT_INTERVAL_MS = 60_000;
+
+const FALLBACK_LABEL_LEN = 8;
 
 export class SelfRevoke {
   private readonly client: MeshClient;
@@ -73,9 +90,17 @@ export class SelfRevoke {
   private readonly myPubkey: Uint8Array;
   private readonly intervalMs: number;
   private readonly onRevoke?: SelfRevokeOptions["onRevoke"];
+  private readonly onMembersChanged?: SelfRevokeOptions["onMembersChanged"];
   private readonly log: NonNullable<SelfRevokeOptions["log"]>;
   /** Anti-rollback floor: never accept a version <= lastSeen per Owner. */
   private readonly lastSeenVersion = new Map<string, number>();
+  /** Plan/25 Wave D: snapshot of the sibling union from the previous
+   *  sweep, used to detect changes without re-firing `onMembersChanged`
+   *  on every poll. Keyed by `pcPubkey`. */
+  private prevSiblings = new Map<string, SiblingInfo>();
+  /** Latest member set per owner, captured during `_checkOwner` so the
+   *  sweep can compute the union after touching every owner. */
+  private readonly membersByOwner = new Map<string, SiblingInfo[]>();
   private timer: ReturnType<typeof setInterval> | null = null;
 
   constructor(opts: SelfRevokeOptions) {
@@ -84,6 +109,7 @@ export class SelfRevoke {
     this.myPubkey = opts.myPubkey;
     this.intervalMs = opts.intervalMs ?? DEFAULT_INTERVAL_MS;
     this.onRevoke = opts.onRevoke;
+    this.onMembersChanged = opts.onMembersChanged;
     this.log = opts.log ?? {
       info: (msg) => console.info(msg),
       warn: (msg) => console.warn(msg),
@@ -123,6 +149,46 @@ export class SelfRevoke {
         );
       }
     }
+
+    // Plan/25 Wave D: fire onMembersChanged if the union of siblings
+    // across all owners changed since the last sweep. Built outside the
+    // per-owner loop so a single owner removing a member doesn't fire
+    // until we've seen the other owners (which may still list that Pi
+    // and keep it as a sibling overall).
+    if (this.onMembersChanged) {
+      const union = this._computeSiblingUnion();
+      if (this._siblingSetChanged(union)) {
+        this.prevSiblings = union;
+        try {
+          await this.onMembersChanged([...union.values()]);
+        } catch (err) {
+          this.log.error(`[mesh] onMembersChanged callback threw: ${String(err)}`);
+        }
+      }
+    }
+  }
+
+  private _computeSiblingUnion(): Map<string, SiblingInfo> {
+    const myB64 = Buffer.from(this.myPubkey).toString("base64");
+    const out = new Map<string, SiblingInfo>();
+    for (const members of this.membersByOwner.values()) {
+      for (const m of members) {
+        if (m.pcPubkey === myB64) continue;
+        if (out.has(m.pcPubkey)) continue;
+        out.set(m.pcPubkey, m);
+      }
+    }
+    return out;
+  }
+
+  private _siblingSetChanged(next: Map<string, SiblingInfo>): boolean {
+    if (next.size !== this.prevSiblings.size) return true;
+    for (const [pk, info] of next) {
+      const prior = this.prevSiblings.get(pk);
+      if (!prior) return true;
+      if (prior.pcLabel !== info.pcLabel) return true;
+    }
+    return false;
   }
 
   private async _checkOwner(ownerEpk: string): Promise<void> {
@@ -156,6 +222,18 @@ export class SelfRevoke {
       return;
     }
     this.lastSeenVersion.set(ownerEpk, header.version);
+
+    // Plan/25 Wave D: capture the full member list for this owner so the
+    // sweep can derive the sibling union after touching every owner.
+    // pc_label follows the same priority as `siblings.ts::discoverSiblings`:
+    // member.nickname → fallback to base64-prefix-8.
+    this.membersByOwner.set(
+      ownerEpk,
+      header.members.map((m) => ({
+        pcPubkey: m.remoteEpk,
+        pcLabel: m.nickname ?? m.remoteEpk.slice(0, FALLBACK_LABEL_LEN),
+      })),
+    );
 
     // Decode every member's pubkey to bytes and compare against our own.
     // The app may emit base64 url-safe (`-`/`_`, no padding) while the Pi

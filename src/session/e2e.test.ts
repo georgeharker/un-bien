@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { setTimeout as wait } from "node:timers/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionPeer } from "./peer.js";
@@ -134,6 +135,327 @@ describe("agent-network e2e", () => {
     expect(inboxA.length).toBe(1);
     expect(inboxB.length).toBe(1);
     expect((inboxA[0]!.body as { hello: string }).hello).toBe("world");
+
+    await orq.leave(); await a.leave(); await b.leave();
+  });
+});
+
+describe("ACK protocol (plan/25 Wave 0)", () => {
+  test("sendWithAck to idle peer → status=received in <200ms", async () => {
+    const sock = tmpSock();
+    const orq = await makePeer(sock, "orq");
+    const backend = await makePeer(sock, "backend");
+
+    const t0 = Date.now();
+    const ack = await orq.sendWithAck("backend", { task: "ping" });
+    const dt = Date.now() - t0;
+
+    expect(ack.status).toBe("received");
+    expect(ack.target).toBe("backend");
+    expect(dt).toBeLessThan(200);
+
+    await orq.leave(); await backend.leave();
+  });
+
+  test("sendWithAck to busy peer → status=busy, envelope dropped", async () => {
+    const sock = tmpSock();
+    const orq = await makePeer(sock, "orq");
+    const backend = await makePeer(sock, "backend");
+
+    // backend signals it is mid-turn
+    await backend.send("broker", { type: "turn_state", busy: true });
+    // allow the control message to be processed by the broker
+    await new Promise((r) => setTimeout(r, 50));
+
+    const backendInbox: Envelope[] = [];
+    backend.onMessage((env) => {
+      const body = env.body as { type?: string } | null;
+      if (env.from === "broker") return;
+      if (body && (body.type === "peer_joined" || body.type === "peer_left")) return;
+      backendInbox.push(env);
+    });
+
+    const ack = await orq.sendWithAck("backend", { task: "ping-while-busy" });
+
+    expect(ack.status).toBe("busy");
+    expect(ack.target).toBe("backend");
+    // Envelope was dropped — backend never received it.
+    expect(backendInbox.length).toBe(0);
+
+    // Now backend signals turn_end → next sendWithAck should be received
+    await backend.send("broker", { type: "turn_state", busy: false });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const ack2 = await orq.sendWithAck("backend", { task: "ping-after-busy" });
+    expect(ack2.status).toBe("received");
+
+    await orq.leave(); await backend.leave();
+  });
+
+  test("delivery flips peer to busy (received = commitment)", async () => {
+    const sock = tmpSock();
+    const orq = await makePeer(sock, "orq");
+    const backend = await makePeer(sock, "backend");
+
+    // First send: backend idle → received
+    const ack1 = await orq.sendWithAck("backend", { task: "t1" });
+    expect(ack1.status).toBe("received");
+
+    // Second send (no turn_state from backend yet): broker has marked it
+    // busy on delivery, so this should be busy.
+    const ack2 = await orq.sendWithAck("backend", { task: "t2" });
+    expect(ack2.status).toBe("busy");
+
+    // Backend "finishes its turn" → broker clears busy → next send received
+    await backend.send("broker", { type: "turn_state", busy: false });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const ack3 = await orq.sendWithAck("backend", { task: "t3" });
+    expect(ack3.status).toBe("received");
+
+    await orq.leave(); await backend.leave();
+  });
+
+  test("reply via send with re=<original> arrives in sender inbox (async pattern)", async () => {
+    const sock = tmpSock();
+    const orq = await makePeer(sock, "orq");
+    const backend = await makePeer(sock, "backend");
+
+    // Orq's inbox collects replies (skip broker control / peer events).
+    const orqInbox: Envelope[] = [];
+    orq.onMessage((env) => {
+      if (env.from === "broker") return;
+      orqInbox.push(env);
+    });
+
+    // Backend auto-replies once it sees a task, marking itself busy/idle
+    // around its "turn".
+    backend.onMessage(async (env) => {
+      if (env.from === "broker") return;
+      // simulate turn lifecycle
+      await backend.send("broker", { type: "turn_state", busy: true });
+      // do "work" then reply via send (not sendWithAck — broadcast-style reply)
+      await backend.sendWithAck(env.from, { answer: 42 }, env.id);
+      await backend.send("broker", { type: "turn_state", busy: false });
+    });
+
+    const ack = await orq.sendWithAck("backend", { question: "meaning?" });
+    expect(ack.status).toBe("received");
+
+    // wait for the async reply to round-trip
+    await new Promise((r) => setTimeout(r, 200));
+
+    expect(orqInbox.length).toBeGreaterThan(0);
+    const reply = orqInbox.find((e) => e.from === "backend");
+    expect(reply).toBeDefined();
+    expect(reply!.re).toBe(ack.id);
+    expect((reply!.body as { answer: number }).answer).toBe(42);
+
+    await orq.leave(); await backend.leave();
+  });
+
+  test("sendWithAck resolves on cross-PC ACK (from=<pc>:broker)", async () => {
+    const sock = tmpSock();
+    const orq = await makePeer(sock, "orq");
+    const broker = orq.localBroker()!;
+
+    // Kick off a sendWithAck that points to an unknown local target — without
+    // a sibling router the broker would silently drop. We want the ACK to
+    // come from a fake cross-PC broker, simulating broker_remote on Pi-B
+    // sending an ACK back via the relay → broker_remote on Pi-A → the local
+    // UDS broker (injectFromRemote injects the ACK envelope into the sender's
+    // socket).
+    const pendingAck = orq.sendWithAck("trab:agent-1", { task: "ping" }, null, 1500);
+    // Give the outbound write time to register in ackPending before injecting.
+    await new Promise((r) => setTimeout(r, 30));
+
+    // Locate the original send's id by inspecting ackPending — but it's
+    // private. Instead, capture the outbound envelope id by sniffing the
+    // last write on orq's socket. Simpler approach: peek via a wrapper.
+    // We just attach a no-op onMessage to ensure the envelope is delivered
+    // and assume the most recent uuid in ackPending is ours. Cleaner: use
+    // sendWithAck's return type's `id` after resolution. Since we need
+    // the id BEFORE resolution, take the path of injecting via broker:
+    const ackPendingMap = (orq as unknown as { ackPending: Map<string, unknown> }).ackPending;
+    const outboundId = [...ackPendingMap.keys()][0]!;
+
+    const crossPcAck: Envelope = {
+      from: "casa:broker",
+      to: "orq",
+      id: "01976000-0000-7000-8000-aaaaaaaaaaab",
+      re: outboundId,
+      body: { type: "ack", status: "received", target: "agent-1" },
+    };
+    expect(broker.injectFromRemote(crossPcAck)).toBe("received");
+
+    const result = await pendingAck;
+    expect(result.status).toBe("received");
+    expect(result.target).toBe("agent-1");
+
+    await orq.leave();
+  });
+
+  test("injectFromRemote: replies (re != null) bypass busy gate", async () => {
+    const sock = tmpSock();
+    const orq = await makePeer(sock, "orq");
+    const backend = await makePeer(sock, "backend");
+
+    // Mark backend busy via turn_state
+    await backend.send("broker", { type: "turn_state", busy: true });
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Reach the leader's broker directly. The leader hosts the Broker
+    // — find which peer that is and pull the instance.
+    const leader = orq.currentRole() === "leader" ? orq : backend;
+    const broker = leader.localBroker()!;
+    expect(broker).toBeTruthy();
+
+    // Inject a NEW work envelope (re=null) — should be 'busy'
+    const newWork = {
+      from: "casa:sess-3", to: "backend", id: "01976000-0000-7000-8000-000000000001",
+      re: null, body: { task: "do thing" },
+    };
+    expect(broker.injectFromRemote(newWork)).toBe("busy");
+
+    // Inject a REPLY (re set) — should bypass and reach the peer
+    const backendInbox: Envelope[] = [];
+    backend.onMessage((env) => {
+      if (env.from === "broker") return;
+      backendInbox.push(env);
+    });
+    const reply = {
+      from: "casa:sess-3", to: "backend", id: "01976000-0000-7000-8000-000000000002",
+      re: "01976000-0000-7000-8000-000000000003", body: { answer: 42 },
+    };
+    expect(broker.injectFromRemote(reply)).toBe("received");
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(backendInbox.length).toBe(1);
+    expect((backendInbox[0]!.body as { answer: number }).answer).toBe(42);
+
+    await orq.leave(); await backend.leave();
+  });
+
+  test("injectFromRemote: unknown local peer → denied", async () => {
+    const sock = tmpSock();
+    const orq = await makePeer(sock, "orq");
+    const broker = orq.localBroker()!;
+
+    const env = {
+      from: "casa:sess-3", to: "no-such-peer", id: "01976000-0000-7000-8000-000000000004",
+      re: null, body: { x: 1 },
+    };
+    expect(broker.injectFromRemote(env)).toBe("denied");
+
+    await orq.leave();
+  });
+
+  test("Broker.list_peers includes RemoteRouter.listRemotePeers", async () => {
+    const sock = tmpSock();
+    const orq = await makePeer(sock, "orq");
+    const broker = orq.localBroker()!;
+
+    broker.setRemoteRouter({
+      tryRouteOutbound: () => false,
+      listRemotePeers: () => ["trab:agent-1", "movel:agent-2"],
+    });
+
+    const reply = await orq.request("broker", { type: "list_peers" }, 1000);
+    const peers = (reply.body as { peers: string[] }).peers;
+    expect(peers).toContain("orq");
+    expect(peers).toContain("trab:agent-1");
+    expect(peers).toContain("movel:agent-2");
+
+    broker.setRemoteRouter(null);
+    await orq.leave();
+  });
+
+  test("Broker._route delegates to RemoteRouter for prefix-addressed envelopes", async () => {
+    const sock = tmpSock();
+    const orq = await makePeer(sock, "orq");
+    const broker = orq.localBroker()!;
+
+    const claimed: Envelope[] = [];
+    broker.setRemoteRouter({
+      tryRouteOutbound: (env) => { claimed.push(env); return true; },
+      listRemotePeers: () => [],
+    });
+
+    await orq.send("trab:agent-1", { hello: 1 });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(claimed.length).toBe(1);
+    expect(claimed[0]!.to).toBe("trab:agent-1");
+
+    broker.setRemoteRouter(null);
+    await orq.leave();
+  });
+
+  test("audit.jsonl tags envelopes with via=uds for local routing", async () => {
+    const sock = tmpSock();
+    const auditDir = mkdtempSync(join(tmpdir(), "pi-audit-"));
+    const audit = join(auditDir, "audit.jsonl");
+    const orq = await makePeer(sock, "orq", audit);
+    const backend = await makePeer(sock, "backend", audit);
+
+    await orq.sendWithAck("backend", { task: "ping" });
+    // Audit writes are async + best-effort; give them a tick.
+    await wait(40);
+
+    const lines = readFileSync(audit, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    // Skip any peer-discovery / broker-control lines; find the unicast.
+    const uds = lines.find((r) => r.from === "orq" && r.to === "backend");
+    expect(uds).toBeDefined();
+    expect(uds.via).toBe("uds");
+    expect(uds.ack_status).toBe("received");
+
+    await orq.leave(); await backend.leave();
+  });
+
+  test("audit.jsonl tags injectFromRemote envelopes with via=relay", async () => {
+    const sock = tmpSock();
+    const auditDir = mkdtempSync(join(tmpdir(), "pi-audit-"));
+    const audit = join(auditDir, "audit.jsonl");
+    const orq = await makePeer(sock, "orq", audit);
+    const broker = orq.localBroker()!;
+
+    const env = {
+      from: "casa:sess-3", to: "orq", id: "01976000-0000-7000-8000-aaaaaaaaaaac",
+      re: null, body: { task: "remote ping" },
+    };
+    expect(broker.injectFromRemote(env)).toBe("received");
+    await wait(40);
+
+    const lines = readFileSync(audit, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    const relayLine = lines.find((r) => r.id === env.id);
+    expect(relayLine).toBeDefined();
+    expect(relayLine.via).toBe("relay");
+    expect(relayLine.ack_status).toBe("received");
+
+    await orq.leave();
+  });
+
+  test("no ACK for broadcast (multi-target, no authoritative recipient)", async () => {
+    const sock = tmpSock();
+    const orq = await makePeer(sock, "orq");
+    const a = await makePeer(sock, "a");
+    const b = await makePeer(sock, "b");
+
+    // We expose ackPending behavior indirectly: if broker ACKed broadcasts,
+    // we'd see the ack envelope in handlers. Sniff for it.
+    const orqInbox: Envelope[] = [];
+    orq.onMessage((env) => {
+      if (env.from === "broker") orqInbox.push(env);
+    });
+
+    await orq.send("broadcast", { hello: "hi" });
+    await new Promise((r) => setTimeout(r, 100));
+
+    // No ack envelopes (only peer_joined/peer_left, which we filter below)
+    const ackMessages = orqInbox.filter((e) => {
+      const b = e.body as { type?: string } | null;
+      return !!b && b.type === "ack";
+    });
+    expect(ackMessages.length).toBe(0);
 
     await orq.leave(); await a.leave(); await b.leave();
   });

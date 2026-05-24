@@ -5,6 +5,10 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "remote-pi": "dist/index.js",
+    "pi-supervisord": "dist/bin/supervisord.js"
+  },
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
@@ -47,6 +51,8 @@
   "files": [
     "dist",
     "skills",
+    "service-templates",
+    "docs",
     "README.md",
     "LICENSE"
   ],
