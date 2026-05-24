@@ -1,1 +1,9 @@
 /target
+
+# SQLite mesh storage — created by `cargo run` (default REMOTEPI_MESH_DB_PATH=data/mesh.db).
+/data
+# Legacy paths in case someone overrides the path back to the project root.
+/mesh.db
+/mesh.db-journal
+/mesh.db-wal
+/mesh.db-shm

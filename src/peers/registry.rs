@@ -5,8 +5,8 @@ use std::sync::{
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use axum::extract::ws::Message;
 use tokio::sync::mpsc;
-use tokio_tungstenite::tungstenite::Message;
 
 use crate::presence::PresenceManager;
 use crate::rooms::{RoomManager, RoomMeta};
@@ -95,7 +95,7 @@ impl PeerRegistry {
                 announced["peer"] = peer_id.as_str().into();
                 let msg = announced.to_string();
                 for sub in &room_subs {
-                    self.forward_to_all_rooms_of(sub, Message::text(msg.clone()));
+                    self.forward_to_all_rooms_of(sub, Message::Text(msg.clone()));
                 }
             }
         }
@@ -106,7 +106,7 @@ impl PeerRegistry {
             let msg =
                 serde_json::json!({"type": "peer_online", "peer": peer_id}).to_string();
             for sub in pres_subs {
-                self.forward_to_all_rooms_of(&sub, Message::text(msg.clone()));
+                self.forward_to_all_rooms_of(&sub, Message::Text(msg.clone()));
             }
         }
 
@@ -122,7 +122,7 @@ impl PeerRegistry {
             if self.is_online(peer) {
                 let msg =
                     serde_json::json!({"type": "peer_online", "peer": peer}).to_string();
-                self.forward_to_all_rooms_of(subscriber, Message::text(msg));
+                self.forward_to_all_rooms_of(subscriber, Message::Text(msg));
             }
         }
     }
@@ -167,7 +167,7 @@ impl PeerRegistry {
                 })
                 .to_string();
                 for sub in &room_subs {
-                    self.forward_to_all_rooms_of(sub, Message::text(msg.clone()));
+                    self.forward_to_all_rooms_of(sub, Message::Text(msg.clone()));
                 }
             }
         }
@@ -182,7 +182,7 @@ impl PeerRegistry {
                 })
                 .to_string();
                 for sub in pres_subs {
-                    self.forward_to_all_rooms_of(&sub, Message::text(msg.clone()));
+                    self.forward_to_all_rooms_of(&sub, Message::Text(msg.clone()));
                 }
             }
             self.presence.record_offline(peer_id, now_ms).await;
@@ -275,7 +275,7 @@ impl PeerRegistry {
             })
             .to_string();
             for sub in &room_subs {
-                self.forward_to_all_rooms_of(sub, Message::text(msg.clone()));
+                self.forward_to_all_rooms_of(sub, Message::Text(msg.clone()));
             }
         }
 
@@ -331,15 +331,15 @@ mod tests {
 
         assert_ne!(conn_main, conn_work);
 
-        assert!(reg.forward(&peer, "main", Message::text("to_main"), EXTERNAL));
+        assert!(reg.forward(&peer, "main", Message::Text("to_main".into()), EXTERNAL));
         assert_eq!(rx_main.try_recv().unwrap().to_text().unwrap(), "to_main");
 
-        assert!(reg.forward(&peer, "work", Message::text("to_work"), EXTERNAL));
+        assert!(reg.forward(&peer, "work", Message::Text("to_work".into()), EXTERNAL));
         assert_eq!(rx_work.try_recv().unwrap().to_text().unwrap(), "to_work");
 
         reg.unregister(&peer, "work", conn_work).await;
-        assert!(!reg.forward(&peer, "work", Message::text("gone"), EXTERNAL));
-        assert!(reg.forward(&peer, "main", Message::text("still_there"), EXTERNAL));
+        assert!(!reg.forward(&peer, "work", Message::Text("gone".into()), EXTERNAL));
+        assert!(reg.forward(&peer, "main", Message::Text("still_there".into()), EXTERNAL));
         let _ = rx_main.try_recv();
     }
 
@@ -358,12 +358,12 @@ mod tests {
         assert_ne!(conn1, conn2);
 
         // Send "from" conn1 → only conn2 receives.
-        assert!(reg.forward(&peer, "main", Message::text("hi"), conn1));
+        assert!(reg.forward(&peer, "main", Message::Text("hi".into()), conn1));
         assert!(rx1.try_recv().is_err(), "sender must not echo");
         assert_eq!(rx2.try_recv().unwrap().to_text().unwrap(), "hi");
 
         // Send "from" conn2 → only conn1 receives.
-        assert!(reg.forward(&peer, "main", Message::text("hi2"), conn2));
+        assert!(reg.forward(&peer, "main", Message::Text("hi2".into()), conn2));
         assert_eq!(rx1.try_recv().unwrap().to_text().unwrap(), "hi2");
         assert!(rx2.try_recv().is_err());
     }
@@ -385,7 +385,7 @@ mod tests {
 
         reg.unregister(&peer, "main", conn2).await;
 
-        assert!(reg.forward(&peer, "main", Message::text("ping"), EXTERNAL));
+        assert!(reg.forward(&peer, "main", Message::Text("ping".into()), EXTERNAL));
         assert_eq!(rx1.try_recv().unwrap().to_text().unwrap(), "ping");
         assert!(rx2.try_recv().is_err(), "disconnected conn must not receive");
         assert_eq!(rx3.try_recv().unwrap().to_text().unwrap(), "ping");
@@ -404,7 +404,7 @@ mod tests {
         let _ = reg.register(peer.clone(), make_meta("main"), tx1).await;
         let _ = reg.register(peer.clone(), make_meta("main"), tx2).await;
 
-        assert!(reg.forward(&peer, "main", Message::text("from_pi"), EXTERNAL));
+        assert!(reg.forward(&peer, "main", Message::Text("from_pi".into()), EXTERNAL));
         assert_eq!(rx1.try_recv().unwrap().to_text().unwrap(), "from_pi");
         assert_eq!(rx2.try_recv().unwrap().to_text().unwrap(), "from_pi");
     }
@@ -419,10 +419,10 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
         let conn = reg.register(peer.clone(), make_meta("main"), tx).await;
 
-        assert!(!reg.forward(&peer, "main", Message::text("echo"), conn));
+        assert!(!reg.forward(&peer, "main", Message::Text("echo".into()), conn));
         assert!(rx.try_recv().is_err());
 
-        assert!(reg.forward(&peer, "main", Message::text("hi"), EXTERNAL));
+        assert!(reg.forward(&peer, "main", Message::Text("hi".into()), EXTERNAL));
         assert_eq!(rx.try_recv().unwrap().to_text().unwrap(), "hi");
     }
 
@@ -442,11 +442,11 @@ mod tests {
 
         // Stale unregister of conn_a is a no-op.
         reg.unregister(&peer, "main", conn_a).await;
-        assert!(reg.forward(&peer, "main", Message::text("alive"), EXTERNAL));
+        assert!(reg.forward(&peer, "main", Message::Text("alive".into()), EXTERNAL));
         assert_eq!(rx_b.try_recv().unwrap().to_text().unwrap(), "alive");
 
         // Correct unregister removes the last conn → entry gone.
         reg.unregister(&peer, "main", conn_b).await;
-        assert!(!reg.forward(&peer, "main", Message::text("gone"), EXTERNAL));
+        assert!(!reg.forward(&peer, "main", Message::Text("gone".into()), EXTERNAL));
     }
 }

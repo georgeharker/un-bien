@@ -57,39 +57,74 @@ party can observe your traffic.
 docker run -d \
   --name remote-pi-relay \
   -p 3000:3000 \
-  -p 3001:3001 \
+  -v remote-pi-data:/data \
   --restart unless-stopped \
   jacobmoura7/remote-pi-relay
 ```
 
-The relay listens on port `3000` by default. Point your app and `pi-extension` to
-`ws://<your-server-ip>:3000` (or `wss://` if you put it behind a TLS-terminating
-reverse proxy such as Caddy or nginx).
+The relay listens on a **single port** (`3000` by default) and serves three
+surfaces at once:
 
-Port `3001` serves an HTTP health check endpoint (`GET /health → 200 OK`), used by
-Docker, load balancers, and uptime monitors.
+- `GET /` — WebSocket upgrade (the peer protocol)
+- `GET /health` — health check (returns `200 OK`)
+- `GET / POST /mesh/<owner_pk_hash>` — signed membership versions
+
+Point your app and `pi-extension` to `ws://<your-server-ip>:3000` (or `wss://`
+if you put it behind a TLS-terminating reverse proxy such as Caddy or nginx).
+
+**`/data` volume**: the relay stores its SQLite database (signed membership
+versions) at `/data/mesh.db` inside the container. Mount a named volume (as in
+the example above) or a host directory (`-v /srv/remote-pi:/data`) so the state
+survives `docker rm` and image upgrades. Without a mount, the database is
+recreated empty each time the container starts and clients re-publish their
+state at the next mutation.
 
 ### Environment variables
 
 | Variable | Default | Description |
 |---|---|---|
-| `REMOTEPI_RELAY_PORT` | `3000` | TCP port for WebSocket connections |
-| `REMOTEPI_HEALTH_PORT` | `3001` | TCP port for the HTTP health check |
+| `REMOTEPI_RELAY_PORT` | `3000` | TCP port that serves the WebSocket upgrade, `/health`, and `/mesh/*` (all on the same port) |
+| `REMOTEPI_MESH_DB_PATH` | `/data/mesh.db` in Docker · `data/mesh.db` (cwd-relative) for bare-metal builds | Path to the SQLite database that stores signed membership versions. The parent directory is created automatically on first boot. The Docker image presets this to `/data/mesh.db` and declares `/data` as a volume — see the volume note above |
 | `RUST_LOG` | _(none)_ | Log level filter — e.g. `info`, `debug`, `warn` |
 
-Example with custom ports and logging:
+Example with a custom port and logging (volume mount is the same):
 
 ```bash
 docker run -d \
   --name remote-pi-relay \
   -p 8080:8080 \
-  -p 8081:8081 \
+  -v remote-pi-data:/data \
   -e REMOTEPI_RELAY_PORT=8080 \
-  -e REMOTEPI_HEALTH_PORT=8081 \
   -e RUST_LOG=info \
   --restart unless-stopped \
   jacobmoura7/remote-pi-relay
 ```
+
+### Mesh membership endpoint
+
+The `/mesh/<owner_pk_hash>` endpoint stores **Owner-signed** lists of paired Pis,
+keyed by `sha256(owner_pk)` in lowercase hex. It enables an app on a new device
+(same Apple ID / Google account) to recover its peer list automatically after
+restoring the Owner Ed25519 key from iCloud Keychain / Block Store.
+
+The relay verifies every `POST` against the embedded `owner_pk` using Ed25519
+and only accepts versions strictly greater than the current one (monotonic).
+Bodies are capped at 500 KB. The relay never decides membership — it only
+stores what was signed by the Owner. A compromised relay can deny service but
+cannot forge membership without the Owner private key.
+
+**Self-hosting note**: the SQLite database at `REMOTEPI_MESH_DB_PATH`
+(`/data/mesh.db` inside the official Docker image) is your operational
+responsibility — make sure `/data` is on a persistent volume and back it up
+alongside any other server state. If you lose it, clients re-publish their
+current view at their next mutation.
+
+**Storage layout**: SQLite runs in the default rollback-journal mode (NOT
+WAL), so only `mesh.db` persists. During a write transaction a transient
+`mesh.db-journal` may appear in the same directory and is deleted on commit.
+Both files live under `REMOTEPI_MESH_DB_PATH`'s parent directory — typically
+`/data/` in Docker or `data/` next to the binary on bare metal. The directory
+is created automatically on first boot.
 
 ### Behind a reverse proxy (HTTPS/WSS)
 

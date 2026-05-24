@@ -1,29 +1,41 @@
 #![allow(dead_code)]
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
-use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use ed25519_dalek::{Signer, SigningKey};
 use futures_util::{SinkExt, StreamExt};
-use relay::{serve, PeerRegistry, PresenceManager, RoomManager};
+use relay::{AppState, MeshStore, PeerRegistry, PresenceManager, RoomManager, build_router};
 use serde_json::json;
 use tokio::net::TcpListener;
 use tokio_tungstenite::{
-    connect_async,
-    tungstenite::Message,
-    WebSocketStream, MaybeTlsStream,
+    MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message,
 };
 
 pub type WsStream = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
-/// Binds a relay on a random port and returns that port.
+/// Binds the unified relay (WS + `/health` + `/mesh`) on a random localhost
+/// port and returns that port. Mesh storage is `:memory:` for these tests —
+/// use the helper in `tests/mesh_test.rs` when you need a persistent DB.
 pub async fn start_relay() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
+    let mesh = Arc::new(MeshStore::open_in_memory().unwrap());
     let presence = Arc::new(PresenceManager::new());
     let rooms = Arc::new(RoomManager::new());
     let registry = Arc::new(PeerRegistry::new(presence.clone(), rooms.clone()));
-    tokio::spawn(serve(listener, registry, presence, rooms, std::future::pending::<()>()));
+    let state = AppState { registry, presence, rooms, mesh };
+    let app = build_router(state);
+    tokio::spawn(async move {
+        let _ = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await;
+    });
+    // Give axum a moment to start accepting.
+    tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
     port
 }
 

@@ -1,42 +1,38 @@
-use std::sync::Arc;
+use std::net::SocketAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{ConnectInfo, State};
+use axum::response::Response;
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use futures_util::{SinkExt, StreamExt};
-use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::time::{self, Duration};
-use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{info, warn};
 
+use crate::AppState;
 use crate::auth::challenge::{
-    challenge_line, gen_nonce, parse_hello, verify_auth, HELLO_TIMEOUT_MS,
+    HELLO_TIMEOUT_MS, challenge_line, gen_nonce, parse_hello, verify_auth,
 };
-use crate::peers::registry::PeerRegistry;
-use crate::presence::PresenceManager;
 use crate::protocol::outer::{OuterEnvelope, parse_line};
-use crate::rooms::{RoomManager, RoomMeta};
+use crate::rooms::RoomMeta;
 
-pub async fn handle_peer(
-    stream: TcpStream,
-    registry: Arc<PeerRegistry>,
-    presence: Arc<PresenceManager>,
-    rooms: Arc<RoomManager>,
-) {
-    let peer_addr = stream
-        .peer_addr()
-        .map(|a| a.to_string())
-        .unwrap_or_else(|_| "unknown".into());
+/// Axum route handler: validates the WebSocket upgrade and hands the upgraded
+/// socket to `handle_peer`, which owns the connection for its lifetime.
+pub async fn ws_handler(
+    ws: WebSocketUpgrade,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<AppState>,
+) -> Response {
+    ws.on_upgrade(move |socket| handle_peer(socket, addr, state))
+}
 
-    let ws = match accept_async(stream).await {
-        Ok(ws) => ws,
-        Err(e) => {
-            warn!(addr = %peer_addr, err = %e, "WS handshake failed");
-            return;
-        }
-    };
-
-    let (mut sink, mut stream) = ws.split();
+/// Owns one peer's WebSocket connection: hello/challenge/auth → register →
+/// routing loop (forwarding outer envelopes + handling presence/rooms control
+/// frames + sending 25 s keepalive pings) → unregister on disconnect.
+async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) {
+    let peer_addr = peer_addr.to_string();
+    let (mut sink, mut stream) = socket.split();
 
     // ── 1. Wait for hello (with timeout) ──────────────────────────────────
     let hello_result = tokio::time::timeout(
@@ -46,11 +42,8 @@ pub async fn handle_peer(
     .await;
 
     let hello_text = match hello_result {
-        Ok(Some(Ok(msg))) => match msg.to_text() {
-            Ok(t) => t.to_string(),
-            Err(_) => return,
-        },
-        Ok(_) | Err(_) => {
+        Ok(Some(Ok(Message::Text(t)))) => t,
+        _ => {
             warn!(addr = %peer_addr, "no hello received, closing");
             return;
         }
@@ -67,7 +60,7 @@ pub async fn handle_peer(
     // ── 2. Send challenge ─────────────────────────────────────────────────
     let (nonce, nonce_b64) = gen_nonce();
     if sink
-        .send(Message::text(challenge_line(&nonce_b64)))
+        .send(Message::Text(challenge_line(&nonce_b64)))
         .await
         .is_err()
     {
@@ -76,10 +69,7 @@ pub async fn handle_peer(
 
     // ── 3. Receive and verify auth ────────────────────────────────────────
     let auth_text = match stream.next().await {
-        Some(Ok(msg)) => match msg.to_text() {
-            Ok(t) => t.to_string(),
-            Err(_) => return,
-        },
+        Some(Ok(Message::Text(t))) => t,
         _ => return,
     };
 
@@ -124,9 +114,11 @@ pub async fn handle_peer(
 
     info!(peer = %peer_short, room = %room_id, addr = %peer_addr, "authenticated");
 
+    let registry = state.registry.clone();
+    let presence = state.presence.clone();
+    let rooms = state.rooms.clone();
+
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
-    // Plan 23 (Wave 2C): registry now accepts N conns per (peer, room) —
-    // multiple devices of the same Owner key. No fallible path remains.
     let conn_id = registry.register(peer_id.clone(), room_meta, tx).await;
 
     // ── 4. Routing loop ───────────────────────────────────────────────────
@@ -143,17 +135,13 @@ pub async fn handle_peer(
                 match item {
                     None | Some(Err(_)) => break,
                     Some(Ok(msg)) => {
-                        if msg.is_close() {
-                            break;
-                        }
-                        // Pong frames are keepalive responses — discard silently.
-                        // Ping frames are answered automatically by tungstenite's next().
-                        if msg.is_pong() || msg.is_ping() {
-                            continue;
-                        }
-                        let text = match msg.to_text() {
-                            Ok(t) => t.to_string(),
-                            Err(_) => continue, // binary frame — ignore
+                        let text = match msg {
+                            Message::Text(t) => t,
+                            Message::Close(_) => break,
+                            // Pong frames are keepalive responses; Ping frames are
+                            // answered automatically by axum's WS. Drop both.
+                            Message::Ping(_) | Message::Pong(_) => continue,
+                            Message::Binary(_) => continue, // ignore binary
                         };
 
                         // Parse as JSON to check for relay control frames.
@@ -198,7 +186,7 @@ pub async fn handle_peer(
                                         "states": states,
                                     })
                                     .to_string();
-                                    if sink.send(Message::text(resp)).await.is_err() {
+                                    if sink.send(Message::Text(resp)).await.is_err() {
                                         break;
                                     }
                                 }
@@ -219,7 +207,7 @@ pub async fn handle_peer(
                                             "rooms": active_rooms,
                                         })
                                         .to_string();
-                                        if sink.send(Message::text(resp)).await.is_err() {
+                                        if sink.send(Message::Text(resp)).await.is_err() {
                                             break 'routing;
                                         }
                                     }
@@ -284,7 +272,7 @@ pub async fn handle_peer(
                                 if !registry.forward(
                                     &dest_peer,
                                     &dest_room,
-                                    Message::text(fwd_line),
+                                    Message::Text(fwd_line),
                                     conn_id,
                                 ) {
                                     warn!(
@@ -311,7 +299,7 @@ pub async fn handle_peer(
                 }
             }
             _ = heartbeat.tick() => {
-                if sink.send(Message::Ping(Default::default())).await.is_err() {
+                if sink.send(Message::Ping(Vec::new())).await.is_err() {
                     break;
                 }
             }
