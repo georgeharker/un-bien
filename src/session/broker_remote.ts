@@ -123,15 +123,33 @@ export class BrokerRemote implements RemoteRouter {
 
     this.broker.setRemoteRouter(this);
 
+    // Seed `lastLocalPeers` from the live broker so the first
+    // `onLocalPeersChanged`-triggered push (or the bootstrap pushes below)
+    // already carry real state. Without seeding, the same single-peer
+    // mesh bug applies to OUTGOING `peers_update`s too: we'd announce
+    // ourselves to siblings as having zero peers.
+    this.lastLocalPeers = this.broker.peerNames();
+
     // Plan/25 Wave B bootstrap: kick a `peers_request` at every known
     // sibling so the cache is warm before anyone calls `list_peers` or
-    // `agent_send` cross-PC. Without this, a freshly-booted Pi would
-    // see an empty remote inventory until a sibling published their next
-    // `peers_update` (which only fires on their `peer_joined`/`peer_left`)
-    // or the local agent attempted a cross-PC send that hit the lazy
-    // cache-miss path. Best-effort; siblings offline at boot will reply
-    // when they come online and push their own `peers_update`.
-    this._requestPeersFromAllSiblings();
+    // `agent_send` cross-PC. Also push our current peer list proactively
+    // so siblings don't have to wait for their own request roundtrip.
+    // Best-effort; siblings offline at boot will reply when they come
+    // online and push their own `peers_update`.
+    this._bootstrapWithSiblings();
+  }
+
+  /** Bootstrap: announce ourselves AND ask every sibling for their peers.
+   *  Single helper so `_addSibling` can reuse half of it when a new
+   *  sibling appears via `setSiblings`. */
+  private _bootstrapWithSiblings(): void {
+    for (const [, pcPubkey] of this.siblingByLabel) {
+      this._sendControlEnvelope(pcPubkey, { type: "peers_request" });
+      this._sendControlEnvelope(pcPubkey, {
+        type: "peers_update",
+        peers: this.lastLocalPeers,
+      });
+    }
   }
 
   detach(): void {
@@ -156,22 +174,16 @@ export class BrokerRemote implements RemoteRouter {
     for (const label of [...this.remotePeers.keys()]) {
       if (!this.siblingByLabel.has(label)) this.remotePeers.delete(label);
     }
-    // Fire peers_request only for newly-added pubkeys — re-pinging
-    // siblings we already knew about would be wasteful and would also
-    // trigger their wrapper to log/audit a redundant control envelope.
+    // For newly-added pubkeys: do the same announce+request pair the
+    // constructor does. Re-pinging siblings we already knew about would
+    // be wasteful (and triggers redundant audit lines on their side).
     for (const [, pcPubkey] of this.siblingByLabel) {
-      if (!prevPubkeys.has(pcPubkey)) {
-        this._sendControlEnvelope(pcPubkey, { type: "peers_request" });
-      }
-    }
-  }
-
-  /** Internal: bootstrap helper — `peers_request` to every current
-   *  sibling. Used by the constructor; `setSiblings` calls this only for
-   *  newly-added entries. */
-  private _requestPeersFromAllSiblings(): void {
-    for (const [, pcPubkey] of this.siblingByLabel) {
+      if (prevPubkeys.has(pcPubkey)) continue;
       this._sendControlEnvelope(pcPubkey, { type: "peers_request" });
+      this._sendControlEnvelope(pcPubkey, {
+        type: "peers_update",
+        peers: this.lastLocalPeers,
+      });
     }
   }
 
@@ -328,9 +340,19 @@ export class BrokerRemote implements RemoteRouter {
 
     // ── control: peers_request ─────────────────────────────────────────────
     if (bodyType === "peers_request") {
+      // Always query the broker directly for the current peer list. We
+      // can't rely on `lastLocalPeers` because that cache is fed by the
+      // `peer_joined`/`peer_left` broadcast in index.ts — and the broker
+      // never delivers a `peer_joined` to the peer that just joined (see
+      // `_broadcastSystem(..., excludeName=assigned)`). In a single-peer
+      // mesh, no event ever fires → `lastLocalPeers` stays `[]` →
+      // siblings see us as "no peers" → cache populates empty → cross-PC
+      // `list_peers` misses us. Querying broker.peerNames() resolves
+      // sync (Map keys), so this is essentially free.
+      const currentLocal = this.broker.peerNames();
       this._sendControlEnvelope(fromPc, {
         type: "peers_update",
-        peers: [...this.lastLocalPeers],
+        peers: currentLocal,
       });
       return;
     }

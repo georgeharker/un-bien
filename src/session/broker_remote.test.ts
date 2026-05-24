@@ -21,12 +21,17 @@ class FakePi extends EventEmitter {
 
 interface FakeBrokerOptions {
   injectStatus?: RemoteInjectStatus;
+  /** Local peer names the fake broker reports via `peerNames()`. Used by
+   *  `BrokerRemote` to seed `lastLocalPeers` and to answer
+   *  `peers_request` envelopes. Defaults to a single self peer. */
+  localPeers?: string[];
 }
 
 function makeFakeBroker(opts: FakeBrokerOptions = {}): {
   broker: Broker;
   injectFromRemote: ReturnType<typeof vi.fn>;
   setRemoteRouter: ReturnType<typeof vi.fn>;
+  peerNames: ReturnType<typeof vi.fn>;
   injected: Envelope[];
 } {
   const injected: Envelope[] = [];
@@ -36,11 +41,18 @@ function makeFakeBroker(opts: FakeBrokerOptions = {}): {
     return status;
   });
   const setRemoteRouter = vi.fn();
+  let _localPeers = opts.localPeers ?? ["self"];
+  const peerNames = vi.fn(() => [..._localPeers]);
+  // Expose a setter for tests that mutate the local set mid-test.
+  (peerNames as unknown as { set: (p: string[]) => void }).set = (p: string[]) => {
+    _localPeers = p;
+  };
   const broker = {
     injectFromRemote,
     setRemoteRouter,
+    peerNames,
   } as unknown as Broker;
-  return { broker, injectFromRemote, setRemoteRouter, injected };
+  return { broker, injectFromRemote, setRemoteRouter, peerNames, injected };
 }
 
 // ── parseAddress ─────────────────────────────────────────────────────────────
@@ -329,13 +341,12 @@ describe("BrokerRemote: control envelopes (peers_update / peers_request)", () =>
 
   test("peers_request triggers peers_update reply with current local peers", () => {
     const fakePi = new FakePi();
-    const { broker } = makeFakeBroker();
-    const br = new BrokerRemote({
+    const { broker } = makeFakeBroker({ localPeers: ["sess-3", "agent-1"] });
+    new BrokerRemote({
       broker, pi: fakePi as never,
       selfPcLabel: "casa", selfPcPubkey: "K_A",
       siblings: [{ pcLabel: "trab", pcPubkey: "K_B" }],
     });
-    br.onLocalPeersChanged(["sess-3", "agent-1"]);
     fakePi.sent.length = 0;
 
     fakePi.emit("envelope", envelope(
@@ -351,6 +362,34 @@ describe("BrokerRemote: control envelopes (peers_update / peers_request)", () =>
     expect((reply!.env.body as { peers: string[] }).peers).toEqual(["sess-3", "agent-1"]);
   });
 
+  test("peers_request reply pulls from live broker.peerNames(), not just lastLocalPeers", () => {
+    // Regression: in a single-peer mesh (only the wrapper itself), no
+    // peer_joined event ever fires for the joiner, so `lastLocalPeers`
+    // stays []. Querying broker.peerNames() directly bypasses that.
+    const fakePi = new FakePi();
+    const { broker, peerNames } = makeFakeBroker({ localPeers: ["MacMini"] });
+    new BrokerRemote({
+      broker, pi: fakePi as never,
+      selfPcLabel: "MacMini", selfPcPubkey: "K_B",
+      siblings: [{ pcLabel: "MacBook", pcPubkey: "K_A" }],
+    });
+    // Note: no `onLocalPeersChanged` was ever called. Bootstrap traffic
+    // was sent; clear it so we observe the reply path cleanly.
+    fakePi.sent.length = 0;
+
+    fakePi.emit("envelope", envelope(
+      "MacBook:_broker_remote", "MacMini:_broker_remote",
+      { type: "peers_request" },
+    ), "K_A");
+
+    const reply = fakePi.sent.find((s) =>
+      (s.env.body as { type?: string } | null)?.type === "peers_update",
+    );
+    expect(reply).toBeDefined();
+    expect((reply!.env.body as { peers: string[] }).peers).toEqual(["MacMini"]);
+    expect(peerNames).toHaveBeenCalled();
+  });
+
   test("onLocalPeersChanged pushes peers_update to every sibling", () => {
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker();
@@ -362,6 +401,9 @@ describe("BrokerRemote: control envelopes (peers_update / peers_request)", () =>
         { pcLabel: "movel", pcPubkey: "K_C" },
       ],
     });
+    // Discard bootstrap announce/request traffic; we only care about the
+    // peers_update emitted by `onLocalPeersChanged` below.
+    fakePi.sent.length = 0;
     br.onLocalPeersChanged(["sess-3"]);
 
     const updates = fakePi.sent.filter((s) =>
@@ -462,6 +504,23 @@ describe("BrokerRemote: bootstrap peers_request (plan/25 Wave B)", () => {
       (s.env.body as { type?: string } | null)?.type === "peers_request",
     );
     expect(requests.map((r) => r.toPc).sort()).toEqual(["K_B", "K_C"]);
+  });
+
+  test("constructor also announces our own peers (peers_update) to every sibling", () => {
+    const fakePi = new FakePi();
+    const { broker } = makeFakeBroker({ localPeers: ["MacMini"] });
+    new BrokerRemote({
+      broker, pi: fakePi as never,
+      selfPcLabel: "MacMini", selfPcPubkey: "K_B",
+      siblings: [{ pcLabel: "MacBook", pcPubkey: "K_A" }],
+    });
+
+    const announces = fakePi.sent.filter((s) =>
+      (s.env.body as { type?: string } | null)?.type === "peers_update",
+    );
+    expect(announces.length).toBe(1);
+    expect(announces[0]!.toPc).toBe("K_A");
+    expect((announces[0]!.env.body as { peers: string[] }).peers).toEqual(["MacMini"]);
   });
 
   test("no peers_request emitted when there are zero siblings", () => {
