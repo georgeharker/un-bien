@@ -361,6 +361,117 @@ async fn room_meta_update_broadcasts_to_subscribers() {
     assert_eq!(v["meta"]["model"], "claude-haiku-4-5-20251001");
 }
 
+/// `rooms_check` dedup: an identical follow-up snapshot for the same target
+/// peer is suppressed by the relay (firehose-fix). First reply always sent.
+#[tokio::test]
+async fn rooms_check_dedup_suppresses_identical_responses() {
+    let port = start_relay().await;
+    let sk_pi = random_key();
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
+
+    let (_ws_pi, _) = connect_and_auth_with_room(port, &sk_pi, "work").await;
+    let (mut ws_app, _) = connect_and_auth(port).await;
+
+    ws_app
+        .send(Message::text(
+            json!({"type": "rooms_check", "peers": [&peer_pi]}).to_string(),
+        ))
+        .await
+        .unwrap();
+    let first = tokio::time::timeout(tokio::time::Duration::from_secs(1), ws_app.next())
+        .await
+        .expect("timed out on first rooms reply")
+        .unwrap()
+        .unwrap();
+    let v1: serde_json::Value = serde_json::from_str(first.to_text().unwrap()).unwrap();
+    assert_eq!(v1["type"], "rooms");
+    assert_eq!(v1["peer"], peer_pi);
+
+    // Identical follow-up — suppressed.
+    ws_app
+        .send(Message::text(
+            json!({"type": "rooms_check", "peers": [&peer_pi]}).to_string(),
+        ))
+        .await
+        .unwrap();
+    let dup = tokio::time::timeout(tokio::time::Duration::from_millis(250), ws_app.next()).await;
+    assert!(
+        dup.is_err(),
+        "identical rooms reply must be suppressed, got: {:?}",
+        dup.ok().and_then(|m| m.and_then(|r| r.ok())).map(|m| m.into_text())
+    );
+}
+
+/// After a real room change (room_meta_update with a new model), the next
+/// `rooms_check` reply is distinct from the cached one and therefore is
+/// emitted, not suppressed.
+#[tokio::test]
+async fn rooms_check_after_real_change_emits_new_snapshot() {
+    let port = start_relay().await;
+    let sk_pi = random_key();
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
+
+    let (mut ws_pi, _) = connect_and_auth_with_key(port, &sk_pi).await; // room "main"
+    let (mut ws_app, _) = connect_and_auth(port).await;
+
+    // First rooms_check — primes the cache.
+    ws_app
+        .send(Message::text(
+            json!({"type": "rooms_check", "peers": [&peer_pi]}).to_string(),
+        ))
+        .await
+        .unwrap();
+    let _ = tokio::time::timeout(tokio::time::Duration::from_secs(1), ws_app.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+
+    // Real change in Pi's room meta.
+    ws_pi
+        .send(Message::text(
+            json!({
+                "type": "room_meta_update",
+                "room_id": "main",
+                "meta": {"model": "claude-sonnet-4-6"},
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+    tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
+
+    // Second rooms_check — distinct payload (model changed) → must come through.
+    ws_app
+        .send(Message::text(
+            json!({"type": "rooms_check", "peers": [&peer_pi]}).to_string(),
+        ))
+        .await
+        .unwrap();
+    // The subscriber may have received an unsolicited room_meta_updated
+    // earlier; loop until we see the rooms snapshot. Cap at a handful of
+    // frames to avoid runaway.
+    let mut got = None;
+    for _ in 0..4 {
+        let m = tokio::time::timeout(tokio::time::Duration::from_secs(1), ws_app.next())
+            .await
+            .expect("timed out waiting for distinct rooms reply")
+            .unwrap()
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(m.to_text().unwrap()).unwrap();
+        if v["type"] == "rooms" {
+            got = Some(v);
+            break;
+        }
+    }
+    let v = got.expect("never received the post-change rooms reply");
+    let rooms_arr = v["rooms"].as_array().unwrap();
+    assert_eq!(rooms_arr.len(), 1);
+    assert_eq!(rooms_arr[0]["model"], "claude-sonnet-4-6");
+}
+
 /// rooms_check after room_meta_update reflects the updated model.
 #[tokio::test]
 async fn rooms_check_reflects_updated_model() {

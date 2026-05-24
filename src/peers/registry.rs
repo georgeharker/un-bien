@@ -8,6 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::extract::ws::Message;
 use tokio::sync::mpsc;
 
+use crate::metrics::FirehoseMetrics;
 use crate::presence::PresenceManager;
 use crate::rooms::{RoomManager, RoomMeta};
 
@@ -31,29 +32,44 @@ type ConnEntry = (u64, RoomMeta, mpsc::UnboundedSender<Message>);
 /// Lifecycle events:
 /// - `room_announced` fires once, when the *first* conn opens a room.
 /// - `room_ended` fires once, when the *last* conn at a room disconnects.
-/// - `peer_online` fires on **every** successful `register` (idempotent for
-///   subscribers). This restores the pre-Wave-2C contract that every fresh
-///   registration signals presence — necessary because zombie conns (orphaned
-///   before TCP timeout) would otherwise suppress the online event of the new
-///   conn that replaces them.
+/// - `peer_online` fires only on a real **offline → online** transition: when
+///   the peer had **zero** live conns immediately before this register. A
+///   second/third conn from the same peer is silently absorbed (no extra
+///   `peer_online` for subscribers). The historic "ALWAYS fires" defense
+///   against zombie conns was retired here because (a) clients now dedupe
+///   client-side anyway and (b) it was generating a firehose of identical
+///   frames whenever multiple Owner devices reconnected.
+///
+///   Zombie reasoning: if a phantom conn is still in the map, `was_offline ==
+///   false` and we skip the emit — subscribers already think the peer is
+///   online (which is still effectively true at the public protocol level).
+///   When the zombie is finally cleaned, `unregister` only fires
+///   `peer_offline` if the **whole** peer is gone — never wrongly while a
+///   real conn is alive.
 /// - `peer_offline` fires only when the peer transitions from N → 0 total
-///   connections (asymmetric: offline must be authoritative, online is safe
-///   to repeat).
+///   connections (asymmetric still: online and offline both gated by real
+///   state changes, but the offline edge is the authoritative one).
 #[derive(Debug)]
 pub struct PeerRegistry {
     next_conn: AtomicU64,
     senders: Mutex<HashMap<RoomKey, Vec<ConnEntry>>>,
     presence: Arc<PresenceManager>,
     rooms: Arc<RoomManager>,
+    metrics: Arc<FirehoseMetrics>,
 }
 
 impl PeerRegistry {
-    pub fn new(presence: Arc<PresenceManager>, rooms: Arc<RoomManager>) -> Self {
+    pub fn new(
+        presence: Arc<PresenceManager>,
+        rooms: Arc<RoomManager>,
+        metrics: Arc<FirehoseMetrics>,
+    ) -> Self {
         Self {
             next_conn: AtomicU64::new(0),
             senders: Mutex::new(HashMap::new()),
             presence,
             rooms,
+            metrics,
         }
     }
 
@@ -61,10 +77,9 @@ impl PeerRegistry {
     ///
     /// Multiple connections may coexist at the same key — each gets a unique
     /// `conn_id`. `room_announced` fires only on the **first** conn at the
-    /// room (to avoid spamming metadata churn). `peer_online` fires on
-    /// **every** successful register: it is idempotent for subscribers and
-    /// guarantees that a fresh connection always signals presence even when
-    /// a zombie conn from the same peer is still being cleaned up.
+    /// room (to avoid spamming metadata churn). `peer_online` fires only
+    /// when `was_offline_before == true` — i.e. on a real offline→online
+    /// transition, not on every register. See struct-level docs.
     pub async fn register(
         &self,
         peer_id: String,
@@ -76,13 +91,16 @@ impl PeerRegistry {
 
         let conn_id = self.next_conn.fetch_add(1, Ordering::Relaxed);
 
-        let is_first_in_room = {
+        // Compute both flags **before** the insert so they reflect the prior
+        // state of the registry.
+        let (was_offline_before, is_first_in_room) = {
             let mut lock = self.senders.lock().unwrap();
+            let was_offline_before = !lock.keys().any(|(p, _)| p == &peer_id);
             let is_first_in_room = !lock.contains_key(&key);
             lock.entry(key)
                 .or_default()
                 .push((conn_id, room_meta.clone(), tx));
-            is_first_in_room
+            (was_offline_before, is_first_in_room)
         };
 
         // room_announced fires once per (peer, room) lifecycle.
@@ -100,13 +118,22 @@ impl PeerRegistry {
             }
         }
 
-        // peer_online ALWAYS fires on register (idempotent for subscribers).
+        // peer_online fires only on a real offline → online transition.
+        // Re-registers from a peer that already had a live conn produce no
+        // new push to subscribers — they already think it's online.
         let pres_subs = self.presence.subscribers_of(&peer_id).await;
-        if !pres_subs.is_empty() {
-            let msg =
-                serde_json::json!({"type": "peer_online", "peer": peer_id}).to_string();
-            for sub in pres_subs {
-                self.forward_to_all_rooms_of(&sub, Message::Text(msg.clone()));
+        let sub_count = pres_subs.len() as u64;
+        if sub_count > 0 {
+            if was_offline_before {
+                let msg =
+                    serde_json::json!({"type": "peer_online", "peer": peer_id})
+                        .to_string();
+                for sub in pres_subs {
+                    self.forward_to_all_rooms_of(&sub, Message::Text(msg.clone()));
+                }
+                self.metrics.inc_peer_online_emitted(sub_count);
+            } else {
+                self.metrics.inc_peer_online_suppressed(sub_count);
             }
         }
 
@@ -330,7 +357,8 @@ mod tests {
     fn make_registry() -> PeerRegistry {
         let presence = Arc::new(PresenceManager::new());
         let rooms = Arc::new(RoomManager::new());
-        PeerRegistry::new(presence, rooms)
+        let metrics = Arc::new(FirehoseMetrics::new());
+        PeerRegistry::new(presence, rooms, metrics)
     }
 
     /// Sentinel `from_conn_id` for "no real sender to skip" — guaranteed not
@@ -467,5 +495,47 @@ mod tests {
         // Correct unregister removes the last conn → entry gone.
         reg.unregister(&peer, "main", conn_b).await;
         assert!(!reg.forward(&peer, "main", Message::Text("gone".into()), EXTERNAL));
+    }
+
+    /// First register from an offline peer with a presence subscriber must
+    /// emit one `peer_online`; a second register from the **same** peer (no
+    /// real transition) must NOT emit again and must bump the suppressed
+    /// counter instead.
+    #[tokio::test]
+    async fn peer_online_fires_only_on_real_transition() {
+        let presence = Arc::new(PresenceManager::new());
+        let rooms = Arc::new(RoomManager::new());
+        let metrics = Arc::new(FirehoseMetrics::new());
+        let reg = PeerRegistry::new(presence.clone(), rooms, metrics.clone());
+
+        let pi = "pi".to_string();
+        let app = "app".to_string();
+
+        // App is online and subscribes to Pi's presence.
+        let (tx_app, mut rx_app) = mpsc::unbounded_channel::<Message>();
+        let _ = reg.register(app.clone(), make_meta("main"), tx_app).await;
+        presence.subscribe(app.clone(), vec![pi.clone()]).await;
+
+        // First Pi conn → real offline→online → app receives peer_online.
+        let (tx_pi_1, _) = mpsc::unbounded_channel::<Message>();
+        let _ = reg.register(pi.clone(), make_meta("main"), tx_pi_1).await;
+        let m1 = rx_app.try_recv().unwrap();
+        let v1: serde_json::Value =
+            serde_json::from_str(m1.to_text().unwrap()).unwrap();
+        assert_eq!(v1["type"], "peer_online");
+        assert_eq!(v1["peer"], pi.clone());
+
+        // Second conn from the same Pi (no transition) → no extra peer_online.
+        let (tx_pi_2, _) = mpsc::unbounded_channel::<Message>();
+        let _ = reg.register(pi.clone(), make_meta("work"), tx_pi_2).await;
+        assert!(
+            rx_app.try_recv().is_err(),
+            "second register at already-online peer must NOT emit peer_online"
+        );
+
+        // Metrics: 1 emitted, 1 suppressed (each over 1 subscriber).
+        let [emitted, suppressed, ..] = metrics.snapshot();
+        assert_eq!(emitted, 1, "snapshot: {:?}", metrics.snapshot());
+        assert_eq!(suppressed, 1, "snapshot: {:?}", metrics.snapshot());
     }
 }

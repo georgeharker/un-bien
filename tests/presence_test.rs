@@ -205,11 +205,12 @@ async fn subscribe_after_peer_already_online_backfills_peer_online() {
     assert_eq!(v["peer"], peer_pi);
 }
 
-/// Fix #1 — peer_online fires on EVERY successful register, not just on
-/// the 0→1 transition. Ensures that a fresh connection from a peer always
-/// signals presence even when a zombie/duplicate conn is still in the registry.
+/// Firehose-fix contract: peer_online fires only on a real offline→online
+/// transition. A second conn from the same Pi (no transition) MUST NOT
+/// re-push peer_online to subscribers. (This is the inverse of the historic
+/// "ALWAYS fires" defense; clients now dedupe client-side anyway.)
 #[tokio::test]
-async fn second_conn_same_peer_still_emits_peer_online() {
+async fn second_conn_same_peer_does_not_re_emit_peer_online() {
     let port = start_relay().await;
     let sk_pi = random_key();
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
@@ -225,7 +226,7 @@ async fn second_conn_same_peer_still_emits_peer_online() {
         .unwrap();
     tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
 
-    // First Pi conn → first peer_online.
+    // First Pi conn → first (and only) peer_online.
     let (_ws_pi_1, _) = connect_and_auth_with_key(port, &sk_pi).await;
     let m1 = tokio::time::timeout(
         tokio::time::Duration::from_secs(1),
@@ -237,20 +238,103 @@ async fn second_conn_same_peer_still_emits_peer_online() {
     .unwrap();
     let v1: serde_json::Value = serde_json::from_str(m1.to_text().unwrap()).unwrap();
     assert_eq!(v1["type"], "peer_online");
+    assert_eq!(v1["peer"], peer_pi);
 
-    // Second Pi conn at the SAME (peer, room) — simulates zombie + reconnect.
-    // Plan 23 (Wave 2C) allows this. peer_online must STILL fire so the app
-    // doesn't get stuck in offline state if it missed the first event.
+    // Second Pi conn at the SAME peer — no real transition → must NOT
+    // emit peer_online again.
     let (_ws_pi_2, _) = connect_and_auth_with_key(port, &sk_pi).await;
-    let m2 = tokio::time::timeout(
-        tokio::time::Duration::from_secs(1),
+    let spurious = tokio::time::timeout(
+        tokio::time::Duration::from_millis(200),
         ws_app.next(),
     )
+    .await;
+    assert!(
+        spurious.is_err(),
+        "second register at already-online peer must NOT re-emit peer_online, got: {:?}",
+        spurious.ok().and_then(|m| m.and_then(|r| r.ok())).map(|m| m.into_text())
+    );
+}
+
+/// `presence_check` dedup: if the snapshot reply is identical to the previous
+/// reply sent on the same WS conn, the relay suppresses it. The first reply
+/// always goes through.
+#[tokio::test]
+async fn presence_check_dedup_suppresses_identical_responses() {
+    let port = start_relay().await;
+    let sk_a = random_key();
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    let peer_a = B64.encode(sk_a.verifying_key().to_bytes());
+
+    // A is online; B asks twice in a row — only the first reply comes back.
+    let (_ws_a, _) = connect_and_auth_with_key(port, &sk_a).await;
+    let (mut ws_b, _) = connect_and_auth(port).await;
+
+    ws_b.send(Message::text(
+        json!({"type": "presence_check", "peers": [&peer_a]}).to_string(),
+    ))
     .await
-    .expect("missed second peer_online (regression)")
-    .unwrap()
     .unwrap();
+    let first = tokio::time::timeout(tokio::time::Duration::from_secs(1), ws_b.next())
+        .await
+        .expect("timed out on first presence reply")
+        .unwrap()
+        .unwrap();
+    let v1: serde_json::Value = serde_json::from_str(first.to_text().unwrap()).unwrap();
+    assert_eq!(v1["type"], "presence", "first reply must come through");
+
+    // Identical follow-up — suppressed.
+    ws_b.send(Message::text(
+        json!({"type": "presence_check", "peers": [&peer_a]}).to_string(),
+    ))
+    .await
+    .unwrap();
+    let dup = tokio::time::timeout(tokio::time::Duration::from_millis(250), ws_b.next()).await;
+    assert!(
+        dup.is_err(),
+        "identical presence reply must be suppressed, got: {:?}",
+        dup.ok().and_then(|m| m.and_then(|r| r.ok())).map(|m| m.into_text())
+    );
+}
+
+/// Changing the subscribed peer set (a real change) makes the next
+/// `presence_check` reply distinct, so it goes through after a dedup-suppressed
+/// run.
+#[tokio::test]
+async fn presence_check_after_change_emits_new_snapshot() {
+    let port = start_relay().await;
+    let sk_a = random_key();
+    let sk_c = random_key();
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    let peer_a = B64.encode(sk_a.verifying_key().to_bytes());
+    let peer_c = B64.encode(sk_c.verifying_key().to_bytes());
+
+    let (_ws_a, _) = connect_and_auth_with_key(port, &sk_a).await;
+    let (mut ws_b, _) = connect_and_auth(port).await;
+
+    // First check with peers=[A]
+    ws_b.send(Message::text(
+        json!({"type": "presence_check", "peers": [&peer_a]}).to_string(),
+    ))
+    .await
+    .unwrap();
+    let _ = tokio::time::timeout(tokio::time::Duration::from_secs(1), ws_b.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+
+    // Different peer set [A, C] → distinct reply, not suppressed.
+    ws_b.send(Message::text(
+        json!({"type": "presence_check", "peers": [&peer_a, &peer_c]}).to_string(),
+    ))
+    .await
+    .unwrap();
+    let m2 = tokio::time::timeout(tokio::time::Duration::from_secs(1), ws_b.next())
+        .await
+        .expect("change in payload must produce a reply")
+        .unwrap()
+        .unwrap();
     let v2: serde_json::Value = serde_json::from_str(m2.to_text().unwrap()).unwrap();
-    assert_eq!(v2["type"], "peer_online", "second register must also emit peer_online, got: {v2}");
-    assert_eq!(v2["peer"], peer_pi);
+    assert_eq!(v2["type"], "presence");
+    assert_eq!(v2["states"].as_array().unwrap().len(), 2);
 }

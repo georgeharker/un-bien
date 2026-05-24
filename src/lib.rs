@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod handlers;
 pub mod mesh;
+pub mod metrics;
 pub mod peers;
 pub mod presence;
 pub mod protocol;
@@ -16,6 +17,7 @@ use axum::{
 
 pub use handlers::pi_forward::MeshAuthCache;
 pub use mesh::MeshStore;
+pub use metrics::FirehoseMetrics;
 pub use peers::registry::PeerRegistry;
 pub use presence::PresenceManager;
 pub use rooms::{RoomManager, RoomMeta};
@@ -34,6 +36,9 @@ pub struct AppState {
     /// Plan 25 — caches `Pi-pubkey → mesh siblings` to avoid hitting SQLite
     /// for every `pi_envelope` forward (60 s TTL).
     pub mesh_auth: Arc<MeshAuthCache>,
+    /// In-process counters for emit/suppress accounting (firehose dedup).
+    /// A background task drains and logs them every 10 s.
+    pub metrics: Arc<FirehoseMetrics>,
 }
 
 // Allows mesh handlers to keep using `State<Arc<MeshStore>>` instead of

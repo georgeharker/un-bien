@@ -27,10 +27,34 @@ async fn main() -> anyhow::Result<()> {
 
     let presence = Arc::new(relay::PresenceManager::new());
     let rooms = Arc::new(relay::RoomManager::new());
-    let registry = Arc::new(relay::PeerRegistry::new(presence.clone(), rooms.clone()));
+    let metrics = Arc::new(relay::FirehoseMetrics::new());
+    let registry = Arc::new(relay::PeerRegistry::new(
+        presence.clone(),
+        rooms.clone(),
+        metrics.clone(),
+    ));
     let mesh_auth = Arc::new(relay::MeshAuthCache::new());
 
-    let state = relay::AppState { registry, presence, rooms, mesh, mesh_auth };
+    // Background reporter: drain firehose counters every 10 s and emit a
+    // single structured log line. Quiet windows are silent.
+    let metrics_for_reporter = metrics.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+        interval.tick().await; // first tick is immediate; skip it
+        loop {
+            interval.tick().await;
+            metrics_for_reporter.report_and_reset();
+        }
+    });
+
+    let state = relay::AppState {
+        registry,
+        presence,
+        rooms,
+        mesh,
+        mesh_auth,
+        metrics,
+    };
     let app = relay::build_router(state);
 
     let addr = format!("0.0.0.0:{port}");

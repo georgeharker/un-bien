@@ -9,7 +9,8 @@ use std::sync::Arc;
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use ed25519_dalek::{Signer, SigningKey};
 use relay::{
-    AppState, MeshAuthCache, MeshStore, PeerRegistry, PresenceManager, RoomManager, build_router,
+    AppState, FirehoseMetrics, MeshAuthCache, MeshStore, PeerRegistry, PresenceManager,
+    RoomManager, build_router,
 };
 use reqwest::StatusCode;
 use serde_json::{Value, json};
@@ -24,9 +25,14 @@ async fn spawn_relay() -> (String, tempfile::TempDir) {
     let mesh = Arc::new(MeshStore::open(&db_path).unwrap());
     let presence = Arc::new(PresenceManager::new());
     let rooms = Arc::new(RoomManager::new());
-    let registry = Arc::new(PeerRegistry::new(presence.clone(), rooms.clone()));
+    let metrics = Arc::new(FirehoseMetrics::new());
+    let registry = Arc::new(PeerRegistry::new(
+        presence.clone(),
+        rooms.clone(),
+        metrics.clone(),
+    ));
     let mesh_auth = Arc::new(MeshAuthCache::new());
-    let state = AppState { registry, presence, rooms, mesh, mesh_auth };
+    let state = AppState { registry, presence, rooms, mesh, mesh_auth, metrics };
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();

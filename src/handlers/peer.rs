@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -119,9 +120,16 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
     let rooms = state.rooms.clone();
     let mesh = state.mesh.clone();
     let mesh_auth = state.mesh_auth.clone();
+    let metrics = state.metrics.clone();
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
     let conn_id = registry.register(peer_id.clone(), room_meta, tx).await;
+
+    // Per-conn dedup state for control-frame replies. Suppress identical
+    // re-emits of `presence` (single cache slot — there's only one
+    // subscription set per conn) and `rooms` (one slot per target peer).
+    let mut last_presence_resp: Option<String> = None;
+    let mut last_rooms_resp: HashMap<String, String> = HashMap::new();
 
     // ── 4. Routing loop ───────────────────────────────────────────────────
     // Send a WS Ping every 25 s so NAT/LB idle timers don't close the connection.
@@ -188,8 +196,18 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                         "states": states,
                                     })
                                     .to_string();
-                                    if sink.send(Message::Text(resp)).await.is_err() {
-                                        break;
+                                    // Dedup: skip reply if identical to the
+                                    // previous one we sent on this conn. The
+                                    // first reply always goes through (cache
+                                    // is None until the first emit).
+                                    if last_presence_resp.as_deref() == Some(resp.as_str()) {
+                                        metrics.inc_presence_suppressed(1);
+                                    } else {
+                                        last_presence_resp = Some(resp.clone());
+                                        if sink.send(Message::Text(resp)).await.is_err() {
+                                            break;
+                                        }
+                                        metrics.inc_presence_emitted(1);
                                     }
                                 }
 
@@ -209,9 +227,18 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                             "rooms": active_rooms,
                                         })
                                         .to_string();
+                                        // Dedup per (conn, target_peer):
+                                        // first reply always sent; subsequent
+                                        // identical snapshots dropped.
+                                        if last_rooms_resp.get(target_peer) == Some(&resp) {
+                                            metrics.inc_rooms_suppressed(1);
+                                            continue;
+                                        }
+                                        last_rooms_resp.insert(target_peer.clone(), resp.clone());
                                         if sink.send(Message::Text(resp)).await.is_err() {
                                             break 'routing;
                                         }
+                                        metrics.inc_rooms_emitted(1);
                                     }
                                 }
 

@@ -263,6 +263,7 @@ mod tests {
         let registry = Arc::new(PeerRegistry::new(
             Arc::new(PresenceManager::new()),
             Arc::new(RoomManager::new()),
+            Arc::new(crate::metrics::FirehoseMetrics::new()),
         ));
         let store = MeshStore::open_in_memory().unwrap();
         let cache = MeshAuthCache::new();
