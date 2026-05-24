@@ -75,7 +75,7 @@ import { acquireCwdLock, type AcquiredLock } from "./session/cwd_lock.js";
 import { addDaemon, listDaemons, removeDaemon } from "./daemon/registry.js";
 import { callSupervisor, supervisorOnline, SupervisorOfflineError } from "./daemon/client.js";
 import type { DaemonInfo } from "./daemon/control_protocol.js";
-import { installService, uninstallService } from "./daemon/install.js";
+import { installService, uninstallService, linkCliBinaries, unlinkCliBinaries } from "./daemon/install.js";
 import {
   defaultAgentName,
   effectiveAutoStartRelay,
@@ -87,7 +87,8 @@ import { runSetupWizard, type WizardUI } from "./session/setup_wizard.js";
 import { updateFooter, type FooterState } from "./ui/footer.js";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { mkdirSync, copyFileSync, existsSync, unlinkSync } from "node:fs";
+import { mkdirSync, copyFileSync, existsSync, unlinkSync, readFileSync } from "node:fs";
+import { hostname } from "node:os";
 import {
   kDefaultRelayUrl,
   resolveRelayUrl,
@@ -800,6 +801,30 @@ function _installAutoListener(relay: RelayClient): () => void {
   return () => relay.off("message", onMsg);
 }
 
+/**
+ * Plan/27 Wave A: lazily resolve the pi-extension package version from
+ * disk so the `pair_ok.harness.version` field reflects what's actually
+ * shipped. The lookup is best-effort — a parse failure (or running this
+ * file out-of-tree) falls back to "0.0.0" which is still semver-valid
+ * and the app tolerates it. Cached at module load.
+ */
+function _readExtensionVersion(): string {
+  try {
+    const here = fileURLToPath(import.meta.url);
+    // dist/index.js → ../package.json. src/index.ts under tsx → also one level up.
+    const pkgPath = join(here, "..", "..", "package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string };
+    return typeof pkg.version === "string" ? pkg.version : "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+const _HARNESS = {
+  name: "Pi coding agent",
+  version: _readExtensionVersion(),
+} as const;
+const _HOSTNAME = hostname();
+
 async function _handlePairRequest(
   relay: RelayClient,
   appPeerId: string,
@@ -860,6 +885,11 @@ async function _handlePairRequest(
     // to roomIdForCwd(cwd) covers the edge case where pair_request lands
     // before _cmdStart could set _myRoomId (shouldn't happen in practice).
     room_id: _myRoomId ?? roomIdForCwd(cwd),
+    // Plan/27 Wave A — surface the host coding-agent identity + machine
+    // hostname so the app can render a meaningful device row (and tell
+    // two PCs apart even when nicknames collide).
+    harness: _HARNESS,
+    hostname: _HOSTNAME,
   });
 }
 
@@ -1050,8 +1080,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       else if (sub === "daemon restart")         { await _cmdDaemonRestart(ctx); }
       else if (sub === "daemon status")          { await _cmdDaemonStatus(ctx); }
       else if (sub.startsWith("daemon send"))    { await _cmdDaemonSend(sub.slice("daemon send".length).trim(), ctx); }
-      else if (sub === "install")                { _cmdInstall(ctx); }
-      else if (sub === "uninstall")              { _cmdUninstall(ctx); }
+      else if (sub === "install")                { _cmdInstall(ctx, { linkCli: true }); }
+      else if (sub === "uninstall")              { _cmdUninstall(ctx, { linkCli: true }); }
       else                                       { await _cmdRoot(ctx); }
     },
   });
@@ -1098,8 +1128,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   pi.registerCommand("remote-pi daemon send",    { description: "Send a prompt to a daemon: `daemon send <id> \"<text>\"`", handler: async (args, ctx) => { _lastCtx = ctx; await _cmdDaemonSend(args.trim(), ctx); } });
 
   // Service install / uninstall (plan/26 W3)
-  pi.registerCommand("remote-pi install",   { description: "Install pi-supervisord as a system service (systemd/launchd)", handler: async (_, ctx) => { _lastCtx = ctx; _cmdInstall(ctx); } });
-  pi.registerCommand("remote-pi uninstall", { description: "Remove the pi-supervisord system service (daemons registry preserved)", handler: async (_, ctx) => { _lastCtx = ctx; _cmdUninstall(ctx); } });
+  pi.registerCommand("remote-pi install",   { description: "Install pi-supervisord as a system service + link the remote-pi CLI into ~/.local/bin (systemd/launchd)", handler: async (_, ctx) => { _lastCtx = ctx; _cmdInstall(ctx, { linkCli: true }); } });
+  pi.registerCommand("remote-pi uninstall", { description: "Remove the pi-supervisord system service + the ~/.local/bin symlinks (daemons registry preserved)", handler: async (_, ctx) => { _lastCtx = ctx; _cmdUninstall(ctx, { linkCli: true }); } });
 };
 
 export default extension;
@@ -1207,14 +1237,17 @@ async function _cmdRoot(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
       return;
     }
     const baseDefault = defaultAgentName(cwd);
-    const newConfig = await runSetupWizard(ui, {
+    const wizardResult = await runSetupWizard(ui, {
       agent_name: baseDefault,
       use_relay: true,
+      enable_daemon: false,
     });
-    if (!newConfig) {
+    if (!wizardResult) {
       ctx.ui.notify("[remote-pi] Setup cancelled.", "info");
       return;
     }
+    // `enable_daemon` is wizard-only state, not part of LocalConfig.
+    const { enable_daemon, ...newConfig } = wizardResult;
     saveLocalConfig(cwd, newConfig);
     ctx.ui.notify(
       `[remote-pi] Config saved to ${cwd}/.pi/remote-pi/config.json`,
@@ -1222,6 +1255,7 @@ async function _cmdRoot(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
     );
     await _cmdJoin(ctx);
     if (effectiveAutoStartRelay(newConfig)) await _cmdStart(ctx);
+    if (enable_daemon) _cmdInstall(ctx, { linkCli: true });
     _cmdStatus(ctx);
     return;
   }
@@ -1248,19 +1282,25 @@ async function _cmdSetup(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
   }
   const current = loadLocalConfig(cwd);
   const baseDefault = defaultAgentName(cwd);
-  const newConfig = await runSetupWizard(ui, {
+  const wizardResult = await runSetupWizard(ui, {
     agent_name: current.agent_name ?? baseDefault,
     use_relay: effectiveAutoStartRelay(current),
+    // No way to introspect launchd/systemd here without shelling out;
+    // default the wizard to "off" — re-running setup is for changing
+    // your mind, not for re-confirming current OS state.
+    enable_daemon: false,
   });
-  if (!newConfig) {
+  if (!wizardResult) {
     ctx.ui.notify("[remote-pi] Setup cancelled.", "info");
     return;
   }
+  const { enable_daemon, ...newConfig } = wizardResult;
   saveLocalConfig(cwd, newConfig);
   ctx.ui.notify(
     "[remote-pi] Config updated. Run /remote-pi to apply now.",
     "info",
   );
+  if (enable_daemon) _cmdInstall(ctx, { linkCli: true });
 }
 
 async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
@@ -1355,6 +1395,23 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
           _detachPeerChannel(ownerEpk);
           _refreshFooter();
         }
+        // Surface the revocation inside the Pi chat panel via
+        // `pi.sendMessage` (same channel the QR pair-code uses). Plain
+        // `console.info` from the SelfRevoke poller bypasses the TUI
+        // widget and bleeds into the prompt area, garbling the layout
+        // — same issue we hit with the QR ASCII before plan/24 Wave 3.
+        // sendMessage with a customType keeps the line inline with
+        // the agent's transcript. The poller's own `log.info` keeps
+        // running for daemons/CI where no TUI is attached.
+        const short = ownerEpk.slice(0, 8);
+        _pi?.sendMessage({
+          customType: "remote-pi:mesh-revoked",
+          content:
+            `🔒 Revoked by Owner ${short}…\n\n` +
+            `The mobile app for this Owner removed this PC from the mesh. ` +
+            `Re-pair via /remote-pi pair if this was unexpected.`,
+          display: true,
+        });
       },
       // Plan/25 Wave D: keep broker_remote's sibling list in sync with
       // mesh_versions. The poller fires this whenever the union of Pi
@@ -1389,13 +1446,42 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
  * owners keep their session.
  */
 async function _cmdPair(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
+  const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : "";
+
+  // Auto-bootstrap when services are down. Before this, `/remote-pi pair`
+  // on a fresh terminal forced the user to call `/remote-pi` first — every
+  // session began with the same surprise warning + second command. Now we
+  // do the join + relay-start inline so the common "I just opened a
+  // terminal and want to pair my phone" flow is a single command.
+  //
+  // We don't run the first-time wizard here: pair is a focused operation
+  // and the wizard prompts are wrong UX in that flow. If there's no local
+  // config, the user truly needs to run `/remote-pi` first to configure.
   if (_state === "idle") {
-    ctx.ui.notify("[remote-pi] Run /remote-pi first.", "warning");
+    if (!localConfigExists(cwd)) {
+      ctx.ui.notify(
+        "[remote-pi] First-time setup needed. Run /remote-pi to configure, then /remote-pi pair.",
+        "warning",
+      );
+      return;
+    }
+    ctx.ui.notify("[remote-pi] Starting mesh + relay before pairing…", "info");
+    if (!_sessionPeer) await _cmdJoin(ctx);
+    if (_state === "idle") await _cmdStart(ctx);
+  }
+
+  // Relay must be up — the QR carries a token the app exchanges through
+  // the relay. Without a live WS there's nothing for the scan to land on.
+  if (_state === "idle" || !_relay) {
+    ctx.ui.notify(
+      "[remote-pi] Pair requires the relay to be connected. " +
+      "Run /remote-pi to start it (or fix your relay URL via /remote-pi set-relay).",
+      "warning",
+    );
     return;
   }
 
   const edKp = _cachedEd25519!;
-  const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : "";
   // Embed the user-configured name in the QR so the app shows it on the
   // pairing screen before pair_ok lands (better UX than "remote" or a
   // raw path snippet).
@@ -1815,28 +1901,65 @@ async function _cmdDaemonSend(arg: string, ctx: Pick<ExtensionContext, "ui">): P
 // Uninstall is the inverse — leaves the registry (`daemons.json`) intact,
 // so re-installing later picks up where you left off.
 
-function _cmdInstall(ctx: Pick<ExtensionContext, "ui">): void {
+/**
+ * `linkCli` controls whether we symlink `remote-pi` + `pi-supervisord`
+ * into `~/.local/bin/`. The slash-command path passes `true` (user is
+ * inside Pi's TUI — they installed via `pi install npm:remote-pi` and
+ * need us to expose the CLI for them). The standalone-CLI path passes
+ * `false` because the user is already running our binary from PATH (they
+ * did `npm install -g remote-pi`), so re-linking would point their
+ * `remote-pi` at the Pi-extension copy and diverge on upgrades.
+ */
+function _cmdInstall(ctx: Pick<ExtensionContext, "ui">, opts: { linkCli?: boolean } = {}): void {
+  const linkCli = opts.linkCli ?? false;
   try {
     const result = installService();
-    const summary =
-      `[remote-pi] Supervisor service installed (${result.platform}).\n` +
-      `  Unit: ${result.unitPath}\n` +
-      `  Steps:\n${result.log.map((l) => "    " + l).join("\n")}`;
-    ctx.ui.notify(summary, "info");
+    const sections = [
+      `[remote-pi] Supervisor service installed (${result.platform}).`,
+      `  Unit: ${result.unitPath}`,
+      `  Steps:\n${result.log.map((l) => "    " + l).join("\n")}`,
+    ];
+    if (linkCli) {
+      const link = linkCliBinaries();
+      sections.push(
+        `  CLI bins linked into ${link.binDir}:`,
+        link.links.map((l) => `    ${l.name} → ${l.target}`).join("\n"),
+        `  Steps:\n${link.log.map((l) => "    " + l).join("\n")}`,
+      );
+      if (!link.onPath) {
+        sections.push(
+          `  ⚠ ${link.binDir} is not on $PATH yet. Add this line to ~/.zshrc / ~/.bashrc:`,
+          `      export PATH="$HOME/.local/bin:$PATH"`,
+          `    Then open a new terminal and run \`remote-pi daemons\` to verify.`,
+        );
+      }
+    }
+    ctx.ui.notify(sections.join("\n"), "info");
   } catch (err) {
     ctx.ui.notify(`[remote-pi] install failed: ${String(err)}`, "error");
   }
 }
 
-function _cmdUninstall(ctx: Pick<ExtensionContext, "ui">): void {
+function _cmdUninstall(ctx: Pick<ExtensionContext, "ui">, opts: { linkCli?: boolean } = {}): void {
+  const linkCli = opts.linkCli ?? false;
   try {
     const result = uninstallService();
-    const summary =
-      `[remote-pi] Supervisor service uninstalled (${result.platform}).\n` +
-      `  Unit: ${result.unitPath} (${result.removed ? "removed" : "not present"})\n` +
-      `  Steps:\n${result.log.map((l) => "    " + l).join("\n")}\n` +
-      `  Note: daemons registry (~/.pi/remote/daemons.json) kept — re-install restores everything.`;
-    ctx.ui.notify(summary, "info");
+    const sections = [
+      `[remote-pi] Supervisor service uninstalled (${result.platform}).`,
+      `  Unit: ${result.unitPath} (${result.removed ? "removed" : "not present"})`,
+      `  Steps:\n${result.log.map((l) => "    " + l).join("\n")}`,
+      `  Note: daemons registry (~/.pi/remote/daemons.json) kept — re-install restores everything.`,
+    ];
+    if (linkCli) {
+      const unlink = unlinkCliBinaries();
+      sections.push(
+        `  CLI bins cleanup (${unlink.binDir}):`,
+        unlink.removed
+          .map((r) => `    ${r.name} (${r.existed ? "removed" : "not present"})`)
+          .join("\n"),
+      );
+    }
+    ctx.ui.notify(sections.join("\n"), "info");
   } catch (err) {
     ctx.ui.notify(`[remote-pi] uninstall failed: ${String(err)}`, "error");
   }
@@ -2282,11 +2405,15 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       console.log("Usage: remote-pi daemon <start|stop|restart|status|send <id> \"<text>\">");
     }
   } else if (subcmd === "install") {
+    // CLI mode = user installed via `npm install -g remote-pi`, so the
+    // `remote-pi` / `pi-supervisord` bins are already on $PATH via npm's
+    // global prefix. Explicit `linkCli: false` so we never stomp those
+    // with symlinks pointing at a parallel Pi-extension install.
     const stubCtx = { ui: { notify: (msg: string) => console.log(msg) } as unknown as ExtensionContext["ui"] };
-    _cmdInstall(stubCtx);
+    _cmdInstall(stubCtx, { linkCli: false });
   } else if (subcmd === "uninstall") {
     const stubCtx = { ui: { notify: (msg: string) => console.log(msg) } as unknown as ExtensionContext["ui"] };
-    _cmdUninstall(stubCtx);
+    _cmdUninstall(stubCtx, { linkCli: false });
   } else {
     const edKp = await getOrCreateEd25519Keypair();
     const sessionName = process.cwd().split("/").slice(-2).join("/");

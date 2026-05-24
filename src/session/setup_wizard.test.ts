@@ -46,10 +46,10 @@ function makeUI(answers: Array<string | undefined>): WizardUI & {
   };
 }
 
-describe("runSetupWizard (2 prompts + confirm)", () => {
-  test("1) accepts answers end-to-end → returns LocalConfig", async () => {
-    // Sequence: agent name (input), use_relay (select Yes), confirm (select Yes)
-    const ui = makeUI(["my-agent", YES, YES]);
+describe("runSetupWizard (3 prompts + confirm)", () => {
+  test("1) accepts answers end-to-end → returns WizardResult", async () => {
+    // Sequence: agent name (input), use_relay (Yes), enable_daemon (Yes), confirm (Yes)
+    const ui = makeUI(["my-agent", YES, YES, YES]);
     const cfg = await runSetupWizard(ui, {
       agent_name: "default-name",
       use_relay: true,
@@ -57,12 +57,13 @@ describe("runSetupWizard (2 prompts + confirm)", () => {
     expect(cfg).toEqual({
       agent_name: "my-agent",
       auto_start_relay: true,
+      enable_daemon: true,
     });
   });
 
   test("2) empty agent_name submission accepts the default", async () => {
-    // Empty input → wizard takes the default ("foo"), then Yes/Yes.
-    const ui = makeUI(["", YES, YES]);
+    // Empty input → wizard takes the default ("foo"), then Yes/No/Yes.
+    const ui = makeUI(["", YES, NO, YES]);
     const cfg = await runSetupWizard(ui, {
       agent_name: "foo",
       use_relay: true,
@@ -70,11 +71,12 @@ describe("runSetupWizard (2 prompts + confirm)", () => {
     expect(cfg).toEqual({
       agent_name: "foo",
       auto_start_relay: true,
+      enable_daemon: false,
     });
   });
 
-  test("2b) prompt labels surface the default as hint", async () => {
-    const ui = makeUI(["my-agent", YES, YES]);
+  test("2b) prompt labels surface the default as hint + new daemon prompt", async () => {
+    const ui = makeUI(["my-agent", YES, NO, YES]);
     await runSetupWizard(ui, {
       agent_name: "default-name",
       use_relay: true,
@@ -84,6 +86,7 @@ describe("runSetupWizard (2 prompts + confirm)", () => {
     ]);
     expect(ui.selectCalls.map((c) => c.title)).toEqual([
       "Use the relay on this terminal to connect to the remote mesh (mobile + PCs)?",
+      "Enable daemon mode? (run agents 24/7 in background)",
       "Save and activate?",
     ]);
   });
@@ -96,8 +99,16 @@ describe("runSetupWizard (2 prompts + confirm)", () => {
     expect(cfg).toBeNull();
   });
 
-  test("3b) cancel on final confirm → returns null (NO chosen)", async () => {
-    const ui = makeUI(["agent", YES, NO]);
+  test("3b) cancel on daemon prompt → returns null", async () => {
+    const ui = makeUI(["agent", YES, undefined]);
+    const cfg = await runSetupWizard(ui, {
+      agent_name: "foo", use_relay: true,
+    });
+    expect(cfg).toBeNull();
+  });
+
+  test("3c) cancel on final confirm → returns null (NO chosen)", async () => {
+    const ui = makeUI(["agent", YES, NO, NO]);
     const cfg = await runSetupWizard(ui, {
       agent_name: "foo", use_relay: true,
     });
@@ -106,19 +117,20 @@ describe("runSetupWizard (2 prompts + confirm)", () => {
 
   test("4) use_relay=No produces auto_start_relay=false", async () => {
     // Reorder: when default is false, the picker shows [No, Yes]. We answer
-    // with the first ("No") to confirm the off path.
-    const ui = makeUI(["agent", NO, YES]);
+    // with the first ("No") to confirm the off path. Daemon stays off.
+    const ui = makeUI(["agent", NO, NO, YES]);
     const cfg = await runSetupWizard(ui, {
       agent_name: "foo", use_relay: false,
     });
     expect(cfg).toEqual({
       agent_name: "agent",
       auto_start_relay: false,
+      enable_daemon: false,
     });
   });
 
-  test("5) relay-prompt informational notify is sent before the question", async () => {
-    const ui = makeUI(["agent", YES, YES]);
+  test("5) relay-prompt + daemon-prompt informational notifies precede their questions", async () => {
+    const ui = makeUI(["agent", YES, YES, YES]);
     await runSetupWizard(ui, {
       agent_name: "foo", use_relay: true,
     });
@@ -129,6 +141,30 @@ describe("runSetupWizard (2 prompts + confirm)", () => {
         n.msg.includes("Remote Pi mobile app"),
       ),
     ).toBe(true);
+    // And the daemon-context notify.
+    expect(
+      ui.notifies.some((n) =>
+        n.msg.includes("Daemon mode") && n.msg.includes("24/7"),
+      ),
+    ).toBe(true);
+  });
+
+  test("6) enable_daemon default flips picker order ([Yes,No] when default true)", async () => {
+    // When defaults.enable_daemon=true, the picker presents [Yes, No]. We
+    // answer "Yes" (first option) to confirm.
+    const ui = makeUI(["agent", YES, YES, YES]);
+    const cfg = await runSetupWizard(ui, {
+      agent_name: "foo",
+      use_relay: true,
+      enable_daemon: true,
+    });
+    expect(cfg).toEqual({
+      agent_name: "agent",
+      auto_start_relay: true,
+      enable_daemon: true,
+    });
+    // Verify picker order — daemon prompt is the 2nd select call.
+    expect(ui.selectCalls[1]!.options[0]).toBe(YES);
   });
 });
 
@@ -157,7 +193,7 @@ describe("localConfig integration with the wizard", () => {
     const current = loadLocalConfig(cwd);
     expect(current.auto_start_relay).toBe(false);
 
-    const ui = makeUI(["new", YES, YES]);
+    const ui = makeUI(["new", YES, NO, YES]);
     const cfg = await runSetupWizard(ui, {
       agent_name: current.agent_name!,
       use_relay: effectiveAutoStartRelay(current),
@@ -165,8 +201,14 @@ describe("localConfig integration with the wizard", () => {
     expect(cfg).toMatchObject({
       agent_name: "new",
       auto_start_relay: true,
+      enable_daemon: false,
     });
-    saveLocalConfig(cwd, cfg!);
+    // Strip the wizard-only `enable_daemon` flag before persisting — it
+    // isn't part of LocalConfig (same pattern _cmdRoot/_cmdSetup follow
+    // in index.ts).
+    const { enable_daemon: _ed, ...persistable } = cfg!;
+    void _ed;
+    saveLocalConfig(cwd, persistable);
     const updated = loadLocalConfig(cwd);
     expect(updated.agent_name).toBe("new");
     expect(updated.auto_start_relay).toBe(true);

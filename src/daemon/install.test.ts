@@ -1,14 +1,21 @@
-import { describe, expect, test } from "vitest";
-import { readFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { existsSync, lstatSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   defaultRenderVars,
   detectPlatform,
   findNodeBinary,
   findSupervisorScript,
+  findRemotePiScript,
   findTemplate,
+  isOnPath,
   launchdPlistPath,
+  linkCliBinaries,
   renderTemplate,
   systemdUnitPath,
+  unlinkCliBinaries,
+  userLocalBinDir,
 } from "./install.js";
 
 /**
@@ -126,5 +133,127 @@ describe("defaultRenderVars", () => {
     expect(vars.home.startsWith("/")).toBe(true);
     expect(vars.user.length).toBeGreaterThan(0);
     expect(vars.path.length).toBeGreaterThan(0);
+  });
+});
+
+// ── CLI bin linking (plan/27) ────────────────────────────────────────────────
+
+describe("findRemotePiScript", () => {
+  test("resolves to dist/index.js sibling of supervisord", () => {
+    const path = findRemotePiScript();
+    expect(path.endsWith("/index.js")).toBe(true);
+    // Same dist root as supervisord.
+    expect(path.replace(/\/[^/]+$/, "")).toBe(
+      findSupervisorScript().replace(/\/bin\/[^/]+$/, ""),
+    );
+  });
+});
+
+describe("userLocalBinDir + isOnPath", () => {
+  test("userLocalBinDir composes ~/.local/bin from given homedir", () => {
+    expect(userLocalBinDir("/tmp/fakehome")).toBe("/tmp/fakehome/.local/bin");
+  });
+
+  test("isOnPath matches dirs with and without trailing slash", () => {
+    expect(isOnPath("/x/.local/bin", "/usr/bin:/x/.local/bin:/opt/bin")).toBe(true);
+    expect(isOnPath("/x/.local/bin", "/usr/bin:/x/.local/bin/:/opt/bin")).toBe(true);
+    expect(isOnPath("/x/.local/bin/", "/usr/bin:/x/.local/bin")).toBe(true);
+    expect(isOnPath("/x/.local/bin", "/usr/bin:/opt/bin")).toBe(false);
+    expect(isOnPath("/x/.local/bin", "")).toBe(false);
+  });
+});
+
+describe("linkCliBinaries / unlinkCliBinaries", () => {
+  let tmpHome: string;
+  let fakePaths: { remotePi: string; supervisord: string };
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(join(tmpdir(), "pi-link-"));
+    // Stand-ins for the real extension files so the test doesn't depend
+    // on `pnpm build` having run.
+    const stub = join(tmpHome, "fake-ext");
+    mkdirSync(join(stub, "bin"), { recursive: true });
+    fakePaths = {
+      remotePi: join(stub, "index.js"),
+      supervisord: join(stub, "bin", "supervisord.js"),
+    };
+    writeFileSync(fakePaths.remotePi, "#!/usr/bin/env node\n");
+    writeFileSync(fakePaths.supervisord, "#!/usr/bin/env node\n");
+  });
+
+  afterEach(() => {
+    rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  test("link creates two symlinks pointing at the real extension files", () => {
+    const result = linkCliBinaries(tmpHome, fakePaths);
+    expect(result.binDir).toBe(join(tmpHome, ".local", "bin"));
+    expect(result.links).toHaveLength(2);
+
+    const names = result.links.map((l) => l.name).sort();
+    expect(names).toEqual(["pi-supervisord", "remote-pi"]);
+
+    for (const link of result.links) {
+      expect(lstatSync(link.path).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(link.path)).toBe(link.target);
+    }
+  });
+
+  test("link is idempotent (re-running yields same symlinks, no error)", () => {
+    linkCliBinaries(tmpHome, fakePaths);
+    const second = linkCliBinaries(tmpHome, fakePaths);
+    for (const link of second.links) {
+      expect(readlinkSync(link.path)).toBe(link.target);
+    }
+    // The "unchanged" branch should have fired the second time.
+    expect(second.log.some((l) => l.includes("(unchanged)"))).toBe(true);
+  });
+
+  test("link replaces a stale symlink pointing elsewhere", () => {
+    const binDir = join(tmpHome, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    // Write a fake stale symlink first
+    const stale = join(binDir, "remote-pi");
+    writeFileSync(join(tmpHome, "fake-old.js"), "// old\n");
+    require("node:fs").symlinkSync(join(tmpHome, "fake-old.js"), stale);
+    expect(readlinkSync(stale)).toBe(join(tmpHome, "fake-old.js"));
+
+    const result = linkCliBinaries(tmpHome, fakePaths);
+    const pi = result.links.find((l) => l.name === "remote-pi")!;
+    expect(readlinkSync(pi.path)).toBe(pi.target);
+    expect(readlinkSync(pi.path)).not.toBe(join(tmpHome, "fake-old.js"));
+  });
+
+  test("link signals onPath=false when binDir is absent from PATH (typical CI)", () => {
+    const originalPath = process.env["PATH"];
+    process.env["PATH"] = "/usr/bin:/bin";
+    try {
+      const result = linkCliBinaries(tmpHome, fakePaths);
+      expect(result.onPath).toBe(false);
+      expect(result.log.some((l) => l.includes("not on $PATH"))).toBe(true);
+    } finally {
+      process.env["PATH"] = originalPath;
+    }
+  });
+
+  test("unlink removes both symlinks, idempotent on second call", () => {
+    linkCliBinaries(tmpHome, fakePaths);
+    const first = unlinkCliBinaries(tmpHome);
+    expect(first.removed.map((r) => r.existed)).toEqual([true, true]);
+    for (const r of first.removed) {
+      expect(existsSync(r.path)).toBe(false);
+    }
+    // Second call is a no-op
+    const second = unlinkCliBinaries(tmpHome);
+    expect(second.removed.map((r) => r.existed)).toEqual([false, false]);
+  });
+
+  test("unlink does NOT delete the extension files (link targets are preserved)", () => {
+    const linkResult = linkCliBinaries(tmpHome, fakePaths);
+    unlinkCliBinaries(tmpHome);
+    for (const link of linkResult.links) {
+      // The target file (the actual dist/index.js etc) still exists.
+      expect(existsSync(link.target)).toBe(true);
+    }
   });
 });

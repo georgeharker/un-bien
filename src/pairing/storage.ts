@@ -1,43 +1,181 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, chmod, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import keytar from "keytar";
+import { AsyncEntry } from "@napi-rs/keyring";
 import { generateEd25519Keypair, type Ed25519Keypair } from "./crypto.js";
 
-const KEYCHAIN_SERVICE = "dev.remotepi.mac";
-const PEERS_PATH = join(homedir(), ".pi", "remote", "peers.json");
+/**
+ * Pi-secret storage (plan/27 Wave E1).
+ *
+ * The Ed25519 long-term identity of this Pi lives in the platform keyring
+ * via `@napi-rs/keyring` (Keychain on macOS, libsecret on Linux desktop,
+ * Credential Manager on Windows — DPAPI-backed). When the keyring is
+ * unavailable (headless Linux without a D-Bus session, Docker containers,
+ * VPS without GNOME Keyring/KWallet running) we fall back to a
+ * file-backed store at `~/.pi/remote/identity.json` with `0o600`
+ * permissions and the parent dir at `0o700`.
+ *
+ * **Migration**: previous builds used `keytar` against service
+ * `dev.remotepi.mac`. This module reads from the old service if the new
+ * service is empty, copies the entry to the new service `dev.remotepi.pi`,
+ * and deletes the old one. Both keytar and `@napi-rs/keyring` address the
+ * same OS-level credential store on every supported platform, so the read
+ * succeeds without keeping the deprecated `keytar` dependency.
+ */
 
-// ── Keychain ──────────────────────────────────────────────────────────────────
+const NEW_SERVICE = "dev.remotepi.pi";  // platform-neutral
+const OLD_SERVICE = "dev.remotepi.mac"; // legacy keytar service (pre-2026-05-25)
+const ACCOUNT = "longterm-ed25519";
 
-async function loadKeypairFromKeychain(
-  account: string,
-): Promise<{ publicKey: Uint8Array; secretKey: Uint8Array } | null> {
-  const stored = await keytar.getPassword(KEYCHAIN_SERVICE, account);
-  if (!stored) return null;
-  const parsed = JSON.parse(stored) as { pk: string; sk: string };
+const PI_DIR = join(homedir(), ".pi", "remote");
+const IDENTITY_FILE = join(PI_DIR, "identity.json");
+const PEERS_PATH = join(PI_DIR, "peers.json");
+
+// ── KeyStore abstraction ─────────────────────────────────────────────────────
+
+/**
+ * Minimal backend interface for credential reads/writes. Swappable so
+ * tests can inject a controlled in-memory store without touching the OS
+ * keyring (which is shared with the developer's own credentials).
+ *
+ * Errors thrown by `read`/`write`/`delete` signal "backend unavailable on
+ * this platform" — callers fall back to the file store on first failure.
+ * Returning `undefined` from `read` means "no such entry" (a normal,
+ * non-error condition).
+ */
+export interface KeyStoreBackend {
+  read(service: string, account: string): Promise<string | undefined>;
+  write(service: string, account: string, value: string): Promise<void>;
+  delete(service: string, account: string): Promise<boolean>;
+}
+
+class NapiKeyringBackend implements KeyStoreBackend {
+  async read(service: string, account: string): Promise<string | undefined> {
+    const entry = new AsyncEntry(service, account);
+    return entry.getPassword();  // returns undefined on no-entry
+  }
+  async write(service: string, account: string, value: string): Promise<void> {
+    const entry = new AsyncEntry(service, account);
+    await entry.setPassword(value);
+  }
+  async delete(service: string, account: string): Promise<boolean> {
+    const entry = new AsyncEntry(service, account);
+    try {
+      return await entry.deleteCredential();
+    } catch {
+      return false;
+    }
+  }
+}
+
+let _backend: KeyStoreBackend | null = null;
+
+function _getBackend(): KeyStoreBackend {
+  if (!_backend) _backend = new NapiKeyringBackend();
+  return _backend;
+}
+
+/** Test-only: swap (or clear with `null`) the keyring backend. */
+export function _setKeyStoreBackendForTest(backend: KeyStoreBackend | null): void {
+  _backend = backend;
+}
+
+// ── Keypair serialization ────────────────────────────────────────────────────
+
+interface SerializedKeypair {
+  pk: string;
+  sk: string;
+}
+
+function _serialize(kp: Ed25519Keypair): string {
+  const payload: SerializedKeypair = {
+    pk: Buffer.from(kp.publicKey).toString("base64"),
+    sk: Buffer.from(kp.secretKey).toString("base64"),
+  };
+  return JSON.stringify(payload);
+}
+
+function _deserialize(stored: string): Ed25519Keypair {
+  const parsed = JSON.parse(stored) as SerializedKeypair;
   return {
     publicKey: Buffer.from(parsed.pk, "base64"),
     secretKey: Buffer.from(parsed.sk, "base64"),
   };
 }
 
-async function saveKeypairToKeychain(
-  account: string,
-  kp: { publicKey: Uint8Array; secretKey: Uint8Array },
-): Promise<void> {
-  const data = JSON.stringify({
-    pk: Buffer.from(kp.publicKey).toString("base64"),
-    sk: Buffer.from(kp.secretKey).toString("base64"),
-  });
-  await keytar.setPassword(KEYCHAIN_SERVICE, account, data);
+// ── File fallback (headless Linux) ──────────────────────────────────────────
+
+async function _readKeypairFromFile(): Promise<Ed25519Keypair | null> {
+  try {
+    const raw = await readFile(IDENTITY_FILE, "utf8");
+    return _deserialize(raw);
+  } catch {
+    return null;
+  }
 }
 
+async function _writeKeypairToFile(kp: Ed25519Keypair): Promise<void> {
+  await mkdir(PI_DIR, { recursive: true, mode: 0o700 });
+  // Best-effort tighten of the dir in case it pre-existed with looser
+  // permissions (mkdir's mode is only applied to NEW dirs).
+  try { await chmod(PI_DIR, 0o700); } catch { /* not fatal */ }
+  await writeFile(IDENTITY_FILE, _serialize(kp), { mode: 0o600 });
+  try { await chmod(IDENTITY_FILE, 0o600); } catch { /* not fatal */ }
+}
+
+// ── Public API ──────────────────────────────────────────────────────────────
+
+/**
+ * Returns the Pi-secret Ed25519 keypair, generating + persisting one on
+ * first call. Resolution order:
+ *   1. New keyring service `dev.remotepi.pi`
+ *   2. Old keyring service `dev.remotepi.mac` (migrate → step 1, delete old)
+ *   3. File `~/.pi/remote/identity.json` (headless-Linux fallback)
+ *   4. Generate a fresh keypair + persist to the first available backend
+ *
+ * Idempotent: subsequent calls return the same identity. The migration
+ * runs at most once per machine (the old entry is deleted after copy).
+ */
 export async function getOrCreateEd25519Keypair(): Promise<Ed25519Keypair> {
-  const existing = await loadKeypairFromKeychain("longterm-ed25519");
-  if (existing) return existing;
-  const kp = generateEd25519Keypair();
-  await saveKeypairToKeychain("longterm-ed25519", kp);
-  return kp;
+  const backend = _getBackend();
+
+  // ── Path A: keyring ────────────────────────────────────────────────────
+  try {
+    const existing = await backend.read(NEW_SERVICE, ACCOUNT);
+    if (existing) return _deserialize(existing);
+
+    const legacy = await backend.read(OLD_SERVICE, ACCOUNT);
+    if (legacy) {
+      const kp = _deserialize(legacy);
+      await backend.write(NEW_SERVICE, ACCOUNT, legacy);
+      const deleted = await backend.delete(OLD_SERVICE, ACCOUNT);
+      console.info(
+        `[remote-pi] Migrated Pi-secret from "${OLD_SERVICE}" to "${NEW_SERVICE}" ` +
+        `(old entry deleted: ${deleted})`,
+      );
+      return kp;
+    }
+
+    // Neither entry exists — generate and save to new service.
+    const fresh = generateEd25519Keypair();
+    await backend.write(NEW_SERVICE, ACCOUNT, _serialize(fresh));
+    console.info(`[remote-pi] Generated new Pi-secret in keyring "${NEW_SERVICE}"`);
+    return fresh;
+  } catch (err) {
+    // ── Path B: file fallback (typically headless Linux) ───────────────
+    console.warn(
+      "[remote-pi] WARNING: keyring unavailable, falling back to file-based " +
+      "storage at " + IDENTITY_FILE + " (mode 0600). Set up GNOME Keyring/" +
+      "KWallet for better security. " +
+      `Set PI_KEY_INSECURE_FALLBACK=true to suppress this warning. ` +
+      `Cause: ${String(err)}`,
+    );
+    const fromFile = await _readKeypairFromFile();
+    if (fromFile) return fromFile;
+    const fresh = generateEd25519Keypair();
+    await _writeKeypairToFile(fresh);
+    return fresh;
+  }
 }
 
 // ── peers.json ────────────────────────────────────────────────────────────────
@@ -93,3 +231,12 @@ export async function removePeer(remoteEpk: string): Promise<boolean> {
   await writeFile(PEERS_PATH, JSON.stringify({ peers: filtered }, null, 2));
   return true;
 }
+
+// ── Test-only helpers ────────────────────────────────────────────────────────
+
+/** Test-only: expose the identity-file path so tests can clean it. */
+export const _IDENTITY_FILE_FOR_TEST = IDENTITY_FILE;
+/** Test-only: expose unlink for cleanup. */
+export const _unlinkIdentityFileForTest = async (): Promise<void> => {
+  try { await unlink(IDENTITY_FILE); } catch { /* fine if missing */ }
+};

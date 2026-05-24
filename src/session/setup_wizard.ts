@@ -17,6 +17,22 @@ export interface WizardUI {
 export interface WizardDefaults {
   agent_name: string;
   use_relay: boolean;
+  /**
+   * Default for the "Enable daemon mode?" prompt. Doesn't persist in
+   * `LocalConfig` — daemon enablement is OS-level state (service unit on
+   * disk), not config. The wizard surfaces it so first-time users get
+   * the option without having to discover `/remote-pi install` later.
+   */
+  enable_daemon?: boolean;
+}
+
+/**
+ * Result of `runSetupWizard`. Extends `LocalConfig` with an out-of-band
+ * `enable_daemon` flag the caller acts on (by invoking the install
+ * command) — NOT a persisted config field.
+ */
+export interface WizardResult extends LocalConfig {
+  enable_daemon: boolean;
 }
 
 const YES = "Yes";
@@ -24,14 +40,19 @@ const NO = "No";
 const CANCEL_TOKEN = "__cancel__";
 
 /**
- * Runs the 2-question setup wizard. Returns the chosen config on confirm,
- * or null when the user cancels any prompt.
+ * Runs the 3-question setup wizard. Returns the chosen config + a
+ * `enable_daemon` flag on confirm, or null when the user cancels any
+ * prompt.
  *
  * Prompts:
  *   1. Agent name (default: parent/folder of cwd)
  *   2. Use the relay on this terminal? (yes/no) — gates connection to the
  *      remote mesh (mobile devices + other PCs over the relay). "No" means
  *      local-only: this Pi joins the UDS mesh but doesn't open WSS.
+ *   3. Enable daemon mode? (yes/no) — installs the system service so
+ *      agents you `/remote-pi create` keep running 24/7 in the background.
+ *      Symlinks the `remote-pi` + `pi-supervisord` CLIs into
+ *      `~/.local/bin/` so the shell can address daemons by id.
  *   Final: review + confirm "Save and activate?" yes/no
  *
  * The local UDS mesh is always single per machine ("local" session) — no
@@ -41,7 +62,7 @@ const CANCEL_TOKEN = "__cancel__";
 export async function runSetupWizard(
   ui: WizardUI,
   defaults: WizardDefaults,
-): Promise<LocalConfig | null> {
+): Promise<WizardResult | null> {
   const agent_name = await _askText(
     ui,
     "Agent name:",
@@ -60,17 +81,30 @@ export async function runSetupWizard(
   if (!useRelayChoice) return null;
   const auto_start_relay = useRelayChoice === YES;
 
+  ui.notify?.(
+    "Daemon mode runs Pi agents 24/7 in the background (systemd on Linux, launchd on macOS) so they can answer your phone or sibling PCs while your terminal is closed. Also adds `remote-pi` and `pi-supervisord` to your $PATH so you can drive them from any shell.",
+    "info",
+  );
+  const enableDaemonDefault = defaults.enable_daemon ?? false;
+  const enableDaemonChoice = await ui.select(
+    "Enable daemon mode? (run agents 24/7 in background)",
+    enableDaemonDefault ? [YES, NO] : [NO, YES],
+  );
+  if (!enableDaemonChoice) return null;
+  const enable_daemon = enableDaemonChoice === YES;
+
   // Review + confirm
   const summary = [
-    `  Agent name:  ${agent_name}`,
-    `  Use relay:   ${auto_start_relay ? YES : NO}`,
+    `  Agent name:    ${agent_name}`,
+    `  Use relay:     ${auto_start_relay ? YES : NO}`,
+    `  Daemon mode:   ${enable_daemon ? YES : NO}`,
   ].join("\n");
   ui.notify?.(`Summary:\n${summary}`, "info");
 
   const confirm = await ui.select("Save and activate?", [YES, NO]);
   if (confirm !== YES) return null;
 
-  return { agent_name, auto_start_relay };
+  return { agent_name, auto_start_relay, enable_daemon };
 }
 
 /**

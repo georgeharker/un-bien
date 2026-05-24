@@ -4,12 +4,22 @@ Extensão para o [Pi coding agent](https://github.com/earendil-works/pi) que
 adiciona o slash command `/remote-pi`. Embarca o SDK do Pi
 (`@mariozechner/pi-coding-agent`) e expõe via WebSocket pro relay.
 
+Faz parte da **mesh de agentes coding cross-PC** do Remote Pi: cada PC
+roda esta extensão (Node daemon) com uma Pi-key Ed25519 no keyring do
+sistema; o celular é autenticador inicial via QR; entre PCs irmãos do
+mesmo Owner, broker UDS local + relay forward Pi-to-Pi via WS roteiam
+envelopes com prefixo `<pc>:<peer>`.
+
+Protocolo, identidades, ACK, roteamento cross-PC e trust model: ver
+[`../PROTOCOL.md`](../PROTOCOL.md) (doc canônica do repo).
+
 ## Stack
 
 - Node 20+ / TypeScript 6
 - **Module system**: ESM only (NodeNext). Imports com extensão `.js` mesmo em `.ts`
 - Package manager: **pnpm** (não usar npm/yarn)
 - Crypto: libsodium-wrappers (Curve25519 + ChaCha20-Poly1305)
+- Pi-secret storage: `@napi-rs/keyring` (Keychain macOS / libsecret Linux desktop / Credential Manager Windows). Headless Linux sem D-Bus cai pra `~/.pi/remote/identity.json` (`chmod 0600`) com warning — instale GNOME Keyring/KWallet pra hardening real.
 
 ## Comandos
 

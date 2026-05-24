@@ -13,6 +13,13 @@
 `/remote-pi` is a single slash command that wires both at once. Run it; the
 first time it asks a couple of questions and you are done.
 
+## Protocol & Security
+
+For wire format, identity model, ACK protocol, cross-PC routing, mesh
+membership, and the trust model (what the relay sees and doesn't see),
+read [`PROTOCOL.md`](../PROTOCOL.md) at the repo root. It is the canonical
+document — this README only covers user-facing setup.
+
 ---
 
 ## Quick start
@@ -90,11 +97,12 @@ over — the failover is invisible to the LLMs.
 
 The companion mobile app lets you send prompts to Pi and read its responses
 from your phone. The phone and the Pi process find each other through a
-**relay**: a small WebSocket server that ferries end-to-end encrypted
-messages between them. Pairing is one-time and per device, via QR code.
+**relay**: a small WebSocket server that ferries messages between them.
+Pairing is one-time and per device, via QR code.
 
-Encryption uses Curve25519 key agreement + ChaCha20-Poly1305 (libsodium).
-The relay sees only ciphertext.
+Communication: WebSocket over TLS to the relay (ciphertext in transit).
+The relay sees plaintext envelopes at rest and in forwarding — see
+[`PROTOCOL.md`](../PROTOCOL.md) for the trust model.
 
 **Get the app** — all current download options (Google Play, App Store, and
 direct builds while public releases roll out):

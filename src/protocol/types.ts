@@ -57,6 +57,22 @@ export type ServerMessage =
       session_name: string;
       session_started_at: number;
       room_id: string;
+      /**
+       * Plan/27 Wave A: identifies the host coding agent driving this
+       * pi-extension instance. `name` is hardcoded to "Pi coding agent"
+       * today; future Pi forks (Claude Code, OpenCode) populate their own
+       * here. `version` is the pi-extension `package.json` version.
+       * Optional in the wire schema so app-side parsing tolerates older
+       * Pi builds that predate this field — every new pairing emits both.
+       */
+      harness?: { name: string; version: string };
+      /**
+       * Plan/27 Wave A: `os.hostname()` of the machine the Pi runs on.
+       * App displays it in the device list so the user can distinguish
+       * two paired PCs that happen to share a nickname or sit in the
+       * same project folder.
+       */
+      hostname?: string;
     }
   | { type: "pair_error"; in_reply_to: string; code: PairErrorCode; message: string }
   | { type: "user_input"; id: string; text: string }

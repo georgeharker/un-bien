@@ -317,6 +317,21 @@ describe("state machine + pair_request flow", () => {
       in_reply_to: "req-1",
     });
 
+    // Plan/27 Wave A: pair_ok carries harness + hostname so the app can
+    // render a meaningful device row. Both are required in every NEW
+    // pairing emitted by this code path (wire type still has them
+    // optional for backward-compat with older Pi builds).
+    const inner = pairOks[0]!.inner as {
+      harness?: { name: string; version: string };
+      hostname?: string;
+    };
+    expect(inner.harness).toBeDefined();
+    expect(inner.harness!.name).toBe("Pi coding agent");
+    expect(typeof inner.harness!.version).toBe("string");
+    expect(inner.harness!.version.length).toBeGreaterThan(0);
+    expect(typeof inner.hostname).toBe("string");
+    expect(inner.hostname!.length).toBeGreaterThan(0);
+
     // Peer must have been persisted
     expect(_addedPeers).toHaveLength(1);
     expect(_addedPeers[0]).toMatchObject({
@@ -806,6 +821,19 @@ describe("multi-channel broadcast (W2D)", () => {
     expect(_getActivePeerCountForTest()).toBe(2);
     expect(_hasActivePeerForTest("ownerA__1234567890")).toBe(true);
     expect(_hasActivePeerForTest("ownerB__abcdefghij")).toBe(true);
+  });
+
+  test("/remote-pi pair without config (idle, first-time) → warns + no QR", async () => {
+    // Default test cwd has no local config, so we expect the focused
+    // first-time message instead of an attempt to auto-bootstrap.
+    expect(_getState()).toBe("idle");
+    const pair = captureHandler("remote-pi pair");
+    const ctx = makeMockCtx();
+    await pair("", ctx);
+
+    const calls = ctx.ui.notify.mock.calls.map((c) => c[0] as string);
+    expect(calls.some((m) => m.includes("First-time setup needed"))).toBe(true);
+    expect(calls.every((m) => !m.includes("QR ready"))).toBe(true);
   });
 
   test("/remote-pi pair generates QR even when an owner is already attached", async () => {
