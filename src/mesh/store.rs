@@ -119,6 +119,17 @@ impl MeshStore {
         Ok(())
     }
 
+    /// Returns the raw `blob` bytes of every stored mesh version (one per
+    /// Owner). Used by mesh authorization (plan 25) to find which Owner a
+    /// given Pi-pubkey belongs to.
+    pub fn all_blobs(&self) -> Result<Vec<Vec<u8>>, StoreError> {
+        let conn = self.conn.lock().expect("mesh store mutex poisoned");
+        let mut stmt = conn.prepare("SELECT blob FROM mesh_versions")?;
+        let rows: Result<Vec<Vec<u8>>, _> =
+            stmt.query_map([], |r| r.get::<_, Vec<u8>>(0))?.collect();
+        Ok(rows?)
+    }
+
     /// Fetches the current record for `owner_pk_hash`, or `None` if absent.
     pub fn get(&self, owner_pk_hash: &str) -> Result<Option<MeshRecord>, StoreError> {
         let conn = self.conn.lock().expect("mesh store mutex poisoned");

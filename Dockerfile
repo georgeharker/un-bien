@@ -7,6 +7,10 @@ WORKDIR /app
 
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+# Migrations are baked into the binary at compile time via `include_str!`
+# (see src/mesh/store.rs). Without this COPY, `cargo build` fails inside
+# the container with "couldn't read .../migrations/001_mesh_versions.sql".
+COPY migrations ./migrations
 
 RUN cargo build --release
 

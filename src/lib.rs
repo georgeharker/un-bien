@@ -14,6 +14,7 @@ use axum::{
     routing::get,
 };
 
+pub use handlers::pi_forward::MeshAuthCache;
 pub use mesh::MeshStore;
 pub use peers::registry::PeerRegistry;
 pub use presence::PresenceManager;
@@ -30,6 +31,9 @@ pub struct AppState {
     pub presence: Arc<PresenceManager>,
     pub rooms: Arc<RoomManager>,
     pub mesh: Arc<MeshStore>,
+    /// Plan 25 — caches `Pi-pubkey → mesh siblings` to avoid hitting SQLite
+    /// for every `pi_envelope` forward (60 s TTL).
+    pub mesh_auth: Arc<MeshAuthCache>,
 }
 
 // Allows mesh handlers to keep using `State<Arc<MeshStore>>` instead of

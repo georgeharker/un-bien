@@ -8,7 +8,9 @@ use std::sync::Arc;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use ed25519_dalek::{Signer, SigningKey};
-use relay::{AppState, MeshStore, PeerRegistry, PresenceManager, RoomManager, build_router};
+use relay::{
+    AppState, MeshAuthCache, MeshStore, PeerRegistry, PresenceManager, RoomManager, build_router,
+};
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
@@ -23,7 +25,8 @@ async fn spawn_relay() -> (String, tempfile::TempDir) {
     let presence = Arc::new(PresenceManager::new());
     let rooms = Arc::new(RoomManager::new());
     let registry = Arc::new(PeerRegistry::new(presence.clone(), rooms.clone()));
-    let state = AppState { registry, presence, rooms, mesh };
+    let mesh_auth = Arc::new(MeshAuthCache::new());
+    let state = AppState { registry, presence, rooms, mesh, mesh_auth };
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();

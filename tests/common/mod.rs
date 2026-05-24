@@ -6,7 +6,9 @@ use std::sync::Arc;
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use ed25519_dalek::{Signer, SigningKey};
 use futures_util::{SinkExt, StreamExt};
-use relay::{AppState, MeshStore, PeerRegistry, PresenceManager, RoomManager, build_router};
+use relay::{
+    AppState, MeshAuthCache, MeshStore, PeerRegistry, PresenceManager, RoomManager, build_router,
+};
 use serde_json::json;
 use tokio::net::TcpListener;
 use tokio_tungstenite::{
@@ -25,7 +27,8 @@ pub async fn start_relay() -> u16 {
     let presence = Arc::new(PresenceManager::new());
     let rooms = Arc::new(RoomManager::new());
     let registry = Arc::new(PeerRegistry::new(presence.clone(), rooms.clone()));
-    let state = AppState { registry, presence, rooms, mesh };
+    let mesh_auth = Arc::new(MeshAuthCache::new());
+    let state = AppState { registry, presence, rooms, mesh, mesh_auth };
     let app = build_router(state);
     tokio::spawn(async move {
         let _ = axum::serve(

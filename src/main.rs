@@ -28,8 +28,9 @@ async fn main() -> anyhow::Result<()> {
     let presence = Arc::new(relay::PresenceManager::new());
     let rooms = Arc::new(relay::RoomManager::new());
     let registry = Arc::new(relay::PeerRegistry::new(presence.clone(), rooms.clone()));
+    let mesh_auth = Arc::new(relay::MeshAuthCache::new());
 
-    let state = relay::AppState { registry, presence, rooms, mesh };
+    let state = relay::AppState { registry, presence, rooms, mesh, mesh_auth };
     let app = relay::build_router(state);
 
     let addr = format!("0.0.0.0:{port}");

@@ -117,6 +117,8 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
     let registry = state.registry.clone();
     let presence = state.presence.clone();
     let rooms = state.rooms.clone();
+    let mesh = state.mesh.clone();
+    let mesh_auth = state.mesh_auth.clone();
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
     let conn_id = registry.register(peer_id.clone(), room_meta, tx).await;
@@ -234,6 +236,29 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                             room = %target_room,
                                             "room_meta_update for unknown (peer, room), dropping"
                                         );
+                                    }
+                                }
+
+                                // ── Pi-to-Pi envelope forward (plano 25 W-A) ──
+                                "pi_envelope" => {
+                                    use crate::handlers::pi_forward::{
+                                        PiForwardResult, handle_pi_envelope,
+                                    };
+                                    match handle_pi_envelope(
+                                        &peer_id,
+                                        &frame,
+                                        &registry,
+                                        &mesh,
+                                        &mesh_auth,
+                                    )
+                                    .await
+                                    {
+                                        PiForwardResult::Forwarded => {}
+                                        PiForwardResult::TransportError(err_msg) => {
+                                            if sink.send(err_msg).await.is_err() {
+                                                break;
+                                            }
+                                        }
                                     }
                                 }
 
