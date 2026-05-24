@@ -70,6 +70,21 @@ export async function addPeer(record: PeerRecord): Promise<void> {
   await writeFile(PEERS_PATH, JSON.stringify({ peers }, null, 2));
 }
 
+/**
+ * Returns the set of distinct `remote_epk` values in peers.json.
+ *
+ * In the current pairing model (plan/23 + plan/24), each `remote_epk` is the
+ * Owner's Ed25519 pubkey — and we treat each as a distinct Owner the Pi has
+ * been paired with. Used by the mesh self-revoke poller (plan/24 Wave 3) to
+ * know which Owners' mesh blobs to fetch.
+ */
+export async function listOwnerPubkeys(): Promise<string[]> {
+  const peers = await listPeers();
+  const seen = new Set<string>();
+  for (const p of peers) seen.add(p.remote_epk);
+  return [...seen];
+}
+
 export async function removePeer(remoteEpk: string): Promise<boolean> {
   const peers = await listPeers();
   const filtered = peers.filter((p) => p.remote_epk !== remoteEpk);

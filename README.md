@@ -195,8 +195,9 @@ You have two options:
 ### Option A — Use the community relay
 
 `https://relay-rp1.jacobmoura.work` (default). Zero setup. Good for trying
-things out or for casual use. (Internally the extension uses the WebSocket
-form `wss://…` — both schemes point at the same endpoint.)
+things out or for casual use. (The extension converts to `wss://…`
+internally when opening the connection — both schemes point at the same
+endpoint.)
 
 Caveats:
 
@@ -226,28 +227,27 @@ docker run -d \
 ```
 
 Bind the container to your VPN interface, terminate TLS in a reverse proxy,
-and point both your Pi and your phone at the resulting `wss://…` URL.
+and point both your Pi and your phone at the resulting `https://…` URL.
 
 ### Pointing Pi at your own relay
 
 Once your relay is reachable, tell the extension:
 
 ```text
-/remote-pi relay url wss://relay.yourdomain.tld
+/remote-pi relay url https://relay.yourdomain.tld
 ```
 
-You can also paste an `https://` URL — many hosts (Coolify, Fly, Render,
-Vercel-style PaaS) only expose HTTPS endpoints in their dashboards, but
-WebSocket Secure (`wss://`) runs over the same TLS connection on the same
-port. The extension auto-rewrites `https://` → `wss://` and `http://` →
-`ws://` so you can use whatever URL your provider gives you.
+The URL **must** be `http://` or `https://` — `ws://` / `wss://` are
+rejected at validation. The extension converts to WebSocket internally when
+it opens the connection. Same canonical form for the mobile app and any
+self-hosting docs: paste the URL your reverse proxy exposes.
 
 This writes `~/.pi/remote/config.json` with `{ "relay": "..." }`. Resolution
 order (highest precedence first):
 
 1. `REMOTE_PI_RELAY` environment variable (CI / one-off overrides)
 2. `~/.pi/remote/config.json`
-3. The built-in default (`https://relay-rp1.jacobmoura.work`, used as `wss://…`)
+3. The built-in default (`https://relay-rp1.jacobmoura.work`)
 
 Verify the active URL and its source with:
 
@@ -351,7 +351,7 @@ your terminals apart at a glance.
 Override the relay for a single run without persisting:
 
 ```bash
-REMOTE_PI_RELAY=wss://staging.example.tld pi
+REMOTE_PI_RELAY=https://staging.example.tld pi
 ```
 
 ---

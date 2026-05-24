@@ -1,5 +1,4 @@
 {
   "agent_name": "Orquestrador",
-  "session_name": "foo",
   "auto_start_relay": true
 }

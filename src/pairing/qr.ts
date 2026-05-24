@@ -63,6 +63,11 @@ export function buildQRUri(
 ): string {
   // `r` (relay URL) removed in plano 14 — relay now comes from app config /
   // pi-ext env|config|default chain. Keeps QR ~30-50 chars shorter.
+  // `n` (session name) is kept: the app uses it for the pre-pair_ok preview
+  // screen (showing the agent name immediately after scan, before the
+  // handshake completes). Dropping it briefly shrank the QR but the QR
+  // size no longer matters now that the copy-paste URI is rendered via
+  // `pi.sendMessage` into the chat panel (not the QR overflow area).
   const epkB64 = Buffer.from(longtermEdPk).toString("base64url");
   const params = new URLSearchParams({
     t: token,
@@ -74,16 +79,31 @@ export function buildQRUri(
 }
 
 /**
- * Renders the QR + URI in the Pi TUI's output pane via stderr. `ctx.ui.notify`
- * collapses multi-line content into a single toast, so for ASCII art we need
- * the raw stderr capture that the Pi TUI exposes as scrollable log. Post
- * plano 14 the QR carries only `t/epk/n`, fits comfortably in the panel
- * without needing a separate Terminal window.
+ * Returns the QR ASCII as a string (pure Unicode block characters —
+ * `█ ▀ ▄` and space, NO ANSI escapes — qrcode-terminal v0.12 small mode
+ * is escape-free, see lib/main.js:48-53).
+ *
+ * The caller can either write the string to stderr (legacy path, breaks
+ * the Pi TUI layout) or inject it via `pi.sendMessage` (renders inside
+ * the chat panel as proper content).
+ */
+export function renderQRAscii(uri: string): string {
+  let out = "";
+  qrTerminal.generate(uri, { small: true }, (qrcode) => { out = qrcode; });
+  return out;
+}
+
+/**
+ * Legacy stderr writer — kept for the standalone CLI mode
+ * (`pi-extension/src/index.ts` bottom block, which runs outside a Pi TUI).
+ * Inside the Pi TUI extension flow, use `renderQRAscii` + `pi.sendMessage`
+ * instead — direct stderr writes from inside an extension break the TUI's
+ * scrollable output widget (the QR overflows the panel and other writes
+ * collide with the prompt area).
  */
 export function displayQR(uri: string): void {
-  qrTerminal.generate(uri, { small: true }, (qrcode) => {
-    process.stderr.write(`\n📱 Scan to pair:\n\n${qrcode}\n${uri}\n`);
-  });
+  const qrcode = renderQRAscii(uri);
+  process.stderr.write(`\n📱 Scan to pair:\n\n${qrcode}\n`);
 }
 
 /**

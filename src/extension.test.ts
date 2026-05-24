@@ -92,13 +92,14 @@ vi.mock("./config.js", async (importOriginal) => {
     }),
     resolveRelayUrl: vi.fn().mockImplementation(() => {
       const env = process.env["REMOTE_PI_RELAY"];
-      if (env && env.length > 0) return { url: orig.normalizeRelayUrl(env), source: "env" as const };
+      if (env && env.length > 0) return { url: orig.toHttpUrl(env), source: "env" as const };
       if (_savedRelayUrl && _savedRelayUrl.length > 0) {
-        return { url: orig.normalizeRelayUrl(_savedRelayUrl), source: "config" as const };
+        return { url: orig.toHttpUrl(_savedRelayUrl), source: "config" as const };
       }
-      return { url: orig.normalizeRelayUrl(orig.kDefaultRelayUrl), source: "default" as const };
+      return { url: orig.toHttpUrl(orig.kDefaultRelayUrl), source: "default" as const };
     }),
-    // isValidRelayUrl + kDefaultRelayUrl + normalizeRelayUrl come from orig (...spread)
+    // isValidRelayUrl + isWebSocketScheme + kDefaultRelayUrl + toHttpUrl
+    // + toWebSocketUrl come from orig (...spread).
   };
 });
 
@@ -139,6 +140,9 @@ const {
   _hasPendingReconnect,
   _getMessageBufferForTest,
   _setCurrentModelForTest,
+  _connectForTest,
+  _hasActivePeerForTest,
+  _getActivePeerCountForTest,
 } = await import("./index.js");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -200,35 +204,32 @@ describe("extension default export", () => {
     expect(typeof extension).toBe("function");
   });
 
-  test("registers all 20 commands (plano 21: + setup)", () => {
+  test("registers the 8 final commands (2026-05-23 simplification)", () => {
     const { pi, registeredCommands } = makeMockPi();
     (extension as ExtensionFactory)(pi);
     expect(registeredCommands).toContain("remote-pi");
     expect(registeredCommands).toContain("remote-pi setup");
-    expect(registeredCommands).toContain("remote-pi join");
-    expect(registeredCommands).toContain("remote-pi leave");
-    expect(registeredCommands).toContain("remote-pi rename");
-    expect(registeredCommands).toContain("remote-pi sessions");
-    expect(registeredCommands).toContain("remote-pi relay");
-    expect(registeredCommands).toContain("remote-pi relay start");
-    expect(registeredCommands).toContain("remote-pi relay stop");
-    expect(registeredCommands).toContain("remote-pi relay status");
-    expect(registeredCommands).toContain("remote-pi relay url");
+    expect(registeredCommands).toContain("remote-pi status");
+    expect(registeredCommands).toContain("remote-pi stop");
     expect(registeredCommands).toContain("remote-pi pair");
     expect(registeredCommands).toContain("remote-pi devices");
     expect(registeredCommands).toContain("remote-pi revoke");
     expect(registeredCommands).toContain("remote-pi set-relay");
-    expect(registeredCommands).toContain("remote-pi config");
-    expect(registeredCommands).toContain("remote-pi start");
-    expect(registeredCommands).toContain("remote-pi stop");
-    expect(registeredCommands).toContain("remote-pi list");
-    expect(registeredCommands).toContain("remote-pi add-relay");
   });
 
-  test("registers exactly 20 commands", () => {
+  test("registers exactly 8 commands (no deprecated, no removed)", () => {
     const { pi, registeredCommands } = makeMockPi();
     (extension as ExtensionFactory)(pi);
-    expect(registeredCommands).toHaveLength(20);
+    expect(registeredCommands).toHaveLength(8);
+    // Negative assertions: ensure the removed surface is truly gone.
+    for (const removed of [
+      "remote-pi join", "remote-pi leave", "remote-pi rename", "remote-pi sessions",
+      "remote-pi relay", "remote-pi relay start", "remote-pi relay stop",
+      "remote-pi relay status", "remote-pi relay url",
+      "remote-pi config", "remote-pi start", "remote-pi list", "remote-pi add-relay",
+    ]) {
+      expect(registeredCommands).not.toContain(removed);
+    }
   });
 });
 
@@ -257,8 +258,8 @@ describe("state machine + pair_request flow", () => {
   });
 
   test("start: idle → started", async () => {
-    const start = captureHandler("remote-pi start");
-    await start("", makeMockCtx());
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
     expect(_getState()).toBe("started");
   });
 
@@ -267,7 +268,7 @@ describe("state machine + pair_request flow", () => {
     const pair = captureHandler("remote-pi pair");
     const ctx = makeMockCtx();
     await pair("", ctx);
-    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("start first"), "warning");
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Run /remote-pi"), "warning");
     expect(_getState()).toBe("idle");
   });
 
@@ -275,8 +276,8 @@ describe("state machine + pair_request flow", () => {
     _tokenStatus = "ok";
     const APP_PEER_ID = "valid-app-peer-base64";
 
-    const start = captureHandler("remote-pi start");
-    await start("", makeMockCtx());
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
     expect(_getState()).toBe("started");
 
     relayRef.current!.emit("message", makeInnerLine(APP_PEER_ID, {
@@ -310,8 +311,8 @@ describe("state machine + pair_request flow", () => {
     _tokenStatus = "expired";
     const APP_PEER_ID = "stale-token-peer";
 
-    const start = captureHandler("remote-pi start");
-    await start("", makeMockCtx());
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
 
     relayRef.current!.emit("message", makeInnerLine(APP_PEER_ID, {
       type: "pair_request",
@@ -351,8 +352,8 @@ describe("state machine + pair_request flow", () => {
     const APP_PEER_A = "peer-a";
     const APP_PEER_B = "peer-b";
 
-    const start = captureHandler("remote-pi start");
-    await start("", makeMockCtx());
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
 
     // First pair_request from peer A → ok
     relayRef.current!.emit("message", makeInnerLine(APP_PEER_A, {
@@ -383,8 +384,8 @@ describe("state machine + pair_request flow", () => {
     _tokenStatus = "ok";
     const APP_PEER_ID = "already-paired";
 
-    const start = captureHandler("remote-pi start");
-    await start("", makeMockCtx());
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
 
     // First pair_request → paired
     relayRef.current!.emit("message", makeInnerLine(APP_PEER_ID, {
@@ -414,8 +415,8 @@ describe("state machine + pair_request flow", () => {
       paired_at: new Date().toISOString(),
     });
 
-    const start = captureHandler("remote-pi start");
-    await start("", makeMockCtx());
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
     expect(_getState()).toBe("started");
 
     relayRef.current!.emit("message", makeInnerLine(APP_PEER_ID, {
@@ -426,8 +427,8 @@ describe("state machine + pair_request flow", () => {
   });
 
   test("unknown peer non-pair message → state stays started, no peer added", async () => {
-    const start = captureHandler("remote-pi start");
-    await start("", makeMockCtx());
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
 
     relayRef.current!.emit("message", makeInnerLine("unknown-peer", {
       type: "ping", id: "ping-x",
@@ -439,8 +440,8 @@ describe("state machine + pair_request flow", () => {
   });
 
   test("unknown peer + user_message → relay receives error{unknown_peer}", async () => {
-    const start = captureHandler("remote-pi start");
-    await start("", makeMockCtx());
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
 
     relayRef.current!.emit("message", makeInnerLine("revoked-peer", {
       type: "user_message", id: "msg-x", text: "are you there",
@@ -465,8 +466,8 @@ describe("state machine + pair_request flow", () => {
     // respond with pair_ok or pair_error, never with the generic
     // error{unknown_peer}. Use token_unknown to keep peer unknown afterwards.
     _tokenStatus = "unknown";
-    const start = captureHandler("remote-pi start");
-    await start("", makeMockCtx());
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
 
     relayRef.current!.emit("message", makeInnerLine("stranger", {
       type: "pair_request", id: "req-stranger", token: "test-token", device_name: "Stranger",
@@ -489,8 +490,8 @@ describe("state machine + pair_request flow", () => {
     _tokenStatus = "ok";
     const APP_PEER_ID = "disco-peer";
 
-    const start = captureHandler("remote-pi start");
-    await start("", makeMockCtx());
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
 
     relayRef.current!.emit("message", makeInnerLine(APP_PEER_ID, {
       type: "pair_request", id: "req-1", token: "test-token", device_name: "Phone",
@@ -641,12 +642,15 @@ describe("/remote-pi revoke", () => {
     expect(_knownPeers).toHaveLength(2);
   });
 
-  test("revoke of currently-paired peer → state goes idle, channel detached", async () => {
+  test("revoke of currently-attached owner → channel removed, relay stays started", async () => {
+    // Multi-channel (W2D): revoking the only attached owner removes their
+    // channel from _activePeers but leaves the relay up. Pre-W2D this went
+    // all the way back to `idle` via _goIdle; that's no longer the case.
     _tokenStatus = "ok";
     const ACTIVE_PEER = "activepeer_xxxx";
 
-    const start = captureHandler("remote-pi start");
-    await start("", makeMockCtx());
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
 
     relayRef.current!.emit("message", JSON.stringify({
       peer: ACTIVE_PEER,
@@ -660,7 +664,9 @@ describe("/remote-pi revoke", () => {
     const ctx = makeMockCtx();
     await revoke("activepe", ctx);
 
-    expect(_state_isIdle()).toBe(true);
+    // Channel torn down, but relay still listening for new pairings.
+    expect(_hasActivePeerForTest(ACTIVE_PEER)).toBe(false);
+    expect(_getState()).toBe("started");
     expect(_removedPeers).toEqual([ACTIVE_PEER]);
     expect(_knownPeers).toHaveLength(0);
     expect(ctx.ui.notify).toHaveBeenCalledWith(
@@ -669,15 +675,12 @@ describe("/remote-pi revoke", () => {
     );
   });
 
-  test("list shows (active) marker for currently-paired peer", async () => {
+  test("devices listing marks online/offline per attached channel", async () => {
     _tokenStatus = "ok";
     const ACTIVE_PEER = "iamthe_activeone";
     _knownPeers.push({ name: "Idle Peer", remote_epk: "idle_idle", paired_at: "now" });
 
-    // Use the canonical command (post-plano-19); legacy `remote-pi list` works
-    // too but emits a deprecation notify as its first call.
-    const start = captureHandler("remote-pi relay start");
-    await start("", makeMockCtx());
+    await _connectForTest(makeMockCtx());
 
     relayRef.current!.emit("message", JSON.stringify({
       peer: ACTIVE_PEER,
@@ -692,15 +695,17 @@ describe("/remote-pi revoke", () => {
     await devices("", ctx);
 
     const text = (ctx.ui.notify.mock.calls[0]![0]) as string;
-    expect(text).toContain("iamthe_a — Active Phone (active)");
-    expect(text).toContain("idle_idl — Idle Peer");
-    expect(text).not.toContain("idle_idl — Idle Peer (active)");
+    // The attached owner shows online; the un-attached one shows offline.
+    expect(text).toContain("iamthe_a — Active Phone 🟢 online");
+    expect(text).toContain("idle_idl — Idle Peer ⚪ offline");
   });
 });
 
-function _state_isIdle(): boolean {
-  return _getState() === "idle";
-}
+// Removed obsolete _state_isIdle helper — tests now check _getState() or
+// _hasActivePeerForTest directly. Kept the void below to anchor the new
+// `_getActivePeerCountForTest` import so it isn't flagged as unused even
+// when only some tests in this file consume it.
+void _getActivePeerCountForTest;
 
 // ── user_input mirroring (local terminal / RPC) ───────────────────────────────
 
@@ -723,8 +728,8 @@ function captureEventHandler(eventName: string): EventHandler {
 }
 
 async function _pairForTest(appPeerId: string): Promise<void> {
-  const start = captureHandler("remote-pi start");
-  await start("", makeMockCtx());
+  captureHandler("remote-pi");
+  await _connectForTest(makeMockCtx());
   relayRef.current!.emit("message", JSON.stringify({
     peer: appPeerId,
     ct: Buffer.from(JSON.stringify({
@@ -733,6 +738,222 @@ async function _pairForTest(appPeerId: string): Promise<void> {
   }));
   await vi.waitFor(() => expect(_getState()).toBe("paired"), { timeout: 2000 });
 }
+
+/** Adds a second pair_request from a new peer to an already-running Pi.
+ *  Used by multi-channel tests to verify the catch-22 is gone. */
+async function _pairAdditionalForTest(appPeerId: string, deviceName: string): Promise<void> {
+  relayRef.current!.emit("message", JSON.stringify({
+    peer: appPeerId,
+    ct: Buffer.from(JSON.stringify({
+      type: "pair_request", id: `req-${appPeerId.slice(0, 6)}`, token: "test-token", device_name: deviceName,
+    })).toString("base64"),
+  }));
+  await vi.waitFor(
+    () => expect(_hasActivePeerForTest(appPeerId)).toBe(true),
+    { timeout: 2000 },
+  );
+}
+
+// ── Multi-channel (plan/24 W2D) ──────────────────────────────────────────────
+//
+// These tests pin down the new contract: N owners can be connected at the
+// same time; broadcast events (agent_chunk, tool_*) fan out; per-request
+// replies (session_history, cancelled, pong) go back only to the sender;
+// revoking or disconnecting one owner doesn't affect the others.
+
+describe("multi-channel broadcast (W2D)", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    _knownPeers.length = 0;
+    _addedPeers.length = 0;
+    _removedPeers.length = 0;
+    _consumeCalls.length = 0;
+    _setRelayCalls.length = 0;
+    _savedRelayUrl = null;
+    _tokenStatus = "ok";
+    relayRef.current = null;
+    relayInstances.length = 0;
+    _defaultConnectImpl = async () => undefined;
+    const qr = await import("./pairing/qr.js");
+    (qr.qrSession.consumeToken as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (token: string) => { _consumeCalls.push(token); return _tokenStatus; },
+    );
+    const stop = captureHandler("remote-pi stop");
+    await stop("", makeMockCtx());
+  });
+
+  test("two owners pair simultaneously → both attach (catch-22 fixed)", async () => {
+    await _pairForTest("ownerA__1234567890");
+    await _pairAdditionalForTest("ownerB__abcdefghij", "Android");
+    expect(_getActivePeerCountForTest()).toBe(2);
+    expect(_hasActivePeerForTest("ownerA__1234567890")).toBe(true);
+    expect(_hasActivePeerForTest("ownerB__abcdefghij")).toBe(true);
+  });
+
+  test("/remote-pi pair generates QR even when an owner is already attached", async () => {
+    await _pairForTest("ownerA__1234567890");
+    expect(_getActivePeerCountForTest()).toBe(1);
+
+    // QR generation must succeed (no "Already paired" rejection).
+    const pair = captureHandler("remote-pi pair");
+    const ctx = makeMockCtx();
+    await pair("", ctx);
+
+    // Should have notified about a QR being ready, not warned about
+    // an existing pairing.
+    const calls = ctx.ui.notify.mock.calls.map((c) => c[0] as string);
+    expect(calls.some((m) => m.includes("QR ready"))).toBe(true);
+    expect(calls.every((m) => !m.includes("Already paired"))).toBe(true);
+  });
+
+  test("agent_chunk broadcasts to every attached owner", async () => {
+    await _pairForTest("ownerA__1234567890");
+    await _pairAdditionalForTest("ownerB__abcdefghij", "Android");
+
+    // Trigger an agent_chunk via the SDK message_update hook. The captured
+    // handlers expect `AnyEvent`; cast since we control the test payload.
+    const onUpdate = captureEventHandler("message_update");
+    const onInput = captureEventHandler("input");
+    // Seed _currentTurnId by simulating a terminal input first.
+    onInput({ source: "terminal", text: "hello" } as unknown as Parameters<typeof onInput>[0]);
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+    onUpdate({ assistantMessageEvent: { type: "text_delta", delta: "hi" } } as unknown as Parameters<typeof onUpdate>[0]);
+
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string).map(decodeSentCt);
+    const chunks = sent.filter((d) => d.inner.type === "agent_chunk");
+    // One for each attached owner.
+    expect(chunks).toHaveLength(2);
+    const recipients = new Set(chunks.map((d) => d.peer));
+    expect(recipients).toEqual(new Set(["ownerA__1234567890", "ownerB__abcdefghij"]));
+  });
+
+  test("session_sync from owner A → session_history reply only to A", async () => {
+    await _pairForTest("ownerA__1234567890");
+    await _pairAdditionalForTest("ownerB__abcdefghij", "Android");
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+    // Owner A asks for history.
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "ownerA__1234567890",
+      ct: Buffer.from(JSON.stringify({
+        type: "session_sync", id: "sync-1", limit: 50,
+      })).toString("base64"),
+    }));
+    // Let the handler run.
+    await new Promise<void>((r) => setImmediate(r));
+
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string).map(decodeSentCt);
+    const histories = sent.filter((d) => d.inner.type === "session_history");
+    expect(histories).toHaveLength(1);
+    expect(histories[0]!.peer).toBe("ownerA__1234567890");
+  });
+
+  test("revoke of owner A → A's channel closed, B keeps running", async () => {
+    await _pairForTest("ownerA__1234567890");
+    await _pairAdditionalForTest("ownerB__abcdefghij", "Android");
+
+    const revoke = captureHandler("remote-pi revoke");
+    await revoke("ownerA__", makeMockCtx());
+
+    expect(_hasActivePeerForTest("ownerA__1234567890")).toBe(false);
+    expect(_hasActivePeerForTest("ownerB__abcdefghij")).toBe(true);
+    expect(_getState()).toBe("paired");  // derived: at least one owner still on
+  });
+
+  // ── Source-of-truth rebroadcast (plan/24 W2D fix) ──────────────────────────
+  //
+  // When app A sends a user_message, the Pi must echo it to every
+  // _activePeers entry (A included) BEFORE handing off to the agent.
+  // App side renders from the echo, not from local optimistic state — keeps
+  // every paired device's session view bit-identical.
+
+  test("user_message from A → rebroadcast reaches both A and B (with id preserved)", async () => {
+    await _pairForTest("ownerA__1234567890");
+    await _pairAdditionalForTest("ownerB__abcdefghij", "Android");
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+    // Owner A sends user_message with a stable id.
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "ownerA__1234567890",
+      ct: Buffer.from(JSON.stringify({
+        type: "user_message", id: "msg-123", text: "oi",
+      })).toString("base64"),
+    }));
+    // Flush microtasks so the route handler runs.
+    await new Promise<void>((r) => setImmediate(r));
+
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string).map(decodeSentCt);
+    const echoes = sent.filter((d) => d.inner.type === "user_message");
+    expect(echoes).toHaveLength(2);
+    // id must be the sender's verbatim — Pi must not re-generate.
+    for (const e of echoes) {
+      expect(e.inner).toMatchObject({ type: "user_message", id: "msg-123", text: "oi" });
+    }
+    // Both owners received the echo (sender included).
+    const recipients = new Set(echoes.map((d) => d.peer));
+    expect(recipients).toEqual(new Set(["ownerA__1234567890", "ownerB__abcdefghij"]));
+  });
+
+  test("rebroadcast happens BEFORE the agent processes the message", async () => {
+    // We can't observe SDK ordering directly with the standard mockPi, but
+    // we can verify the echo fires synchronously after the inner is
+    // received — i.e., it's queued onto `relay.send` before any async
+    // SDK work resolves. The test asserts at least the order in
+    // `relay.send.mock.calls`: user_message echoes precede any reply
+    // generated downstream (none expected here since SDK is mocked).
+    await _pairForTest("ownerA__1234567890");
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "ownerA__1234567890",
+      ct: Buffer.from(JSON.stringify({
+        type: "user_message", id: "msg-order-1", text: "order check",
+      })).toString("base64"),
+    }));
+    await new Promise<void>((r) => setImmediate(r));
+
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string).map(decodeSentCt);
+    // First outbound after the user_message arrives must be the echo.
+    expect(sent[0]?.inner).toMatchObject({
+      type: "user_message", id: "msg-order-1", text: "order check",
+    });
+  });
+
+  test("user_message lands in _messageBuffer → session_sync returns it as user_input", async () => {
+    // The SDK side normally pushes role="user" entries to the buffer on
+    // its `message_end` event. We simulate that effect with the test
+    // helper so we can verify session_sync replays correctly.
+    await _pairForTest("ownerA__1234567890");
+
+    // Simulate the SDK persisting the user turn.
+    _setMessageBufferForTest([
+      { role: "user", content: "oi", timestamp: 1700000000000 },
+    ]);
+    _setSessionStartedAtForTest(1699999999000);
+
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "ownerA__1234567890",
+      ct: Buffer.from(JSON.stringify({
+        type: "session_sync", id: "sync-buffer-1", limit: 50,
+      })).toString("base64"),
+    }));
+    await new Promise<void>((r) => setImmediate(r));
+
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string).map(decodeSentCt);
+    const histories = sent.filter((d) => d.inner.type === "session_history");
+    expect(histories).toHaveLength(1);
+    const events = (histories[0]!.inner as unknown as { events: unknown[] }).events;
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "user_input", text: "oi" }),
+    ]));
+  });
+});
 
 describe("user_input mirroring", () => {
   beforeEach(async () => {
@@ -945,28 +1166,52 @@ describe("/remote-pi set-relay + config", () => {
     expect(_setRelayCalls).toHaveLength(0);
   });
 
-  test("set-relay normalizes http:// → ws://", async () => {
+  test("set-relay stores http:// as-is (canonical scheme)", async () => {
     const setRelay = captureHandler("remote-pi set-relay");
     const ctx = makeMockCtx();
     await setRelay("http://foo:3000", ctx);
 
-    expect(_setRelayCalls).toEqual(["ws://foo:3000"]);
+    expect(_setRelayCalls).toEqual(["http://foo:3000"]);
     expect(ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("ws://foo:3000"),
+      expect.stringContaining("http://foo:3000"),
       "info",
     );
   });
 
-  test("set-relay normalizes https:// → wss:// (reverse-proxy-friendly)", async () => {
+  test("set-relay stores https:// as-is (canonical scheme)", async () => {
     const setRelay = captureHandler("remote-pi set-relay");
     const ctx = makeMockCtx();
     await setRelay("https://relay.example.tld", ctx);
 
-    expect(_setRelayCalls).toEqual(["wss://relay.example.tld"]);
+    expect(_setRelayCalls).toEqual(["https://relay.example.tld"]);
     expect(ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("wss://relay.example.tld"),
+      expect.stringContaining("https://relay.example.tld"),
       "info",
     );
+  });
+
+  test("set-relay rejects ws:// scheme with conversion hint", async () => {
+    const setRelay = captureHandler("remote-pi set-relay");
+    const ctx = makeMockCtx();
+    await setRelay("ws://foo:3000", ctx);
+
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("Use http:// or https://"),
+      "error",
+    );
+    expect(_setRelayCalls).toHaveLength(0);
+  });
+
+  test("set-relay rejects wss:// scheme with conversion hint", async () => {
+    const setRelay = captureHandler("remote-pi set-relay");
+    const ctx = makeMockCtx();
+    await setRelay("wss://relay.example.tld", ctx);
+
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("Use http:// or https://"),
+      "error",
+    );
+    expect(_setRelayCalls).toHaveLength(0);
   });
 
   test("set-relay rejects malformed URL", async () => {
@@ -981,92 +1226,84 @@ describe("/remote-pi set-relay + config", () => {
     expect(_setRelayCalls).toHaveLength(0);
   });
 
-  test("set-relay persists ws:// URL via saveConfig", async () => {
+  test("set-relay persists http:// URL via saveConfig (canonical form)", async () => {
     const setRelay = captureHandler("remote-pi set-relay");
     const ctx = makeMockCtx();
-    await setRelay("ws://192.168.1.10:3000", ctx);
+    await setRelay("http://192.168.1.10:3000", ctx);
 
-    expect(_setRelayCalls).toEqual(["ws://192.168.1.10:3000"]);
+    expect(_setRelayCalls).toEqual(["http://192.168.1.10:3000"]);
     expect(ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("Relay set to ws://192.168.1.10:3000"),
+      expect.stringContaining("Relay set to http://192.168.1.10:3000"),
       "info",
     );
   });
 
-  test("set-relay accepts wss://", async () => {
-    const setRelay = captureHandler("remote-pi set-relay");
-    const ctx = makeMockCtx();
-    await setRelay("wss://relay.example.com", ctx);
-
-    expect(_setRelayCalls).toEqual(["wss://relay.example.com"]);
-  });
-
-  test("resolveRelayUrl: env > config > default", async () => {
+  test("resolveRelayUrl: env > config > default (all canonicalized to http(s)://)", async () => {
     const cfg = await import("./config.js");
-    const { resolveRelayUrl, kDefaultRelayUrl, normalizeRelayUrl } = cfg;
+    const { resolveRelayUrl, kDefaultRelayUrl, toHttpUrl } = cfg;
 
-    // 1) Nothing set → default (normalized: kDefaultRelayUrl is https://, code uses wss://)
-    expect(resolveRelayUrl()).toEqual({ url: normalizeRelayUrl(kDefaultRelayUrl), source: "default" });
+    // 1) Nothing set → default (canonical form is http(s)://)
+    expect(resolveRelayUrl()).toEqual({ url: toHttpUrl(kDefaultRelayUrl), source: "default" });
 
-    // 2) Config set, no env → config
+    // 2) Config set, no env → config. Legacy ws:// in config gets coerced
+    // back to canonical http(s):// by resolveRelayUrl.
     _savedRelayUrl = "ws://config.test";
-    expect(resolveRelayUrl()).toEqual({ url: "ws://config.test", source: "config" });
+    expect(resolveRelayUrl()).toEqual({ url: "http://config.test", source: "config" });
 
-    // 3) Env set → env wins over config
+    // 3) Env set → env wins over config. Same defensive coercion.
     process.env["REMOTE_PI_RELAY"] = "wss://env.test";
-    expect(resolveRelayUrl()).toEqual({ url: "wss://env.test", source: "env" });
+    expect(resolveRelayUrl()).toEqual({ url: "https://env.test", source: "env" });
     delete process.env["REMOTE_PI_RELAY"];
   });
 
-  test("/remote-pi config shows effective URL + source (config)", async () => {
+  test("/remote-pi status shows the saved URL after set-relay", async () => {
     const setRelay = captureHandler("remote-pi set-relay");
-    await setRelay("ws://10.0.0.5:4000", makeMockCtx());
+    await setRelay("http://10.0.0.5:4000", makeMockCtx());
 
-    const config = captureHandler("remote-pi config");
+    const status = captureHandler("remote-pi status");
     const ctx = makeMockCtx();
-    await config("", ctx);
+    await status("", ctx);
 
     const text = (ctx.ui.notify.mock.calls[0]![0]) as string;
-    expect(text).toContain("Relay: ws://10.0.0.5:4000");
-    expect(text).toContain("Source: config");
+    expect(text).toContain("http://10.0.0.5:4000");
   });
 
-  test("/remote-pi config shows default source when nothing set", async () => {
-    const config = captureHandler("remote-pi config");
+  test("/remote-pi status shows the default URL when nothing set", async () => {
+    const status = captureHandler("remote-pi status");
     const ctx = makeMockCtx();
-    await config("", ctx);
+    await status("", ctx);
 
     const text = (ctx.ui.notify.mock.calls[0]![0]) as string;
-    expect(text).toContain("Source: default");
-    expect(text).toContain("wss://relay-rp1.jacobmoura.work");
+    expect(text).toContain("https://relay-rp1.jacobmoura.work");
   });
 
-  test("/remote-pi config shows env source when REMOTE_PI_RELAY set", async () => {
+  test("/remote-pi status reflects env override (canonicalized to https://)", async () => {
+    // Env var with wss:// is coerced back to https:// by resolveRelayUrl.
     process.env["REMOTE_PI_RELAY"] = "wss://from-env.test";
-    const config = captureHandler("remote-pi config");
+    const status = captureHandler("remote-pi status");
     const ctx = makeMockCtx();
-    await config("", ctx);
+    await status("", ctx);
 
     const text = (ctx.ui.notify.mock.calls[0]![0]) as string;
-    expect(text).toContain("Source: env");
-    expect(text).toContain("wss://from-env.test");
+    expect(text).toContain("https://from-env.test");
     delete process.env["REMOTE_PI_RELAY"];
   });
 
-  test("saved URL is used by _cmdStart on next connect", async () => {
+  test("saved URL is used by _cmdStart on next connect (http:// stored as-is)", async () => {
     const setRelay = captureHandler("remote-pi set-relay");
-    await setRelay("ws://10.0.0.5:4000", makeMockCtx());
+    await setRelay("http://10.0.0.5:4000", makeMockCtx());
 
-    const start = captureHandler("remote-pi start");
+    captureHandler("remote-pi");
     const ctx = makeMockCtx();
-    await start("", ctx);
+    await _connectForTest(ctx);
 
     expect(_getState()).toBe("started");
+    // The "Connecting to relay <url>" notify shows the canonical http(s)://
+    // form. Transport converts to ws(s):// internally before opening WS.
     expect(ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("ws://10.0.0.5:4000"),
+      expect.stringContaining("http://10.0.0.5:4000"),
       "info",
     );
-    // Also surfaces source in the connect notify
     expect(ctx.ui.notify).toHaveBeenCalledWith(
       expect.stringContaining("source: config"),
       "info",
@@ -1141,8 +1378,8 @@ describe("rooms wiring", () => {
       capturedOpts.push(opts);
     };
 
-    const start = captureHandler("remote-pi start");
-    await start("", makeMockCtx("/tmp/remote-pi-test-room"));
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx("/tmp/remote-pi-test-room"));
 
     expect(capturedOpts).toHaveLength(1);
     const opts = capturedOpts[0] as { roomId?: string; roomMeta?: { name: string; cwd: string } };
@@ -1158,13 +1395,13 @@ describe("rooms wiring", () => {
       capturedOpts.push(opts as { roomId?: string });
     };
 
-    const start = captureHandler("remote-pi start");
-    await start("", makeMockCtx("/tmp/remote-pi-A"));
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx("/tmp/remote-pi-A"));
 
     const stop = captureHandler("remote-pi stop");
     await stop("", makeMockCtx());
 
-    await start("", makeMockCtx("/tmp/remote-pi-B"));
+    await _connectForTest(makeMockCtx("/tmp/remote-pi-B"));
 
     expect(capturedOpts).toHaveLength(2);
     expect(capturedOpts[0]!.roomId).not.toBe(capturedOpts[1]!.roomId);
@@ -1175,9 +1412,9 @@ describe("rooms wiring", () => {
       throw new MockRoomAlreadyOpenError("AbCdEfGhIjKl");
     };
 
-    const start = captureHandler("remote-pi start");
+    captureHandler("remote-pi");
     const ctx = makeMockCtx("/tmp/remote-pi-dup");
-    await start("", ctx);
+    await _connectForTest(ctx);
 
     expect(ctx.ui.notify).toHaveBeenCalledWith(
       expect.stringContaining("Already running in this cwd"),
@@ -1187,8 +1424,8 @@ describe("rooms wiring", () => {
   });
 
   test("PeerChannel outer envelope omits `room` field (defensive, until W1.A/C ready)", async () => {
-    const start = captureHandler("remote-pi start");
-    await start("", makeMockCtx("/tmp/remote-pi-room-test"));
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx("/tmp/remote-pi-room-test"));
 
     relayRef.current!.emit("message", JSON.stringify({
       peer: "peer-room-test",
@@ -1546,8 +1783,8 @@ describe("bye on teardown", () => {
   });
 
   test("started (no peer paired) + /remote-pi stop → no bye sent (channel is null)", async () => {
-    const start = captureHandler("remote-pi start");
-    await start("", makeMockCtx());
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
     expect(_getState()).toBe("started");
     const sendsBefore = relayRef.current!.send.mock.calls.length;
 
@@ -1560,10 +1797,10 @@ describe("bye on teardown", () => {
     expect(_getState()).toBe("idle");
   });
 
-  test("revoke of active peer → channel.send sees bye{session_replaced}", async () => {
+  test("revoke of attached owner → channel sees bye{session_replaced}, relay stays started", async () => {
     _tokenStatus = "ok";
     const ACTIVE = "peer-bye-active";
-    // Pair so the peer becomes _appPeerId
+    // Attach the peer so it lives in _activePeers
     await _pairForTest(ACTIVE);
     const sendsBefore = relayRef.current!.send.mock.calls.length;
 
@@ -1574,7 +1811,10 @@ describe("bye on teardown", () => {
     const byes = sent.map(decodeSentCt).filter((d) => d.inner.type === "bye");
     expect(byes).toHaveLength(1);
     expect(byes[0]!.inner).toMatchObject({ type: "bye", reason: "session_replaced" });
-    expect(_getState()).toBe("idle");
+    // Multi-channel (W2D): only this owner's channel is closed; the relay
+    // stays up, ready for new pairings. Pre-W2D this dropped to idle.
+    expect(_hasActivePeerForTest(ACTIVE)).toBe(false);
+    expect(_getState()).toBe("started");
   });
 });
 
@@ -1607,8 +1847,8 @@ describe("relay reconnect", () => {
   test("relay close schedules reconnect; advancing past 1s triggers a new connect", async () => {
     vi.useFakeTimers();
     try {
-      const start = captureHandler("remote-pi start");
-      await start("", makeMockCtx());
+      captureHandler("remote-pi");
+      await _connectForTest(makeMockCtx());
       expect(relayInstances).toHaveLength(1);
       expect(_getState()).toBe("started");
 
@@ -1632,8 +1872,8 @@ describe("relay reconnect", () => {
   test("backoff progression 1s, 2s, 5s, 10s, 30s, 30s (capped) when connects keep failing", async () => {
     vi.useFakeTimers();
     try {
-      const start = captureHandler("remote-pi start");
-      await start("", makeMockCtx());
+      captureHandler("remote-pi");
+      await _connectForTest(makeMockCtx());
       expect(relayInstances).toHaveLength(1);
 
       // From here on, every new MockRelay.connect rejects.
@@ -1655,8 +1895,8 @@ describe("relay reconnect", () => {
   test("/remote-pi stop during reconnect cancels the timer and no new RelayClient is created", async () => {
     vi.useFakeTimers();
     try {
-      const start = captureHandler("remote-pi start");
-      await start("", makeMockCtx());
+      captureHandler("remote-pi");
+      await _connectForTest(makeMockCtx());
       expect(relayInstances).toHaveLength(1);
 
       relayInstances[0]!.emit("close");
@@ -1678,8 +1918,8 @@ describe("relay reconnect", () => {
   test("successful reconnect preserves _sessionStartedAt and _messageBuffer", async () => {
     vi.useFakeTimers();
     try {
-      const start = captureHandler("remote-pi start");
-      await start("", makeMockCtx());
+      captureHandler("remote-pi");
+      await _connectForTest(makeMockCtx());
       const sessionTs = 1_700_000_000_000;
       _setSessionStartedAtForTest(sessionTs);
       _setMessageBufferForTest([
@@ -1713,8 +1953,8 @@ describe("relay reconnect", () => {
   test("reconnect that succeeds clears attempt counter (next close starts at 1s again)", async () => {
     vi.useFakeTimers();
     try {
-      const start = captureHandler("remote-pi start");
-      await start("", makeMockCtx());
+      captureHandler("remote-pi");
+      await _connectForTest(makeMockCtx());
 
       // First close → reconnect after 1s (succeeds)
       relayInstances[0]!.emit("close");
@@ -1918,15 +2158,15 @@ describe("cumulative buffer", () => {
     ]);
     expect(_getMessageBufferForTest()).toHaveLength(2);
 
-    const start = captureHandler("remote-pi start");
-    await start("", makeMockCtx());
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
 
     expect(_getMessageBufferForTest()).toHaveLength(2);  // PRESERVED
   });
 
   test("_goIdle preserves buffer + sessionStartedAt across /remote-pi stop", async () => {
-    const start = captureHandler("remote-pi start");
-    await start("", makeMockCtx());
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
 
     const onMsgEnd = captureEventHandler("message_end");
     onMsgEnd({ type: "message_end", message: { role: "user", content: "x", timestamp: 100 } });
@@ -1944,15 +2184,15 @@ describe("cumulative buffer", () => {
     expect(_getMessageBufferForTest()).toHaveLength(4);
 
     // Start again → buffer still has all 4
-    await start("", makeMockCtx());
+    await _connectForTest(makeMockCtx());
     expect(_getMessageBufferForTest()).toHaveLength(4);
   });
 
   test("_onRelayClose preserves buffer (regression — buffer must survive reconnect)", async () => {
     vi.useFakeTimers();
     try {
-      const start = captureHandler("remote-pi start");
-      await start("", makeMockCtx());
+      captureHandler("remote-pi");
+      await _connectForTest(makeMockCtx());
 
       const onMsgEnd = captureEventHandler("message_end");
       onMsgEnd({ type: "message_end", message: { role: "user", content: "x", timestamp: 100 } });
@@ -2007,14 +2247,14 @@ describe("model meta", () => {
       capturedOpts.push(opts as { roomMeta?: { model?: string; name?: string; cwd?: string } });
     };
 
-    const start = captureHandler("remote-pi start");
+    captureHandler("remote-pi");
     const ctx = {
       ui: { notify: vi.fn() },
       cwd: "/tmp/remote-pi-model-test",
       abort: vi.fn(),
       model: { id: "claude-sonnet-4-5", name: "claude-sonnet-4.5" },
     } as unknown as ReturnType<typeof makeMockCtx>;
-    await start("", ctx);
+    await _connectForTest(ctx);
 
     expect(capturedOpts).toHaveLength(1);
     expect(capturedOpts[0]!.roomMeta?.model).toBe("claude-sonnet-4.5");
@@ -2028,16 +2268,16 @@ describe("model meta", () => {
       capturedOpts.push(opts as { roomMeta?: { model?: string } });
     };
 
-    const start = captureHandler("remote-pi start");
-    await start("", makeMockCtx("/tmp/remote-pi-no-model"));
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx("/tmp/remote-pi-no-model"));
 
     expect(capturedOpts).toHaveLength(1);
     expect(capturedOpts[0]!.roomMeta?.model).toBeUndefined();
   });
 
   test("pi.on('model_select') fires room_meta_update via relay.sendControl", async () => {
-    const start = captureHandler("remote-pi start");
-    await start("", makeMockCtx("/tmp/remote-pi-model-switch"));
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx("/tmp/remote-pi-model-switch"));
 
     const onModelSelect = captureEventHandler("model_select");
     onModelSelect({
@@ -2057,8 +2297,8 @@ describe("model meta", () => {
   });
 
   test("model_select with no model.name falls back to model.id", async () => {
-    const start = captureHandler("remote-pi start");
-    await start("", makeMockCtx("/tmp/remote-pi-model-fallback"));
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx("/tmp/remote-pi-model-fallback"));
 
     const onModelSelect = captureEventHandler("model_select");
     onModelSelect({
@@ -2074,8 +2314,8 @@ describe("model meta", () => {
   });
 
   test("model_select with no model (undefined) is silently ignored", async () => {
-    const start = captureHandler("remote-pi start");
-    await start("", makeMockCtx("/tmp/remote-pi-model-noop"));
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx("/tmp/remote-pi-model-noop"));
 
     const sendControlBefore = relayRef.current!.sendControl.mock.calls.length;
     const onModelSelect = captureEventHandler("model_select");
@@ -2092,14 +2332,14 @@ describe("model meta", () => {
         capturedOpts.push(opts as typeof capturedOpts[number]);
       };
 
-      const start = captureHandler("remote-pi start");
+      captureHandler("remote-pi");
       const ctx = {
         ui: { notify: vi.fn() },
         cwd: "/tmp/remote-pi-reconnect-room",
         abort: vi.fn(),
         model: { id: "claude-sonnet-4-5", name: "claude-sonnet-4.5" },
       } as unknown as ReturnType<typeof makeMockCtx>;
-      await start("", ctx);
+      await _connectForTest(ctx);
 
       expect(capturedOpts).toHaveLength(1);
       const initialRoomId = capturedOpts[0]!.roomId!;
@@ -2129,14 +2369,14 @@ describe("model meta", () => {
         capturedOpts.push(opts as { roomMeta?: { model?: string } });
       };
 
-      const start = captureHandler("remote-pi start");
+      captureHandler("remote-pi");
       const ctx = {
         ui: { notify: vi.fn() },
         cwd: "/tmp/remote-pi-reconnect-model",
         abort: vi.fn(),
         model: { id: "claude-sonnet-4-5", name: "claude-sonnet-4.5" },
       } as unknown as ReturnType<typeof makeMockCtx>;
-      await start("", ctx);
+      await _connectForTest(ctx);
 
       // User switches model
       const onModelSelect = captureEventHandler("model_select");

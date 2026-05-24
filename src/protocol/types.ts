@@ -60,6 +60,14 @@ export type ServerMessage =
     }
   | { type: "pair_error"; in_reply_to: string; code: PairErrorCode; message: string }
   | { type: "user_input"; id: string; text: string }
+  // Echo of an app-originated user_message, broadcast by the Pi to every
+  // connected owner (including the sender). Source-of-truth model: each
+  // app waits for this echo to render the message it sent, so all owners
+  // see the same session timeline regardless of who typed.
+  // Field shape mirrors the inbound ClientMessage `user_message` exactly,
+  // and `id` is the sender-provided id — Pi never re-generates it (lets
+  // future dedup logic use id as a stable key). See plan/24 W2D fix.
+  | { type: "user_message"; id: string; text: string }
   | { type: "agent_chunk"; in_reply_to: string; delta: string }
   | { type: "agent_done"; in_reply_to: string; usage?: Usage }
   | { type: "agent_message"; in_reply_to: string; text: string; usage?: Usage }

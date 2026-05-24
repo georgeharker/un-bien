@@ -80,6 +80,8 @@ const {
   default: extension,
   _getState,
   routeClientMessage,
+  _startRelayForTest,
+  _stopForTest,
 } = await import("../src/index.js");
 
 import type { ExtensionAPI, ExtensionFactory } from "@mariozechner/pi-coding-agent";
@@ -106,15 +108,12 @@ function decodeSentCt(raw: string): { peer: string; inner: Record<string, unknow
  * `pair_request` via the relay mock.
  */
 async function pairUp(): Promise<void> {
-  // Use the new canonical `remote-pi relay start` command (plano 19). The
-  // legacy `remote-pi start` alias would also auto-join a local UDS session
-  // — undesired in this relay-focused test.
-  let startHandler: ((args: string, ctx: ReturnType<typeof makeMockCtx>) => Promise<void>) | undefined;
+  // Bring just the relay up (no UDS mesh — this test is relay-focused).
+  // The 2026-05-23 surface cleanup removed `remote-pi relay start`; the
+  // equivalent for tests is `_startRelayForTest`.
   const pi = {
     on: () => undefined,
-    registerCommand(name: string, opts: { handler: typeof startHandler }) {
-      if (name === "remote-pi relay start") startHandler = opts.handler;
-    },
+    registerCommand: () => undefined,
     registerTool: () => undefined,
     registerShortcut: () => undefined,
     registerFlag: () => undefined,
@@ -125,8 +124,7 @@ async function pairUp(): Promise<void> {
   } as unknown as ExtensionAPI;
   (extension as ExtensionFactory)(pi);
 
-  if (!startHandler) throw new Error("remote-pi relay start handler not registered");
-  await startHandler("", makeMockCtx());
+  await _startRelayForTest(makeMockCtx());
   expect(_getState()).toBe("started");
 
   // Inject a pair_request
@@ -148,21 +146,8 @@ describe("ping → pong roundtrip", () => {
     vi.clearAllMocks();
     relayRef.current = null;
 
-    // Stop any active session first
-    const pi = {
-      on: () => undefined,
-      registerCommand(_name: string, opts: { handler: (args: string, ctx: ReturnType<typeof makeMockCtx>) => Promise<void> }) {
-        if (_name === "remote-pi stop") opts.handler("", makeMockCtx());
-      },
-      registerTool: () => undefined,
-      registerShortcut: () => undefined,
-      registerFlag: () => undefined,
-      getFlag: () => undefined,
-      registerMessageRenderer: () => undefined,
-      sendMessage: () => undefined,
-      sendUserMessage: () => undefined,
-    } as unknown as ExtensionAPI;
-    (extension as ExtensionFactory)(pi);
+    // Stop any active session first (idempotent — safe when already idle).
+    await _stopForTest(makeMockCtx());
   });
 
   test("ping from paired peer → pong sent back with matching in_reply_to", async () => {

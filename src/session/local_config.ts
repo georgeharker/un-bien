@@ -6,11 +6,12 @@ const LOCAL_FILE = "config.json";
 
 export interface LocalConfig {
   agent_name?: string;
-  session_name?: string;
   /**
-   * If true (default), `/remote-pi` with no args auto-joins the session and
-   * starts the relay on a fresh terminal. Added in plano 21. Legacy configs
-   * without this field are treated as `true` for backward compatibility.
+   * If true (default), `/remote-pi` with no args auto-joins the local UDS
+   * mesh and starts the relay on a fresh terminal. The field name is
+   * historical (plano 21); the UX wording was reworked to "use the relay
+   * on this terminal to connect to the remote mesh (mobile + PCs)". Legacy
+   * configs without this field are treated as `true` for backward compat.
    */
   auto_start_relay?: boolean;
 }
@@ -31,7 +32,14 @@ export function loadLocalConfig(cwd: string): LocalConfig {
     const raw = readFileSync(p, "utf8");
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object") return {};
-    return parsed as LocalConfig;
+    // Only surface known fields. Legacy `session_name` from pre-refactor
+    // configs is silently dropped — the local UDS mesh is now always a
+    // single fixed session, so the field has no meaning.
+    const src = parsed as Record<string, unknown>;
+    const cfg: LocalConfig = {};
+    if (typeof src["agent_name"] === "string") cfg.agent_name = src["agent_name"];
+    if (typeof src["auto_start_relay"] === "boolean") cfg.auto_start_relay = src["auto_start_relay"];
+    return cfg;
   } catch {
     return {};
   }
@@ -49,9 +57,19 @@ export function saveLocalConfig(cwd: string, patch: Partial<LocalConfig>): void 
   writeFileSync(p, JSON.stringify(next, null, 2));
 }
 
-/** Default agent name when none is configured: basename of cwd. */
+/**
+ * Default agent name when none is configured: `<parent>/<folder>` of the
+ * given cwd. Falls back gracefully when the parent isn't meaningful
+ * (root, current dir, single-segment paths) — in those cases just the
+ * folder name. Purpose: surface a non-empty string the user can accept
+ * by pressing enter in the wizard.
+ */
 export function defaultAgentName(cwd: string): string {
-  return basename(cwd) || "agent";
+  const folder = basename(cwd);
+  const parent = basename(dirname(cwd));
+  if (!folder) return "agent";
+  if (!parent || parent === "/" || parent === folder || parent === ".") return folder;
+  return `${parent}/${folder}`;
 }
 
 /** Resolves auto_start_relay with backward-compat (undefined → true). */

@@ -58,9 +58,13 @@ export function updateFooter(ctx: FooterContext, state: FooterState): void {
     ctx.ui.setStatus(K_PEER, undefined);
   }
 
-  const titleParts: string[] = [];
-  if (state.session) titleParts.push(state.session);
-  if (state.relayOn) titleParts.push("relay");
+  // Terminal title — two parts only: `<agent-name> · <On|Off>`.
+  // Pre-2026-05-24 the title carried three segments (`name · local · relay`),
+  // but `local` was always the same string (single fixed UDS session) and
+  // `relay` repeated information the relay slot already shows. Collapsed
+  // to "name + relay state in plain English" — same info, clearer at a
+  // glance: terminal tabs read like `backend · On` / `backend · Off`.
   const prefix = state.agentName?.trim() || "Pi";
-  ctx.ui.setTitle(titleParts.length ? `${prefix} · ${titleParts.join(" · ")}` : prefix);
+  const relayState = state.relayOn ? "On" : "Off";
+  ctx.ui.setTitle(`${prefix} · ${relayState}`);
 }

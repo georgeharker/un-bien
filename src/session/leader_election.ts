@@ -34,6 +34,31 @@ export async function joinOrLead(sockPath: string): Promise<ElectionResult> {
   throw new Error(`leader election failed after ${MAX_ATTEMPTS} attempts: ${sockPath}`);
 }
 
+/**
+ * Probes a UDS path: if a live listener responds, returns the connected
+ * socket; otherwise returns null (timeout or ECONNREFUSED). Exported so
+ * the cwd-lock primitive can reuse it without duplicating the OS dance.
+ */
+export function tryConnect(sockPath: string): Promise<Socket | null> {
+  return _tryConnect(sockPath);
+}
+
+/**
+ * Attempts to bind a UDS server on `sockPath`. Returns the live server on
+ * success, null when the path is already held (EADDRINUSE) or any other
+ * bind error. Caller is responsible for `unlink`ing a stale sock file
+ * before retrying.
+ */
+export function tryBind(sockPath: string): Promise<Server | null> {
+  return _tryBind(sockPath);
+}
+
+/** Unlinks the sock file if it exists and is actually a socket. No-op
+ *  otherwise. Used to clear stale sockets left behind by a crashed peer. */
+export function removeStaleSock(sockPath: string): void {
+  _removeStaleSock(sockPath);
+}
+
 function _tryConnect(sockPath: string): Promise<Socket | null> {
   return new Promise((resolve) => {
     const sock = createConnection({ path: sockPath });

@@ -37,14 +37,17 @@ import type {
   ExtensionFactory,
 } from "@mariozechner/pi-coding-agent";
 import { type Ed25519Keypair } from "./pairing/crypto.js";
-import { buildQRUri, displayQR, qrSession, startQRRotation } from "./pairing/qr.js";
+import { buildQRUri, qrSession, renderQRAscii, startQRRotation } from "./pairing/qr.js";
 import {
   addPeer,
   getOrCreateEd25519Keypair,
+  listOwnerPubkeys,
   listPeers,
   removePeer,
   type PeerRecord,
 } from "./pairing/storage.js";
+import { MeshClient } from "./mesh/client.js";
+import { SelfRevoke } from "./mesh/self_revoke.js";
 import type {
   ClientMessage,
   PairErrorCode,
@@ -58,12 +61,12 @@ import { SessionPeer } from "./session/peer.js";
 import { registerAgentTools } from "./session/tools.js";
 import {
   ensureGlobalDirs,
-  listSessions,
+  LOCAL_SESSION_NAME,
   sessionAuditPath,
-  sessionHasSock,
   sessionSockPath,
   skillsDir,
 } from "./session/global_config.js";
+import { acquireCwdLock, type AcquiredLock } from "./session/cwd_lock.js";
 import {
   defaultAgentName,
   effectiveAutoStartRelay,
@@ -81,19 +84,41 @@ import {
   resolveRelayUrl,
   saveConfig,
   isValidRelayUrl,
-  normalizeRelayUrl,
+  isWebSocketScheme,
+  toWebSocketUrl,
 } from "./config.js";
 
 // ── State machine ─────────────────────────────────────────────────────────────
+//
+// Pre-2026-05-23: `idle` → `started` → `paired` (one owner at a time, gate-kept
+// by `_appPeerId`/`_peerChannel` singletons). The transition to `paired` was
+// what unblocked the app from sending application messages.
+//
+// Now: `idle` → `started`. The `paired` state is a derived metric
+// (`_activePeers.size > 0`) — N owners can be connected at once, each with
+// its own `PlainPeerChannel` in `_activePeers`. Plan/24 W2D ("multi-channel
+// broadcast"): pairing a second device no longer disconnects the first, and
+// every connected owner receives the same agent stream in parallel.
 
-export type RemoteState = "idle" | "started" | "paired";
+export type RemoteState = "idle" | "started";
 
 let _state: RemoteState = "idle";
 let _relay: RelayClient | null = null;
 let _relayUrl: string | null = null;  // URL used by current _relay connection
-let _peerChannel: PlainPeerChannel | null = null;
-let _appPeerId: string | null = null;  // active app peer ID (Ed25519 pk base64 std)
-let _peerShort = "";
+/**
+ * Owners currently connected via the relay. Key = app peer pubkey (Ed25519,
+ * base64 standard); value = the dedicated PlainPeerChannel routing messages
+ * to/from that owner.
+ *
+ * Operational notes:
+ *   - Adding/removing entries is exclusively in `_attachPeerChannel` and
+ *     `_detachPeerChannel` (or `_goIdle` for the bulk teardown). Don't mutate
+ *     directly elsewhere — those helpers keep the footer/log/state in sync.
+ *   - `paired` UX state is `_activePeers.size > 0`. The footer and the
+ *     `/remote-pi status` output both derive from this.
+ */
+const _activePeers = new Map<string, PlainPeerChannel>();
+let _peerShort = "";  // shortid of the most recently attached peer (UX hint only)
 
 let _myRoomId: string | null = null;   // this Pi's room id (derived from cwd)
 let _myRoomMeta: { name: string; cwd: string; model?: string } | null = null;
@@ -155,7 +180,10 @@ function _refreshFooter(ctx?: { ui?: { setStatus?: unknown; setTitle?: unknown }
     session: _sessionName ?? undefined,
     peerCount: _sessionPeerCount,
     relayOn: _state !== "idle",
-    devicePaired: _state === "paired" ? _peerShort : undefined,
+    // `devicePaired` now reflects "any owner currently attached" — picks one
+    // shortid representatively (multi-owner UX detail surfaces in the
+    // `/remote-pi status` line, not the footer slot).
+    devicePaired: _anyPeerActive() ? _peerShort : undefined,
     hasPairings: _hasGlobalPairings,
     agentName: _sessionPeer?.name(),
   };
@@ -184,6 +212,37 @@ type BufferMsg = {
 let _messageBuffer: BufferMsg[] = [];
 
 /** Test-only override of the message buffer. */
+/**
+ * Test-only: emulate what `/remote-pi` does on the returning-user path
+ * (join the local mesh, then start the relay) without touching the FS for
+ * a `localConfigExists()` lookup. Lets tests bring the relay up without
+ * mocking the wizard or the local config storage.
+ *
+ * Typed loosely to accept any ctx shape with `ui.notify` + `cwd` — the
+ * unit tests use minimal mocks that don't satisfy the full
+ * `ExtensionContext` interface.
+ */
+export async function _connectForTest(ctx: unknown): Promise<void> {
+  const real = ctx as Parameters<typeof _cmdJoin>[0];
+  await _cmdJoin(real);
+  await _cmdStart(real);
+}
+
+/** Test-only: tear everything down (mirrors `/remote-pi stop`). */
+export async function _stopForTest(ctx: unknown): Promise<void> {
+  await _cmdStop(ctx as Parameters<typeof _cmdStop>[0]);
+}
+
+/**
+ * Test-only: relay-only startup, no UDS mesh join. Replaces the old
+ * `remote-pi relay start` handler that some tests captured to bring up
+ * the relay in isolation (e.g. ping/pong tests that don't care about the
+ * agent-network broker).
+ */
+export async function _startRelayForTest(ctx: unknown): Promise<void> {
+  await _cmdStart(ctx as Parameters<typeof _cmdStart>[0]);
+}
+
 export function _setMessageBufferForTest(msgs: unknown[]): void {
   _messageBuffer = msgs as BufferMsg[];
 }
@@ -214,6 +273,17 @@ let _stopAutoListener: (() => void) | null = null;
 // Cached keypair (loaded once, reused across start/pair cycles)
 let _cachedEd25519: Ed25519Keypair | null = null;
 
+// Mesh-membership poller (plan/24 Wave 3). Lives across the relay
+// connection lifecycle: started in _cmdStart after the WS is up, stopped
+// in _goIdle when the relay is torn down.
+let _selfRevoke: SelfRevoke | null = null;
+
+// Per-cwd lock acquired by the first `/remote-pi` invocation in this
+// process. Holds the UDS socket open until the process exits (OS auto-
+// releases on crash too). Stays held across `/remote-pi stop` cycles —
+// only released when the Node process itself dies.
+let _cwdLock: AcquiredLock | null = null;
+
 // ── Session sync limit (mirror cache cap) ─────────────────────────────────────
 //
 // Configurable via REMOTE_PI_SYNC_LIMIT env var (positive int, default 30).
@@ -238,9 +308,103 @@ export function _hasPendingReconnect(): boolean {
   return _reconnectTimer !== null;
 }
 
-/** Exported for tests. */
-export function _getState(): RemoteState { return _state; }
+/**
+ * Public state-snapshot helper. Returns the derived UX state, not the raw
+ * `_state` enum: the W2D refactor collapsed the internal machine to
+ * `idle | started` and made `paired` a derived metric
+ * (`_activePeers.size > 0`). Tests and the footer keep the three-state
+ * mental model via this getter.
+ */
+export function _getState(): "idle" | "started" | "paired" {
+  if (_state === "idle") return "idle";
+  return _activePeers.size > 0 ? "paired" : "started";
+}
 
+/** Test-only: number of owners currently attached via PlainPeerChannel. */
+export function _getActivePeerCountForTest(): number {
+  return _activePeers.size;
+}
+
+/** Test-only: true if a specific peer (base64 std) has an attached channel. */
+export function _hasActivePeerForTest(appPeerIdStd: string): boolean {
+  return _activePeers.has(appPeerIdStd);
+}
+
+
+// ── Multi-channel helpers ─────────────────────────────────────────────────────
+
+/**
+ * Sends `msg` to every currently-attached owner channel. The default
+ * dispatch for application-level events that are part of "the agent
+ * session is doing X" (agent_chunk, tool_request, tool_result, agent_done,
+ * user_input mirror, room_meta_update, etc.) — all paired devices see the
+ * same stream.
+ *
+ * Per-request responses (e.g. `session_history` answering a specific
+ * `session_sync` query, or `pair_ok` answering `pair_request`) must NOT
+ * use this — they go to the sender channel directly.
+ */
+function _broadcastToActive(msg: ServerMessage): void {
+  for (const ch of _activePeers.values()) {
+    try { ch.send(msg); } catch { /* best-effort per channel */ }
+  }
+}
+
+/** Returns true when at least one owner is attached. Derived `paired` UX. */
+function _anyPeerActive(): boolean {
+  return _activePeers.size > 0;
+}
+
+/**
+ * Adds an owner's channel to `_activePeers`. Also updates the UX hint
+ * `_peerShort` (last-attached shortid) so the footer + status can pick
+ * a representative device when only one is connected.
+ */
+function _attachPeerChannel(appPeerId: string, channel: PlainPeerChannel): void {
+  _activePeers.set(appPeerId, channel);
+  _peerShort = appPeerId.slice(0, 8);
+}
+
+/** Detaches a single owner's channel + removes it from the map. Used by
+ *  `_onPeerDisconnect`, `_cmdRevoke`, and the SelfRevoke callback. */
+function _detachPeerChannel(appPeerId: string): void {
+  const ch = _activePeers.get(appPeerId);
+  if (!ch) return;
+  try { ch.detach(); } catch { /* best-effort */ }
+  _activePeers.delete(appPeerId);
+  if (_peerShort === appPeerId.slice(0, 8)) {
+    // Pick a different remaining peer for the UX hint, or clear when none.
+    const next = _activePeers.keys().next().value;
+    _peerShort = next ? next.slice(0, 8) : "";
+  }
+}
+
+// ── Display-name helpers ──────────────────────────────────────────────────────
+
+/**
+ * Resolves the name this Pi shows to the mobile app and the relay's
+ * `room_meta.name`. Single source of truth for "what does this Pi call
+ * itself when talking to others".
+ *
+ * Resolution order:
+ *   1. Broker-assigned name (when this Pi is on the local UDS mesh) — may
+ *      carry a `#N` suffix from a name collision. Matches what other
+ *      agents see, so the mobile UI shows the exact same string.
+ *   2. `agent_name` from `<cwd>/.pi/remote-pi/config.json` — set by the
+ *      wizard on first run; this is "the name the user configured".
+ *   3. `defaultAgentName(cwd)` (parent/folder) — fallback when no config
+ *      exists yet and the mesh hasn't been joined.
+ *
+ * Pre-2026-05-23 callers computed `cwd.split('/').slice(-2).join('/')`
+ * inline at three different sites (pair_ok, room_meta, QR URI); this
+ * helper consolidates them and lifts the user's configured name above
+ * the raw cwd path.
+ */
+function _displayName(cwd: string): string {
+  if (_sessionPeer) return _sessionPeer.name();
+  const local = loadLocalConfig(cwd);
+  return local.agent_name || defaultAgentName(cwd);
+}
 
 // ── Peer lookup helpers ───────────────────────────────────────────────────────
 
@@ -261,12 +425,10 @@ async function _findKnownPeer(appPeerIdStd: string): Promise<PeerRecord | null> 
  * by omitting the reason; app falls back to ping miss naturally.
  */
 function _goIdle(byeReason?: import("./protocol/types.js").ByeReason): void {
-  if (_peerChannel && byeReason && _state !== "idle") {
-    try {
-      _peerChannel.send({ type: "bye", reason: byeReason });
-    } catch {
-      // peer already offline — fine
-    }
+  // Broadcast bye to every still-attached owner so each app surfaces
+  // "offline" immediately instead of waiting ~50s for a ping miss.
+  if (byeReason && _state !== "idle" && _anyPeerActive()) {
+    _broadcastToActive({ type: "bye", reason: byeReason });
   }
 
   // Cancel any pending reconnect attempt. Critical: /remote-pi stop must
@@ -280,15 +442,24 @@ function _goIdle(byeReason?: import("./protocol/types.js").ByeReason): void {
   _stopAutoListener?.();
   _stopAutoListener = null;
 
-  _peerChannel?.detach();
-  _peerChannel = null;
-  _appPeerId = null;
+  // Tear down every per-owner channel and clear the map.
+  for (const ch of _activePeers.values()) {
+    try { ch.detach(); } catch { /* best-effort */ }
+  }
+  _activePeers.clear();
   _peerShort = "";
   _currentTurnId = null;
 
   _relay?.close();
   _relay = null;
   _relayUrl = null;
+
+  // Stop the mesh poller — it's bound to the relay-up lifecycle so a new
+  // _cmdStart will spin up a fresh instance (with potentially a new relay
+  // URL if the user changed it via /remote-pi relay url).
+  _selfRevoke?.stop();
+  _selfRevoke = null;
+
   // Preserve _sessionStartedAt + _messageBuffer across stop/start cycles.
   // The Pi agent session outlives the relay connection — `message_end` keeps
   // firing for terminal turns even while idle, and the buffer must survive
@@ -315,9 +486,14 @@ function _onRelayClose(): void {
   _stopAutoListener?.();
   _stopAutoListener = null;
 
-  _peerChannel?.detach();
-  _peerChannel = null;
-  _appPeerId = null;
+  // Detach every per-owner channel — relay is gone, none can route. The
+  // auto-listener re-attaches owners after `_attemptReconnect` succeeds
+  // (via the same known-peer + pair_request paths used on first connect).
+  for (const ch of _activePeers.values()) {
+    try { ch.detach(); } catch { /* best-effort */ }
+  }
+  _activePeers.clear();
+  _peerShort = "";
   _currentTurnId = null;
 
   _relay = null;  // _relayUrl preserved for retry
@@ -350,7 +526,9 @@ async function _attemptReconnect(): Promise<void> {
 
   const edKp = _cachedEd25519;
   const url = _relayUrl;
-  const relay = new RelayClient(url, edKp);
+  // _relayUrl is stored in canonical http(s):// form — convert at the
+  // WS boundary, same as _cmdStart.
+  const relay = new RelayClient(toWebSocketUrl(url), edKp);
 
   try {
     // Replay the same room identity from _cmdStart. Without this the relay
@@ -384,77 +562,97 @@ async function _attemptReconnect(): Promise<void> {
 }
 
 /**
- * App-level peer disconnect (relay still up).
- * Transitions paired → started and re-installs the auto-listener.
- * Exported so tests can trigger it directly; in production it will be
- * called when the relay sends a peer-disconnect notification (future).
+ * Per-owner disconnect callback. Fires when one specific owner's channel
+ * detaches (e.g. relay told us the peer is gone). Other owners' channels
+ * keep running — relay stays "started".
+ *
+ * Exported so tests can trigger the disconnect path for a specific peer.
+ *
+ * Backward-compat: a no-arg call (legacy tests / pre-W2D callers) falls
+ * back to detaching the most recently attached peer, mirroring the old
+ * singleton semantics.
  */
-export function _onPeerDisconnect(): void {
-  if (_state !== "paired") return;
+export function _onPeerDisconnect(appPeerId?: string): void {
+  if (_state === "idle") return;
+  const target = appPeerId ?? [..._activePeers.keys()].pop();
+  if (!target) return;
+  if (!_activePeers.has(target)) return;
 
-  _peerChannel?.detach();
-  _peerChannel = null;
-  _appPeerId = null;
-  _peerShort = "";
-  _currentTurnId = null;
-
-  _state = "started";
-  _refreshFooter();
-  _lastCtx?.ui.notify("[remote-pi] App disconnected, listening for reconnect", "info");
-
-  // Re-install auto-listener so reconnect works
-  if (_relay) {
-    _stopAutoListener?.();
-    _stopAutoListener = _installAutoListener(_relay);
+  _detachPeerChannel(target);
+  if (_anyPeerActive()) {
+    // Other owners still attached — keep _currentTurnId so they continue
+    // seeing the in-flight agent stream.
+    _refreshFooter();
+    return;
   }
+
+  // No owner left. Conservatively clear the turn so the next pair_request
+  // starts cleanly.
+  _currentTurnId = null;
+  _refreshFooter();
+  _lastCtx?.ui.notify("[remote-pi] All app peers disconnected, listening for reconnect", "info");
+  // Auto-listener stays up — same listener catches the reconnect on any peer.
 }
 
 /**
- * Promotes started → paired by installing a PlainPeerChannel for `appPeerId`.
- * Routes `firstInner` immediately so the message that triggered reconnection
- * isn't dropped.
+ * Attaches a new owner channel to the multi-owner set. Replaces the
+ * pre-W2D singleton `_promoteToPaired` which set `_state = "paired"` and
+ * a single `_peerChannel`. The relay state remains `started`; pairing
+ * status is derived from `_activePeers.size`.
+ *
+ * Idempotent for the same `appPeerId` (re-attaching tears down the prior
+ * channel and installs a fresh one — covers reconnect from the same
+ * device without leaking listeners).
  */
-function _promoteToPaired(
+function _attachOwner(
   relay: RelayClient,
   appPeerId: string,
   peerName: string,
   firstInner?: ClientMessage,
-): void {
+): PlainPeerChannel {
   const peerShort = appPeerId.slice(0, 8);
+
+  // Drop any stale channel for this owner before re-attaching.
+  if (_activePeers.has(appPeerId)) _detachPeerChannel(appPeerId);
 
   const channel = new PlainPeerChannel(
     relay,
     appPeerId,
     _myRoomId ?? undefined,
-    (msg) => routeClientMessage(msg, _lastCtx ?? _noopCtx),
-    () => _onPeerDisconnect(),
+    (msg) => _routeClientMessageFrom(channel, msg, _lastCtx ?? _noopCtx),
+    () => _onPeerDisconnect(appPeerId),
   );
 
-  _peerChannel = channel;
-  _appPeerId = appPeerId;
-  _peerShort = peerShort;
-  _state = "paired";
+  _attachPeerChannel(appPeerId, channel);
   _refreshFooter();
 
   _lastCtx?.ui.notify(
-    `[remote-pi] state: paired (peer=${peerShort}, name=${peerName})`,
+    `[remote-pi] Owner attached: peer=${peerShort}, name=${peerName} ` +
+    `(${_activePeers.size} active)`,
     "info",
   );
 
   if (firstInner) {
-    // Route the inner that triggered the reconnect — the channel listener
-    // also saw it, but we route through routeClientMessage to be explicit.
+    // The PlainPeerChannel listener fired on the same line that triggered
+    // attachment in some flows; we route explicitly here too to ensure the
+    // inner reaches the handler exactly once.
     void firstInner;
   }
+  return channel;
 }
 
-// ── Auto-reconnect listener ───────────────────────────────────────────────────
+// ── Auto-listener ─────────────────────────────────────────────────────────────
 //
 // Installed while in 'started' state. Decodes the outer envelope as
-// base64(JSON) and dispatches based on inner type:
-//   • pair_request from any peer → validate token, persist peer, send pair_ok/pair_error
-//   • any inner from a known peer (peers.json) → promote to paired and route
-//   • anything else → ignored
+// base64(JSON) and dispatches per sender peer_id:
+//   • Sender already in `_activePeers` → ignored here (the per-owner
+//     PlainPeerChannel listens on the same relay event and handles its own
+//     traffic via its `remotePeerId` filter)
+//   • `pair_request` from a new peer → validate token, persist peer, send
+//     pair_ok/pair_error, attach a new channel
+//   • Non-pair message from a known peer (peers.json) without an active
+//     channel yet → attach + route the inner (reconnect path)
+//   • Anything else (unknown peer + non-pair) → emit `error: unknown_peer`
 
 function _installAutoListener(relay: RelayClient): () => void {
   const onMsg = async (line: string) => {
@@ -464,9 +662,9 @@ function _installAutoListener(relay: RelayClient): () => void {
 
     if (!outer.peer || !outer.ct) return;
 
-    // Once paired, the PlainPeerChannel handles application messages.
-    if (_state === "paired") return;
     if (_state !== "started") return;
+    // Already-attached owners: their PlainPeerChannel handles routing.
+    if (_activePeers.has(outer.peer)) return;
 
     // Decode inner envelope (base64 JSON)
     let inner: ClientMessage;
@@ -488,14 +686,16 @@ function _installAutoListener(relay: RelayClient): () => void {
       return;
     }
 
-    // Reconnect path: known peer sends a non-pair message → promote to paired
-    // and route through the new PlainPeerChannel. See pairing.md §Reconexão.
+    // Reconnect path: known peer (peers.json) without an active channel
+    // sends a non-pair message → attach + route through the new channel.
+    // See pairing.md §Reconexão.
     const known = await _findKnownPeer(appPeerId);
     if (known) {
-      _promoteToPaired(relay, appPeerId, known.name);
-      // The PlainPeerChannel that was just installed will not have observed
-      // the line we already consumed; route the inner directly.
-      routeClientMessage(inner, _lastCtx ?? _noopCtx);
+      const channel = _attachOwner(relay, appPeerId, known.name);
+      // The PlainPeerChannel listener for this owner won't have seen the
+      // line that triggered the attach (we already consumed it); route
+      // it explicitly via the new channel so the sender gets a reply.
+      _routeClientMessageFrom(channel, inner, _lastCtx ?? _noopCtx);
       return;
     }
 
@@ -537,9 +737,9 @@ async function _handlePairRequest(
       : status === "consumed" ? "token_consumed"
       : "token_unknown";
     const msg =
-      code === "token_expired"  ? "Token efêmero expirou. Gere um novo QR com /remote-pi pair."
-      : code === "token_consumed" ? "Token já consumido por outro pair_request."
-      : "Token não foi emitido por este Pi.";
+      code === "token_expired"  ? "Ephemeral token expired. Generate a new QR with /remote-pi pair."
+      : code === "token_consumed" ? "Token already consumed by another pair_request."
+      : "Token was not issued by this Pi.";
     sendError(code, msg);
     return;
   }
@@ -559,9 +759,12 @@ async function _handlePairRequest(
   const cwd = _lastCtx && "cwd" in _lastCtx
     ? (_lastCtx as ExtensionCommandContext).cwd
     : process.cwd();
-  const sessionName = cwd.split("/").slice(-2).join("/") || "remote";
+  // Prefer the user-configured agent_name (with broker suffix when on the
+  // mesh) over the legacy parent/folder path — matches what the user sees
+  // in the terminal title and in /remote-pi status.
+  const sessionName = _displayName(cwd);
 
-  _promoteToPaired(relay, appPeerId, inner.device_name);
+  _attachOwner(relay, appPeerId, inner.device_name);
 
   sendInner({
     type: "pair_ok",
@@ -610,15 +813,16 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // come back when the Pi ecosystem ships a permissions convention. tool_result
   // is still forwarded so the app shows tool activity transparently.
 
-  // Mirror input typed in the Pi terminal (or sent via RPC) to the remote app.
-  // 'extension' source is our own sendUserMessage call from routeClientMessage,
-  // which already set _currentTurnId — skip to avoid double turnId.
+  // Mirror input typed in the Pi terminal (or sent via RPC) to every
+  // connected owner. 'extension' source is our own sendUserMessage call
+  // from routeClientMessage, which already set _currentTurnId — skip to
+  // avoid a double turnId.
   pi.on("input", (event) => {
-    if (!_peerChannel) return;
+    if (!_anyPeerActive()) return;
     if (event.source === "extension") return;
     const turnId = `local_${randomUUID()}`;
     _currentTurnId = turnId;
-    _peerChannel.send({ type: "user_input", id: turnId, text: event.text });
+    _broadcastToActive({ type: "user_input", id: turnId, text: event.text });
   });
 
   // Track active model so the app can show it in the SessionTile (plano 18).
@@ -644,20 +848,20 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   });
 
   pi.on("message_update", (event) => {
-    if (!_peerChannel || !_currentTurnId) return;
+    if (!_anyPeerActive() || !_currentTurnId) return;
     const ae = event.assistantMessageEvent;
     if (ae.type === "text_delta") {
-      _peerChannel.send({ type: "agent_chunk", in_reply_to: _currentTurnId, delta: ae.delta });
+      _broadcastToActive({ type: "agent_chunk", in_reply_to: _currentTurnId, delta: ae.delta });
     }
   });
 
-  // Notify the app a tool is about to run (visibility only, NOT approval).
-  // tool_execution_start fires before the tool executes; tool_execution_end
-  // closes the loop with the result (success or error). Together they let
-  // the app render a "Tool running… done" timeline without any gating.
+  // Notify every connected owner that a tool is about to run (visibility
+  // only, NOT approval). tool_execution_start fires before the tool
+  // executes; tool_execution_end closes the loop with the result. Together
+  // they render a "Tool running… done" timeline in each paired app.
   pi.on("tool_execution_start", (event) => {
-    if (!_peerChannel) return;
-    _peerChannel.send({
+    if (!_anyPeerActive()) return;
+    _broadcastToActive({
       type: "tool_request",
       tool_call_id: event.toolCallId,
       tool: event.toolName,
@@ -666,11 +870,11 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   });
 
   pi.on("tool_execution_end", (event) => {
-    if (!_peerChannel) return;
+    if (!_anyPeerActive()) return;
     const msg: ServerMessage = event.isError
       ? { type: "tool_result", tool_call_id: event.toolCallId, error: String(event.result) }
       : { type: "tool_result", tool_call_id: event.toolCallId, result: event.result as unknown };
-    _peerChannel.send(msg);
+    _broadcastToActive(msg);
   });
 
   // Cumulative session buffer fed via `message_end`, which fires once per
@@ -690,26 +894,31 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
 
   pi.on("agent_end", () => {
     // Buffer is fed by `message_end`; here we only finalize the outbound
-    // turn signal to the app. No buffer mutation.
-    if (!_peerChannel || !_currentTurnId) return;
-    _peerChannel.send({ type: "agent_done", in_reply_to: _currentTurnId });
+    // turn signal to every connected owner. No buffer mutation.
+    if (!_anyPeerActive() || !_currentTurnId) return;
+    _broadcastToActive({ type: "agent_done", in_reply_to: _currentTurnId });
     _currentTurnId = null;
   });
 
-  // ── Commands (plano 19 taxonomy) ──────────────────────────────────────────
+  // ── Commands ──────────────────────────────────────────────────────────────
+  //
+  // Final surface: 8 commands. Pre-2026-05-23 we had 20 commands covering
+  // multi-session UDS + granular relay control; in practice every install
+  // converged on one session and the relay was always either fully on or
+  // fully off. The simplified surface keeps the day-to-day path one-key
+  // (`/remote-pi`) and exposes only the actions that have distinct user
+  // intent: setup, status, stop, pair, devices, revoke, set-relay.
   pi.registerCommand("remote-pi", {
-    description: "Connect (join session + start relay), or run setup on first use",
+    description: "Connect (join local mesh + start relay), or run setup on first use",
     getArgumentCompletions: async (prefix) => {
       if (prefix.startsWith("revoke ") || prefix === "revoke") {
         const shortPrefix = prefix === "revoke" ? "" : prefix.slice("revoke ".length);
         return _shortidCompletions(shortPrefix, "revoke ");
       }
       return [
-        "join", "leave", "rename", "sessions", "setup",
-        "relay", "pair", "devices", "revoke",
-        "set-relay", "config",
-        // legacy aliases (still autocomplete-visible during the deprecation window)
-        "start", "stop", "list", "add-relay",
+        "setup", "status", "stop",
+        "pair", "devices", "revoke",
+        "set-relay",
       ]
         .filter((o) => o.startsWith(prefix))
         .map((o) => ({ value: o, label: o }));
@@ -717,56 +926,24 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     handler: async (args, ctx) => {
       _lastCtx = ctx;
       const sub = args.trim();
-      if      (sub === "")                  { await _cmdStatus(ctx); }
+      if      (sub === "")                  { await _cmdRoot(ctx); }
       else if (sub === "setup")             { await _cmdSetup(ctx); }
-      else if (sub === "join" || sub.startsWith("join ")) { await _cmdJoin(sub.slice("join".length).trim(), ctx); }
-      else if (sub === "leave")             { await _cmdLeave(ctx); }
-      else if (sub.startsWith("rename"))    { await _cmdRename(sub.slice("rename".length).trim(), ctx); }
-      else if (sub === "sessions")          { _cmdSessions(ctx); }
-      else if (sub === "relay")             { await _cmdRelayToggle(ctx); }
-      else if (sub === "relay start")       { await _cmdStart(ctx); }
-      else if (sub === "relay stop")        { await _cmdStop(ctx); }
-      else if (sub === "relay status")      { _cmdRelayStatus(ctx); }
-      else if (sub.startsWith("relay url")) { _cmdSetRelay(sub.slice("relay url".length).trim(), ctx); }
+      else if (sub === "status")            { _cmdStatus(ctx); }
+      else if (sub === "stop")              { await _cmdStop(ctx); }
       else if (sub === "pair")              { await _cmdPair(ctx); }
       else if (sub === "devices")           { await _cmdList(ctx); }
       else if (sub.startsWith("revoke"))    { await _cmdRevoke(sub.slice("revoke".length).trim(), ctx); }
       else if (sub.startsWith("set-relay")) { _cmdSetRelay(sub.slice("set-relay".length).trim(), ctx); }
-      else if (sub === "config")            { _cmdConfig(ctx); }
-      // ── Legacy aliases (deprecated, 1-release window) ─────────────────────
-      else if (sub === "start") {
-        ctx.ui.notify("[remote-pi] '/remote-pi start' deprecated — use '/remote-pi relay start' (auto-joining default session)", "warning");
-        await _cmdJoin("", ctx);
-        await _cmdStart(ctx);
-      }
-      else if (sub === "stop") {
-        ctx.ui.notify("[remote-pi] '/remote-pi stop' deprecated — use '/remote-pi leave' + '/remote-pi relay stop'", "warning");
-        await _cmdLeave(ctx);
-        await _cmdStop(ctx);
-      }
-      else if (sub === "list") {
-        ctx.ui.notify("[remote-pi] '/remote-pi list' deprecated — use '/remote-pi devices'", "warning");
-        await _cmdList(ctx);
-      }
-      else if (sub.startsWith("add-relay")) {
-        ctx.ui.notify("[remote-pi] '/remote-pi add-relay' deprecated — use '/remote-pi relay url <...>'", "warning");
-        _cmdSetRelay(sub.slice("add-relay".length).trim(), ctx);
-      }
-      else { await _cmdStatus(ctx); }
+      else                                  { await _cmdRoot(ctx); }
     },
   });
 
-  // Nested registrations (full taxonomy)
+  // Nested registrations (one entry per public action). The flat handler
+  // above already routes `/remote-pi <sub>` — these exist for the SDK's
+  // command palette and slash-autocomplete in some UI modes.
   pi.registerCommand("remote-pi setup",    { description: "Run the setup wizard and update local config", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdSetup(ctx); } });
-  pi.registerCommand("remote-pi join",     { description: "Join (or create) a local agent session", handler: async (args, ctx) => { _lastCtx = ctx; await _cmdJoin(args.trim(), ctx); } });
-  pi.registerCommand("remote-pi leave",    { description: "Leave the current agent session", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdLeave(ctx); } });
-  pi.registerCommand("remote-pi rename",   { description: "Rename this agent in the current session", handler: async (args, ctx) => { _lastCtx = ctx; await _cmdRename(args.trim(), ctx); } });
-  pi.registerCommand("remote-pi sessions", { description: "List local agent sessions", handler: async (_, ctx) => { _lastCtx = ctx; _cmdSessions(ctx); } });
-  pi.registerCommand("remote-pi relay",    { description: "Toggle the relay connection on/off", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdRelayToggle(ctx); } });
-  pi.registerCommand("remote-pi relay start",  { description: "Connect to the relay", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdStart(ctx); } });
-  pi.registerCommand("remote-pi relay stop",   { description: "Disconnect from the relay", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdStop(ctx); } });
-  pi.registerCommand("remote-pi relay status", { description: "Show current relay status", handler: async (_, ctx) => { _lastCtx = ctx; _cmdRelayStatus(ctx); } });
-  pi.registerCommand("remote-pi relay url",    { description: "Set relay URL (alias of /remote-pi set-relay)", handler: async (args, ctx) => { _lastCtx = ctx; _cmdSetRelay(args.trim(), ctx); } });
+  pi.registerCommand("remote-pi status",   { description: "Show local mesh + relay status", handler: async (_, ctx) => { _lastCtx = ctx; _cmdStatus(ctx); } });
+  pi.registerCommand("remote-pi stop",     { description: "Stop everything (leave local mesh + disconnect relay)", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdStop(ctx); } });
   pi.registerCommand("remote-pi pair",     { description: "Show a QR code to pair a new mobile device", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdPair(ctx); } });
   pi.registerCommand("remote-pi devices",  { description: "List paired mobile devices", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdList(ctx); } });
   pi.registerCommand("remote-pi revoke", {
@@ -775,58 +952,89 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     handler: async (args, ctx) => { _lastCtx = ctx; await _cmdRevoke(args.trim(), ctx); },
   });
   pi.registerCommand("remote-pi set-relay", { description: "Persist a new relay URL to user config", handler: async (args, ctx) => { _lastCtx = ctx; _cmdSetRelay(args.trim(), ctx); } });
-  pi.registerCommand("remote-pi config",    { description: "Show the effective relay URL and its source", handler: async (_, ctx) => { _lastCtx = ctx; _cmdConfig(ctx); } });
-
-  // Legacy aliases (deprecated, 1-release deprecation window).
-  const legacyWarn = (ctx: ExtensionCommandContext, old: string, neu: string) =>
-    ctx.ui.notify(`[remote-pi] '${old}' deprecated — use '${neu}'`, "warning");
-  pi.registerCommand("remote-pi start", {
-    description: "[DEPRECATED] alias of /remote-pi relay start (also auto-joins the default session)",
-    handler: async (_, ctx) => { _lastCtx = ctx; legacyWarn(ctx, "/remote-pi start", "/remote-pi relay start"); await _cmdJoin("", ctx); await _cmdStart(ctx); },
-  });
-  pi.registerCommand("remote-pi stop", {
-    description: "[DEPRECATED] alias of /remote-pi leave + /remote-pi relay stop",
-    handler: async (_, ctx) => { _lastCtx = ctx; legacyWarn(ctx, "/remote-pi stop", "/remote-pi leave + /remote-pi relay stop"); await _cmdLeave(ctx); await _cmdStop(ctx); },
-  });
-  pi.registerCommand("remote-pi list", {
-    description: "[DEPRECATED] alias of /remote-pi devices",
-    handler: async (_, ctx) => { _lastCtx = ctx; legacyWarn(ctx, "/remote-pi list", "/remote-pi devices"); await _cmdList(ctx); },
-  });
-  pi.registerCommand("remote-pi add-relay", {
-    description: "[DEPRECATED] alias of /remote-pi relay url",
-    handler: async (args, ctx) => { _lastCtx = ctx; legacyWarn(ctx, "/remote-pi add-relay", "/remote-pi relay url"); _cmdSetRelay(args.trim(), ctx); },
-  });
 };
 
 export default extension;
 
 // ── Command implementations ───────────────────────────────────────────────────
 
-function _showStatus(ctx: Pick<ExtensionContext, "ui">): void {
+/**
+ * `/remote-pi status` — full state snapshot. Two lines: local mesh + relay.
+ *
+ * Always callable; safe when nothing is up (renders the off variants).
+ * Reuses the same icons as the footer so terminal + status output stay
+ * visually consistent.
+ */
+function _cmdStatus(ctx: Pick<ExtensionContext, "ui">): void {
   const relayUrl = _relayUrl ?? resolveRelayUrl().url;
-  const sessionPart = _sessionName ? `session=${_sessionName} (${_sessionPeerCount}) · ` : "";
-  let msg: string;
-  if      (_state === "idle")   msg = `[remote-pi] ${sessionPart}relay=idle (${relayUrl}). Run /remote-pi relay start to connect.`;
-  else if (_state === "started") msg = `[remote-pi] ${sessionPart}relay=started (peer=${_peerShort || "?"}, ${relayUrl}) — run /remote-pi pair to show QR`;
-  else                           msg = `[remote-pi] ${sessionPart}relay=paired (peer=${_peerShort}, ${relayUrl}) — connected and ready`;
-  ctx.ui.notify(msg, "info");
+
+  // Mesh line
+  let meshLine: string;
+  if (_sessionPeer) {
+    const name = _sessionPeer.name();
+    meshLine = `🟢 Local mesh: connected as "${name}" (${_sessionPeerCount} peer${_sessionPeerCount === 1 ? "" : "s"})`;
+  } else {
+    meshLine = "⚪ Local mesh: not connected";
+  }
+
+  // Relay line — paired state is derived from _activePeers.size now.
+  let relayLine: string;
+  if (_state === "idle") {
+    relayLine = `⚪ Relay: off (${relayUrl}) — run /remote-pi to start`;
+  } else if (_activePeers.size > 0) {
+    const count = _activePeers.size;
+    const shortids = [..._activePeers.keys()].map((k) => k.slice(0, 8)).join(", ");
+    relayLine = `🟢 Relay: ${count} owner${count === 1 ? "" : "s"} online (${shortids}) (${relayUrl})`;
+  } else {
+    relayLine = _hasGlobalPairings
+      ? `🟢 Relay: on, waiting for an app to connect (${relayUrl})`
+      : `🟡 Relay: on, waiting for first pairing (${relayUrl})`;
+  }
+
+  ctx.ui.notify(`[remote-pi]\n  ${meshLine}\n  ${relayLine}`, "info");
 }
 
-async function _cmdStatus(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
+/**
+ * Root handler for `/remote-pi`. On first run (no local config) drops into
+ * the wizard; on subsequent runs auto-joins the local mesh + starts the
+ * relay (if opted in during setup), then prints the status.
+ *
+ * `/remote-pi` is intentionally the only command users need day-to-day:
+ * idempotent connect + status display.
+ */
+async function _cmdRoot(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
   const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd();
+
+  // Per-cwd singleton: at most one Pi process per folder may run /remote-pi.
+  // Bind a UDS socket as the lock (kernel auto-releases on process exit, even
+  // crash); a second invocation in the same cwd sees the live socket and is
+  // refused here, before any wizard / mesh / relay side-effect can run.
+  // Once acquired, the lock is bound to the lifetime of THIS process — repeat
+  // calls to /remote-pi from the same terminal are idempotent (no re-acquire).
+  if (_cwdLock === null) {
+    const result = await acquireCwdLock(cwd);
+    if (!result.ok) {
+      ctx.ui.notify(
+        "[remote-pi] Another agent is already running in this folder. " +
+        "Use the existing terminal or run from a different folder.",
+        "warning",
+      );
+      return;
+    }
+    _cwdLock = result;
+  }
 
   // First-time wizard: no local config in this cwd → run interactive setup.
   if (!localConfigExists(cwd)) {
     const ui = ctx.ui as unknown as WizardUI;
     if (typeof ui.select !== "function") {
-      _showStatus(ctx);
+      _cmdStatus(ctx);
       return;
     }
     const baseDefault = defaultAgentName(cwd);
     const newConfig = await runSetupWizard(ui, {
       agent_name: baseDefault,
-      session_name: baseDefault,
-      auto_start_relay: true,
+      use_relay: true,
     });
     if (!newConfig) {
       ctx.ui.notify("[remote-pi] Setup cancelled.", "info");
@@ -837,22 +1045,25 @@ async function _cmdStatus(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<vo
       `[remote-pi] Config saved to ${cwd}/.pi/remote-pi/config.json`,
       "info",
     );
-    await _cmdJoin(newConfig.session_name ?? baseDefault, ctx);
+    await _cmdJoin(ctx);
     if (effectiveAutoStartRelay(newConfig)) await _cmdStart(ctx);
-    _showStatus(ctx);
+    _cmdStatus(ctx);
     return;
   }
 
   // Returning user with config: auto-start if requested + currently inactive.
   const config = loadLocalConfig(cwd);
   if (effectiveAutoStartRelay(config) && !_sessionPeer) {
-    const sessionName = config.session_name ?? defaultAgentName(cwd);
-    await _cmdJoin(sessionName, ctx);
+    await _cmdJoin(ctx);
     if (_state === "idle") await _cmdStart(ctx);
   }
-  _showStatus(ctx);
+  _cmdStatus(ctx);
 }
 
+/**
+ * `/remote-pi setup` — re-run the wizard. Defaults pre-fill from the
+ * existing config so it doubles as an "edit" flow.
+ */
 async function _cmdSetup(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
   const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd();
   const ui = ctx.ui as unknown as WizardUI;
@@ -864,8 +1075,7 @@ async function _cmdSetup(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
   const baseDefault = defaultAgentName(cwd);
   const newConfig = await runSetupWizard(ui, {
     agent_name: current.agent_name ?? baseDefault,
-    session_name: current.session_name ?? baseDefault,
-    auto_start_relay: effectiveAutoStartRelay(current),
+    use_relay: effectiveAutoStartRelay(current),
   });
   if (!newConfig) {
     ctx.ui.notify("[remote-pi] Setup cancelled.", "info");
@@ -873,7 +1083,7 @@ async function _cmdSetup(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
   }
   saveLocalConfig(cwd, newConfig);
   ctx.ui.notify(
-    "[remote-pi] Config updated. Run /remote-pi to apply now (join + relay).",
+    "[remote-pi] Config updated. Run /remote-pi to apply now.",
     "info",
   );
 }
@@ -894,7 +1104,9 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
   // share the same Ed25519 identity without colliding on the relay.
   const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd();
   const roomId = roomIdForCwd(cwd);
-  const sessionName = cwd.split("/").slice(-2).join("/") || "remote";
+  // Same name we send in pair_ok — keeps room_meta.name and the per-pair
+  // session_name aligned so the app shows consistent labels.
+  const sessionName = _displayName(cwd);
 
   // Initial model from ctx (ExtensionContext.model is the SDK's current
   // selection — set by user settings or last-used). May be undefined on
@@ -913,7 +1125,10 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
 
   ctx.ui.notify(`[remote-pi] Connecting to relay ${relayUrl} (source: ${source}, room: ${roomId})…`, "info");
 
-  const relay = new RelayClient(relayUrl, edKp);
+  // Transport opens WebSocket; convert the canonical http(s):// stored
+  // form to ws(s):// at this boundary. The relayUrl variable keeps the
+  // http(s):// form for logging + mesh client construction below.
+  const relay = new RelayClient(toWebSocketUrl(relayUrl), edKp);
   try {
     await relay.connect({ roomId, roomMeta });
   } catch (err) {
@@ -948,51 +1163,121 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
   _stopAutoListener = _installAutoListener(relay);
   _refreshFooter(ctx);
 
+  // Plan/24 Wave 3: poll mesh_versions to detect remote revocation. The
+  // poller is independent of WS (uses HTTP) and self-heals across relay
+  // reconnects, so a single start here per relay-up cycle is enough.
+  if (_selfRevoke === null) {
+    _selfRevoke = new SelfRevoke({
+      client: new MeshClient(relayUrl),
+      storage: { listOwnerPubkeys, removePeer },
+      myPubkey: edKp.publicKey,
+      onRevoke: (ownerEpk) => {
+        // Multi-channel (W2D): drop only the revoked owner's channel.
+        // Other owners keep their session. Only fall back to full idle
+        // when there are zero attached owners left.
+        _refreshPairingsCache();
+        if (_activePeers.has(ownerEpk)) {
+          _detachPeerChannel(ownerEpk);
+          _refreshFooter();
+        }
+      },
+    });
+    _selfRevoke.start();
+  }
+
   ctx.ui.notify(`[remote-pi] state: started (peer=${myShort}) — Connected to relay ${relayUrl}`, "info");
 }
 
+/**
+ * `/remote-pi pair` — always generates a fresh QR when the relay is up.
+ *
+ * Pre-W2D this rejected with "Already paired with X" once one owner was
+ * connected, forcing /remote-pi stop to pair a second device — the
+ * catch-22 the multi-channel refactor was designed to break. Now the new
+ * device is **added** to `_activePeers` after scanning, while existing
+ * owners keep their session.
+ */
 async function _cmdPair(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
   if (_state === "idle") {
-    ctx.ui.notify("[remote-pi] Run /remote-pi start first.", "warning");
-    return;
-  }
-  if (_state === "paired") {
-    ctx.ui.notify(`[remote-pi] Already paired with ${_peerShort}. Run /remote-pi stop first.`, "warning");
+    ctx.ui.notify("[remote-pi] Run /remote-pi first.", "warning");
     return;
   }
 
   const edKp = _cachedEd25519!;
   const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : "";
-  const sessionName = cwd.split("/").slice(-2).join("/") || "remote";
+  // Embed the user-configured name in the QR so the app shows it on the
+  // pairing screen before pair_ok lands (better UX than "remote" or a
+  // raw path snippet).
+  const sessionName = _displayName(cwd);
 
   const { token, expiresAt } = qrSession.issueToken();
   const roomId = _myRoomId ?? roomIdForCwd(cwd);
   const qrUri = buildQRUri(token, edKp.publicKey, sessionName, roomId);
-  displayQR(qrUri);
+  // Render both the QR ASCII and the copy-paste URI inside the Pi TUI's
+  // chat panel via `pi.sendMessage` — the same channel the SDK uses for
+  // agent responses + tool results. `process.stderr.write` (the old QR
+  // path via `displayQR`) broke the TUI layout because it bypassed the
+  // chat widget and bled into the prompt area. qrcode-terminal v0.12
+  // small mode is pure Unicode (█ ▀ ▄ space, no ANSI escapes — see
+  // `lib/main.js:48-53`), so embedding the ASCII inside a sendMessage
+  // content string renders correctly without raw escape bytes.
+  if (_pi) {
+    const qrAscii = renderQRAscii(qrUri);
+    _pi.sendMessage({
+      customType: "remote-pi:pair-code",
+      content:
+        `📱 Scan to pair:\n\n${qrAscii}\n` +
+        `📋 Or copy this pairing code (camera-less devices):\n\n${qrUri}`,
+      display: true,
+    });
+  }
 
   ctx.ui.notify(
-    `[remote-pi] QR ready — valid until ${new Date(expiresAt).toLocaleTimeString()}. Scan with the app.`,
+    `[remote-pi] QR ready — valid until ${new Date(expiresAt).toLocaleTimeString()}. ` +
+    `Scan with the app, or copy the pairing code printed above.`,
     "info",
   );
   // Returns immediately; the auto-listener transitions to 'paired' on pair_request.
 }
 
+/**
+ * `/remote-pi stop` — full teardown. Leaves the local UDS mesh AND closes
+ * the relay. Safe when one or both are already off. To resume, run
+ * `/remote-pi` again.
+ */
 async function _cmdStop(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
-  if (_state === "idle") {
-    ctx.ui.notify("[remote-pi] Already idle — nothing to stop.", "info");
+  const meshUp = _sessionPeer !== null;
+  const relayUp = _state !== "idle";
+  if (!meshUp && !relayUp) {
+    ctx.ui.notify("[remote-pi] Already stopped — nothing to do.", "info");
     return;
   }
-  _goIdle("peer_stop");
-  ctx.ui.notify("[remote-pi] state: idle — Disconnected.", "info");
+
+  if (meshUp) {
+    try {
+      await _sessionPeer!.leave();
+    } catch { /* best-effort */ }
+    _sessionPeer = null;
+    _sessionName = null;
+    _sessionPeerCount = 0;
+  }
+
+  if (relayUp) _goIdle("peer_stop");
+
+  ctx.ui.notify("[remote-pi] Stopped (mesh + relay disconnected).", "info");
+  _refreshFooter(ctx);
 }
 
 async function _cmdList(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
   const peers = await listPeers();
   if (peers.length === 0) { ctx.ui.notify("[remote-pi] No paired devices.", "info"); return; }
+  // Multi-channel (W2D): each peer is either `online` (channel attached
+  // right now) or `offline` (in peers.json but not connected). Replaces
+  // the singleton " (active)" marker that only ever marked one peer.
   const lines = peers.map((p) => {
     const shortid = p.remote_epk.slice(0, 8);
-    const active = _state === "paired" && _appPeerId === p.remote_epk ? " (active)" : "";
-    return `• ${shortid} — ${p.name}${active}`;
+    const tag = _activePeers.has(p.remote_epk) ? " 🟢 online" : " ⚪ offline";
+    return `• ${shortid} — ${p.name}${tag}`;
   }).join("\n");
   ctx.ui.notify(`[remote-pi] Paired devices:\n${lines}`, "info");
 }
@@ -1031,8 +1316,15 @@ async function _cmdRevoke(arg: string, ctx: Pick<ExtensionContext, "ui">): Promi
   await removePeer(peer.remote_epk);
   _refreshPairingsCache();
 
-  if (_state === "paired" && _appPeerId === peer.remote_epk) {
-    _goIdle("session_replaced");
+  // Multi-channel (W2D): close just this owner's channel. Other connected
+  // owners keep their session — the relay stays `started`.
+  if (_activePeers.has(peer.remote_epk)) {
+    // Notify the revoked device explicitly before tearing the channel
+    // down — otherwise it would only know via ping miss.
+    const ch = _activePeers.get(peer.remote_epk);
+    try { ch?.send({ type: "bye", reason: "session_replaced" }); } catch { /* best-effort */ }
+    _detachPeerChannel(peer.remote_epk);
+    _refreshFooter();
   }
 
   ctx.ui.notify(
@@ -1056,31 +1348,28 @@ function _cmdSetRelay(arg: string, ctx: Pick<ExtensionContext, "ui">): void {
   const raw = arg.trim();
   if (!raw) {
     ctx.ui.notify(
-      "[remote-pi] Usage: /remote-pi set-relay <ws:// | wss:// | http:// | https:// url>",
+      "[remote-pi] Usage: /remote-pi set-relay <http:// or https:// url>",
       "warning",
+    );
+    return;
+  }
+  if (isWebSocketScheme(raw)) {
+    ctx.ui.notify(
+      `[remote-pi] Use http:// or https://. The extension converts to WebSocket automatically.`,
+      "error",
     );
     return;
   }
   if (!isValidRelayUrl(raw)) {
     ctx.ui.notify(
-      `[remote-pi] Invalid URL: ${raw}. Must start with ws://, wss://, http:// or https://`,
+      `[remote-pi] Invalid URL: ${raw}. Must start with http:// or https://`,
       "error",
     );
     return;
   }
-  const url = normalizeRelayUrl(raw);
-  saveConfig({ relay: url });
-  const note = url === raw ? "" : ` (normalized from ${raw})`;
+  saveConfig({ relay: raw });
   ctx.ui.notify(
-    `[remote-pi] Relay set to ${url}${note}. Run /remote-pi start (or restart) to apply.`,
-    "info",
-  );
-}
-
-function _cmdConfig(ctx: Pick<ExtensionContext, "ui">): void {
-  const { url, source } = resolveRelayUrl();
-  ctx.ui.notify(
-    `[remote-pi] Relay: ${url}\n  Source: ${source}`,
+    `[remote-pi] Relay set to ${raw}. Run /remote-pi start (or restart) to apply.`,
     "info",
   );
 }
@@ -1126,14 +1415,21 @@ function _deployAgentNetworkSkill(): void {
   } catch { /* best-effort */ }
 }
 
-async function _cmdJoin(arg: string, ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
+/**
+ * Joins the fixed local UDS mesh ("local" session — see LOCAL_SESSION_NAME).
+ * Called by `_cmdRoot` on first run and on subsequent runs when the relay
+ * is up and the user hasn't explicitly stopped. The session name is no
+ * longer user-configurable: every Pi on the same machine joins the same
+ * broker.
+ */
+async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
   const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd();
   const local = loadLocalConfig(cwd);
-  const sessionName = (arg || local.session_name || defaultAgentName(cwd)).trim();
+  const sessionName = LOCAL_SESSION_NAME;
   const agentName = local.agent_name || defaultAgentName(cwd);
 
   if (_sessionPeer) {
-    ctx.ui.notify(`[remote-pi] Already joined "${_sessionName}". Leave first.`, "warning");
+    ctx.ui.notify("[remote-pi] Already on the local mesh.", "warning");
     return;
   }
 
@@ -1186,9 +1482,9 @@ async function _cmdJoin(arg: string, ctx: Pick<ExtensionContext, "ui" | "cwd">):
     // arrives — the newcomer doesn't get retroactive joined events. Ask the
     // broker for the live peer list to seed the count correctly on join.
     _refreshSessionPeerCount(peer, ctx);
-    saveLocalConfig(cwd, { agent_name: assigned, session_name: sessionName });
+    saveLocalConfig(cwd, { agent_name: assigned });
     ctx.ui.notify(
-      `[remote-pi] Joined session "${sessionName}" as "${assigned}" (${peer.currentRole()})`,
+      `[remote-pi] Joined local mesh as "${assigned}" (${peer.currentRole()})`,
       "info",
     );
     _refreshFooter(ctx);
@@ -1197,81 +1493,58 @@ async function _cmdJoin(arg: string, ctx: Pick<ExtensionContext, "ui" | "cwd">):
   }
 }
 
-async function _cmdLeave(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
-  if (!_sessionPeer) {
-    ctx.ui.notify("[remote-pi] Not in any session.", "info");
-    return;
-  }
-  await _sessionPeer.leave();
-  const name = _sessionName;
-  _sessionPeer = null;
-  _sessionName = null;
-  _sessionPeerCount = 0;
-  ctx.ui.notify(`[remote-pi] Left session "${name}".`, "info");
-  _refreshFooter(ctx);
-}
-
-async function _cmdRename(arg: string, ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
-  const newName = arg.trim();
-  if (!newName) {
-    ctx.ui.notify("[remote-pi] Usage: /remote-pi rename <new-name>", "warning");
-    return;
-  }
-  if (!_sessionPeer) {
-    ctx.ui.notify("[remote-pi] Not in any session. Run /remote-pi join first.", "warning");
-    return;
-  }
-  try {
-    const assigned = await _sessionPeer.rename(newName);
-    const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd();
-    saveLocalConfig(cwd, { agent_name: assigned });
-    ctx.ui.notify(`[remote-pi] Renamed to "${assigned}".`, "info");
-  } catch (err) {
-    ctx.ui.notify(`[remote-pi] rename failed: ${String(err)}`, "error");
-  }
-}
-
-function _cmdSessions(ctx: Pick<ExtensionContext, "ui">): void {
-  const sessions = listSessions();
-  if (sessions.length === 0) {
-    ctx.ui.notify("[remote-pi] No sessions found.", "info");
-    return;
-  }
-  const lines = sessions.map((s) => {
-    const live = sessionHasSock(s) ? "🟢" : "⚪";
-    const me = s === _sessionName ? " (current)" : "";
-    return `  ${live} ${s}${me}`;
-  });
-  ctx.ui.notify(`[remote-pi] Sessions:\n${lines.join("\n")}`, "info");
-}
-
-async function _cmdRelayToggle(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
-  if (_state === "idle") await _cmdStart(ctx);
-  else await _cmdStop(ctx);
-}
-
-function _cmdRelayStatus(ctx: Pick<ExtensionContext, "ui">): void {
-  _showStatus(ctx);
-}
-
 // ── routeClientMessage ────────────────────────────────────────────────────────
 
-export function routeClientMessage(
+/**
+ * Per-channel router. Replaces the W2D-pre `routeClientMessage` which
+ * implicitly used the `_peerChannel` singleton for replies. Each
+ * PlainPeerChannel now carries its own `sender` and passes it here so
+ * sender-specific responses (cancelled, pong, session_history) flow back
+ * through the right wire instead of being broadcast.
+ *
+ * Broadcast messages (user_input mirror, agent_chunk, tool_*) still use
+ * `_broadcastToActive` from the SDK event handlers; this router only
+ * handles incoming app→pi requests.
+ */
+export function _routeClientMessageFrom(
+  sender: PlainPeerChannel,
   msg: ClientMessage,
   ctx: Pick<ExtensionContext, "abort">,
 ): void {
   // session_sync has its own internal guards — handle before the strict
-  // peer/pi guard so a missing _pi doesn't drop the reply.
+  // pi-binding guard so a missing _pi doesn't drop the reply.
   if (msg.type === "session_sync") {
-    _handleSessionSync(msg);
+    _handleSessionSync(sender, msg);
     return;
   }
-  if (!_peerChannel || !_pi) return;
+  if (!_pi) return;
   switch (msg.type) {
-    case "user_message":
+    case "user_message": {
+      // Reverse-lookup of the sender's appPeerId from `_activePeers` (the
+      // PlainPeerChannel's `remotePeerId` is private). Purely diagnostic.
+      const senderId =
+        [..._activePeers.entries()].find(([, ch]) => ch === sender)?.[0] ?? "unknown";
+      console.error(
+        `[remote-pi] user_message from ${senderId.slice(0, 8)} ` +
+        `id=${msg.id} text=${JSON.stringify(msg.text).slice(0, 60)} ` +
+        `activePeers=[${[..._activePeers.keys()].map((k) => k.slice(0, 8)).join(", ")}]`,
+      );
+      // Source-of-truth rebroadcast (plan/24 W2D fix). Echo the message
+      // back to every attached owner (sender included) BEFORE handing it
+      // off to the agent — so that:
+      //   1. The sender's app waits for this echo to render (no eager
+      //      local store), keeping all owners visually consistent.
+      //   2. Other owners see what was said, not just the agent's reply.
+      //   3. `id` is preserved verbatim, so future dedup logic on the app
+      //      side can key off it.
+      // The user_message is also recorded in _messageBuffer indirectly
+      // via `pi.on("message_end")` after the SDK persists the turn — so
+      // a later `session_sync` returns it in the history events.
+      _broadcastToActive({ type: "user_message", id: msg.id, text: msg.text });
       _currentTurnId = msg.id;
       _pi.sendUserMessage(msg.text);
       break;
+    }
     case "approve_tool":
       // Approval gate was removed (plano 10.2 revisado). Type kept in
       // ClientMessage for forward-compat with a future permissions model;
@@ -1279,10 +1552,12 @@ export function routeClientMessage(
       break;
     case "cancel":
       ctx.abort();
-      _peerChannel.send({ type: "cancelled", in_reply_to: msg.id, target_id: msg.target_id });
+      // Reply to the sender that asked to cancel — broadcasting would tell
+      // every owner about a cancellation they didn't request.
+      sender.send({ type: "cancelled", in_reply_to: msg.id, target_id: msg.target_id });
       break;
     case "ping":
-      _peerChannel.send({ type: "pong", in_reply_to: msg.id });
+      sender.send({ type: "pong", in_reply_to: msg.id });
       break;
     case "pair_request":
       // Already paired — ignore subsequent pair_request to maintain idempotency.
@@ -1291,15 +1566,34 @@ export function routeClientMessage(
   }
 }
 
+/**
+ * Backward-compatible shim for legacy callers + tests that didn't track
+ * a specific sender channel. Routes to the most recently attached owner,
+ * mirroring the pre-W2D singleton behavior.
+ */
+export function routeClientMessage(
+  msg: ClientMessage,
+  ctx: Pick<ExtensionContext, "abort">,
+): void {
+  const fallback = [..._activePeers.values()].pop();
+  if (!fallback) return;
+  _routeClientMessageFrom(fallback, msg, ctx);
+}
+
 // ── session_sync handler + helpers ────────────────────────────────────────────
 
+/**
+ * `session_sync` is a per-sender query: the owner asking gets the reply,
+ * not the whole broadcast. Otherwise a session_sync from owner A would
+ * also dump history to owner B's wire — duplicate traffic + the wrong
+ * `in_reply_to`.
+ */
 function _handleSessionSync(
+  sender: PlainPeerChannel,
   msg: Extract<ClientMessage, { type: "session_sync" }>,
 ): void {
-  if (!_peerChannel) return;
-
   if (_sessionStartedAt === null) {
-    _peerChannel.send({
+    sender.send({
       type: "session_history",
       in_reply_to: msg.id,
       session_started_at: 0,
@@ -1320,7 +1614,7 @@ function _handleSessionSync(
   const slice = effectiveLimit > 0 ? allEvents.slice(-effectiveLimit) : [];
   const truncated = allEvents.length > effectiveLimit;
 
-  _peerChannel.send({
+  sender.send({
     type: "session_history",
     in_reply_to: msg.id,
     session_started_at: _sessionStartedAt,
@@ -1416,7 +1710,7 @@ export function _mapAgentMessagesToEvents(
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const [, , subcmd, ...cliArgs] = process.argv;
-  if (subcmd === "list") {
+  if (subcmd === "devices" || subcmd === "list") {
     const peers = await listPeers();
     if (peers.length === 0) { console.log("[remote-pi] No peers"); }
     else { for (const p of peers) console.log(`• ${p.remote_epk.slice(0, 8)} — ${p.name}`); }
@@ -1440,16 +1734,14 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const raw = (cliArgs[0] ?? "").trim();
     if (!raw) {
       console.log(`Usage: set-relay <url> (default: ${kDefaultRelayUrl})`);
+    } else if (isWebSocketScheme(raw)) {
+      console.log(`Use http:// or https://. The extension converts to WebSocket automatically.`);
     } else if (!isValidRelayUrl(raw)) {
-      console.log(`Invalid URL: ${raw}. Must start with ws://, wss://, http:// or https://`);
+      console.log(`Invalid URL: ${raw}. Must start with http:// or https://`);
     } else {
-      const url = normalizeRelayUrl(raw);
-      saveConfig({ relay: url });
-      console.log(`Relay set to ${url}${url === raw ? "" : ` (normalized from ${raw})`}`);
+      saveConfig({ relay: raw });
+      console.log(`Relay set to ${raw}`);
     }
-  } else if (subcmd === "config") {
-    const { url, source } = resolveRelayUrl();
-    console.log(`Relay: ${url}\n  Source: ${source}`);
   } else {
     const edKp = await getOrCreateEd25519Keypair();
     const sessionName = process.cwd().split("/").slice(-2).join("/");

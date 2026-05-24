@@ -6,6 +6,16 @@ const HOME_PI_REMOTE = join(homedir(), ".pi", "remote");
 const SESSIONS_DIR = join(HOME_PI_REMOTE, "sessions");
 const SKILLS_DIR = join(HOME_PI_REMOTE, "skills");
 
+/**
+ * Fixed UDS session name. The local mesh is single per machine — every Pi
+ * process on the host shares this broker. Previous versions exposed
+ * multi-session support (named sessions, leave/rename/sessions commands);
+ * those were removed in the 2026-05-23 simplification because in practice
+ * every install converged on one session anyway and multi-session UX added
+ * friction without value.
+ */
+export const LOCAL_SESSION_NAME = "local";
+
 /** Ensures the new subdirs exist inside the existing ~/.pi/remote/. */
 export function ensureGlobalDirs(): void {
   mkdirSync(SESSIONS_DIR, { recursive: true });

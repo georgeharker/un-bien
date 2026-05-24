@@ -16,8 +16,7 @@ export interface WizardUI {
 
 export interface WizardDefaults {
   agent_name: string;
-  session_name: string;
-  auto_start_relay: boolean;
+  use_relay: boolean;
 }
 
 const YES = "Yes";
@@ -25,14 +24,19 @@ const NO = "No";
 const CANCEL_TOKEN = "__cancel__";
 
 /**
- * Runs the 3-question setup wizard. Returns the chosen config on confirm,
+ * Runs the 2-question setup wizard. Returns the chosen config on confirm,
  * or null when the user cancels any prompt.
  *
  * Prompts:
- *   1. Agent name (default: basename of cwd)
- *   2. Session name (default: basename of cwd)
- *   3. Auto-start relay? (yes/no) — relay lets the mobile app connect to this Pi
+ *   1. Agent name (default: parent/folder of cwd)
+ *   2. Use the relay on this terminal? (yes/no) — gates connection to the
+ *      remote mesh (mobile devices + other PCs over the relay). "No" means
+ *      local-only: this Pi joins the UDS mesh but doesn't open WSS.
  *   Final: review + confirm "Save and activate?" yes/no
+ *
+ * The local UDS mesh is always single per machine ("local" session) — no
+ * session question. All Pis on the same machine see each other through
+ * the same broker.
  */
 export async function runSetupWizard(
   ui: WizardUI,
@@ -45,36 +49,28 @@ export async function runSetupWizard(
   );
   if (agent_name === null) return null;
 
-  const session_name = await _askText(
-    ui,
-    "Default session:",
-    defaults.session_name,
-  );
-  if (session_name === null) return null;
-
   ui.notify?.(
-    "The relay lets the Remote Pi mobile app connect to this Pi over the network. Enable it to allow the app to send prompts and receive responses; disable for local-only use.",
+    "The relay forwards encrypted messages to the Remote Pi mobile app and other PCs in your mesh. Skip this if you only want a local-only mesh on this machine.",
     "info",
   );
-  const autoChoice = await ui.select(
-    "Auto-start the relay (for mobile app access)?",
-    defaults.auto_start_relay ? [YES, NO] : [NO, YES],
+  const useRelayChoice = await ui.select(
+    "Use the relay on this terminal to connect to the remote mesh (mobile + PCs)?",
+    defaults.use_relay ? [YES, NO] : [NO, YES],
   );
-  if (!autoChoice) return null;
-  const auto_start_relay = autoChoice === YES;
+  if (!useRelayChoice) return null;
+  const auto_start_relay = useRelayChoice === YES;
 
   // Review + confirm
   const summary = [
-    `  Agent name:       ${agent_name}`,
-    `  Default session:  ${session_name}`,
-    `  Auto-start relay: ${auto_start_relay ? YES : NO}`,
+    `  Agent name:  ${agent_name}`,
+    `  Use relay:   ${auto_start_relay ? YES : NO}`,
   ].join("\n");
   ui.notify?.(`Summary:\n${summary}`, "info");
 
   const confirm = await ui.select("Save and activate?", [YES, NO]);
   if (confirm !== YES) return null;
 
-  return { agent_name, session_name, auto_start_relay };
+  return { agent_name, auto_start_relay };
 }
 
 /**
