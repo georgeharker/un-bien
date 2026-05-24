@@ -9,6 +9,15 @@ For a full overview of the project, see the
 
 ---
 
+## Protocol & Security
+
+For wire format, identity model, ACK protocol, cross-PC routing, mesh
+membership, trust model, and failure modes, see
+[PROTOCOL.md](../PROTOCOL.md) at the repo root. It is the canonical reference
+for everything the relay enforces on the wire.
+
+---
+
 ## How it works
 
 Every device authenticates with an Ed25519 keypair during the WebSocket handshake
