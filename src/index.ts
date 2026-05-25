@@ -214,16 +214,32 @@ async function _ensureBrokerRemote(): Promise<void> {
     const meshClient = new MeshClient(_relayUrl);
     const owners = await listOwnerPubkeys();
     if (owners.length > 0) {
+      // Pass a silent `log` so per-Owner fetch failures (relay 404 before
+      // any Owner published, transient HTTP errors, etc.) don't leak as
+      // stderr into the TUI chat panel.
+      const silentDiscoverLog = { warn: (_m: string) => { /* silent in TUI */ } };
       const [labelRes, sibs] = await Promise.all([
-        discoverSelfLabel({ client: meshClient, ownerEpks: owners, myPubkey: _cachedEd25519.publicKey }),
-        discoverSiblings({ client: meshClient, ownerEpks: owners, myPubkey: _cachedEd25519.publicKey }),
+        discoverSelfLabel({ client: meshClient, ownerEpks: owners, myPubkey: _cachedEd25519.publicKey, log: silentDiscoverLog }),
+        discoverSiblings({ client: meshClient, ownerEpks: owners, myPubkey: _cachedEd25519.publicKey, log: silentDiscoverLog }),
       ]);
       selfPcLabel = labelRes.selfPcLabel;
       siblings = sibs;
     }
   } catch (err) {
-    console.error(`[remote-pi] broker_remote bootstrap: sibling discovery failed: ${String(err)}`);
+    // Bootstrap is best-effort — siblings populate later via SelfRevoke's
+    // onMembersChanged callback. Silent fail (no console output) avoids
+    // leaking diagnostic noise into the Pi TUI's chat panel.
+    void err;
   }
+
+  // Silent logger injected into the mesh helpers below so their
+  // diagnostic warnings (sibling fetch failures, anti-spoof drops, etc.)
+  // don't bleed into the Pi TUI chat panel as raw stderr lines. The
+  // user-facing events (revoke, peer joined/left) flow through proper
+  // channels — `onRevoke` → `pi.sendMessage`, broker peer events →
+  // footer state. Daemon mode (supervisor-managed) ignores these
+  // entirely; we instead lean on `audit.jsonl` for postmortem.
+  const silentLog = (_msg: string): void => {};
 
   _brokerRemote = new BrokerRemote({
     broker,
@@ -231,6 +247,7 @@ async function _ensureBrokerRemote(): Promise<void> {
     selfPcLabel,
     selfPcPubkey: selfPubkeyB64,
     siblings,
+    log: silentLog,
   });
 }
 
@@ -637,9 +654,7 @@ async function _attemptReconnect(): Promise<void> {
   _stopAutoListener = _installAutoListener(relay);
 
   // Plan/25 Wave B/C: relay is back; bring cross-PC routing back online.
-  void _ensureBrokerRemote().catch((err) => {
-    console.error(`[remote-pi] _ensureBrokerRemote (post-reconnect) failed: ${String(err)}`);
-  });
+  void _ensureBrokerRemote().catch(() => { /* best-effort */ });
 
   // _state stays "started"; peer reconnect (if previously paired) flows
   // through _installAutoListener → _findKnownPeer → _promoteToPaired
@@ -901,7 +916,6 @@ const _noopCtx = { ui: { notify: () => undefined }, abort: () => undefined };
 
 const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   _pi = pi;
-  console.error(`[remote-pi] session sync limit: ${_getSyncLimit()}`);
 
   // Plano 19: ensure ~/.pi/remote/{sessions,skills}/ exist and deploy the
   // agent-network skill on first load. resources_discover lets Pi find it.
@@ -953,7 +967,6 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // ship the stale model that was active at _cmdStart time).
     if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, model: modelName };
     if (!_relay || !_myRoomId) return;
-    console.error(`[remote-pi] model_select → ${modelName}`);
     _relay.sendControl({
       type: "room_meta_update",
       room_id: _myRoomId,
@@ -1421,17 +1434,18 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
       onMembersChanged: (siblings) => {
         _brokerRemote?.setSiblings(siblings);
       },
+      // Silent log: routine self-revoke audit and per-Owner fetch
+      // failures don't belong in the TUI chat panel. User-facing
+      // revocation events flow through `onRevoke` → `pi.sendMessage`.
+      log: { info: () => {}, warn: () => {}, error: () => {} },
     });
     _selfRevoke.start();
   }
 
   // Plan/25 Wave B/C: bring up cross-PC routing if local broker is ready.
   // No-op when we're a follower (broker_remote needs the local Broker
-  // instance the leader hosts). Best-effort; failures log but don't break
-  // single-PC operation.
-  void _ensureBrokerRemote().catch((err) => {
-    console.error(`[remote-pi] _ensureBrokerRemote failed: ${String(err)}`);
-  });
+  // instance the leader hosts). Best-effort; failures don't surface.
+  void _ensureBrokerRemote().catch(() => { /* best-effort */ });
 
   ctx.ui.notify(`[remote-pi] state: started (peer=${myShort}) — Connected to relay ${relayUrl}`, "info");
 }
@@ -2088,9 +2102,7 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
       // disconnect). The new broker comes from `peer.localBroker()` after
       // reconnect.
       _teardownBrokerRemote();
-      void _ensureBrokerRemote().catch((err) => {
-        console.error(`[remote-pi] _ensureBrokerRemote (post-failover) failed: ${String(err)}`);
-      });
+      void _ensureBrokerRemote().catch(() => { /* best-effort */ });
     }
   });
 
@@ -2112,9 +2124,7 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
     // Plan/25 Wave B/C: try to bring up cross-PC routing now that the
     // local broker exists. No-op if the relay isn't up yet (will fire
     // again from `_cmdStart`).
-    void _ensureBrokerRemote().catch((err) => {
-      console.error(`[remote-pi] _ensureBrokerRemote (post-join) failed: ${String(err)}`);
-    });
+    void _ensureBrokerRemote().catch(() => { /* best-effort */ });
   } catch (err) {
     ctx.ui.notify(`[remote-pi] join failed: ${String(err)}`, "error");
   }
@@ -2147,15 +2157,6 @@ export function _routeClientMessageFrom(
   if (!_pi) return;
   switch (msg.type) {
     case "user_message": {
-      // Reverse-lookup of the sender's appPeerId from `_activePeers` (the
-      // PlainPeerChannel's `remotePeerId` is private). Purely diagnostic.
-      const senderId =
-        [..._activePeers.entries()].find(([, ch]) => ch === sender)?.[0] ?? "unknown";
-      console.error(
-        `[remote-pi] user_message from ${senderId.slice(0, 8)} ` +
-        `id=${msg.id} text=${JSON.stringify(msg.text).slice(0, 60)} ` +
-        `activePeers=[${[..._activePeers.keys()].map((k) => k.slice(0, 8)).join(", ")}]`,
-      );
       // Source-of-truth rebroadcast (plan/24 W2D fix). Echo the message
       // back to every attached owner (sender included) BEFORE handing it
       // off to the agent — so that:

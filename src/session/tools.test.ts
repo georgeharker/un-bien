@@ -320,34 +320,6 @@ describe("agent_request tool (deprecated, still functional)", () => {
     expect(peer.request).toHaveBeenCalledWith("backend", { q: "?" }, 5_000);
   });
 
-  test("emits one-shot deprecation warning to stderr on first call", async () => {
-    const warn = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    try {
-      const { pi, tools } = makeMockPi();
-      const peer = makeMockPeer();
-      registerAgentTools(pi, () => peer);
-      const tool = tools.get("agent_request")!;
-
-      await tool.execute(
-        TOOL_CALL_ID,
-        { to: "backend", body: { q: "?" } },
-        undefined, undefined, {} as never,
-      );
-      await tool.execute(
-        TOOL_CALL_ID,
-        { to: "backend", body: { q: "?" } },
-        undefined, undefined, {} as never,
-      );
-
-      const warnedCalls = warn.mock.calls.filter((c) =>
-        typeof c[0] === "string" && c[0].includes("agent_request is deprecated"),
-      );
-      expect(warnedCalls.length).toBe(1);
-    } finally {
-      warn.mockRestore();
-    }
-  });
-
   test("not in a session → structured error", async () => {
     const { pi, tools } = makeMockPi();
     registerAgentTools(pi, () => null);

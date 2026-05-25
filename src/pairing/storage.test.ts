@@ -215,17 +215,4 @@ describe("getOrCreateEd25519Keypair — headless Linux fallback", () => {
     );
   });
 
-  test("warning logged on fallback", async () => {
-    const warn = vi.spyOn(console, "warn");
-    const backend = new InMemoryBackend();
-    backend.failNext("read");
-    _setKeyStoreBackendForTest(backend);
-
-    await getOrCreateEd25519Keypair();
-
-    const warnedCalls = warn.mock.calls.filter((c) =>
-      typeof c[0] === "string" && c[0].includes("keyring unavailable"),
-    );
-    expect(warnedCalls.length).toBeGreaterThan(0);
-  });
 });

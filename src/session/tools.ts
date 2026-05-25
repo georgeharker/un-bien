@@ -207,8 +207,6 @@ export function registerAgentTools(
     },
   });
 
-  let _requestDeprecationWarned = false;
-
   pi.registerTool<typeof RequestParams, unknown>({
     name: "agent_request",
     label: "Agent Request (deprecated)",
@@ -222,13 +220,6 @@ export function registerAgentTools(
       "agent_request({to, body, timeout_ms?}): DEPRECATED synchronous request/reply (blocks current turn). Prefer agent_send + inbox observation.",
     parameters: RequestParams,
     execute: async (_toolCallId, params) => {
-      if (!_requestDeprecationWarned) {
-        _requestDeprecationWarned = true;
-        console.error(
-          "[remote-pi] agent_request is deprecated — migrate to agent_send + " +
-          "observe inbox by `re`. See the agent-network skill for the new pattern.",
-        );
-      }
       const peer = getSessionPeer();
       if (!peer) {
         return {

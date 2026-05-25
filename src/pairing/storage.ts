@@ -148,28 +148,26 @@ export async function getOrCreateEd25519Keypair(): Promise<Ed25519Keypair> {
     if (legacy) {
       const kp = _deserialize(legacy);
       await backend.write(NEW_SERVICE, ACCOUNT, legacy);
-      const deleted = await backend.delete(OLD_SERVICE, ACCOUNT);
-      console.info(
-        `[remote-pi] Migrated Pi-secret from "${OLD_SERVICE}" to "${NEW_SERVICE}" ` +
-        `(old entry deleted: ${deleted})`,
-      );
+      await backend.delete(OLD_SERVICE, ACCOUNT);
+      // Silent migration: writing the chat surface would be premature
+      // (Pi SDK isn't bound yet at this point in boot) and console
+      // output bleeds outside the TUI. The presence of an entry under
+      // NEW_SERVICE is itself the audit signal — re-running migration
+      // is idempotent and harmless.
       return kp;
     }
 
     // Neither entry exists — generate and save to new service.
     const fresh = generateEd25519Keypair();
     await backend.write(NEW_SERVICE, ACCOUNT, _serialize(fresh));
-    console.info(`[remote-pi] Generated new Pi-secret in keyring "${NEW_SERVICE}"`);
     return fresh;
   } catch (err) {
-    // ── Path B: file fallback (typically headless Linux) ───────────────
-    console.warn(
-      "[remote-pi] WARNING: keyring unavailable, falling back to file-based " +
-      "storage at " + IDENTITY_FILE + " (mode 0600). Set up GNOME Keyring/" +
-      "KWallet for better security. " +
-      `Set PI_KEY_INSECURE_FALLBACK=true to suppress this warning. ` +
-      `Cause: ${String(err)}`,
-    );
+    // Path B: file fallback (typically headless Linux without a D-Bus
+    // session). Silent in the chat panel — for daemon mode, the
+    // existence of `~/.pi/remote/identity.json` IS the signal that the
+    // keyring path failed. Document this in CLAUDE.md / PROTOCOL.md
+    // so headless users know what to look for.
+    void err;
     const fromFile = await _readKeypairFromFile();
     if (fromFile) return fromFile;
     const fresh = generateEd25519Keypair();
