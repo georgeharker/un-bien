@@ -31,7 +31,7 @@ identified by their public key. It never decrypts or inspects payload content.
 A shared relay is available at:
 
 ```
-wss://relay-rp1.jacobmoura.work
+https://relay-rp1.jacobmoura.work
 ```
 
 You can use it to get started without any setup. However, be aware of the security
