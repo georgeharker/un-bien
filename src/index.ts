@@ -38,7 +38,7 @@ import type {
   ExtensionFactory,
 } from "@mariozechner/pi-coding-agent";
 import { type Ed25519Keypair } from "./pairing/crypto.js";
-import { buildQRUri, qrSession, renderQRAscii, startQRRotation } from "./pairing/qr.js";
+import { buildQRUri, qrSession, renderQRAscii } from "./pairing/qr.js";
 import {
   addPeer,
   getOrCreateEd25519Keypair,
@@ -63,6 +63,7 @@ import { registerAgentTools } from "./session/tools.js";
 import { BrokerRemote } from "./session/broker_remote.js";
 import { formatPeerInventory } from "./session/peer_inventory.js";
 import { PiForwardClient } from "./transport/pi_forward_client.js";
+import { handleListCommands } from "./commands/list_commands.js";
 import { discoverSelfLabel, discoverSiblings, fallbackLabel } from "./mesh/siblings.js";
 import {
   ensureGlobalDirs,
@@ -87,7 +88,7 @@ import { runSetupWizard, type WizardUI } from "./session/setup_wizard.js";
 import { updateFooter, type FooterState } from "./ui/footer.js";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { mkdirSync, copyFileSync, existsSync, unlinkSync, readFileSync } from "node:fs";
+import { mkdirSync, copyFileSync, existsSync, unlinkSync, readFileSync, realpathSync } from "node:fs";
 import { hostname } from "node:os";
 import {
   kDefaultRelayUrl,
@@ -1143,6 +1144,19 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // Service install / uninstall (plan/26 W3)
   pi.registerCommand("remote-pi install",   { description: "Install pi-supervisord as a system service + link the remote-pi CLI into ~/.local/bin (systemd/launchd)", handler: async (_, ctx) => { _lastCtx = ctx; _cmdInstall(ctx, { linkCli: true }); } });
   pi.registerCommand("remote-pi uninstall", { description: "Remove the pi-supervisord system service + the ~/.local/bin symlinks (daemons registry preserved)", handler: async (_, ctx) => { _lastCtx = ctx; _cmdUninstall(ctx, { linkCli: true }); } });
+
+  // Daemon mode: when spawned by pi-supervisord (REMOTE_PI_DAEMON=1) there is
+  // no human to type /remote-pi, so we auto-init after the factory returns.
+  // _cmdRoot checks localConfig.auto_start_relay and connects to the relay +
+  // local broker automatically; if no config exists it is a no-op (no wizard
+  // in headless mode).
+  if (process.env["REMOTE_PI_DAEMON"] === "1") {
+    const daemonCtx = {
+      ui: { notify: (msg: string) => process.stderr.write(`${msg}\n`) },
+      cwd: process.cwd(),
+    } as unknown as Pick<ExtensionContext, "ui" | "cwd">;
+    setTimeout(() => { void _cmdRoot(daemonCtx); }, 0);
+  }
 };
 
 export default extension;
@@ -2155,6 +2169,26 @@ export function _routeClientMessageFrom(
     return;
   }
   if (!_pi) return;
+  // Plan/28 Wave B — slash commands surface. Both messages need `_pi`
+  // (above guard) but neither depends on a turn being free, so route
+  // before the `switch` to keep that block focused on chat flow.
+  if (msg.type === "list_commands") {
+    handleListCommands(_pi, sender, msg);
+    return;
+  }
+  if (msg.type === "command_invoke") {
+    // Slice 2 will implement dispatch. Until then the protocol is
+    // honest about it: the app gets a structured "not_implemented"
+    // result instead of silent drop, so the picker can show a clear
+    // error toast rather than spin forever.
+    sender.send({
+      type: "command_result",
+      in_reply_to: msg.id,
+      ok: false,
+      error: "not_implemented",
+    });
+    return;
+  }
   switch (msg.type) {
     case "user_message": {
       // Source-of-truth rebroadcast (plan/24 W2D fix). Echo the message
@@ -2336,7 +2370,15 @@ export function _mapAgentMessagesToEvents(
 
 // ── Standalone CLI ────────────────────────────────────────────────────────────
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+function _isDirectRun(): boolean {
+  try {
+    return fileURLToPath(import.meta.url) === realpathSync(process.argv[1] ?? "");
+  } catch {
+    return false;
+  }
+}
+
+if (_isDirectRun()) {
   const [, , subcmd, ...cliArgs] = process.argv;
   if (subcmd === "devices" || subcmd === "list") {
     const peers = await listPeers();
@@ -2416,13 +2458,31 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const stubCtx = { ui: { notify: (msg: string) => console.log(msg) } as unknown as ExtensionContext["ui"] };
     _cmdUninstall(stubCtx, { linkCli: false });
   } else {
-    const edKp = await getOrCreateEd25519Keypair();
-    const sessionName = process.cwd().split("/").slice(-2).join("/");
-    const { url: relayUrl, source } = resolveRelayUrl();
-    const roomId = roomIdForCwd(process.cwd());
-    console.log(`[remote-pi] relay: ${relayUrl} (source: ${source}), room: ${roomId}`);
-    void cliArgs;
-    const stop = startQRRotation(edKp.publicKey, sessionName, roomId);
-    process.once("SIGINT", () => { stop(); process.exit(0); });
+    console.log([
+      "Usage: remote-pi <command>",
+      "",
+      "Daemon registry:",
+      "  create <cwd> [--name \"Name\"]   Register a folder as a daemon",
+      "  remove <id>                     Unregister a daemon",
+      "  daemons                         List registered daemons",
+      "",
+      "Fleet control:",
+      "  daemon start                    Start all registered daemons",
+      "  daemon stop                     Stop all running daemons",
+      "  daemon restart                  Restart all daemons",
+      "  daemon status                   Show pid / uptime / restarts",
+      "  daemon send <id> \"<text>\"       Send a prompt to a daemon",
+      "",
+      "Service:",
+      "  install                         Install pi-supervisord as a system service",
+      "  uninstall                       Remove the system service",
+      "",
+      "Devices:",
+      "  devices                         List paired devices",
+      "  revoke <shortid>                Revoke a paired device",
+      "",
+      "Config:",
+      "  set-relay <url>                 Set the relay URL (http:// or https://)",
+    ].join("\n"));
   }
 }

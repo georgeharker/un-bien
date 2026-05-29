@@ -10,7 +10,15 @@ export type ClientMessage =
   | { type: "approve_tool"; id: string; tool_call_id: string; decision: "allow" | "deny" }
   | { type: "cancel"; id: string; target_id: string }
   | { type: "ping"; id: string }
-  | { type: "session_sync"; id: string; limit?: number };
+  | { type: "session_sync"; id: string; limit?: number }
+  // Plan/28 Wave A — slash commands surface for the app picker.
+  // `list_commands` asks the paired Pi for its full command catalog
+  // (builtins + extension-registered + prompt templates + skills).
+  // `command_invoke` asks the Pi to run a canonized command as if the
+  // user had typed it in the TUI. Only commands with `invokable: true`
+  // in the corresponding `commands_list` reply are guaranteed to work.
+  | { type: "list_commands"; id: string }
+  | { type: "command_invoke"; id: string; name: string; args?: string };
 
 export type Usage = { input_tokens: number; output_tokens: number };
 
@@ -100,6 +108,59 @@ export type ServerMessage =
       events: SessionHistoryEvent[];
       eos: boolean;
       truncated: boolean;
-    };
+    }
+  // Plan/28 Wave A — slash commands replies.
+  // `commands_list` is the response to a `list_commands` request, carrying
+  // the full catalog the app should render in its picker.
+  // `command_result` is the response to a `command_invoke`, signaling only
+  // whether dispatch succeeded — visible side-effects (chat output, model
+  // changes, compaction notice) still flow via the normal channels
+  // (`agent_chunk`/`agent_done`/`model_select` etc.).
+  | { type: "commands_list"; in_reply_to: string; commands: WireCommand[] }
+  | { type: "command_result"; in_reply_to: string; ok: boolean; error?: string };
+
+/**
+ * Plan/28 — Source of a slash command in the Pi runtime.
+ *
+ * - `builtin`: hardcoded in `@mariozechner/pi-coding-agent`'s interactive mode
+ *   (e.g. `/compact`, `/model`). The SDK does NOT export this list publicly,
+ *   so pi-extension carries a manually-maintained mirror.
+ * - `extension`: registered via `pi.registerCommand(...)` by an extension
+ *   (e.g. our own `/remote-pi`, `/remote-pi setup`, etc.).
+ * - `prompt`: a prompt template the user installed.
+ * - `skill`: a skill the user installed.
+ */
+export type CommandSource = "builtin" | "extension" | "prompt" | "skill";
+
+/**
+ * Plan/28 — Wire schema for a slash command exposed to the app.
+ *
+ * The app uses this to render its picker. `invokable` tells it whether the
+ * Pi can actually run the command remotely (some builtins are tied to the
+ * TUI and have no programmatic equivalent in the SDK); the app should
+ * render non-invokable commands as informational only (e.g. grayed out
+ * with a "available in terminal only" hint).
+ */
+export interface WireCommand {
+  /** Slash name WITHOUT the leading `/`. E.g. `"compact"`, `"remote-pi"`. */
+  name: string;
+  /** Short human-readable description shown in the picker. */
+  description?: string;
+  /** Where the command lives in the Pi runtime. */
+  source: CommandSource;
+  /**
+   * Whether this Pi build can actually invoke the command via
+   * `command_invoke`. When `false`, the app should disable invocation
+   * and surface a "terminal only" hint instead.
+   */
+  invokable: boolean;
+  /**
+   * Whether the command accepts free-text arguments after its name
+   * (e.g. `/model claude-opus-4-7` takes args, `/compact` does not).
+   * The app uses this to decide whether to keep the text input editable
+   * after the chip is placed.
+   */
+  takes_args: boolean;
+}
 
 export type ByeReason = "peer_stop" | "session_replaced" | "shutdown";
