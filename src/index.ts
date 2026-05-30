@@ -146,7 +146,7 @@ let _myRoomId: string | null = null;   // this Pi's room id (derived from cwd)
 // open instead of starting null. The SDK fires `thinking_level_select`
 // on every change (initial load + user toggle), mirrored to room_meta
 // the same way model is — apps subscribe to one channel for both.
-let _myRoomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel } | null = null;
+let _myRoomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel; working?: boolean } | null = null;
 let _currentModel: string | undefined = undefined;  // last-known model name
 let _currentThinking: ThinkingLevel | undefined = undefined;  // last-known thinking level
 
@@ -1045,11 +1045,22 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         if (name) _setCurrentModel(name);
       } catch { /* defensive — never block a turn on a model lookup */ }
     }
+    // Plan/32 Part B: publish working=true as room_meta (raw, no debounce —
+    // the debounce lives in the app). Same shape as the model/thinking updates.
+    if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working: true };
+    if (_relay && _myRoomId) {
+      _relay.sendControl({ type: "room_meta_update", room_id: _myRoomId, meta: { working: true } });
+    }
     if (!_meshNode) return;
     void _meshNode.send("broker", { type: "turn_state", busy: true })
       .catch(() => { /* best-effort */ });
   });
   pi.on("turn_end", () => {
+    // Plan/32 Part B: publish working=false as room_meta (raw, no debounce).
+    if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working: false };
+    if (_relay && _myRoomId) {
+      _relay.sendControl({ type: "room_meta_update", room_id: _myRoomId, meta: { working: false } });
+    }
     if (!_meshNode) return;
     void _meshNode.send("broker", { type: "turn_state", busy: false })
       .catch(() => { /* best-effort */ });

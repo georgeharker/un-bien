@@ -2460,6 +2460,35 @@ describe("model meta", () => {
     expect(updates[0]!.room_id).toMatch(/^[A-Za-z0-9_-]{12}$/);
   });
 
+  test("plan/32: pi.on('turn_start') publishes working=true via room_meta_update", async () => {
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx("/tmp/remote-pi-working-on"));
+
+    const onTurnStart = captureEventHandler("turn_start");
+    onTurnStart({ type: "turn_start", turnIndex: 0, timestamp: 0 });
+
+    const updates = relayRef.current!.sendControl.mock.calls
+      .map((c) => c[0] as { type: string; room_id?: string; meta?: { working?: boolean } })
+      .filter((f) => f.type === "room_meta_update");
+    expect(updates).toHaveLength(1);
+    expect(updates[0]!.meta?.working).toBe(true);
+    expect(updates[0]!.room_id).toMatch(/^[A-Za-z0-9_-]{12}$/);
+  });
+
+  test("plan/32: pi.on('turn_end') publishes working=false via room_meta_update", async () => {
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx("/tmp/remote-pi-working-off"));
+
+    const onTurnEnd = captureEventHandler("turn_end");
+    onTurnEnd({ type: "turn_end", turnIndex: 0 });
+
+    const updates = relayRef.current!.sendControl.mock.calls
+      .map((c) => c[0] as { type: string; meta?: { working?: boolean } })
+      .filter((f) => f.type === "room_meta_update");
+    expect(updates).toHaveLength(1);
+    expect(updates[0]!.meta?.working).toBe(false);
+  });
+
   test("model_select with no model.name falls back to model.id", async () => {
     captureHandler("remote-pi");
     await _connectForTest(makeMockCtx("/tmp/remote-pi-model-fallback"));
