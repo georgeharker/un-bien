@@ -5,6 +5,18 @@ import type { Ed25519Keypair } from "../pairing/crypto.js";
 
 const AUTH_TIMEOUT_MS = 5_000;
 
+/**
+ * Liveness watchdog. The relay sends a WS Ping every ~25s (relay `peer.rs`),
+ * so a healthy connection sees inbound frames at least that often. If NOTHING
+ * arrives for this long the socket is silently dead — NAT/router idle drop,
+ * laptop sleep, or the relay/Cloudflare reaping the connection WITHOUT a clean
+ * close frame. That half-open case never fires `close`, so reconnect never
+ * triggers and a background daemon sits "online" but dead after a few idle
+ * hours. We force-close on timeout so `close` drives the caller's reconnect.
+ */
+const LIVENESS_TIMEOUT_MS = 70_000;  // ~2.8 missed relay pings → confidently dead
+const LIVENESS_CHECK_MS = 20_000;
+
 /** Relay control messages (sent/received during auth). */
 interface HelloMsg {
   type: "hello";
@@ -71,6 +83,9 @@ export interface RelayClientEvents {
  */
 export class RelayClient extends EventEmitter {
   private ws: WebSocket | null = null;
+  /** Epoch ms of the last inbound frame (message / relay ping / pong). */
+  private lastActivityAt = 0;
+  private livenessTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly url: string,
@@ -105,16 +120,30 @@ export class RelayClient extends EventEmitter {
         try {
           await this._authenticate(ws, options);
 
-          // Auth done — wire persistent message handler
+          // Auth done — wire persistent message handler. Every inbound frame
+          // (data, plus the relay's keepalive ping/pong below) refreshes the
+          // liveness clock.
+          this.lastActivityAt = Date.now();
           ws.on("message", (raw) => {
+            this.lastActivityAt = Date.now();
             const text = Buffer.isBuffer(raw) ? raw.toString() : String(raw);
             for (const line of text.split("\n")) {
               const trimmed = line.trim();
               if (trimmed) this.emit("message", trimmed);
             }
           });
+          // The relay pings every ~25s; `ws` auto-replies Pong (keeping the
+          // relay's view of us alive). The relay ignores client pings rather
+          // than ponging, so these inbound pings — not a ping/pong we initiate
+          // — are our liveness signal.
+          ws.on("ping", () => { this.lastActivityAt = Date.now(); });
+          ws.on("pong", () => { this.lastActivityAt = Date.now(); });
 
-          ws.on("close", () => this.emit("close"));
+          ws.on("close", () => {
+            this._stopLiveness();
+            this.emit("close");
+          });
+          this._startLiveness(ws);
           resolve();
         } catch (err) {
           ws.terminate();
@@ -144,8 +173,31 @@ export class RelayClient extends EventEmitter {
   }
 
   close(): void {
+    this._stopLiveness();
     this.ws?.close();
     this.ws = null;
+  }
+
+  // ── Liveness watchdog ─────────────────────────────────────────────────────
+
+  /** Force-close the WS when no inbound frame has arrived for
+   *  `LIVENESS_TIMEOUT_MS` — see the constant's doc for why. `terminate()`
+   *  fires `close`, which the owner turns into a reconnect. */
+  private _startLiveness(ws: WebSocket): void {
+    this._stopLiveness();
+    this.livenessTimer = setInterval(() => {
+      if (Date.now() - this.lastActivityAt > LIVENESS_TIMEOUT_MS) {
+        this._stopLiveness();
+        ws.terminate();
+      }
+    }, LIVENESS_CHECK_MS);
+  }
+
+  private _stopLiveness(): void {
+    if (this.livenessTimer) {
+      clearInterval(this.livenessTimer);
+      this.livenessTimer = null;
+    }
   }
 
   // ── Auth ────────────────────────────────────────────────────────────────────

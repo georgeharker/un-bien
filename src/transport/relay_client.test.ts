@@ -133,4 +133,51 @@ describe("RelayClient", () => {
 
     client.close();
   });
+
+  // ── Liveness watchdog ───────────────────────────────────────────────────────
+  // Regression for "daemon shows online but is dead after a few idle hours":
+  // a silently half-open WS never fires `close`, so reconnect never triggers.
+
+  async function connectFake(client: InstanceType<typeof RelayClient>): Promise<void> {
+    const p = client.connect();
+    await vi.advanceTimersByTimeAsync(1);  // MockWS defers 'open' via setTimeout(0)
+    simulateChallenge(currentWs());        // resolves auth's _nextMsg
+    await p;
+  }
+
+  test("liveness: force-closes (→ reconnect) after silence past the timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new RelayClient("ws://localhost:9999", keypair);
+      await connectFake(client);
+      let closed = false;
+      client.on("close", () => { closed = true; });
+
+      // No inbound frame for > 70s → watchdog terminates → close.
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("liveness: relay's ~25s pings keep it alive (no spurious close)", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new RelayClient("ws://localhost:9999", keypair);
+      await connectFake(client);
+      let closed = false;
+      client.on("close", () => { closed = true; });
+
+      // Simulate the relay's keepalive ping every 25s for 2.5 min.
+      for (let i = 0; i < 6; i++) {
+        await vi.advanceTimersByTimeAsync(25_000);
+        currentWs().emit("ping");
+      }
+      expect(closed).toBe(false);
+      client.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
