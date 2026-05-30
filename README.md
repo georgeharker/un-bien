@@ -136,6 +136,23 @@ interactive loop), so the app exposes only the actions that have a clean
 SDK call. The [`pi-telegram`](https://github.com/llblab/pi-telegram) adapter
 follows the same pattern.
 
+### Images
+
+The app can attach **one image** (camera or gallery) to a message. It's
+compressed on the device and rides **inline** in the `user_message` — the
+optional `images` field carries `{ data: <base64>, mime }`. The pi-extension
+turns it into the SDK's multimodal content (an `ImageContent` followed by the
+caption `TextContent`) and calls `sendUserMessage(content)`, so the model sees
+the picture plus your text.
+
+Whether a model accepts images is surfaced as a `vision` flag on each
+`WireModel` (derived from the SDK's `Model.input` including `"image"`); the app
+greys out the attach button when the active model is text-only.
+
+The **relay is unchanged** — the image travels inside the same opaque `ct` blob
+as the rest of the message, so there's no binary channel (large files are a
+future track). Text-only messages are unaffected.
+
 ---
 
 ## Install
