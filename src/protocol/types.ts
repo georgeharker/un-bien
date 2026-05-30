@@ -11,14 +11,15 @@ export type ClientMessage =
   | { type: "cancel"; id: string; target_id: string }
   | { type: "ping"; id: string }
   | { type: "session_sync"; id: string; limit?: number }
-  // Plan/28 Wave A — slash commands surface for the app picker.
-  // `list_commands` asks the paired Pi for its full command catalog
-  // (builtins + extension-registered + prompt templates + skills).
-  // `command_invoke` asks the Pi to run a canonized command as if the
-  // user had typed it in the TUI. Only commands with `invokable: true`
-  // in the corresponding `commands_list` reply are guaranteed to work.
-  | { type: "list_commands"; id: string }
-  | { type: "command_invoke"; id: string; name: string; args?: string };
+  // Plan/28 — Typed app actions on the paired Pi session. Each carries a
+  // structured payload (no string parsing) and gets either `action_ok` or
+  // `action_error` back. Visible side-effects (chat output, model change
+  // broadcasts, compaction notice) still flow through the normal channels.
+  | { type: "session_new"; id: string }
+  | { type: "session_compact"; id: string }
+  | { type: "model_set"; id: string; provider: string; model_id: string }
+  | { type: "thinking_set"; id: string; level: ThinkingLevel }
+  | { type: "list_models"; id: string };
 
 export type Usage = { input_tokens: number; output_tokens: number };
 
@@ -109,58 +110,64 @@ export type ServerMessage =
       eos: boolean;
       truncated: boolean;
     }
-  // Plan/28 Wave A — slash commands replies.
-  // `commands_list` is the response to a `list_commands` request, carrying
-  // the full catalog the app should render in its picker.
-  // `command_result` is the response to a `command_invoke`, signaling only
-  // whether dispatch succeeded — visible side-effects (chat output, model
-  // changes, compaction notice) still flow via the normal channels
-  // (`agent_chunk`/`agent_done`/`model_select` etc.).
-  | { type: "commands_list"; in_reply_to: string; commands: WireCommand[] }
-  | { type: "command_result"; in_reply_to: string; ok: boolean; error?: string };
+  // Plan/28 — Replies for typed app actions.
+  // `action_ok` / `action_error` carry the original `ActionName` so the
+  // app can demultiplex by action type rather than having to remember
+  // every in-flight request id.
+  // `models_list` is the response to a `list_models` request; the optional
+  // `current` echoes the model the Pi is using right now so the app can
+  // highlight the selected row without a second round-trip.
+  | { type: "action_ok"; in_reply_to: string; action: ActionName }
+  | { type: "action_error"; in_reply_to: string; action: ActionName; error: string }
+  | { type: "models_list"; in_reply_to: string; models: WireModel[]; current?: WireModel };
 
 /**
- * Plan/28 — Source of a slash command in the Pi runtime.
- *
- * - `builtin`: hardcoded in `@mariozechner/pi-coding-agent`'s interactive mode
- *   (e.g. `/compact`, `/model`). The SDK does NOT export this list publicly,
- *   so pi-extension carries a manually-maintained mirror.
- * - `extension`: registered via `pi.registerCommand(...)` by an extension
- *   (e.g. our own `/remote-pi`, `/remote-pi setup`, etc.).
- * - `prompt`: a prompt template the user installed.
- * - `skill`: a skill the user installed.
+ * Plan/28 — Stable names for the typed actions the app can request. Kept
+ * as a closed string union so a switch in either side gets exhaustiveness
+ * checking from the compiler.
  */
-export type CommandSource = "builtin" | "extension" | "prompt" | "skill";
+export type ActionName =
+  | "session_new"
+  | "session_compact"
+  | "model_set"
+  | "thinking_set";
 
 /**
- * Plan/28 — Wire schema for a slash command exposed to the app.
+ * Plan/28 — Mirror of the SDK's `ThinkingLevel` (defined in
+ * `@mariozechner/pi-agent-core/types`). Re-declared locally so the wire
+ * protocol owns its own enum and we don't leak SDK-internal types onto
+ * the app's network surface.
  *
- * The app uses this to render its picker. `invokable` tells it whether the
- * Pi can actually run the command remotely (some builtins are tied to the
- * TUI and have no programmatic equivalent in the SDK); the app should
- * render non-invokable commands as informational only (e.g. grayed out
- * with a "available in terminal only" hint).
+ * Note: `"xhigh"` is only honored by select model families — the SDK uses
+ * each `Model.thinkingLevelMap` to decide if the requested level is
+ * supported, falling back to a sensible neighbour when not. The app
+ * surfaces all 6 buttons but can grey out unsupported ones using the
+ * model's metadata if the picker fetches it later.
  */
-export interface WireCommand {
-  /** Slash name WITHOUT the leading `/`. E.g. `"compact"`, `"remote-pi"`. */
+export type ThinkingLevel =
+  | "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
+/**
+ * Plan/28 — Wire shape for one model entry in the app's model picker.
+ *
+ * Subset of the SDK's `Model<Api>` interface — only the fields the app
+ * actually renders. Cost / max-tokens / API class are left off the wire
+ * deliberately; if the app's picker grows to need them, they get added
+ * here and to the handler's mapping in `index.ts` in one diff.
+ */
+export interface WireModel {
+  /** Stable identifier inside the provider's catalog. E.g. `"claude-opus-4-7"`. */
+  id: string;
+  /** Display name for the picker row. E.g. `"Claude Opus 4.7"`. */
   name: string;
-  /** Short human-readable description shown in the picker. */
-  description?: string;
-  /** Where the command lives in the Pi runtime. */
-  source: CommandSource;
-  /**
-   * Whether this Pi build can actually invoke the command via
-   * `command_invoke`. When `false`, the app should disable invocation
-   * and surface a "terminal only" hint instead.
-   */
-  invokable: boolean;
-  /**
-   * Whether the command accepts free-text arguments after its name
-   * (e.g. `/model claude-opus-4-7` takes args, `/compact` does not).
-   * The app uses this to decide whether to keep the text input editable
-   * after the chip is placed.
-   */
-  takes_args: boolean;
+  /** Provider slug. E.g. `"anthropic"`, `"openai"`. */
+  provider: string;
+  /** Whether the model supports the thinking surface (`reasoning: true`
+   *  in the SDK). Useful so the app can decide whether the thinking
+   *  segmented control should be enabled when this model is selected. */
+  reasoning: boolean;
+  /** Context window in tokens, for display in the picker subtitle. */
+  context_window: number;
 }
 
 export type ByeReason = "peer_stop" | "session_replaced" | "shutdown";

@@ -111,6 +111,33 @@ direct builds while public releases roll out):
 
 ---
 
+## Mobile app actions
+
+Beyond the chat, the app surfaces a small set of typed actions you can run
+on the paired Pi session. Tap the ⚙ button next to the message input (visible
+when the input is empty) to open the Quick Actions sheet:
+
+| Action | What it does |
+|---|---|
+| **Compact context** | Runs `ctx.compact()` — same as `/compact` in the TUI. |
+| **New session** | Runs `ctx.newSession()` — equivalent to `/new`, asks for confirmation first. |
+| **Model** | Opens a model picker fed by your authenticated providers (same source the TUI uses) and switches via `pi.setModel(model)`. |
+| **Thinking** | Segmented control with the 6 SDK levels (`off` · `minimal` · `low` · `medium` · `high` · `xhigh`). Changes via `pi.setThinkingLevel(level)`. |
+
+Each action gets a structured `action_ok` / `action_error` reply so the app
+can show a SnackBar on failure. Visible side-effects (chat output, model
+change broadcasts, compaction notice) still flow through the normal chat
+channels. The wire schema is documented in [`PROTOCOL.md`](../PROTOCOL.md)
+under "App actions".
+
+It is **not** a generic slash-command picker. The Pi SDK does not expose
+programmatic invocation for most builtins (those live in the TUI's
+interactive loop), so the app exposes only the actions that have a clean
+SDK call. The [`pi-telegram`](https://github.com/llblab/pi-telegram) adapter
+follows the same pattern.
+
+---
+
 ## Install
 
 Requirements: Node 20+, Pi (the host coding agent).

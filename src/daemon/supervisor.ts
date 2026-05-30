@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
-import { createServer, type Server, type Socket } from "node:net";
+import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { addDaemon, listDaemons, removeDaemon } from "./registry.js";
@@ -44,6 +44,36 @@ const RESTART_BACKOFFS_MS = [1_000, 5_000, 30_000, 5 * 60_000];
 function supervisorSockPath(): string {
   const root = process.env["REMOTE_PI_HOME"] || homedir();
   return join(root, ".pi", "remote", SUPERVISOR_SOCK_NAME);
+}
+
+/** Thrown by `start()` when another live supervisor already holds the UDS.
+ *  Prevents a second supervisor from orphaning the first's children. */
+export class SupervisorAlreadyRunningError extends Error {
+  constructor(public readonly sockPath: string) {
+    super(
+      `Another pi-supervisord is already running (UDS held at ${sockPath}). ` +
+      "Refusing to start a second instance. Use `remote-pi daemon …` to control it, " +
+      "or stop the running one first.",
+    );
+    this.name = "SupervisorAlreadyRunningError";
+  }
+}
+
+/** Probes whether a live supervisor is accepting connections on `path`.
+ *  Resolves true if the connect succeeds (a listener is there), false on
+ *  ECONNREFUSED / ENOENT (stale socket file from a crashed supervisor). */
+function _probeSupervisor(path: string): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const sock = createConnection({ path });
+    const done = (alive: boolean) => {
+      sock.removeAllListeners();
+      sock.destroy();
+      resolve(alive);
+    };
+    const timer = setTimeout(() => done(false), 1_000);
+    sock.once("connect", () => { clearTimeout(timer); done(true); });
+    sock.once("error", () => { clearTimeout(timer); done(false); });
+  });
 }
 
 export interface SupervisorOptions {
@@ -106,10 +136,17 @@ export class Supervisor {
 
   private async _bindUds(): Promise<void> {
     const path = supervisorSockPath();
-    // If a stale socket file exists from a previous crashed supervisor,
-    // try to connect first — if that fails, unlink and bind. Same self-
-    // healing pattern as cwd_lock / leader_election.
+    // Single-instance guard. If a socket file exists, PROBE it first: a live
+    // supervisor answering the connect means we must NOT start a second one.
+    // Stealing the socket (unlink + bind) would orphan the running
+    // supervisor's children — they'd keep running, unreachable by the CLI,
+    // so `remote-pi daemon stop` could never kill them. Only when the probe
+    // fails (stale socket from a crashed supervisor) do we unlink + bind.
     if (existsSync(path)) {
+      const alive = await _probeSupervisor(path);
+      if (alive) {
+        throw new SupervisorAlreadyRunningError(path);
+      }
       try { unlinkSync(path); } catch { /* will throw on bind if still held */ }
     }
     const server = createServer((socket) => this._onConnection(socket));
