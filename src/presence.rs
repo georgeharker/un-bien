@@ -106,14 +106,22 @@ impl PresenceManager {
                 } else {
                     g.last_offline_ts.get(peer.as_str()).copied()
                 };
-                PeerPresence { peer: peer.clone(), online, since_ts }
+                PeerPresence {
+                    peer: peer.clone(),
+                    online,
+                    since_ts,
+                }
             })
             .collect()
     }
 
     /// Records when `peer` went offline (stored for `since_ts` in future snapshots).
     pub async fn record_offline(&self, peer: &str, ts: i64) {
-        self.inner.lock().await.last_offline_ts.insert(peer.to_string(), ts);
+        self.inner
+            .lock()
+            .await
+            .last_offline_ts
+            .insert(peer.to_string(), ts);
     }
 }
 
@@ -155,9 +163,7 @@ mod tests {
     async fn snapshot_reflects_online_flag() {
         let pm = PresenceManager::new();
         pm.record_offline("X", 1_000_000).await;
-        let states = pm
-            .snapshot(&["X".into(), "Y".into()], |p| p == "Y")
-            .await;
+        let states = pm.snapshot(&["X".into(), "Y".into()], |p| p == "Y").await;
         assert_eq!(states.len(), 2);
         let x = states.iter().find(|s| s.peer == "X").unwrap();
         let y = states.iter().find(|s| s.peer == "Y").unwrap();

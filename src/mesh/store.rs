@@ -47,14 +47,18 @@ impl MeshStore {
         }
         let conn = Connection::open(path)?;
         conn.execute_batch(SCHEMA)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     /// Opens an in-memory database (for tests).
     pub fn open_in_memory() -> Result<Self, StoreError> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(SCHEMA)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     /// Returns the current version for `owner_pk_hash`, or `None` if absent.
@@ -94,7 +98,10 @@ impl MeshStore {
         if let Some(c) = current {
             let c = c as u64;
             if new_version <= c {
-                return Err(StoreError::StaleVersion { new: new_version, current: c });
+                return Err(StoreError::StaleVersion {
+                    new: new_version,
+                    current: c,
+                });
             }
         }
         tx.execute(
@@ -174,11 +181,23 @@ mod tests {
     #[test]
     fn upsert_rejects_stale_version() {
         let store = MeshStore::open_in_memory().unwrap();
-        store.upsert("abc", &fake_pk(), 5, b"v5", &[0u8; 64], 100).unwrap();
-        let err = store.upsert("abc", &fake_pk(), 5, b"v5", &[0u8; 64], 200).unwrap_err();
-        assert!(matches!(err, StoreError::StaleVersion { new: 5, current: 5 }));
-        let err = store.upsert("abc", &fake_pk(), 3, b"v3", &[0u8; 64], 200).unwrap_err();
-        assert!(matches!(err, StoreError::StaleVersion { new: 3, current: 5 }));
+        store
+            .upsert("abc", &fake_pk(), 5, b"v5", &[0u8; 64], 100)
+            .unwrap();
+        let err = store
+            .upsert("abc", &fake_pk(), 5, b"v5", &[0u8; 64], 200)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            StoreError::StaleVersion { new: 5, current: 5 }
+        ));
+        let err = store
+            .upsert("abc", &fake_pk(), 3, b"v3", &[0u8; 64], 200)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            StoreError::StaleVersion { new: 3, current: 5 }
+        ));
         // current still 5
         assert_eq!(store.current_version("abc").unwrap(), Some(5));
     }
@@ -186,8 +205,12 @@ mod tests {
     #[test]
     fn upsert_advances_version() {
         let store = MeshStore::open_in_memory().unwrap();
-        store.upsert("abc", &fake_pk(), 1, b"v1", &[0u8; 64], 100).unwrap();
-        store.upsert("abc", &fake_pk(), 2, b"v2", &[0u8; 64], 200).unwrap();
+        store
+            .upsert("abc", &fake_pk(), 1, b"v1", &[0u8; 64], 100)
+            .unwrap();
+        store
+            .upsert("abc", &fake_pk(), 2, b"v2", &[0u8; 64], 200)
+            .unwrap();
         let rec = store.get("abc").unwrap().unwrap();
         assert_eq!(rec.version, 2);
         assert_eq!(rec.blob, b"v2");

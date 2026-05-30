@@ -20,7 +20,7 @@ pub use mesh::MeshStore;
 pub use metrics::FirehoseMetrics;
 pub use peers::registry::PeerRegistry;
 pub use presence::PresenceManager;
-pub use rooms::{RoomManager, RoomMeta};
+pub use rooms::{RoomManager, RoomMeta, RoomMetaPatch};
 
 /// Shared state injected into every axum handler.
 ///

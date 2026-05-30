@@ -32,7 +32,14 @@ async fn spawn_relay() -> (String, tempfile::TempDir) {
         metrics.clone(),
     ));
     let mesh_auth = Arc::new(MeshAuthCache::new());
-    let state = AppState { registry, presence, rooms, mesh, mesh_auth, metrics };
+    let state = AppState {
+        registry,
+        presence,
+        rooms,
+        mesh,
+        mesh_auth,
+        metrics,
+    };
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -91,12 +98,21 @@ async fn post_v1_then_get_returns_v1() {
     let (env, hash) = make_envelope(&sk, 1);
 
     let client = reqwest::Client::new();
-    let resp = client.post(format!("{base}/mesh/{hash}")).json(&env).send().await.unwrap();
+    let resp = client
+        .post(format!("{base}/mesh/{hash}"))
+        .json(&env)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value = resp.json().await.unwrap();
     assert_eq!(body["version"], 1);
 
-    let resp = client.get(format!("{base}/mesh/{hash}")).send().await.unwrap();
+    let resp = client
+        .get(format!("{base}/mesh/{hash}"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value = resp.json().await.unwrap();
     assert_eq!(body["version"], 1);
@@ -113,9 +129,19 @@ async fn post_v2_after_v1_advances_state() {
     let (env2, _) = make_envelope(&sk, 2);
 
     let client = reqwest::Client::new();
-    let r = client.post(format!("{base}/mesh/{hash}")).json(&env1).send().await.unwrap();
+    let r = client
+        .post(format!("{base}/mesh/{hash}"))
+        .json(&env1)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
-    let r = client.post(format!("{base}/mesh/{hash}")).json(&env2).send().await.unwrap();
+    let r = client
+        .post(format!("{base}/mesh/{hash}"))
+        .json(&env2)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
 
     let body: Value = client
@@ -138,10 +164,20 @@ async fn post_stale_version_returns_409() {
     let (env1, _) = make_envelope(&sk, 1);
 
     let client = reqwest::Client::new();
-    let r = client.post(format!("{base}/mesh/{hash}")).json(&env2).send().await.unwrap();
+    let r = client
+        .post(format!("{base}/mesh/{hash}"))
+        .json(&env2)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
 
-    let r = client.post(format!("{base}/mesh/{hash}")).json(&env1).send().await.unwrap();
+    let r = client
+        .post(format!("{base}/mesh/{hash}"))
+        .json(&env1)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), StatusCode::CONFLICT);
 }
 
@@ -153,10 +189,20 @@ async fn post_same_version_returns_409() {
     let (env, hash) = make_envelope(&sk, 7);
 
     let client = reqwest::Client::new();
-    let r = client.post(format!("{base}/mesh/{hash}")).json(&env).send().await.unwrap();
+    let r = client
+        .post(format!("{base}/mesh/{hash}"))
+        .json(&env)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
 
-    let r = client.post(format!("{base}/mesh/{hash}")).json(&env).send().await.unwrap();
+    let r = client
+        .post(format!("{base}/mesh/{hash}"))
+        .json(&env)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(
         r.status(),
         StatusCode::CONFLICT,
@@ -171,9 +217,18 @@ async fn get_with_since_below_current_returns_blob() {
     let (env, hash) = make_envelope(&sk, 5);
 
     let client = reqwest::Client::new();
-    client.post(format!("{base}/mesh/{hash}")).json(&env).send().await.unwrap();
+    client
+        .post(format!("{base}/mesh/{hash}"))
+        .json(&env)
+        .send()
+        .await
+        .unwrap();
 
-    let r = client.get(format!("{base}/mesh/{hash}?since=3")).send().await.unwrap();
+    let r = client
+        .get(format!("{base}/mesh/{hash}?since=3"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
     let body: Value = r.json().await.unwrap();
     assert_eq!(body["version"], 5);
@@ -186,19 +241,34 @@ async fn get_with_since_at_or_above_current_returns_304() {
     let (env, hash) = make_envelope(&sk, 5);
 
     let client = reqwest::Client::new();
-    client.post(format!("{base}/mesh/{hash}")).json(&env).send().await.unwrap();
+    client
+        .post(format!("{base}/mesh/{hash}"))
+        .json(&env)
+        .send()
+        .await
+        .unwrap();
 
-    let r = client.get(format!("{base}/mesh/{hash}?since=5")).send().await.unwrap();
+    let r = client
+        .get(format!("{base}/mesh/{hash}?since=5"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), StatusCode::NOT_MODIFIED);
 
-    let r = client.get(format!("{base}/mesh/{hash}?since=999")).send().await.unwrap();
+    let r = client
+        .get(format!("{base}/mesh/{hash}?since=999"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), StatusCode::NOT_MODIFIED);
 }
 
 #[tokio::test]
 async fn get_unknown_owner_returns_404() {
     let (base, _dir) = spawn_relay().await;
-    let r = reqwest::get(format!("{base}/mesh/{}", "0".repeat(64))).await.unwrap();
+    let r = reqwest::get(format!("{base}/mesh/{}", "0".repeat(64)))
+        .await
+        .unwrap();
     assert_eq!(r.status(), StatusCode::NOT_FOUND);
 }
 
@@ -211,7 +281,12 @@ async fn post_with_invalid_signature_returns_403() {
     env["sig"] = json!(B64.encode([0u8; 64]));
 
     let client = reqwest::Client::new();
-    let r = client.post(format!("{base}/mesh/{hash}")).json(&env).send().await.unwrap();
+    let r = client
+        .post(format!("{base}/mesh/{hash}"))
+        .json(&env)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), StatusCode::FORBIDDEN);
 }
 
@@ -223,7 +298,12 @@ async fn post_with_url_hash_mismatch_returns_403() {
     let bogus_hash = "f".repeat(64);
 
     let client = reqwest::Client::new();
-    let r = client.post(format!("{base}/mesh/{bogus_hash}")).json(&env).send().await.unwrap();
+    let r = client
+        .post(format!("{base}/mesh/{bogus_hash}"))
+        .json(&env)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), StatusCode::FORBIDDEN);
 }
 
@@ -278,14 +358,18 @@ async fn unified_port_serves_health_mesh_and_ws() {
     assert_eq!(r.status(), StatusCode::OK);
 
     // 2) GET /mesh/<unknown hash> → 404
-    let r = reqwest::get(format!("{base}/mesh/{}", "0".repeat(64))).await.unwrap();
+    let r = reqwest::get(format!("{base}/mesh/{}", "0".repeat(64)))
+        .await
+        .unwrap();
     assert_eq!(r.status(), StatusCode::NOT_FOUND);
 
     // 3) WebSocket upgrade succeeds on the same port (no /ws prefix).
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::{connect_async, tungstenite::Message};
     let ws_url = format!("ws://{host_port}");
-    let (mut ws, _) = connect_async(&ws_url).await.expect("WS handshake must succeed");
+    let (mut ws, _) = connect_async(&ws_url)
+        .await
+        .expect("WS handshake must succeed");
     // Send something invalid as hello → relay drops connection cleanly,
     // proving the WS handler is wired.
     ws.send(Message::text("not a valid hello")).await.unwrap();

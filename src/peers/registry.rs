@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 
 use crate::metrics::FirehoseMetrics;
 use crate::presence::PresenceManager;
-use crate::rooms::{RoomManager, RoomMeta};
+use crate::rooms::{RoomManager, RoomMeta, RoomMetaPatch};
 
 type RoomKey = (String, String); // (peer_id, room_id)
 type ConnEntry = (u64, RoomMeta, mpsc::UnboundedSender<Message>);
@@ -107,8 +107,8 @@ impl PeerRegistry {
         if is_first_in_room {
             let room_subs = self.rooms.subscribers_of(&peer_id).await;
             if !room_subs.is_empty() {
-                let mut announced = serde_json::to_value(&room_meta)
-                    .expect("RoomMeta serialization is infallible");
+                let mut announced =
+                    serde_json::to_value(&room_meta).expect("RoomMeta serialization is infallible");
                 announced["type"] = "room_announced".into();
                 announced["peer"] = peer_id.as_str().into();
                 let msg = announced.to_string();
@@ -125,9 +125,7 @@ impl PeerRegistry {
         let sub_count = pres_subs.len() as u64;
         if sub_count > 0 {
             if was_offline_before {
-                let msg =
-                    serde_json::json!({"type": "peer_online", "peer": peer_id})
-                        .to_string();
+                let msg = serde_json::json!({"type": "peer_online", "peer": peer_id}).to_string();
                 for sub in pres_subs {
                     self.forward_to_all_rooms_of(&sub, Message::Text(msg.clone()));
                 }
@@ -147,8 +145,7 @@ impl PeerRegistry {
     pub fn backfill_presence(&self, subscriber: &str, peers: &[String]) {
         for peer in peers {
             if self.is_online(peer) {
-                let msg =
-                    serde_json::json!({"type": "peer_online", "peer": peer}).to_string();
+                let msg = serde_json::json!({"type": "peer_online", "peer": peer}).to_string();
                 self.forward_to_all_rooms_of(subscriber, Message::Text(msg));
             }
         }
@@ -270,35 +267,66 @@ impl PeerRegistry {
         delivered
     }
 
-    /// Updates the stored `model` on every live conn at `(peer_id, room_id)`
-    /// and broadcasts `room_meta_updated` to room subscribers. Returns `false`
-    /// when no entries exist for the pair.
+    /// Applies `patch` to every live conn at `(peer_id, room_id)` and
+    /// broadcasts `room_meta_updated` to room subscribers. Returns `false`
+    /// when no entries exist for the pair (so the handler can log and drop).
+    ///
+    /// Patch semantics: only fields explicitly present in `patch` are written
+    /// (see [`RoomMetaPatch`]). The broadcast carries the **post-patch**
+    /// full state of the mutable fields — subscribers replace their cached
+    /// `meta` wholesale instead of merging field-by-field. Fields that are
+    /// still `None` after the patch are omitted from `meta` (matching the
+    /// `skip_serializing_if` convention used for `RoomMeta` itself).
+    ///
+    /// An empty patch (no fields present) still returns `true` if the
+    /// `(peer, room)` pair exists, but skips the broadcast — nothing changed.
     pub async fn update_room_meta(
         &self,
         peer_id: &str,
         room_id: &str,
-        model: Option<String>,
+        patch: RoomMetaPatch,
     ) -> bool {
-        {
+        let (current_model, current_thinking) = {
             let mut lock = self.senders.lock().unwrap();
             let key = (peer_id.to_string(), room_id.to_string());
             match lock.get_mut(&key) {
                 Some(v) if !v.is_empty() => {
                     for (_, meta, _) in v.iter_mut() {
-                        meta.model = model.clone();
+                        if let Some(ref m) = patch.model {
+                            meta.model = m.clone();
+                        }
+                        if let Some(ref t) = patch.thinking {
+                            meta.thinking = t.clone();
+                        }
                     }
+                    // All conns at this key carry the same post-patch state
+                    // now; read the first as the canonical snapshot.
+                    let head = v.first().expect("v is non-empty");
+                    (head.1.model.clone(), head.1.thinking.clone())
                 }
                 _ => return false,
             }
+        };
+
+        // Empty patch → state didn't change, suppress broadcast.
+        if patch.is_empty() {
+            return true;
         }
 
         let room_subs = self.rooms.subscribers_of(peer_id).await;
         if !room_subs.is_empty() {
+            let mut meta_obj = serde_json::Map::new();
+            if let Some(m) = &current_model {
+                meta_obj.insert("model".to_string(), serde_json::Value::String(m.clone()));
+            }
+            if let Some(t) = &current_thinking {
+                meta_obj.insert("thinking".to_string(), serde_json::Value::String(t.clone()));
+            }
             let msg = serde_json::json!({
                 "type": "room_meta_updated",
                 "peer": peer_id,
                 "room_id": room_id,
-                "meta": { "model": model },
+                "meta": serde_json::Value::Object(meta_obj),
             })
             .to_string();
             for sub in &room_subs {
@@ -351,7 +379,14 @@ mod tests {
     use crate::rooms::{RoomManager, RoomMeta};
 
     fn make_meta(room_id: &str) -> RoomMeta {
-        RoomMeta { room_id: room_id.into(), name: None, cwd: None, model: None, started_at: 0 }
+        RoomMeta {
+            room_id: room_id.into(),
+            name: None,
+            cwd: None,
+            model: None,
+            thinking: None,
+            started_at: 0,
+        }
     }
 
     fn make_registry() -> PeerRegistry {
@@ -434,7 +469,10 @@ mod tests {
 
         assert!(reg.forward(&peer, "main", Message::Text("ping".into()), EXTERNAL));
         assert_eq!(rx1.try_recv().unwrap().to_text().unwrap(), "ping");
-        assert!(rx2.try_recv().is_err(), "disconnected conn must not receive");
+        assert!(
+            rx2.try_recv().is_err(),
+            "disconnected conn must not receive"
+        );
         assert_eq!(rx3.try_recv().unwrap().to_text().unwrap(), "ping");
     }
 
@@ -520,8 +558,7 @@ mod tests {
         let (tx_pi_1, _) = mpsc::unbounded_channel::<Message>();
         let _ = reg.register(pi.clone(), make_meta("main"), tx_pi_1).await;
         let m1 = rx_app.try_recv().unwrap();
-        let v1: serde_json::Value =
-            serde_json::from_str(m1.to_text().unwrap()).unwrap();
+        let v1: serde_json::Value = serde_json::from_str(m1.to_text().unwrap()).unwrap();
         assert_eq!(v1["type"], "peer_online");
         assert_eq!(v1["peer"], pi.clone());
 

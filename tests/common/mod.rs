@@ -12,9 +12,7 @@ use relay::{
 };
 use serde_json::json;
 use tokio::net::TcpListener;
-use tokio_tungstenite::{
-    MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message,
-};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 
 pub type WsStream = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
@@ -34,7 +32,14 @@ pub async fn start_relay() -> u16 {
         metrics.clone(),
     ));
     let mesh_auth = Arc::new(MeshAuthCache::new());
-    let state = AppState { registry, presence, rooms, mesh, mesh_auth, metrics };
+    let state = AppState {
+        registry,
+        presence,
+        rooms,
+        mesh,
+        mesh_auth,
+        metrics,
+    };
     let app = build_router(state);
     tokio::spawn(async move {
         let _ = axum::serve(

@@ -11,9 +11,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use tracing::warn;
 
 use super::store::{MeshStore, StoreError};
-use super::types::{
-    GetQuery, GetResponse, MeshEnvelopeWire, PostResponse,
-};
+use super::types::{GetQuery, GetResponse, MeshEnvelopeWire, PostResponse};
 use super::verify::{VerifyError, decode_wire, owner_pk_hash, verify_envelope};
 
 /// 500 KB cap on `POST /mesh/:hash` bodies (decision Q4 of plan 24).
@@ -63,8 +61,7 @@ pub async fn post_mesh(
 
     let wire: MeshEnvelopeWire = serde_json::from_slice(&body)
         .map_err(|e| MeshHttpError::BadRequest(format!("invalid json: {e}")))?;
-    let env = decode_wire(&wire)
-        .map_err(|e| MeshHttpError::BadRequest(format!("decode: {e}")))?;
+    let env = decode_wire(&wire).map_err(|e| MeshHttpError::BadRequest(format!("decode: {e}")))?;
 
     let header = verify_envelope(&env).map_err(|e| match e {
         VerifyError::SigFailed => MeshHttpError::Forbidden("sig_invalid".into()),
@@ -98,11 +95,14 @@ pub async fn post_mesh(
     ) {
         Ok(()) => Ok((
             StatusCode::OK,
-            Json(PostResponse { version: header.version, updated_at: now_ms }),
+            Json(PostResponse {
+                version: header.version,
+                updated_at: now_ms,
+            }),
         )),
-        Err(StoreError::StaleVersion { current, .. }) => {
-            Err(MeshHttpError::Conflict { current_version: current })
-        }
+        Err(StoreError::StaleVersion { current, .. }) => Err(MeshHttpError::Conflict {
+            current_version: current,
+        }),
         Err(e) => Err(MeshHttpError::Internal(e.to_string())),
     }
 }

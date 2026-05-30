@@ -27,8 +27,8 @@ pub enum VerifyError {
 /// Different serializers may produce different bytes for the same logical
 /// object — agree on one canonical form across Dart, Rust, TypeScript.
 pub fn verify_envelope(env: &MeshEnvelope) -> Result<MeshHeader, VerifyError> {
-    let header: MeshHeader = serde_json::from_slice(&env.blob)
-        .map_err(|e| VerifyError::BadBlobJson(e.to_string()))?;
+    let header: MeshHeader =
+        serde_json::from_slice(&env.blob).map_err(|e| VerifyError::BadBlobJson(e.to_string()))?;
 
     let owner_pk_bytes = B64
         .decode(&header.owner_pk)
@@ -118,12 +118,18 @@ mod tests {
         // Re-serialize JSON so it still parses cleanly but with bad bytes
         // — actually the easier way: keep blob valid JSON but mismatch sig.
         let original_blob = make_blob(7, &pk_b64);
-        let env2 = MeshEnvelope { blob: original_blob, sig: env.sig.clone() };
+        let env2 = MeshEnvelope {
+            blob: original_blob,
+            sig: env.sig.clone(),
+        };
         // env2 has a sig that was made over a different blob → sig fails.
         let _ = env; // silence unused
         // We want to assert verification fails; trick: swap blob with sig over different version.
         let other_blob = make_blob(99, &pk_b64);
-        let bad = MeshEnvelope { blob: other_blob, sig: env2.sig };
+        let bad = MeshEnvelope {
+            blob: other_blob,
+            sig: env2.sig,
+        };
         assert!(matches!(verify_envelope(&bad), Err(VerifyError::SigFailed)));
     }
 
@@ -142,6 +148,9 @@ mod tests {
     fn computes_sha256_lowercase_hex() {
         // sha256("") = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
         let h = owner_pk_hash(&[]);
-        assert_eq!(h, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assert_eq!(
+            h,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
     }
 }

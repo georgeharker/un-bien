@@ -84,13 +84,20 @@ impl MeshAuthCache {
             };
             let set: HashSet<String> = members_arr
                 .iter()
-                .filter_map(|m| m.get("remote_epk").and_then(|v| v.as_str()).map(String::from))
+                .filter_map(|m| {
+                    m.get("remote_epk")
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                })
                 .collect();
             if set.contains(pi_pk) {
                 let mut g = self.inner.lock().unwrap();
                 g.insert(
                     pi_pk.to_string(),
-                    CachedMembers { members: set.clone(), cached_at: Instant::now() },
+                    CachedMembers {
+                        members: set.clone(),
+                        cached_at: Instant::now(),
+                    },
                 );
                 return Some(set);
             }
@@ -166,7 +173,10 @@ fn make_transport_error(envelope: Option<&serde_json::Value>, reason: &str) -> M
     let (re, to_addr) = match envelope {
         Some(e) => (
             e.get("id").and_then(|v| v.as_str()).map(String::from),
-            e.get("from").and_then(|v| v.as_str()).unwrap_or("_unknown").to_string(),
+            e.get("from")
+                .and_then(|v| v.as_str())
+                .unwrap_or("_unknown")
+                .to_string(),
         ),
         None => (None, "_unknown".to_string()),
     };
@@ -224,7 +234,9 @@ mod tests {
             }
             s
         };
-        store.upsert(&hash, owner_pk, version, &blob_bytes, &[0u8; 64], 0).unwrap();
+        store
+            .upsert(&hash, owner_pk, version, &blob_bytes, &[0u8; 64], 0)
+            .unwrap();
     }
 
     #[tokio::test]

@@ -39,10 +39,7 @@ async fn publish_owner_blob(
 ) {
     let owner_pk_bytes = owner_sk.verifying_key().to_bytes();
     let owner_pk_b64 = B64.encode(owner_pk_bytes);
-    let members_json: Vec<Value> = members
-        .iter()
-        .map(|m| json!({ "remote_epk": m }))
-        .collect();
+    let members_json: Vec<Value> = members.iter().map(|m| json!({ "remote_epk": m })).collect();
     let blob = json!({
         "owner_pk": owner_pk_b64,
         "version": version,
@@ -67,11 +64,7 @@ async fn publish_owner_blob(
 }
 
 /// Sends a `pi_envelope` frame from an already-authenticated Pi WS.
-async fn send_pi_envelope(
-    ws: &mut common::WsStream,
-    to_pc: &str,
-    envelope: Value,
-) {
+async fn send_pi_envelope(ws: &mut common::WsStream, to_pc: &str, envelope: Value) {
     ws.send(Message::text(
         json!({
             "type": "pi_envelope",
@@ -131,7 +124,10 @@ async fn happy_path_same_owner_envelope_delivered_verbatim() {
     let frame = recv_json(&mut ws_b, "ws_b").await;
     let latency = t0.elapsed();
     assert_eq!(frame["type"], "pi_envelope_in");
-    assert_eq!(frame["from_pc"], peer_a, "must carry authenticated sender pk");
+    assert_eq!(
+        frame["from_pc"], peer_a,
+        "must carry authenticated sender pk"
+    );
     assert_eq!(
         frame["envelope"], envelope,
         "envelope must be forwarded verbatim"
@@ -175,7 +171,10 @@ async fn pi_b_offline_returns_transport_error_offline() {
     assert_eq!(frame["from_pc"], "_relay");
     assert_eq!(frame["envelope"]["body"]["type"], "transport_error");
     assert_eq!(frame["envelope"]["body"]["reason"], "offline");
-    assert_eq!(frame["envelope"]["re"], "u-offline", "must correlate via re");
+    assert_eq!(
+        frame["envelope"]["re"], "u-offline",
+        "must correlate via re"
+    );
     assert_eq!(frame["envelope"]["from"], "_relay");
     assert_eq!(frame["envelope"]["to"], "casa:sess-3");
 }

@@ -20,19 +20,19 @@ async fn two_peers_route_message() {
         .await
         .unwrap();
 
-    let received = tokio::time::timeout(
-        tokio::time::Duration::from_secs(1),
-        ws_b.next(),
-    )
-    .await
-    .expect("timed out waiting for forwarded message")
-    .unwrap()
-    .unwrap();
+    let received = tokio::time::timeout(tokio::time::Duration::from_secs(1), ws_b.next())
+        .await
+        .expect("timed out waiting for forwarded message")
+        .unwrap()
+        .unwrap();
 
     // B receives: peer = sender (peer_a), ct unchanged
     let received_json: serde_json::Value =
         serde_json::from_str(received.to_text().unwrap()).unwrap();
-    assert_eq!(received_json["peer"], peer_a, "relay must rewrite peer to sender id");
+    assert_eq!(
+        received_json["peer"], peer_a,
+        "relay must rewrite peer to sender id"
+    );
     assert_eq!(received_json["ct"], ct, "ct must be forwarded unchanged");
 }
 
@@ -46,11 +46,7 @@ async fn dest_offline_drops_silently() {
     ws_a.send(Message::text(envelope)).await.unwrap();
 
     // If the relay silently drops it, no message arrives and no close frame is sent.
-    let result = tokio::time::timeout(
-        tokio::time::Duration::from_millis(200),
-        ws_a.next(),
-    )
-    .await;
+    let result = tokio::time::timeout(tokio::time::Duration::from_millis(200), ws_a.next()).await;
 
     assert!(
         result.is_err(),
@@ -66,7 +62,7 @@ async fn invalid_sig_closes_ws() {
     let url = format!("ws://127.0.0.1:{port}");
     let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
 
-    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     use ed25519_dalek::SigningKey;
     let sk = SigningKey::generate(&mut rand::thread_rng());
     let vk = sk.verifying_key();
@@ -80,8 +76,7 @@ async fn invalid_sig_closes_ws() {
 
     // receive and ignore challenge (we won't sign correctly)
     let challenge_msg = ws.next().await.unwrap().unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(challenge_msg.to_text().unwrap()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(challenge_msg.to_text().unwrap()).unwrap();
     assert_eq!(v["type"], "challenge");
 
     // send all-zero signature (invalid)
@@ -92,11 +87,8 @@ async fn invalid_sig_closes_ws() {
     .unwrap();
 
     // relay must close within 100 ms
-    let close_result = tokio::time::timeout(
-        tokio::time::Duration::from_millis(100),
-        ws.next(),
-    )
-    .await;
+    let close_result =
+        tokio::time::timeout(tokio::time::Duration::from_millis(100), ws.next()).await;
 
     assert!(
         close_result.is_ok(),

@@ -16,7 +16,7 @@ use crate::auth::challenge::{
     HELLO_TIMEOUT_MS, challenge_line, gen_nonce, parse_hello, verify_auth,
 };
 use crate::protocol::outer::{OuterEnvelope, parse_line};
-use crate::rooms::RoomMeta;
+use crate::rooms::{RoomMeta, RoomMetaPatch};
 
 /// Axum route handler: validates the WebSocket upgrade and hands the upgraded
 /// socket to `handle_peer`, which owns the connection for its lifetime.
@@ -36,11 +36,8 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
     let (mut sink, mut stream) = socket.split();
 
     // ── 1. Wait for hello (with timeout) ──────────────────────────────────
-    let hello_result = tokio::time::timeout(
-        Duration::from_millis(HELLO_TIMEOUT_MS),
-        stream.next(),
-    )
-    .await;
+    let hello_result =
+        tokio::time::timeout(Duration::from_millis(HELLO_TIMEOUT_MS), stream.next()).await;
 
     let hello_text = match hello_result {
         Ok(Some(Ok(Message::Text(t)))) => t,
@@ -105,11 +102,22 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
             .and_then(|m| m.get("model"))
             .and_then(|v| v.as_str())
             .map(String::from);
+        let thinking = room_meta_val
+            .and_then(|m| m.get("thinking"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
         let started_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as i64;
-        RoomMeta { room_id, name, cwd, model, started_at }
+        RoomMeta {
+            room_id,
+            name,
+            cwd,
+            model,
+            thinking,
+            started_at,
+        }
     };
     let room_id = room_meta.room_id.clone();
 
@@ -242,20 +250,35 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                     }
                                 }
 
-                                // ── room meta update (plano 18) ──
+                                // ── room meta update (plano 18 + 28) ──
+                                // `meta.model` and `meta.thinking` are
+                                // patched independently: a field absent from
+                                // `meta` is *left alone* on the room (not
+                                // cleared). A field explicitly set to `null`
+                                // clears it. Mirrors the JSON Merge Patch
+                                // shape clients already produce for thinking
+                                // and model selection.
                                 "room_meta_update" => {
                                     let target_room = frame
                                         .get("room_id")
                                         .and_then(|v| v.as_str())
                                         .unwrap_or(&room_id)
                                         .to_string();
-                                    let model = frame
+                                    let meta_obj = frame
                                         .get("meta")
+                                        .and_then(|v| v.as_object());
+                                    let model_patch = meta_obj
                                         .and_then(|m| m.get("model"))
-                                        .and_then(|v| v.as_str())
-                                        .map(String::from);
+                                        .map(|v| v.as_str().map(String::from));
+                                    let thinking_patch = meta_obj
+                                        .and_then(|m| m.get("thinking"))
+                                        .map(|v| v.as_str().map(String::from));
+                                    let patch = RoomMetaPatch {
+                                        model: model_patch,
+                                        thinking: thinking_patch,
+                                    };
                                     if !registry
-                                        .update_room_meta(&peer_id, &target_room, model)
+                                        .update_room_meta(&peer_id, &target_room, patch)
                                         .await
                                     {
                                         warn!(

@@ -16,8 +16,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Default puts the SQLite file (and any transient -journal) under data/,
     // so bare-metal `cargo run` doesn't litter the project root.
-    let db_path = std::env::var("REMOTEPI_MESH_DB_PATH")
-        .unwrap_or_else(|_| "data/mesh.db".to_string());
+    let db_path =
+        std::env::var("REMOTEPI_MESH_DB_PATH").unwrap_or_else(|_| "data/mesh.db".to_string());
 
     let mesh = Arc::new(
         relay::MeshStore::open(&db_path)

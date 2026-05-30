@@ -14,7 +14,35 @@ pub struct RoomMeta {
     /// Active Claude model for this room (plano 18). None = not reported yet.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Active thinking level for this room (plano 28). Opaque string from the
+    /// Pi's perspective (e.g. `"high"`, `"medium"`, `"none"`) — the relay
+    /// never interprets it. None = not reported yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
     pub started_at: i64,
+}
+
+/// Patch over the mutable `RoomMeta` fields. Each entry distinguishes
+/// "field absent in the update" (outer `None`, meaning "leave current") from
+/// "field present in the update" (outer `Some(_)`, whose inner `None` means
+/// "clear to null" and whose inner `Some(s)` means "set to s").
+///
+/// Built by the `room_meta_update` handler from the `meta` JSON object; the
+/// relay never inspects the inner values beyond JSON-shape (they're forwarded
+/// opaquely to subscribers).
+#[derive(Debug, Default, Clone)]
+pub struct RoomMetaPatch {
+    pub model: Option<Option<String>>,
+    pub thinking: Option<Option<String>>,
+}
+
+impl RoomMetaPatch {
+    /// `true` when at least one field is present (i.e. the patch is a no-op
+    /// otherwise). Used by the registry to skip work when callers send empty
+    /// `meta: {}`.
+    pub fn is_empty(&self) -> bool {
+        self.model.is_none() && self.thinking.is_none()
+    }
 }
 
 #[derive(Debug, Default)]

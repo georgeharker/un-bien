@@ -1,7 +1,7 @@
 // Types not yet wired into the WS handler — will be connected in routing step.
 #![allow(dead_code)]
 
-use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use ed25519_dalek::{Signature, VerifyingKey};
 use rand::RngCore as _;
 use serde::{Deserialize, Serialize};

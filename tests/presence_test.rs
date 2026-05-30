@@ -15,7 +15,7 @@ fn random_key() -> SigningKey {
 async fn subscribe_then_peer_connects_pushes_online() {
     let port = start_relay().await;
     let sk_a = random_key();
-    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     let peer_a = B64.encode(sk_a.verifying_key().to_bytes());
 
     let (mut ws_b, _) = connect_and_auth(port).await;
@@ -32,14 +32,11 @@ async fn subscribe_then_peer_connects_pushes_online() {
     let (_ws_a, _) = connect_and_auth_with_key(port, &sk_a).await;
 
     // B must receive peer_online within 1s
-    let msg = tokio::time::timeout(
-        tokio::time::Duration::from_secs(1),
-        ws_b.next(),
-    )
-    .await
-    .expect("timed out waiting for peer_online")
-    .unwrap()
-    .unwrap();
+    let msg = tokio::time::timeout(tokio::time::Duration::from_secs(1), ws_b.next())
+        .await
+        .expect("timed out waiting for peer_online")
+        .unwrap()
+        .unwrap();
 
     let v: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
     assert_eq!(v["type"], "peer_online", "expected peer_online, got {v}");
@@ -51,7 +48,7 @@ async fn subscribe_then_peer_connects_pushes_online() {
 async fn peer_disconnects_pushes_offline_with_since_ts() {
     let port = start_relay().await;
     let sk_a = random_key();
-    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     let peer_a = B64.encode(sk_a.verifying_key().to_bytes());
 
     let (ws_a, _) = connect_and_auth_with_key(port, &sk_a).await;
@@ -66,30 +63,27 @@ async fn peer_disconnects_pushes_offline_with_since_ts() {
 
     // Backfill (Fix #2) pushes a peer_online for the already-online A —
     // consume it so the assertion below only sees the peer_offline frame.
-    let backfill = tokio::time::timeout(
-        tokio::time::Duration::from_millis(200),
-        ws_b.next(),
-    )
-    .await
-    .expect("timed out waiting for backfill")
-    .unwrap()
-    .unwrap();
+    let backfill = tokio::time::timeout(tokio::time::Duration::from_millis(200), ws_b.next())
+        .await
+        .expect("timed out waiting for backfill")
+        .unwrap()
+        .unwrap();
     let bf: serde_json::Value = serde_json::from_str(backfill.to_text().unwrap()).unwrap();
-    assert_eq!(bf["type"], "peer_online", "expected backfill peer_online, got {bf}");
+    assert_eq!(
+        bf["type"], "peer_online",
+        "expected backfill peer_online, got {bf}"
+    );
 
     // A drops its WS (simulates disconnect)
     drop(ws_a);
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
     // B must receive peer_offline with a numeric since_ts
-    let msg = tokio::time::timeout(
-        tokio::time::Duration::from_secs(1),
-        ws_b.next(),
-    )
-    .await
-    .expect("timed out waiting for peer_offline")
-    .unwrap()
-    .unwrap();
+    let msg = tokio::time::timeout(tokio::time::Duration::from_secs(1), ws_b.next())
+        .await
+        .expect("timed out waiting for peer_offline")
+        .unwrap()
+        .unwrap();
 
     let v: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
     assert_eq!(v["type"], "peer_offline", "expected peer_offline, got {v}");
@@ -106,7 +100,7 @@ async fn peer_disconnects_pushes_offline_with_since_ts() {
 async fn presence_check_returns_offline_for_unknown_peer() {
     let port = start_relay().await;
     let sk_a = random_key();
-    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     let peer_a = B64.encode(sk_a.verifying_key().to_bytes());
 
     let (mut ws_b, _) = connect_and_auth(port).await;
@@ -116,14 +110,11 @@ async fn presence_check_returns_offline_for_unknown_peer() {
     .await
     .unwrap();
 
-    let msg = tokio::time::timeout(
-        tokio::time::Duration::from_secs(1),
-        ws_b.next(),
-    )
-    .await
-    .expect("timed out waiting for presence response")
-    .unwrap()
-    .unwrap();
+    let msg = tokio::time::timeout(tokio::time::Duration::from_secs(1), ws_b.next())
+        .await
+        .expect("timed out waiting for presence response")
+        .unwrap()
+        .unwrap();
 
     let v: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
     assert_eq!(v["type"], "presence");
@@ -131,7 +122,10 @@ async fn presence_check_returns_offline_for_unknown_peer() {
     assert_eq!(states.len(), 1);
     assert_eq!(states[0]["peer"], peer_a);
     assert_eq!(states[0]["online"], false, "peer_a should be offline");
-    assert!(states[0]["since_ts"].is_null(), "since_ts should be null for never-seen peer");
+    assert!(
+        states[0]["since_ts"].is_null(),
+        "since_ts should be null for never-seen peer"
+    );
 }
 
 /// presence_check for a peer that IS connected → online, since_ts null.
@@ -139,7 +133,7 @@ async fn presence_check_returns_offline_for_unknown_peer() {
 async fn presence_check_returns_online_for_connected_peer() {
     let port = start_relay().await;
     let sk_a = random_key();
-    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     let peer_a = B64.encode(sk_a.verifying_key().to_bytes());
 
     let (_ws_a, _) = connect_and_auth_with_key(port, &sk_a).await;
@@ -151,21 +145,21 @@ async fn presence_check_returns_online_for_connected_peer() {
     .await
     .unwrap();
 
-    let msg = tokio::time::timeout(
-        tokio::time::Duration::from_secs(1),
-        ws_b.next(),
-    )
-    .await
-    .expect("timed out waiting for presence response")
-    .unwrap()
-    .unwrap();
+    let msg = tokio::time::timeout(tokio::time::Duration::from_secs(1), ws_b.next())
+        .await
+        .expect("timed out waiting for presence response")
+        .unwrap()
+        .unwrap();
 
     let v: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
     assert_eq!(v["type"], "presence");
     let states = v["states"].as_array().unwrap();
     assert_eq!(states[0]["peer"], peer_a);
     assert_eq!(states[0]["online"], true, "peer_a should be online");
-    assert!(states[0]["since_ts"].is_null(), "since_ts is null when online");
+    assert!(
+        states[0]["since_ts"].is_null(),
+        "since_ts is null when online"
+    );
 }
 
 /// Fix #2 — subscribe_presence backfill: if the target peer is ALREADY online
@@ -175,7 +169,7 @@ async fn presence_check_returns_online_for_connected_peer() {
 async fn subscribe_after_peer_already_online_backfills_peer_online() {
     let port = start_relay().await;
     let sk_pi = random_key();
-    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
 
     // Pi comes online FIRST.
@@ -191,17 +185,17 @@ async fn subscribe_after_peer_already_online_backfills_peer_online() {
         .unwrap();
 
     // App must receive peer_online via backfill, not having to call presence_check.
-    let msg = tokio::time::timeout(
-        tokio::time::Duration::from_secs(1),
-        ws_app.next(),
-    )
-    .await
-    .expect("timed out waiting for backfilled peer_online")
-    .unwrap()
-    .unwrap();
+    let msg = tokio::time::timeout(tokio::time::Duration::from_secs(1), ws_app.next())
+        .await
+        .expect("timed out waiting for backfilled peer_online")
+        .unwrap()
+        .unwrap();
 
     let v: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
-    assert_eq!(v["type"], "peer_online", "expected backfilled peer_online, got: {v}");
+    assert_eq!(
+        v["type"], "peer_online",
+        "expected backfilled peer_online, got: {v}"
+    );
     assert_eq!(v["peer"], peer_pi);
 }
 
@@ -213,7 +207,7 @@ async fn subscribe_after_peer_already_online_backfills_peer_online() {
 async fn second_conn_same_peer_does_not_re_emit_peer_online() {
     let port = start_relay().await;
     let sk_pi = random_key();
-    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
 
     // App subscribes first.
@@ -228,14 +222,11 @@ async fn second_conn_same_peer_does_not_re_emit_peer_online() {
 
     // First Pi conn → first (and only) peer_online.
     let (_ws_pi_1, _) = connect_and_auth_with_key(port, &sk_pi).await;
-    let m1 = tokio::time::timeout(
-        tokio::time::Duration::from_secs(1),
-        ws_app.next(),
-    )
-    .await
-    .expect("missed first peer_online")
-    .unwrap()
-    .unwrap();
+    let m1 = tokio::time::timeout(tokio::time::Duration::from_secs(1), ws_app.next())
+        .await
+        .expect("missed first peer_online")
+        .unwrap()
+        .unwrap();
     let v1: serde_json::Value = serde_json::from_str(m1.to_text().unwrap()).unwrap();
     assert_eq!(v1["type"], "peer_online");
     assert_eq!(v1["peer"], peer_pi);
@@ -243,15 +234,15 @@ async fn second_conn_same_peer_does_not_re_emit_peer_online() {
     // Second Pi conn at the SAME peer — no real transition → must NOT
     // emit peer_online again.
     let (_ws_pi_2, _) = connect_and_auth_with_key(port, &sk_pi).await;
-    let spurious = tokio::time::timeout(
-        tokio::time::Duration::from_millis(200),
-        ws_app.next(),
-    )
-    .await;
+    let spurious =
+        tokio::time::timeout(tokio::time::Duration::from_millis(200), ws_app.next()).await;
     assert!(
         spurious.is_err(),
         "second register at already-online peer must NOT re-emit peer_online, got: {:?}",
-        spurious.ok().and_then(|m| m.and_then(|r| r.ok())).map(|m| m.into_text())
+        spurious
+            .ok()
+            .and_then(|m| m.and_then(|r| r.ok()))
+            .map(|m| m.into_text())
     );
 }
 
@@ -262,7 +253,7 @@ async fn second_conn_same_peer_does_not_re_emit_peer_online() {
 async fn presence_check_dedup_suppresses_identical_responses() {
     let port = start_relay().await;
     let sk_a = random_key();
-    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     let peer_a = B64.encode(sk_a.verifying_key().to_bytes());
 
     // A is online; B asks twice in a row — only the first reply comes back.
@@ -292,7 +283,9 @@ async fn presence_check_dedup_suppresses_identical_responses() {
     assert!(
         dup.is_err(),
         "identical presence reply must be suppressed, got: {:?}",
-        dup.ok().and_then(|m| m.and_then(|r| r.ok())).map(|m| m.into_text())
+        dup.ok()
+            .and_then(|m| m.and_then(|r| r.ok()))
+            .map(|m| m.into_text())
     );
 }
 
@@ -304,7 +297,7 @@ async fn presence_check_after_change_emits_new_snapshot() {
     let port = start_relay().await;
     let sk_a = random_key();
     let sk_c = random_key();
-    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     let peer_a = B64.encode(sk_a.verifying_key().to_bytes());
     let peer_c = B64.encode(sk_c.verifying_key().to_bytes());
 
