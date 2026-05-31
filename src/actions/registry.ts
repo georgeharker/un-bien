@@ -15,7 +15,7 @@
  * `plan/28-pi-commands.md` Wave 0.
  */
 
-import { ModelRegistry, AuthStorage } from "@mariozechner/pi-coding-agent";
+import { ModelRegistry, AuthStorage } from "@earendil-works/pi-coding-agent";
 
 let _registry: ModelRegistry | null = null;
 

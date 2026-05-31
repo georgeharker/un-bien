@@ -2,7 +2,7 @@
 
 Extensão para o [Pi coding agent](https://github.com/earendil-works/pi) que
 adiciona o slash command `/remote-pi`. Embarca o SDK do Pi
-(`@mariozechner/pi-coding-agent`) e expõe via WebSocket pro relay.
+(`@earendil-works/pi-coding-agent`) e expõe via WebSocket pro relay.
 
 Faz parte da **mesh de agentes coding cross-PC** do Remote Pi: cada PC
 roda esta extensão (Node daemon) com uma Pi-key Ed25519 no keyring do
@@ -51,7 +51,7 @@ Slash commands:
 
 ## Dependências importantes
 
-- `@mariozechner/pi-coding-agent` — SDK do Pi (`AgentSession`, `SessionManager`, `ModelRegistry`)
+- `@earendil-works/pi-coding-agent` — SDK do Pi (`AgentSession`, `SessionManager`, `ModelRegistry`)
 - `ws` — WebSocket client
 
 ## Convenções

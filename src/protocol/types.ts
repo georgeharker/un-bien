@@ -159,7 +159,7 @@ export type ActionName =
 
 /**
  * Plan/28 — Mirror of the SDK's `ThinkingLevel` (defined in
- * `@mariozechner/pi-agent-core/types`). Re-declared locally so the wire
+ * `@earendil-works/pi-agent-core/types`). Re-declared locally so the wire
  * protocol owns its own enum and we don't leak SDK-internal types onto
  * the app's network surface.
  *

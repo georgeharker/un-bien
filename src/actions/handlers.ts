@@ -30,8 +30,8 @@ import type {
 
 /**
  * Structural subset of the SDK's `Model<Api>` interface (defined in
- * `@mariozechner/pi-ai`, which is a transitive dep — not re-exported by
- * `@mariozechner/pi-coding-agent`'s main entry). Capturing just the
+ * `@earendil-works/pi-ai`, which is a transitive dep — not re-exported by
+ * `@earendil-works/pi-coding-agent`'s main entry). Capturing just the
  * fields we touch keeps the handler decoupled from the SDK's full Model
  * surface and avoids a direct dep on `pi-ai`.
  */

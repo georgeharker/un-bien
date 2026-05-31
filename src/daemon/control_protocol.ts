@@ -8,7 +8,7 @@
  *
  * Plan/26 W2. The Pi RPC protocol (`pi --mode rpc`) used by the daemon
  * children themselves is a separate contract — see
- * `node_modules/@mariozechner/pi-coding-agent/dist/modes/rpc/rpc-types.d.ts`.
+ * `node_modules/@earendil-works/pi-coding-agent/dist/modes/rpc/rpc-types.d.ts`.
  * This file is strictly the supervisor's own control plane.
  */
 

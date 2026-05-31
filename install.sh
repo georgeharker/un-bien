@@ -9,7 +9,7 @@
 #   1. Node      — uses the system Node if it's >= 20.6.0; otherwise installs
 #                  it via nvm under ~/.nvm (never touches the system Node).
 #   2. Pi        — installs the Pi coding agent (npm package
-#                  @mariozechner/pi-coding-agent) into a user-space prefix
+#                  @earendil-works/pi-coding-agent) into a user-space prefix
 #                  (~/.local) so `pi` lands on ~/.local/bin without root.
 #   3. remote-pi — installs this plugin into Pi (`pi install npm:remote-pi`).
 #   4. CLI link  — symlinks the `remote-pi` CLI into ~/.local/bin.
@@ -29,12 +29,17 @@ set -euo pipefail
 
 MIN_NODE="20.6.0"               # Pi requires Node >= 20.6.0
 NODE_LTS="22"                   # what we install via nvm when Node is missing
-PI_PKG="@mariozechner/pi-coding-agent"
+PI_PKG="@earendil-works/pi-coding-agent"
 PLUGIN_SPEC="npm:remote-pi"
 PLUGIN_NAME="remote-pi"
 USER_PREFIX="$HOME/.local"      # user-space npm global prefix (sudo-free)
 LOCAL_BIN="$USER_PREFIX/bin"
-PLUGIN_DIST="$HOME/.pi/agent/npm/node_modules/remote-pi/dist/index.js"
+
+# Resolved at runtime by ensure_plugin() — `pi install npm:remote-pi` runs
+# `npm install -g`, so the plugin lands under `npm root -g`, NOT in
+# ~/.pi/agent/npm. We can't hardcode it: it depends on the effective npm
+# prefix (nvm dir, ~/.local, a user .npmrc, …). Always ask `npm root -g`.
+PLUGIN_DIST=""
 
 # ── Pretty output ────────────────────────────────────────────────────────────
 
@@ -111,6 +116,46 @@ ensure_local_bin_on_path() {
   esac
 }
 
+# Resolve the global node_modules root that `npm install -g` (and therefore
+# `pi install npm:…`) writes to, honoring the effective npm config. We point
+# it at our user-space prefix by default so global installs stay sudo-free —
+# but whatever prefix actually wins, pi and this script read the SAME config,
+# so they can never disagree on where the plugin lands.
+npm_global_root() { npm root -g 2>/dev/null; }
+
+# Whether the active Node is provided by nvm (we installed it, or the user
+# already had an nvm Node on PATH). Set by ensure_node(). This gates whether
+# we may touch npm_config_prefix at all — see configure_npm_prefix().
+NODE_FROM_NVM=0
+
+# GOLDEN RULE: never export npm_config_prefix while nvm is (or might be) in
+# play — nvm flat-out refuses to run with that env var set and aborts. So we
+# decide the prefix AFTER Node is settled, and only for the system-Node case:
+#
+#   • nvm Node      → its global root (`npm root -g`) is already user-writable.
+#                     Leave npm_config_prefix UNSET (setting it breaks nvm).
+#   • system Node   → if `npm root -g` isn't writable without sudo, redirect
+#                     global installs into ~/.local via npm_config_prefix.
+#
+# Either way resolve_plugin_dist() finds the plugin via `npm root -g`, since
+# pi and this script read the same effective npm config.
+configure_npm_prefix() {
+  if [ "$NODE_FROM_NVM" = "1" ]; then
+    unset npm_config_prefix 2>/dev/null || true   # must stay unset for nvm Node
+    return 0
+  fi
+  # System Node: is the global node_modules root writable without sudo?
+  local groot gparent
+  groot="$(npm_global_root)"
+  [ -n "$groot" ] || return 0
+  gparent="$(dirname "$groot")"
+  while [ -n "$gparent" ] && [ ! -e "$gparent" ]; do gparent="$(dirname "$gparent")"; done
+  if [ -n "$gparent" ] && [ ! -w "$gparent" ]; then
+    info "system npm global root '$groot' is not writable — redirecting global installs to $USER_PREFIX (sudo-free)"
+    export npm_config_prefix="$USER_PREFIX"
+  fi
+}
+
 # Append an `export PATH` line to the user's shell rc (idempotent) so the bins
 # survive a new shell. We never rewrite existing lines — only add if missing.
 persist_path_in_rc() {
@@ -140,8 +185,12 @@ ensure_node() {
   if command -v node >/dev/null 2>&1; then
     local have; have="$(node -v 2>/dev/null | sed 's/^v//')"
     if [ -n "$have" ] && version_gte "$have" "$MIN_NODE"; then
-      ok "using system Node v$have"
-      record "Node:       v$have (system)"
+      # Classify by path: an nvm Node lives under ~/.nvm, even if it was
+      # already on PATH when we started.
+      case "$(command -v node)" in
+        "$HOME/.nvm/"*) NODE_FROM_NVM=1; ok "using existing nvm Node v$have"; record "Node:       v$have (nvm)" ;;
+        *)              NODE_FROM_NVM=0; ok "using system Node v$have";       record "Node:       v$have (system)" ;;
+      esac
       return 0
     fi
     warn "system Node v${have:-?} is older than $MIN_NODE — installing a private one via nvm"
@@ -153,6 +202,9 @@ ensure_node() {
 }
 
 install_node_via_nvm() {
+  # nvm is INCOMPATIBLE with npm_config_prefix and aborts if it's set (whether
+  # we set it or the user's environment did). Clear it before any nvm call.
+  unset npm_config_prefix 2>/dev/null || true
   export NVM_DIR="$HOME/.nvm"
   if [ ! -s "$NVM_DIR/nvm.sh" ]; then
     info "installing nvm into $NVM_DIR"
@@ -174,6 +226,7 @@ install_node_via_nvm() {
   command -v node >/dev/null 2>&1 || die "nvm install finished but 'node' is still not on PATH"
   local have; have="$(node -v | sed 's/^v//')"
   version_gte "$have" "$MIN_NODE" || die "installed Node v$have is still < $MIN_NODE"
+  NODE_FROM_NVM=1
   ok "installed Node v$have via nvm"
   record "Node:       v$have (nvm)"
 }
@@ -190,6 +243,22 @@ ensure_pi() {
     return 0
   fi
 
+  # Guard the no-sudo promise: the global node_modules root must be writable.
+  # On a clean box (nvm Node, or ~/.local prefix) it is. If it points at a
+  # root-owned dir (e.g. system Node's /usr/local), fail with a clear hint
+  # instead of triggering an EACCES / sudo prompt mid-install.
+  local groot; groot="$(npm_global_root)"
+  if [ -n "$groot" ]; then
+    local gparent; gparent="$(dirname "$groot")"   # …/lib  (created on first install)
+    while [ -n "$gparent" ] && [ ! -e "$gparent" ]; do gparent="$(dirname "$gparent")"; done
+    if [ -n "$gparent" ] && [ ! -w "$gparent" ]; then
+      die "npm global prefix '$groot' is not writable without sudo.
+    This installer never uses sudo. Fix it user-space, then re-run:
+      npm config set prefix \"\$HOME/.local\"
+    (or install Node via nvm, which uses a writable prefix automatically)."
+    fi
+  fi
+
   # User-space global install: --prefix keeps `pi` in ~/.local/bin, no sudo.
   info "npm install -g --prefix $USER_PREFIX $PI_PKG"
   npm install -g --prefix "$USER_PREFIX" "$PI_PKG" >/dev/null
@@ -202,20 +271,50 @@ ensure_pi() {
 
 # ── 3. remote-pi plugin ──────────────────────────────────────────────────────
 
+# Locate the plugin's compiled entry. Pi's install path CHANGED across versions:
+#   • Pi >= 0.78 (@earendil-works): installs into ~/.pi/agent/npm/node_modules/
+#   • Pi  = 0.73 (@mariozechner):   ran `npm install -g` → lands in `npm root -g`
+# We check both, current-behavior first, and use whichever exists. Sets the
+# global PLUGIN_DIST. Returns 1 if neither is found.
+plugin_dist_candidates() {
+  printf '%s\n' "$HOME/.pi/agent/npm/node_modules/remote-pi/dist/index.js"
+  local root; root="$(npm_global_root)"
+  [ -n "$root" ] && printf '%s\n' "$root/remote-pi/dist/index.js"
+}
+
+resolve_plugin_dist() {
+  local cand
+  while IFS= read -r cand; do
+    [ -n "$cand" ] || continue
+    if [ -f "$cand" ]; then PLUGIN_DIST="$cand"; return 0; fi
+  done < <(plugin_dist_candidates)
+  return 1
+}
+
 ensure_plugin() {
   step "Installing the remote-pi plugin into Pi"
 
-  if [ -f "$PLUGIN_DIST" ]; then
-    ok "plugin already installed at ~/.pi/agent/npm — skipping"
+  if resolve_plugin_dist; then
+    ok "plugin already installed ($(dirname "$(dirname "$PLUGIN_DIST")")) — skipping"
     record "Plugin:     remote-pi (pre-existing)"
     return 0
   fi
 
   info "pi install $PLUGIN_SPEC"
   pi install "$PLUGIN_SPEC" >/dev/null
-  [ -f "$PLUGIN_DIST" ] || die "plugin install ran but $PLUGIN_DIST is missing"
-  local v; v="$(node -p "require('$HOME/.pi/agent/npm/node_modules/remote-pi/package.json').version" 2>/dev/null || true)"
-  ok "installed remote-pi plugin${v:+ v$v}"
+
+  # Pi may install into ~/.pi/agent/npm (>= 0.78) or `npm root -g` (0.73).
+  # resolve_plugin_dist() checks both — never a single hardcoded path.
+  if ! resolve_plugin_dist; then
+    die "plugin install ran but remote-pi/dist/index.js was not found.
+    Looked in:
+      $HOME/.pi/agent/npm/node_modules/remote-pi/dist/index.js
+      $(npm_global_root)/remote-pi/dist/index.js
+    Check the 'pi install $PLUGIN_SPEC' output above."
+  fi
+  local pkg_json; pkg_json="$(dirname "$(dirname "$PLUGIN_DIST")")/package.json"
+  local v; v="$(node -p "require('$pkg_json').version" 2>/dev/null || true)"
+  ok "installed remote-pi plugin${v:+ v$v} → $PLUGIN_DIST"
   record "Plugin:     remote-pi${v:+ v$v}"
 }
 
@@ -299,7 +398,8 @@ EOF
 
 main() {
   ensure_local_bin_on_path
-  ensure_node
+  ensure_node            # may use nvm — must run BEFORE we touch npm_config_prefix
+  configure_npm_prefix   # only sets npm_config_prefix for the system-Node case
   ensure_pi
   ensure_plugin
   link_cli

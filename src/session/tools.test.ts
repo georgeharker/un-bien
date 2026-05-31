@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import { registerAgentTools } from "./tools.js";
 import type { SessionPeer, AckResult } from "./peer.js";
-import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 // Captures tools registered via pi.registerTool so we can invoke them directly.
 function makeMockPi() {

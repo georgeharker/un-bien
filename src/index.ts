@@ -36,8 +36,8 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
   ExtensionFactory,
-} from "@mariozechner/pi-coding-agent";
-import { SettingsManager } from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
+import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { type Ed25519Keypair } from "./pairing/crypto.js";
 import { buildQRUri, qrSession, renderQRAscii } from "./pairing/qr.js";
 import {
