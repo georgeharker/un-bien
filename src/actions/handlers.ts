@@ -229,6 +229,7 @@ export async function handleModelSet(
   reg: ActionModelRegistry,
   sender: ActionReplySender,
   msg: ModelSetMsg,
+  onPersist?: (provider: string, modelId: string) => void,
 ): Promise<void> {
   await runAsync(sender, msg, "model_set", async () => {
     // Refresh first so a model just-added via `/login` is visible.
@@ -239,6 +240,13 @@ export async function handleModelSet(
     }
     const success = await pi.setModel(model);
     if (!success) throw new Error("no auth configured for this model");
+    // `pi.setModel` only sets the LIVE model — it does NOT persist. Without
+    // this, a model picked from the app reverts to the saved default on the
+    // next Pi/daemon restart (the TUI persists because AgentSession.setModel
+    // writes the default; this path doesn't). `onPersist` writes the new
+    // default so the app's choice survives. Best-effort — the caller's writer
+    // must not throw, so a failed settings write never fails the model change.
+    onPersist?.(model.provider, model.id);
   });
 }
 

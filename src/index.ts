@@ -96,7 +96,7 @@ import { runSetupWizard, type WizardUI } from "./session/setup_wizard.js";
 import { updateFooter, type FooterState } from "./ui/footer.js";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { mkdirSync, copyFileSync, existsSync, unlinkSync, readFileSync, realpathSync } from "node:fs";
+import { mkdirSync, copyFileSync, existsSync, unlinkSync, readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { spawnSync } from "node:child_process";
 import { hostname, homedir } from "node:os";
@@ -330,6 +330,35 @@ export function _setCurrentModelForTest(name: string | undefined): void {
  *  content handed to `sendUserMessage` (plan/30 multimodal ingest). */
 export function _setPiForTest(pi: unknown): void {
   _pi = pi as typeof _pi;
+}
+
+/**
+ * Persist a model change to the PROJECT settings (`<cwd>/.pi/settings.json`) so
+ * a model picked from the app survives a Pi/daemon restart. `pi.setModel` only
+ * sets the LIVE model — on the next restart a fresh session reads the saved
+ * default and reverts (the reported bug). We write the PROJECT scope, NOT
+ * global, deliberately: the SDK merges global←project with PROJECT winning
+ * (`SettingsManager`), so a folder that already has a project default (every
+ * created daemon does) would shadow a global write like the TUI's. Project
+ * scope is also correct for a fleet — each daemon keeps its own model rather
+ * than leaking one default globally.
+ *
+ * Read-merge-write + best-effort: preserves other keys and never throws (a
+ * settings write must not fail the live model change, which already applied).
+ */
+function _persistModelDefault(provider: string, modelId: string): void {
+  try {
+    const path = join(process.cwd(), ".pi", "settings.json");
+    let obj: Record<string, unknown> = {};
+    try {
+      const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+      if (parsed && typeof parsed === "object") obj = parsed as Record<string, unknown>;
+    } catch { /* no existing/parseable file → start fresh */ }
+    obj["defaultProvider"] = provider;
+    obj["defaultModel"] = modelId;
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify(obj, null, 2));
+  } catch { /* best-effort — model change already applied live */ }
 }
 
 // Per-turn messaging state
@@ -2430,7 +2459,7 @@ export function _routeClientMessageFrom(
       });
       break;
     case "model_set":
-      void handleModelSet(_pi, ensureModelRegistry(), sender, msg);
+      void handleModelSet(_pi, ensureModelRegistry(), sender, msg, _persistModelDefault);
       break;
     case "thinking_set":
       handleThinkingSet(_pi, sender, msg);

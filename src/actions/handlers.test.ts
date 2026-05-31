@@ -232,6 +232,46 @@ describe("handleModelSet", () => {
       error: expect.stringContaining("no auth configured"),
     });
   });
+
+  test("persists the change via onPersist after a successful live set", async () => {
+    const reg = fakeRegistry([sampleModel]);
+    const pi = fakePi({ setModel: async () => true });
+    const sender = makeSender();
+    const persisted: Array<{ provider: string; modelId: string }> = [];
+    await handleModelSet(
+      pi, reg, sender,
+      { type: "model_set", id: "r4", provider: "anthropic", model_id: "claude-opus-4-7" },
+      (provider, modelId) => persisted.push({ provider, modelId }),
+    );
+    // onPersist receives the resolved model's provider/id so it survives restart.
+    expect(persisted).toEqual([{ provider: "anthropic", modelId: "claude-opus-4-7" }]);
+  });
+
+  test("does NOT persist when the live set fails (no auth)", async () => {
+    const reg = fakeRegistry([sampleModel]);
+    const pi = fakePi({ setModel: async () => false });
+    const sender = makeSender();
+    let persistCalls = 0;
+    await handleModelSet(
+      pi, reg, sender,
+      { type: "model_set", id: "r4", provider: "anthropic", model_id: "claude-opus-4-7" },
+      () => { persistCalls += 1; },
+    );
+    expect(persistCalls).toBe(0);
+    expect(sender.sent[0]).toMatchObject({ type: "action_error" });
+  });
+
+  test("does NOT persist when the model is unknown", async () => {
+    const reg = fakeRegistry([sampleModel]);
+    const sender = makeSender();
+    let persistCalls = 0;
+    await handleModelSet(
+      fakePi(), reg, sender,
+      { type: "model_set", id: "r4", provider: "anthropic", model_id: "nope-3" },
+      () => { persistCalls += 1; },
+    );
+    expect(persistCalls).toBe(0);
+  });
 });
 
 // ── list_models ────────────────────────────────────────────────────────────
