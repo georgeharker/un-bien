@@ -1066,10 +1066,25 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // or RPC. Previous impl overwrote on `agent_end` and lost everything but the
   // last turn (see diagnostics 14, 15).
   pi.on("message_end", (event) => {
-    const m = event?.message as { role?: string } | undefined;
+    const m = event?.message as { role?: string; stopReason?: string; errorMessage?: string } | undefined;
     if (!m) return;
     if (m.role === "user" || m.role === "assistant" || m.role === "toolResult") {
       _messageBuffer.push(m as unknown as BufferMsg);
+    }
+    // Forward a failed turn to connected owners. Without this the app just
+    // hangs with no response when the provider errors (e.g. the TUI's
+    // "Provider finish_reason: error"): the SDK surfaces the failure as an
+    // assistant message with stopReason "error" + an `errorMessage` (pi-ai).
+    // `error` is an existing ServerMessage the app already renders — no
+    // protocol/app change. `in_reply_to` ties it to the turn the app awaits.
+    if (m.role === "assistant" && m.stopReason === "error" && _anyPeerActive()) {
+      const message = typeof m.errorMessage === "string" && m.errorMessage
+        ? m.errorMessage
+        : "Provider error";
+      const errMsg: ServerMessage = _currentTurnId
+        ? { type: "error", in_reply_to: _currentTurnId, code: "provider_error", message }
+        : { type: "error", code: "provider_error", message };
+      _broadcastToActive(errMsg);
     }
   });
 
@@ -2624,6 +2639,13 @@ function _stringifyToolResult(value: unknown): string {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) return _stringifyContent(value);
   if (value !== null && typeof value === "object") {
+    // The LIVE `tool_execution_end` result is a WRAPPER object
+    // `{ content: [{type:"text",...}], details:{} }` — not the bare
+    // content-array the history path (`m.content`) carries. Unwrap `content`
+    // (or a plain `text`) so live == re-sync; JSON is only the last fallback.
+    const obj = value as { content?: unknown; text?: unknown };
+    if (Array.isArray(obj.content)) return _stringifyContent(obj.content);
+    if (typeof obj.text === "string") return obj.text;
     try { return JSON.stringify(value); } catch { return ""; }
   }
   return value === null || value === undefined ? "" : String(value);

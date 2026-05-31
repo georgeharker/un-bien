@@ -1035,6 +1035,42 @@ describe("multi-channel broadcast (W2D)", () => {
     )).toBe(true);
   });
 
+  test("provider error (assistant stopReason:error) → forwards `error` to owners (was silent)", async () => {
+    await _pairForTest("ownerA__1234567890");
+    const onMsgEnd = captureEventHandler("message_end");
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+    onMsgEnd({
+      type: "message_end",
+      message: {
+        role: "assistant", stopReason: "error",
+        errorMessage: "Provider finish_reason: error", content: [],
+      },
+    });
+
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string).map(decodeSentCt);
+    const err = sent.find((d) => d.inner.type === "error");
+    expect(err?.inner).toMatchObject({
+      type: "error", code: "provider_error", message: "Provider finish_reason: error",
+    });
+  });
+
+  test("normal assistant turn (stopReason:stop) → no error forwarded", async () => {
+    await _pairForTest("ownerA__1234567890");
+    const onMsgEnd = captureEventHandler("message_end");
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+    onMsgEnd({
+      type: "message_end",
+      message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "done" }] },
+    });
+
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string).map(decodeSentCt);
+    expect(sent.some((d) => d.inner.type === "error")).toBe(false);
+  });
+
   test("rebroadcast happens BEFORE the agent processes the message", async () => {
     // We can't observe SDK ordering directly with the standard mockPi, but
     // we can verify the echo fires synchronously after the inner is
@@ -1320,6 +1356,33 @@ describe("tool visibility", () => {
     ])[0] as { error?: string };
     expect(histOk.result).toBe(ok?.inner.result);
     expect(histErr.error).toBe(err?.inner.error);
+  });
+
+  test("tool_result unwraps the live { content:[…], details } wrapper (== re-sync)", async () => {
+    await _pairForTest("peer-tr2");
+    const onToolEnd = captureEventHandler("tool_execution_end");
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+    // Live: event.result is the WRAPPER object, NOT a bare content-array.
+    onToolEnd({
+      type: "tool_execution_end", toolCallId: "tc_w", toolName: "run_command",
+      result: { content: [{ type: "text", text: "ping: cannot resolve host" }], details: {} },
+      isError: true,
+    });
+
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string).map(decodeSentCt)
+      .filter((d) => d.inner.type === "tool_result");
+    const w = sent.find((d) => d.inner.tool_call_id === "tc_w");
+    // unwrapped to the clean text — no braces / JSON wrapper / "[object Object]".
+    expect(w?.inner.error).toBe("ping: cannot resolve host");
+    expect(JSON.stringify(sent)).not.toContain("\"content\"");
+
+    // live == re-sync: history (m.content = bare content-array) gives same text.
+    const hist = _mapAgentMessagesToEvents([
+      { role: "toolResult", toolCallId: "tc_w", isError: true, content: [{ type: "text", text: "ping: cannot resolve host" }], timestamp: 1 },
+    ])[0] as { error?: string };
+    expect(hist.error).toBe(w?.inner.error);
   });
 });
 
