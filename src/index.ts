@@ -56,6 +56,7 @@ import type {
   ServerMessage,
   SessionHistoryEvent,
   ThinkingLevel,
+  WireImage,
 } from "./protocol/types.js";
 import { RelayClient, RoomAlreadyOpenError } from "./transport/relay_client.js";
 import { PlainPeerChannel } from "./transport/peer_channel.js";
@@ -2539,6 +2540,25 @@ function _stringifyContent(content: unknown): string {
 }
 
 /**
+ * Plan/30: extract `ImageContent` blocks ({type:"image", data, mimeType}) from
+ * an SDK message's content and map them to the wire shape (`mimeType` → `mime`).
+ * Used by the history mapper so a re-synced image bubble keeps its bytes —
+ * `_stringifyContent` only pulls text and would otherwise drop the image.
+ */
+function _imagesFromContent(content: unknown): WireImage[] {
+  if (!Array.isArray(content)) return [];
+  const out: WireImage[] = [];
+  for (const c of content) {
+    if (!c || typeof c !== "object") continue;
+    const block = c as { type?: string; data?: unknown; mimeType?: unknown };
+    if (block.type === "image" && typeof block.data === "string" && typeof block.mimeType === "string") {
+      out.push({ data: block.data, mime: block.mimeType });
+    }
+  }
+  return out;
+}
+
+/**
  * Maps SDK AgentMessage[] (UserMessage / AssistantMessage / ToolResultMessage)
  * into the flat SessionHistoryEvent[] shape consumed by the app.
  *
@@ -2559,12 +2579,18 @@ export function _mapAgentMessagesToEvents(
     if (m.role === "user") {
       const id = `sync_${ts}`;
       lastUserId = id;
-      events.push({
+      // Plan/30: keep any image blocks so a re-sync rebuilds the bubble. The
+      // bytes are already in _messageBuffer; only attach `images` when present
+      // so the text-only path stays byte-identical (no `images` key).
+      const images = _imagesFromContent(m.content);
+      const ev: SessionHistoryEvent = {
         ts,
         type: "user_input",
         id,
         text: _stringifyContent(m.content),
-      });
+      };
+      if (images.length > 0) ev.images = images;
+      events.push(ev);
     } else if (m.role === "assistant") {
       const content = Array.isArray(m.content) ? m.content : [];
       const usage = m.usage

@@ -52,7 +52,9 @@ export type KnownErrorCode =
 export type ErrorCode = KnownErrorCode | (string & {});
 
 export type SessionHistoryEvent =
-  | { ts: number; type: "user_input"; id: string; text: string }
+  // Plan/30: `images` replayed in history so a re-sync rebuilds the image
+  // bubble (the bytes live in `_messageBuffer`). Omitted on text-only inputs.
+  | { ts: number; type: "user_input"; id: string; text: string; images?: WireImage[] }
   | {
       ts: number;
       type: "tool_request";

@@ -1814,6 +1814,36 @@ describe("session sync", () => {
     expect((events[1] as { in_reply_to: string }).in_reply_to).toBe(`sync_${ts}`);
   });
 
+  test("mapping (plan/30 re-sync): user [image, text] → user_input keeps images", () => {
+    const ts = 1_700_000_000_000;
+    const events = _mapAgentMessagesToEvents([
+      {
+        role: "user",
+        content: [
+          { type: "image", data: "QUJD", mimeType: "image/jpeg" },
+          { type: "text", text: "what is this?" },
+        ],
+        timestamp: ts,
+      },
+    ]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      ts,
+      type: "user_input",
+      text: "what is this?",
+      images: [{ data: "QUJD", mime: "image/jpeg" }],
+    });
+  });
+
+  test("mapping: text-only user message → no `images` key (path unchanged)", () => {
+    const events = _mapAgentMessagesToEvents([
+      { role: "user", content: "just text", timestamp: 1 },
+    ]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "user_input", text: "just text" });
+    expect(events[0]).not.toHaveProperty("images");
+  });
+
   test("pair_ok carries session_started_at = _sessionStartedAt", async () => {
     const beforePair = Date.now();
     await _pairForTest("peer-ss-5");
