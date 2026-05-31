@@ -1,6 +1,7 @@
 import { ChildProcess, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import type { DaemonState } from "./control_protocol.js";
+import { defaultAgentName, loadLocalConfig } from "../session/local_config.js";
 
 /**
  * Wrapper around a `pi --mode rpc -e <extension>` child process for the
@@ -40,6 +41,31 @@ export interface RpcChildExitEvent {
   isCrash: boolean;
 }
 
+/**
+ * CLI args for the daemon's `pi --mode rpc` child.
+ *
+ * `--continue` is the key bit: it resumes the **most recent** session for the
+ * cwd (`SessionManager.continueRecent`, non-interactive — unlike `--resume`
+ * which opens a picker). Without it every supervisor restart spun up a brand
+ * new session file, piling up thousands of JSONLs per folder. With it, a
+ * restart REUSES the one session; the app's `/new` (session_new) still rolls
+ * it over to a fresh one, which the next restart then continues. First boot
+ * (no prior session) just creates the first one.
+ *
+ * `--name <sessionName>`, when given, pins the session's display name to the
+ * daemon's identity (its `agent_name`) so every restart shows up under the
+ * same stable name in the picker/app instead of an auto-generated one. The
+ * daemon's name is set at registration (`remote-pi create <cwd> --name "…"`).
+ * Omitted when no name resolves, so the arg list stays minimal.
+ */
+export function rpcSpawnArgs(extensionPath: string, sessionName?: string): string[] {
+  return [
+    "--mode", "rpc", "--continue",
+    ...(sessionName ? ["--name", sessionName] : []),
+    "-e", extensionPath,
+  ];
+}
+
 export class RpcChild extends EventEmitter {
   private child: ChildProcess | null = null;
   private _state: DaemonState = "stopped";
@@ -75,7 +101,11 @@ export class RpcChild extends EventEmitter {
     this._state = "starting";
 
     const piBin = this.opts.piBin ?? "pi";
-    const args = ["--mode", "rpc", "-e", this.opts.extensionPath];
+    // Name the (single) daemon session after the daemon's configured identity,
+    // so it shows up stably instead of an auto-generated name on each restart.
+    const sessionName = loadLocalConfig(this.opts.cwd).agent_name
+      ?? defaultAgentName(this.opts.cwd);
+    const args = rpcSpawnArgs(this.opts.extensionPath, sessionName);
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       ...this.opts.env,

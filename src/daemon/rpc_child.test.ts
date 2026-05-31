@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RpcChild, type RpcChildExitEvent } from "./rpc_child.js";
+import { RpcChild, rpcSpawnArgs, type RpcChildExitEvent } from "./rpc_child.js";
 
 /**
  * Regression for the orphaned-daemon bug: a deliberate `stop()` kills the
@@ -13,6 +13,20 @@ import { RpcChild, type RpcChildExitEvent } from "./rpc_child.js";
  * We use a tiny executable that ignores the `--mode rpc -e <path>` args and
  * just sleeps, so the child is genuinely alive when we stop it.
  */
+describe("rpcSpawnArgs", () => {
+  test("includes --continue so a restart resumes the latest session (not a new one)", () => {
+    expect(rpcSpawnArgs("/path/to/dist/index.js")).toEqual([
+      "--mode", "rpc", "--continue", "-e", "/path/to/dist/index.js",
+    ]);
+  });
+
+  test("pins the session display name via --name when one is given", () => {
+    expect(rpcSpawnArgs("/path/to/dist/index.js", "PC")).toEqual([
+      "--mode", "rpc", "--continue", "--name", "PC", "-e", "/path/to/dist/index.js",
+    ]);
+  });
+});
+
 describe("RpcChild — deliberate stop is not a crash", () => {
   let dir: string;
 
