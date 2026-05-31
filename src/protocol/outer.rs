@@ -1,6 +1,8 @@
 // Tipos ainda não usados no handler — serão conectados no próximo passo
 #![allow(dead_code)]
 
+use std::sync::OnceLock;
+
 use serde::{Deserialize, Serialize};
 
 fn default_room() -> String {
@@ -16,9 +18,32 @@ pub struct OuterEnvelope {
     pub ct: String, // base64 — nunca decodificado aqui
 }
 
-// 1 MiB do payload base64-decoded. Relay não precisa conhecer o tamanho
-// exato do inner — só protege o duto de payloads abusivos.
-pub const MAX_CT_BYTES: usize = 1024 * 1024;
+/// Nome da env var que sobrescreve o teto do outer envelope (inteiro em MiB).
+pub const MAX_CT_ENV: &str = "RELAY_MAX_CT_MIB";
+
+/// Default do teto: 4 MiB de payload base64-decoded. Históricamente era 1 MiB
+/// fixo, mas imagens passam por base64 duplo (inner `data` + outer `ct` ≈
+/// 1,333× o JPEG bruto), então 1 MiB dropava em silêncio qualquer imagem
+/// acima de ~768 KB e travava o app em "sending…". 4 MiB cobre o teto de
+/// compressão do app (~1,5 MB, ~2 MB estimado) com folga.
+pub const DEFAULT_MAX_CT_MIB: usize = 4;
+
+/// Teto efetivo do outer envelope, em bytes. Lido **uma vez** de
+/// [`MAX_CT_ENV`] (valor em MiB) na primeira chamada e memoizado. Ausência ou
+/// valor inválido (não-inteiro, zero, vazio) cai no default de 4 MiB —
+/// **nunca** entra em panic (convenção do relay: zero `unwrap`/`expect` em
+/// prod).
+pub fn max_ct_bytes() -> usize {
+    static MAX_CT_BYTES: OnceLock<usize> = OnceLock::new();
+    *MAX_CT_BYTES.get_or_init(|| {
+        let mib = std::env::var(MAX_CT_ENV)
+            .ok()
+            .and_then(|s| s.trim().parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(DEFAULT_MAX_CT_MIB);
+        mib * 1024 * 1024
+    })
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
@@ -28,14 +53,22 @@ pub enum ParseError {
     TooLarge(usize, usize),
 }
 
-/// Parseia uma linha JSONL no outer envelope e valida o tamanho de `ct`.
-/// Nunca decodifica o conteúdo de `ct` — apenas mede o comprimento da string
-/// base64 para estimar o tamanho do payload (3/4 do len base64).
+/// Parseia uma linha JSONL no outer envelope e valida o tamanho de `ct`
+/// contra o teto configurado ([`max_ct_bytes`]). Nunca decodifica o conteúdo
+/// de `ct` — apenas mede o comprimento da string base64 para estimar o tamanho
+/// do payload (3/4 do len base64).
 pub fn parse_line(line: &str) -> Result<OuterEnvelope, ParseError> {
+    parse_line_with_max(line, max_ct_bytes())
+}
+
+/// Núcleo testável de [`parse_line`] com o teto injetado, para que os testes
+/// exerçam o limite sem mexer na env var global (evita corrida entre testes
+/// paralelos e o `OnceLock` memoizado).
+fn parse_line_with_max(line: &str, max_ct_bytes: usize) -> Result<OuterEnvelope, ParseError> {
     let env: OuterEnvelope = serde_json::from_str(line)?;
     let estimated = env.ct.len() * 3 / 4;
-    if estimated > MAX_CT_BYTES {
-        return Err(ParseError::TooLarge(estimated, MAX_CT_BYTES));
+    if estimated > max_ct_bytes {
+        return Err(ParseError::TooLarge(estimated, max_ct_bytes));
     }
     Ok(env)
 }
@@ -62,9 +95,44 @@ mod tests {
 
     #[test]
     fn rejects_too_large() {
-        let big = "A".repeat(2 * 1024 * 1024);
+        // 12 MiB de "A" → estimativa 9 MiB, acima do default de 4 MiB.
+        // (Antes era 2 MiB → 1,5 MiB estimado, que agora PASSARIA no default.)
+        let big = "A".repeat(12 * 1024 * 1024);
         let line = format!(r#"{{"peer":"abc","ct":"{}"}}"#, big);
         assert!(matches!(parse_line(&line), Err(ParseError::TooLarge(..))));
+    }
+
+    #[test]
+    fn accepts_two_mb_payload_under_default() {
+        // Regressão do bug da imagem: 3 MiB de base64 → ~2,25 MiB estimado.
+        // Sob o antigo teto de 1 MiB isto era dropado em silêncio (app travava
+        // em "sending…"); sob o default atual de 4 MiB deve passar.
+        let img = "A".repeat(3 * 1024 * 1024);
+        let line = format!(r#"{{"peer":"abc","ct":"{}"}}"#, img);
+        let env = parse_line(&line).expect("≈2 MB payload must pass under 4 MiB default");
+        assert_eq!(env.peer, "abc");
+    }
+
+    #[test]
+    fn default_max_ct_bytes_is_four_mib() {
+        // Sem RELAY_MAX_CT_MIB no ambiente de teste, o teto efetivo é 4 MiB.
+        assert_eq!(max_ct_bytes(), DEFAULT_MAX_CT_MIB * 1024 * 1024);
+        assert_eq!(max_ct_bytes(), 4 * 1024 * 1024);
+    }
+
+    #[test]
+    fn injected_max_overrides_limit() {
+        // Override testável via núcleo com teto injetado — sem mexer na env
+        // global (evita corrida com o OnceLock memoizado / testes paralelos).
+        // ~2,25 MiB estimado: rejeitado por um teto de 1 MiB, aceito por 4 MiB.
+        let payload = "A".repeat(3 * 1024 * 1024);
+        let line = format!(r#"{{"peer":"abc","ct":"{}"}}"#, payload);
+
+        assert!(matches!(
+            parse_line_with_max(&line, 1024 * 1024),
+            Err(ParseError::TooLarge(..))
+        ));
+        assert!(parse_line_with_max(&line, 4 * 1024 * 1024).is_ok());
     }
 
     #[test]
