@@ -1277,6 +1277,50 @@ describe("tool visibility", () => {
       tool_call_id: "tc_2",
     });
   });
+
+  test("tool_result stringifies content-array/object (no [object Object]) and == re-sync", async () => {
+    await _pairForTest("peer-tr");
+    const onToolEnd = captureEventHandler("tool_execution_end");
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+    // success: content-array result → joined text (was "[object Object]").
+    onToolEnd({
+      type: "tool_execution_end", toolCallId: "tc_ok", toolName: "Read",
+      result: [{ type: "text", text: "file contents" }], isError: false,
+    });
+    // error: content-array → text (was "[object Object]").
+    onToolEnd({
+      type: "tool_execution_end", toolCallId: "tc_err", toolName: "Bash",
+      result: [{ type: "text", text: "command failed: boom" }], isError: true,
+    });
+    // plain object → readable JSON (was "[object Object]").
+    onToolEnd({
+      type: "tool_execution_end", toolCallId: "tc_obj", toolName: "X",
+      result: { code: 1, msg: "nope" }, isError: true,
+    });
+
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string).map(decodeSentCt)
+      .filter((d) => d.inner.type === "tool_result");
+    const ok = sent.find((d) => d.inner.tool_call_id === "tc_ok");
+    const err = sent.find((d) => d.inner.tool_call_id === "tc_err");
+    const obj = sent.find((d) => d.inner.tool_call_id === "tc_obj");
+
+    expect(ok?.inner.result).toBe("file contents");
+    expect(err?.inner.error).toBe("command failed: boom");
+    expect(obj?.inner.error).toBe(JSON.stringify({ code: 1, msg: "nope" }));
+    expect(JSON.stringify(sent)).not.toContain("[object Object]");
+
+    // live == re-sync: the history mapper yields identical text for the same tool.
+    const histOk = _mapAgentMessagesToEvents([
+      { role: "toolResult", toolCallId: "tc_ok", content: [{ type: "text", text: "file contents" }], timestamp: 1 },
+    ])[0] as { result?: string };
+    const histErr = _mapAgentMessagesToEvents([
+      { role: "toolResult", toolCallId: "tc_err", isError: true, content: [{ type: "text", text: "command failed: boom" }], timestamp: 1 },
+    ])[0] as { error?: string };
+    expect(histOk.result).toBe(ok?.inner.result);
+    expect(histErr.error).toBe(err?.inner.error);
+  });
 });
 
 // ── /remote-pi set-relay + /remote-pi config ──────────────────────────────────

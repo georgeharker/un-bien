@@ -1047,9 +1047,14 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
 
   pi.on("tool_execution_end", (event) => {
     if (!_anyPeerActive()) return;
+    // Stringify like the history mapper (same helper) so the live text == what
+    // a session_sync replays for this tool. Raw `String(event.result)` turned
+    // a content-array/object into "[object Object]" and the success branch sent
+    // the object unstringified — both diverging from re-sync.
+    const text = _stringifyToolResult(event.result);
     const msg: ServerMessage = event.isError
-      ? { type: "tool_result", tool_call_id: event.toolCallId, error: String(event.result) }
-      : { type: "tool_result", tool_call_id: event.toolCallId, result: event.result as unknown };
+      ? { type: "tool_result", tool_call_id: event.toolCallId, error: text }
+      : { type: "tool_result", tool_call_id: event.toolCallId, result: text };
     _broadcastToActive(msg);
   });
 
@@ -2607,6 +2612,24 @@ function _stringifyContent(content: unknown): string {
 }
 
 /**
+ * Stringify a tool result consistently for BOTH the live `tool_execution_end`
+ * broadcast AND the history mapper, so the app shows the same text live and on
+ * re-sync. The SDK's `ToolExecutionEndEvent.result` is `any` — usually a
+ * content-array of `{type:"text"}` blocks; `String()` on that yields the
+ * "[object Object]" bug. Rules: string → as-is; content-array → join its text
+ * (same as `_stringifyContent`); any other object → readable JSON; other
+ * primitives → `String()`; null/undefined → "". Never "[object Object]".
+ */
+function _stringifyToolResult(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return _stringifyContent(value);
+  if (value !== null && typeof value === "object") {
+    try { return JSON.stringify(value); } catch { return ""; }
+  }
+  return value === null || value === undefined ? "" : String(value);
+}
+
+/**
  * Plan/30: extract `ImageContent` blocks ({type:"image", data, mimeType}) from
  * an SDK message's content and map them to the wire shape (`mimeType` → `mime`).
  * Used by the history mapper so a re-synced image bubble keeps its bytes —
@@ -2696,7 +2719,8 @@ export function _mapAgentMessagesToEvents(
         }
       }
     } else if (m.role === "toolResult") {
-      const text = _stringifyContent(m.content);
+      // Same helper as the live `tool_execution_end` broadcast → live == re-sync.
+      const text = _stringifyToolResult(m.content);
       const tcid = String(m.toolCallId ?? "");
       events.push(
         m.isError
