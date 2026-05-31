@@ -183,7 +183,14 @@ export function handleSessionCompact(
 ): void {
   runSync(sender, msg, "session_compact", () => {
     if (!ctx?.compact) throw new Error("compact unavailable (no active session ctx)");
-    ctx.compact();
+    // Force the summary to English regardless of the conversation language —
+    // the summary is surfaced to the app via the `compaction` message, which
+    // is an English-only surface. `customInstructions` is appended to the SDK's
+    // compaction prompt (best-effort: the model writes the summary).
+    ctx.compact({
+      customInstructions:
+        "Always write the compaction summary in English, even if the conversation is in another language.",
+    });
   });
 }
 

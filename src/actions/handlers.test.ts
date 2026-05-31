@@ -66,12 +66,14 @@ function fakeRegistry(catalog: SdkModelLike[]): ActionModelRegistry {
 // ── session_compact ────────────────────────────────────────────────────────
 
 describe("handleSessionCompact", () => {
-  test("calls ctx.compact() and replies action_ok", () => {
-    let compacted = 0;
-    const ctx: ActionCtx = { compact: () => { compacted += 1; } };
+  test("calls ctx.compact() with an English-summary instruction and replies action_ok", () => {
+    const compactArgs: unknown[] = [];
+    const ctx: ActionCtx = { compact: (opts) => { compactArgs.push(opts); } };
     const sender = makeSender();
     handleSessionCompact(ctx, sender, { type: "session_compact", id: "r1" });
-    expect(compacted).toBe(1);
+    expect(compactArgs).toHaveLength(1);
+    // The summary must be forced to English (surfaced via the `compaction` msg).
+    expect(JSON.stringify(compactArgs[0])).toMatch(/English/i);
     expect(sender.sent).toEqual([
       { type: "action_ok", in_reply_to: "r1", action: "session_compact" },
     ]);
