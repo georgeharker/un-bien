@@ -217,6 +217,20 @@ function _setCurrentModel(name: string): void {
   }
 }
 
+/**
+ * Plan/32: publish the `working` flag as room_meta (raw, no debounce — the
+ * app debounces). Same shape as model/thinking updates. Used by turn_start/end
+ * AND by the compaction handlers: `compact()` doesn't run a turn (it
+ * disconnects the agent + aborts, emitting compaction_start, NOT turn_start),
+ * so room_meta.working must be bracketed manually around compaction.
+ */
+function _publishWorking(working: boolean): void {
+  if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working };
+  if (_relay && _myRoomId) {
+    _relay.sendControl({ type: "room_meta_update", room_id: _myRoomId, meta: { working } });
+  }
+}
+
 // ── Cross-PC mesh wiring (plan/25 Wave B/C) ───────────────────────────────────
 
 /**
@@ -272,6 +286,9 @@ type BufferMsg = {
   toolName?: string;
   isError?: boolean;
   usage?: { input?: number; output?: number };
+  /** Plan/32: pre-compaction token count, set on the synthetic
+   *  `role:"compaction"` marker pushed in `session_compact`. */
+  tokensBefore?: number;
 };
 let _messageBuffer: BufferMsg[] = [];
 
@@ -1094,6 +1111,27 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     if (!_meshNode) return;
     void _meshNode.send("broker", { type: "turn_state", busy: false })
       .catch(() => { /* best-effort */ });
+  });
+
+  // Plan/32: compaction feedback. compact() doesn't run a turn, so bracket it
+  // with working=true/false here. Returning void = no veto → default
+  // compaction proceeds.
+  pi.on("session_before_compact", () => {
+    _publishWorking(true);
+  });
+  pi.on("session_compact", (event) => {
+    const entry = event?.compactionEntry as { summary?: unknown; tokensBefore?: unknown } | undefined;
+    const summary = typeof entry?.summary === "string" ? entry.summary : "";
+    const tokensBefore = typeof entry?.tokensBefore === "number" ? entry.tokensBefore : 0;
+    const ts = Date.now();
+    // (2) Persist in history: the CompactionEntry never reaches _messageBuffer
+    // via message_end (only user/assistant/toolResult), so push a synthetic
+    // marker the mapper turns into a `compaction` event — survives session_sync.
+    _messageBuffer.push({ role: "compaction", content: summary, timestamp: ts, tokensBefore });
+    // (1) Live result to every connected owner.
+    _broadcastToActive({ type: "compaction", summary, tokens_before: tokensBefore, ts });
+    // (3) Working ends.
+    _publishWorking(false);
   });
 
   // Re-capture the freshest base ctx on every session replacement so compact
@@ -2605,7 +2643,15 @@ export function _mapAgentMessagesToEvents(
   for (const m of messages) {
     const ts = typeof m.timestamp === "number" ? m.timestamp : 0;
 
-    if (m.role === "user") {
+    if (m.role === "compaction") {
+      // Plan/32: re-render the compaction notice on history re-sync.
+      events.push({
+        ts,
+        type: "compaction",
+        summary: typeof m.content === "string" ? m.content : "",
+        tokens_before: typeof m.tokensBefore === "number" ? m.tokensBefore : 0,
+      });
+    } else if (m.role === "user") {
       const id = `sync_${ts}`;
       lastUserId = id;
       // Plan/30: keep any image blocks so a re-sync rebuilds the bubble. The

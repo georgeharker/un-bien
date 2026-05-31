@@ -998,6 +998,43 @@ describe("multi-channel broadcast (W2D)", () => {
     expect(echo?.inner).not.toHaveProperty("images");
   });
 
+  test("plan/32: session_compact → broadcasts compaction, working=false, buffers a marker", async () => {
+    await _pairForTest("ownerA__1234567890");
+    _setMessageBufferForTest([]);
+    const onCompact = captureEventHandler("session_compact");
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+    const ctrlBefore = relayRef.current!.sendControl.mock.calls.length;
+
+    onCompact({
+      type: "session_compact",
+      compactionEntry: {
+        type: "compaction", summary: "compacted 10 turns", tokensBefore: 12345,
+        firstKeptEntryId: "e1", timestamp: "2026-05-31T00:00:00Z",
+      },
+      fromExtension: false,
+    });
+
+    // (1) compaction broadcast reaches the owner
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string).map(decodeSentCt);
+    const compaction = sent.find((d) => d.inner.type === "compaction");
+    expect(compaction?.inner).toMatchObject({
+      type: "compaction", summary: "compacted 10 turns", tokens_before: 12345,
+    });
+
+    // (3) working=false via room_meta_update
+    const ctrls = relayRef.current!.sendControl.mock.calls.slice(ctrlBefore)
+      .map((c) => c[0] as { type: string; meta?: { working?: boolean } })
+      .filter((f) => f.type === "room_meta_update");
+    expect(ctrls.some((f) => f.meta?.working === false)).toBe(true);
+
+    // (2) a compaction marker landed in _messageBuffer (survives session_sync)
+    const buf = _getMessageBufferForTest() as Array<{ role?: string; content?: unknown; tokensBefore?: number }>;
+    expect(buf.some((m) =>
+      m.role === "compaction" && m.content === "compacted 10 turns" && m.tokensBefore === 12345,
+    )).toBe(true);
+  });
+
   test("rebroadcast happens BEFORE the agent processes the message", async () => {
     // We can't observe SDK ordering directly with the standard mockPi, but
     // we can verify the echo fires synchronously after the inner is
@@ -1844,6 +1881,20 @@ describe("session sync", () => {
     expect(events[0]).not.toHaveProperty("images");
   });
 
+  test("mapping (plan/32): compaction marker → compaction event (history re-sync)", () => {
+    const events = _mapAgentMessagesToEvents([
+      { role: "user", content: "hi", timestamp: 1 },
+      { role: "compaction", content: "summarised 10 turns", timestamp: 1700, tokensBefore: 12345 },
+    ]);
+    expect(events).toHaveLength(2);
+    expect(events[1]).toMatchObject({
+      ts: 1700,
+      type: "compaction",
+      summary: "summarised 10 turns",
+      tokens_before: 12345,
+    });
+  });
+
   test("pair_ok carries session_started_at = _sessionStartedAt", async () => {
     const beforePair = Date.now();
     await _pairForTest("peer-ss-5");
@@ -2517,6 +2568,20 @@ describe("model meta", () => {
       .filter((f) => f.type === "room_meta_update");
     expect(updates).toHaveLength(1);
     expect(updates[0]!.meta?.working).toBe(false);
+  });
+
+  test("plan/32: pi.on('session_before_compact') publishes working=true", async () => {
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx("/tmp/remote-pi-compact-working"));
+
+    const onBefore = captureEventHandler("session_before_compact");
+    onBefore({ type: "session_before_compact" });
+
+    const updates = relayRef.current!.sendControl.mock.calls
+      .map((c) => c[0] as { type: string; meta?: { working?: boolean } })
+      .filter((f) => f.type === "room_meta_update");
+    expect(updates).toHaveLength(1);
+    expect(updates[0]!.meta?.working).toBe(true);
   });
 
   test("model_select with no model.name falls back to model.id", async () => {

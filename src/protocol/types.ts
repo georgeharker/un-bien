@@ -75,7 +75,10 @@ export type SessionHistoryEvent =
       in_reply_to: string;
       text: string;
       usage?: Usage;
-    };
+    }
+  // Plan/32: a context-compaction marker, replayed in history (survives
+  // re-sync like images) so the app re-renders the "context compacted" notice.
+  | { ts: number; type: "compaction"; summary: string; tokens_before: number };
 
 export type ServerMessage =
   | {
@@ -115,6 +118,9 @@ export type ServerMessage =
   | { type: "agent_chunk"; in_reply_to: string; delta: string }
   | { type: "agent_done"; in_reply_to: string; usage?: Usage }
   | { type: "agent_message"; in_reply_to: string; text: string; usage?: Usage }
+  // Plan/32: pushed after a context compaction (live, and replayed on history
+  // re-sync). `tokens_before` is the pre-compaction token count.
+  | { type: "compaction"; summary: string; tokens_before: number; ts?: number }
   | { type: "tool_request"; tool_call_id: string; tool: string; args: Record<string, unknown> }
   | { type: "tool_result"; tool_call_id: string; result?: unknown; error?: string }
   | { type: "error"; in_reply_to?: string; code: ErrorCode; message: string }
