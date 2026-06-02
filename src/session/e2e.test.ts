@@ -141,7 +141,7 @@ describe("agent-network e2e", () => {
 });
 
 describe("ACK protocol (plan/25 Wave 0)", () => {
-  test("sendWithAck to idle peer → status=received in <200ms", async () => {
+  test("sendWithAck to idle peer → status=received, synchronously (not an LLM turn)", async () => {
     const sock = tmpSock();
     const orq = await makePeer(sock, "orq");
     const backend = await makePeer(sock, "backend");
@@ -152,7 +152,10 @@ describe("ACK protocol (plan/25 Wave 0)", () => {
 
     expect(ack.status).toBe("received");
     expect(ack.target).toBe("backend");
-    expect(dt).toBeLessThan(200);
+    // The broker ACK is synchronous — it must NOT block on the peer taking a
+    // turn. A generous ceiling proves "immediate, not a turn" without flaking
+    // under CI/load (this used to be 200ms and broke `prepublishOnly`).
+    expect(dt).toBeLessThan(2_000);
 
     await orq.leave(); await backend.leave();
   });

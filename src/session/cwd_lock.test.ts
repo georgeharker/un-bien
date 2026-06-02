@@ -11,11 +11,17 @@ function tmpCwd(): string {
 }
 
 /** Redirect the lock dir away from the developer's real `~/.pi/remote/locks`
- *  so running the suite never binds sockets in the live mesh's directory. */
+ *  so running the suite never binds sockets in the live mesh's directory.
+ *
+ *  Base it on a SHORT root (`/tmp`), NOT `os.tmpdir()`: the lock socket nests
+ *  `<home>/.pi/remote/locks/<12-char>.sock`, and on macOS `os.tmpdir()` is a
+ *  deep `/var/folders/…/T/` path that pushes the socket past the ~104-char UDS
+ *  path limit → `bind` fails → `acquireCwdLock` returns `ok:false` and these
+ *  tests fail (and break `prepublishOnly`). `/tmp` keeps the full path short. */
 let testHome: string;
 
 beforeEach(() => {
-  testHome = mkdtempSync(join(tmpdir(), "pi-cwdlock-home-"));
+  testHome = mkdtempSync("/tmp/rp-cwdlock-");
   process.env["REMOTE_PI_HOME"] = testHome;
 });
 
