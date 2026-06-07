@@ -1268,6 +1268,123 @@ describe("tool visibility", () => {
     });
   });
 
+  test("tool_execution_start enriches edit args with numbered context hunks", async () => {
+    await _pairForTest("peer-edit");
+    const cwd = mkdtempSync(join(tmpdir(), "remote-pi-edit-"));
+    const file = join(cwd, "sample.dart");
+    writeFileSync(
+      file,
+      [
+        "line 1",
+        "line 2",
+        "line 3",
+        "line 4",
+        "line 5",
+        "  tool: 'Edit',",
+        "  args: {",
+        "    'file_path': 'x',",
+        "  },",
+        "line 10",
+      ].join("\n"),
+    );
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+    try {
+      const onToolStart = captureEventHandler("tool_execution_start");
+      onToolStart({
+        type: "tool_execution_start",
+        toolCallId: "tc_edit",
+        toolName: "edit",
+        args: {
+          path: file,
+          edits: [
+            {
+              oldText: "  tool: 'Edit',\n  args: {\n    'file_path': 'x',",
+              newText: "  tool: 'edit',\n  args: {\n    'path': 'x',",
+            },
+          ],
+        },
+      });
+
+      const requests = relayRef.current!.send.mock.calls
+        .slice(sendsBefore)
+        .map((c) => c[0] as string)
+        .map(decodeSentCt)
+        .filter((d) => d.inner.type === "tool_request");
+      const args = requests[0]!.inner.args as {
+        hunks: Array<{ lines: Array<{ kind: string; oldLine?: number; newLine?: number; text?: string }> }>;
+      };
+      expect(args.hunks[0]!.lines).toEqual(
+        expect.arrayContaining([
+          { kind: "context", oldLine: 5, newLine: 5, text: "line 5" },
+          { kind: "remove", oldLine: 6, text: "  tool: 'Edit'," },
+          { kind: "add", newLine: 6, text: "  tool: 'edit'," },
+          { kind: "context", oldLine: 9, newLine: 9, text: "  }," },
+        ]),
+      );
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+
+  test("tool_execution_start keeps unchanged edit lines as context", async () => {
+    await _pairForTest("peer-edit-context");
+    const cwd = mkdtempSync(join(tmpdir(), "remote-pi-edit-context-"));
+    const file = join(cwd, "README.md");
+    writeFileSync(
+      file,
+      [
+        "<p align=\"center\">",
+        "  Control your Pi from your phone.",
+        "  Pair with a one-time QR code.",
+        "</p>",
+      ].join("\n"),
+    );
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+    try {
+      const onToolStart = captureEventHandler("tool_execution_start");
+      onToolStart({
+        type: "tool_execution_start",
+        toolCallId: "tc_edit_context",
+        toolName: "edit",
+        args: {
+          path: file,
+          edits: [
+            {
+              oldText: "  Pair with a one-time QR code.",
+              newText: "  Pair with a one-time QR code.\n  Test note: edit preview smoke test.",
+            },
+          ],
+        },
+      });
+
+      const requests = relayRef.current!.send.mock.calls
+        .slice(sendsBefore)
+        .map((c) => c[0] as string)
+        .map(decodeSentCt)
+        .filter((d) => d.inner.type === "tool_request");
+      const args = requests[0]!.inner.args as {
+        hunks: Array<{ lines: Array<{ kind: string; oldLine?: number; newLine?: number; text?: string }> }>;
+      };
+      expect(args.hunks[0]!.lines).toEqual(
+        expect.arrayContaining([
+          { kind: "context", oldLine: 3, newLine: 3, text: "  Pair with a one-time QR code." },
+          { kind: "add", newLine: 4, text: "  Test note: edit preview smoke test." },
+          { kind: "context", oldLine: 4, newLine: 5, text: "</p>" },
+        ]),
+      );
+      expect(args.hunks[0]!.lines).not.toEqual(
+        expect.arrayContaining([
+          { kind: "remove", oldLine: 3, text: "  Pair with a one-time QR code." },
+        ]),
+      );
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   test("tool_execution_start ignored when _peerChannel is null (idle state)", () => {
     expect(_getState()).toBe("idle");
 
