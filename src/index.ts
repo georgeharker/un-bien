@@ -39,7 +39,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { type Ed25519Keypair } from "./pairing/crypto.js";
-import { buildQRUri, qrSession, renderQRAscii } from "./pairing/qr.js";
+import { buildQRUri, qrSession, renderQRAscii, clampPairTtlMs, TOKEN_TTL_MS } from "./pairing/qr.js";
 import {
   addPeer,
   getOrCreateEd25519Keypair,
@@ -896,11 +896,12 @@ async function _handlePairRequest(
     return;
   }
 
+  const pairedAt = new Date().toISOString();
   try {
     await addPeer({
       name: inner.device_name,
       remote_epk: appPeerId,
-      paired_at: new Date().toISOString(),
+      paired_at: pairedAt,
     });
     _refreshPairingsCache();
   } catch (err) {
@@ -933,6 +934,16 @@ async function _handlePairRequest(
     // two PCs apart even when nicknames collide).
     harness: _HARNESS,
     hostname: _HOSTNAME,
+  });
+
+  // Notify local RPC clients (e.g. Cockpit) that pairing completed, so they can
+  // close the QR screen and show the new device. Pure data event (display:false)
+  // — still emitted to the RPC stdout via the session stream.
+  _pi?.sendMessage({
+    customType: "remote-pi:paired",
+    content: `Paired with ${inner.device_name}`,
+    details: { name: inner.device_name, peerId: appPeerId, pairedAt },
+    display: false,
   });
 }
 
@@ -1194,7 +1205,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       else if (sub === "setup")                  { await _cmdSetup(ctx); }
       else if (sub === "status")                 { _cmdStatus(ctx); }
       else if (sub === "stop")                   { await _cmdStop(ctx); }
-      else if (sub === "pair")                   { await _cmdPair(ctx); }
+      else if (sub === "pair" || sub.startsWith("pair ")) { await _cmdPair(ctx, sub.slice("pair".length).trim()); }
       else if (sub === "devices")                { await _cmdList(ctx); }
       else if (sub.startsWith("revoke"))         { await _cmdRevoke(sub.slice("revoke".length).trim(), ctx); }
       else if (sub.startsWith("set-relay"))      { _cmdSetRelay(sub.slice("set-relay".length).trim(), ctx); }
@@ -1219,7 +1230,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   pi.registerCommand("remote-pi setup",    { description: "Run the setup wizard and update local config", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdSetup(ctx); } });
   pi.registerCommand("remote-pi status",   { description: "Show local mesh + relay status", handler: async (_, ctx) => { _lastCtx = ctx; _cmdStatus(ctx); } });
   pi.registerCommand("remote-pi stop",     { description: "Stop everything (leave local mesh + disconnect relay)", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdStop(ctx); } });
-  pi.registerCommand("remote-pi pair",     { description: "Show a QR code to pair a new mobile device", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdPair(ctx); } });
+  pi.registerCommand("remote-pi pair",     { description: "Show a QR code to pair a new mobile device (optional: --ttl <seconds>)", handler: async (args, ctx) => { _lastCtx = ctx; await _cmdPair(ctx, args.trim()); } });
   pi.registerCommand("remote-pi devices",  { description: "List paired mobile devices", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdList(ctx); } });
   pi.registerCommand("remote-pi revoke", {
     description: "Revoke a paired device by its shortid",
@@ -1615,7 +1626,7 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
  * device is **added** to `_activePeers` after scanning, while existing
  * owners keep their session.
  */
-async function _cmdPair(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
+async function _cmdPair(ctx: Pick<ExtensionContext, "ui" | "cwd">, args = ""): Promise<void> {
   const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : "";
 
   // Auto-bootstrap when services are down. Before this, `/remote-pi pair`
@@ -1657,7 +1668,11 @@ async function _cmdPair(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
   // raw path snippet).
   const sessionName = _displayName(cwd);
 
-  const { token, expiresAt } = qrSession.issueToken();
+  // Optional `--ttl <seconds>` — RPC clients (e.g. Cockpit) pass a caller-
+  // defined expiry. Defaults to TOKEN_TTL_MS, clamped to the safe window.
+  const ttlMatch = /--ttl\s+(\d+)/.exec(args);
+  const ttlMs = ttlMatch ? clampPairTtlMs(Number(ttlMatch[1]) * 1000) : TOKEN_TTL_MS;
+  const { token, expiresAt } = qrSession.issueToken(ttlMs);
   const roomId = _myRoomId ?? roomIdForCwd(cwd);
   const qrUri = buildQRUri(token, edKp.publicKey, sessionName, roomId);
   // Render both the QR ASCII and the copy-paste URI inside the Pi TUI's
@@ -1675,6 +1690,9 @@ async function _cmdPair(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
       content:
         `📱 Scan to pair:\n\n${qrAscii}\n` +
         `📋 Or copy this pairing code (camera-less devices):\n\n${qrUri}`,
+      // Structured payload for RPC clients (e.g. Cockpit): render their own QR
+      // from `uri` + show the expiry, without scraping the display string.
+      details: { uri: qrUri, token, expiresAt, roomId, name: sessionName },
       display: true,
     });
   }

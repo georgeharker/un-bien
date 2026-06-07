@@ -1,7 +1,17 @@
 import { randomBytes } from "node:crypto";
 import qrTerminal from "qrcode-terminal";
 
-const TOKEN_TTL_MS = 60_000;
+/** Default ephemeral-token lifetime (also the QR rotation period). */
+export const TOKEN_TTL_MS = 60_000;
+/** Bounds for a caller-supplied pairing TTL (e.g. `/remote-pi pair --ttl <s>`). */
+export const PAIR_TTL_MIN_MS = 10_000;
+export const PAIR_TTL_MAX_MS = 600_000;
+
+/** Clamp an arbitrary ttl (ms) into the safe pairing range; NaN → default. */
+export function clampPairTtlMs(ttlMs: number): number {
+  if (!Number.isFinite(ttlMs)) return TOKEN_TTL_MS;
+  return Math.min(PAIR_TTL_MAX_MS, Math.max(PAIR_TTL_MIN_MS, Math.floor(ttlMs)));
+}
 
 interface ActiveToken {
   token: string;
@@ -22,9 +32,9 @@ export class QRSession {
    * Issues a new active token, invalidating any previous one.
    * Returns the token and its expiry timestamp.
    */
-  issueToken(): { token: string; expiresAt: number } {
+  issueToken(ttlMs: number = TOKEN_TTL_MS): { token: string; expiresAt: number } {
     const token = this.generateToken();
-    const expiresAt = Date.now() + TOKEN_TTL_MS;
+    const expiresAt = Date.now() + ttlMs;
     this.active = { token, expiresAt, consumed: false };
     return { token, expiresAt };
   }
