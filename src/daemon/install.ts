@@ -105,7 +105,9 @@ export function launchdPlistPath(): string {
   return join(homedir(), "Library", "LaunchAgents", "dev.remotepi.supervisord.plist");
 }
 
-const LAUNCHD_LABEL = "dev.remotepi.supervisord";
+export const LAUNCHD_LABEL = "dev.remotepi.supervisord";
+/** systemd --user unit name (with `.service`) for the supervisor. */
+export const SYSTEMD_UNIT = "remote-pi-supervisord.service";
 
 // ── Template rendering ─────────────────────────────────────────────────────
 

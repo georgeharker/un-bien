@@ -85,7 +85,7 @@ import { addDaemon, listDaemons, removeDaemon } from "./daemon/registry.js";
 import { callSupervisor, supervisorOnline, SupervisorOfflineError } from "./daemon/client.js";
 import type { ControlRequest, DaemonInfo } from "./daemon/control_protocol.js";
 import { EXIT_DAEMON_FRESH_SESSION } from "./daemon/rpc_child.js";
-import { installService, uninstallService, linkCliBinaries, unlinkCliBinaries } from "./daemon/install.js";
+import { installService, uninstallService, linkCliBinaries, unlinkCliBinaries, LAUNCHD_LABEL, SYSTEMD_UNIT } from "./daemon/install.js";
 import {
   defaultAgentName,
   effectiveAutoStartRelay,
@@ -3125,6 +3125,55 @@ export function _mapAgentMessagesToEvents(
 
 // ── Standalone CLI ────────────────────────────────────────────────────────────
 
+/**
+ * `remote-pi restart-supervisor` — restarts the `pi-supervisord` PROCESS
+ * (not the daemons). The supervisor is a long-running Node process with no
+ * hot-reload, so after a `dist` rebuild the old code keeps running until the
+ * process is restarted. The Cockpit "Restart supervisor" button shells out to
+ * this; the OS-specific restart lives here so the app stays cross-platform.
+ *
+ * Restarting the supervisor re-spawns every daemon as a side effect. Exits 0
+ * on success, non-zero on failure (the Cockpit detects failure by exit code).
+ */
+/** Pure: the OS command that restarts the supervisor service, or null when the
+ *  platform isn't supported yet. Exported for tests. */
+export function _restartSupervisorCommand(
+  platform: NodeJS.Platform,
+  uid: number,
+): { cmd: string; args: string[] } | null {
+  if (platform === "darwin") return { cmd: "launchctl", args: ["kickstart", "-k", `gui/${uid}/${LAUNCHD_LABEL}`] };
+  if (platform === "linux") return { cmd: "systemctl", args: ["--user", "restart", SYSTEMD_UNIT] };
+  return null;
+}
+
+function _restartSupervisor(): void {
+  const uid = process.getuid?.() ?? 0;
+  const spec = _restartSupervisorCommand(process.platform, uid);
+  if (!spec) {
+    console.error(
+      `[remote-pi] restart-supervisor is not supported on '${process.platform}' yet ` +
+      "(the supervisor has no Windows service). Restart pi-supervisord manually.",
+    );
+    process.exit(1);
+  }
+  _runRestart(spec.cmd, spec.args);
+}
+
+/** Runs the platform restart command, mapping its outcome to a clean exit. */
+function _runRestart(cmd: string, args: string[]): void {
+  const r = spawnSync(cmd, args, { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
+  if (r.error) {
+    console.error(`[remote-pi] restart-supervisor failed: ${cmd} not runnable (${r.error.message}). Is the service installed? Run \`remote-pi install\`.`);
+    process.exit(1);
+  }
+  if (r.status !== 0) {
+    const detail = (r.stderr || r.stdout || "").trim();
+    console.error(`[remote-pi] restart-supervisor failed (${cmd} exited ${r.status})${detail ? `: ${detail}` : ""}.`);
+    process.exit(r.status === null ? 1 : r.status);
+  }
+  console.log("[remote-pi] Supervisor restarted.");
+}
+
 function _isDirectRun(): boolean {
   try {
     return fileURLToPath(import.meta.url) === realpathSync(process.argv[1] ?? "");
@@ -3220,6 +3269,8 @@ if (_isDirectRun()) {
   } else if (subcmd === "uninstall") {
     const stubCtx = { ui: { notify: (msg: string) => console.log(msg) } as unknown as ExtensionContext["ui"] };
     _cmdUninstall(stubCtx, { linkCli: false });
+  } else if (subcmd === "restart-supervisor") {
+    _restartSupervisor();
   } else {
     console.log([
       "Usage: remote-pi <command>",
@@ -3241,6 +3292,7 @@ if (_isDirectRun()) {
       "Service:",
       "  install                         Install pi-supervisord as a system service",
       "  uninstall                       Remove the system service",
+      "  restart-supervisor              Restart the pi-supervisord process",
       "",
       "Devices:",
       "  devices                         List paired devices",
