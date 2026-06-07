@@ -1747,11 +1747,36 @@ async function _cmdList(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
   ctx.ui.notify(`[remote-pi] Paired devices:\n${lines}`, "info");
 }
 
-async function _cmdRevoke(arg: string, ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+async function _cmdRevoke(arg: string, ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
   const shortid = arg.trim();
   if (!shortid) {
     ctx.ui.notify(
       "[remote-pi] Usage: /remote-pi revoke <shortid>. Run /remote-pi list to see shortids.",
+      "warning",
+    );
+    return;
+  }
+
+  // Revoke needs the relay so the revoked device gets a `bye` and its live
+  // channel is torn down — not just a silent peers.json edit. Auto-bootstrap
+  // the mesh + relay when down, mirroring `_cmdPair`.
+  const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : "";
+  if (_state === "idle") {
+    if (!localConfigExists(cwd)) {
+      ctx.ui.notify(
+        "[remote-pi] First-time setup needed. Run /remote-pi to configure, then /remote-pi revoke.",
+        "warning",
+      );
+      return;
+    }
+    ctx.ui.notify("[remote-pi] Starting mesh + relay before revoking…", "info");
+    if (!_meshNode) await _cmdJoin(ctx);
+    if (_state === "idle") await _cmdStart(ctx);
+  }
+  if (_state === "idle" || !_relay) {
+    ctx.ui.notify(
+      "[remote-pi] Revoke requires the relay to be connected. " +
+      "Run /remote-pi to start it (or fix your relay URL via /remote-pi set-relay).",
       "warning",
     );
     return;

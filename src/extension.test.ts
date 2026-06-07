@@ -631,9 +631,30 @@ describe("/remote-pi revoke", () => {
     expect(_removedPeers).toHaveLength(0);
   });
 
+  test("idle (relay off) → refuses instead of a silent peers.json edit", async () => {
+    _knownPeers.push({ name: "Phone", remote_epk: "aaaa1111zzzz", paired_at: "now" });
+
+    // beforeEach stopped the relay and the synthetic cwd has no local config,
+    // so revoke now bails (mirrors pair) rather than editing the file offline.
+    const revoke = captureHandler("remote-pi revoke");
+    const ctx = makeMockCtx();
+    await revoke("aaaa1111", ctx);
+
+    expect(_removedPeers).toHaveLength(0);
+    expect(_knownPeers).toHaveLength(1);
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("First-time setup needed"),
+      "warning",
+    );
+  });
+
   test("valid shortid → peer removed + success notify", async () => {
     _knownPeers.push({ name: "Phone A", remote_epk: "aaaa1111zzzz",   paired_at: "now" });
     _knownPeers.push({ name: "Phone B", remote_epk: "bbbb2222yyyy",   paired_at: "now" });
+
+    // Revoke now requires the relay (mirrors pair) — bring it up first.
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
 
     const revoke = captureHandler("remote-pi revoke");
     const ctx = makeMockCtx();
@@ -650,6 +671,9 @@ describe("/remote-pi revoke", () => {
   test("unknown shortid → no peer matching warning, peers untouched", async () => {
     _knownPeers.push({ name: "Phone", remote_epk: "cccc3333", paired_at: "now" });
 
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
+
     const revoke = captureHandler("remote-pi revoke");
     const ctx = makeMockCtx();
     await revoke("ffffffff", ctx);
@@ -665,6 +689,9 @@ describe("/remote-pi revoke", () => {
   test("ambiguous shortid (>1 match) → ambiguity warning, peers untouched", async () => {
     _knownPeers.push({ name: "A", remote_epk: "prefix01_AAAA", paired_at: "now" });
     _knownPeers.push({ name: "B", remote_epk: "prefix02_BBBB", paired_at: "now" });
+
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
 
     const revoke = captureHandler("remote-pi revoke");
     const ctx = makeMockCtx();
