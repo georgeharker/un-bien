@@ -3,8 +3,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createConnection } from "node:net";
 import { join } from "node:path";
-import { Supervisor, getSupervisorSockPath } from "./supervisor.js";
+import { Supervisor, decideFireAction, getSupervisorSockPath } from "./supervisor.js";
 import { addDaemon } from "./registry.js";
+import { readCronLog } from "./cron_log.js";
 import {
   encodeRequest,
   parseReply,
@@ -210,5 +211,83 @@ describe("Supervisor — control UDS surface", () => {
       // before our addDaemon call, so this entry isn't in the children map.
       expect(found?.state).toBe("stopped");
     }
+  });
+});
+
+describe("decideFireAction (cron — 4 ramos)", () => {
+  test("running + idle → send", () => {
+    expect(decideFireAction({ running: true, busy: false, wake: false, skipIfBusy: true })).toBe("send");
+  });
+  test("running + busy + skip_if_busy → skip_busy", () => {
+    expect(decideFireAction({ running: true, busy: true, wake: false, skipIfBusy: true })).toBe("skip_busy");
+  });
+  test("running + busy + no skip_if_busy → send", () => {
+    expect(decideFireAction({ running: true, busy: true, wake: false, skipIfBusy: false })).toBe("send");
+  });
+  test("down + no wake → skip_down", () => {
+    expect(decideFireAction({ running: false, busy: false, wake: false, skipIfBusy: true })).toBe("skip_down");
+  });
+  test("down + wake → wake_and_send", () => {
+    expect(decideFireAction({ running: false, busy: false, wake: true, skipIfBusy: true })).toBe("wake_and_send");
+  });
+});
+
+describe("Supervisor — cron ops", () => {
+  async function registerDaemon(): Promise<string> {
+    const tmp = mkdtempSync(join(tmpdir(), "pi-cron-d-"));
+    const r = await ask({ op: "register", cwd: tmp }) as ControlReply<{ id: string }>;
+    return r.ok ? r.data!.id : "";
+  }
+
+  test("cron_add validates: invalid expr + <60s rejected, valid accepted", async () => {
+    const daemon_id = await registerDaemon();
+    const bad = await ask({ op: "cron_add", daemon_id, schedule: "nope", prompt: "p" });
+    expect(bad.ok).toBe(false);
+    const tooFreq = await ask({ op: "cron_add", daemon_id, schedule: "* * * * * *", prompt: "p" });
+    expect(tooFreq).toMatchObject({ ok: false });
+    if (!tooFreq.ok) expect(tooFreq.error).toMatch(/60s|too frequent/i);
+    const good = await ask({ op: "cron_add", daemon_id, schedule: "0 9 * * *", prompt: "p" }) as ControlReply<{ job: { id: string } }>;
+    expect(good.ok).toBe(true);
+    expect(good.ok && good.data!.job.id).toMatch(/^j_/);
+  });
+
+  test("cron list/enable/remove round-trip", async () => {
+    const daemon_id = await registerDaemon();
+    const add = await ask({ op: "cron_add", daemon_id, schedule: "0 9 * * *", prompt: "p" }) as ControlReply<{ job: { id: string } }>;
+    const jobId = add.ok ? add.data!.job.id : "";
+
+    const list = await ask({ op: "cron_list" }) as ControlReply<{ jobs: Array<{ id: string; next_run?: string | null }> }>;
+    expect(list.ok && list.data!.jobs.some((j) => j.id === jobId && !!j.next_run)).toBe(true);
+
+    const dis = await ask({ op: "cron_enable", job_id: jobId, enabled: false }) as ControlReply<{ updated: boolean }>;
+    expect(dis.ok && dis.data!.updated).toBe(true);
+
+    const rm = await ask({ op: "cron_remove", job_id: jobId }) as ControlReply<{ removed: boolean }>;
+    expect(rm.ok && rm.data!.removed).toBe(true);
+    const list2 = await ask({ op: "cron_list" }) as ControlReply<{ jobs: unknown[] }>;
+    expect(list2.ok && list2.data!.jobs.length).toBe(0);
+  });
+
+  test("cron_run on a down daemon → skipped_down, recorded + logged", async () => {
+    const daemon_id = await registerDaemon(); // registered, not started → not running
+    const add = await ask({ op: "cron_add", daemon_id, schedule: "0 9 * * *", prompt: "ping" }) as ControlReply<{ job: { id: string } }>;
+    const jobId = add.ok ? add.data!.job.id : "";
+
+    const run = await ask({ op: "cron_run", job_id: jobId }) as ControlReply<{ result: string }>;
+    expect(run.ok && run.data!.result).toBe("skipped_down");
+
+    // logged to cron.jsonl
+    const log = readCronLog({ jobId });
+    expect(log.at(-1)).toMatchObject({ result: "skipped_down", fired: false });
+
+    // last_status reflected in cron list
+    const list = await ask({ op: "cron_list" }) as ControlReply<{ jobs: Array<{ id: string; last_status?: string }> }>;
+    const job = list.ok ? list.data!.jobs.find((j) => j.id === jobId) : undefined;
+    expect(job?.last_status).toBe("skipped_down");
+  });
+
+  test("cron_run on an unknown job → ok:false", async () => {
+    const r = await ask({ op: "cron_run", job_id: "j_unknown" });
+    expect(r).toMatchObject({ ok: false });
   });
 });

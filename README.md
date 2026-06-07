@@ -384,12 +384,45 @@ real name to the peer.
 | `/remote-pi daemon restart` | Stop + start all daemons |
 | `/remote-pi daemon status` | Detailed runtime status (pid, uptime, restart count) |
 | `/remote-pi daemon send <id> "<text>"` | Send a prompt to a specific daemon |
+| `/remote-pi cron add <id> "<expr>" "<prompt>"` | Schedule a recurring prompt (`--tz`, `--wake`, `--no-skip-busy`, `--catchup`) |
+| `/remote-pi cron list` | List scheduled jobs (schedule, enabled, next run, last status) |
+| `/remote-pi cron run <jobId>` | Fire a job now (ignores its schedule) |
+| `/remote-pi cron enable\|disable <jobId>` | Toggle a job on/off |
+| `/remote-pi cron remove <jobId>` | Delete a job |
+| `/remote-pi cron log [<jobId>] [--tail N]` | Read the fire/skip audit log |
 | `/remote-pi install` | Install `pi-supervisord` as a system service |
 | `/remote-pi uninstall` | Remove the system service (registry preserved) |
 
 All commands above work both as Pi slash commands (interactive) and as
 shell-level `remote-pi <subcommand>` when the package is installed
 globally (`npm install -g remote-pi`).
+
+### Scheduled prompts (`cron`)
+
+`remote-pi cron` schedules **recurring prompts** to daemons through the
+supervisor — e.g. a daily "summarise new PRs". Output flows fire-and-forget to
+the mesh/app like any prompt; the cron layer only audits the dispatch.
+
+- **Schedule** is a cron expression (croner syntax; an optional 6th *seconds*
+  field is supported), with an optional IANA timezone via `--tz`:
+
+  ```sh
+  remote-pi cron add a1b2c3d4 "0 9 * * *" "Summarise new PRs" --tz America/Sao_Paulo
+  ```
+
+- **Minimum interval is 60s** — more frequent schedules are rejected (guards
+  token cost + pileup). A fire is **skipped when the daemon is mid-turn**
+  (`--no-skip-busy` to override); `--wake` starts a stopped daemon first;
+  `--catchup` runs once on supervisor start if the previous run was missed.
+- **Prerequisite**: the supervisor must run as a service (`remote-pi install`).
+  Without it there is no scheduler, and `cron` commands say so instead of
+  silently pretending to schedule.
+- **Audit**: every fire **and** every skip appends one line to
+  `~/.pi/remote/cron.jsonl` with a `result` of `delivered`,
+  `woke_and_delivered`, `deliver_failed`, `skipped_busy`, `skipped_down`, or
+  `skipped_disabled` — read it with `remote-pi cron log`.
+
+Step-by-step walkthrough: the [daemon tutorial](https://remote-pi.jacobmoura.work/tutorials/daemon).
 
 ### Footer + title
 

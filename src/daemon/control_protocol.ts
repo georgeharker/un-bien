@@ -12,6 +12,9 @@
  * This file is strictly the supervisor's own control plane.
  */
 
+import type { CronJob } from "./cron_registry.js";
+import type { CronLogEntry } from "./cron_log.js";
+
 /** Per-daemon runtime state observable through the supervisor. */
 export type DaemonState = "running" | "stopped" | "starting" | "crashed";
 
@@ -37,7 +40,14 @@ export type ControlRequest =
   | { op: "restart"; id: string }
   | { op: "send"; id: string; text: string }
   | { op: "register"; cwd: string }
-  | { op: "unregister"; id: string };
+  | { op: "unregister"; id: string }
+  // ── cron (plan/39) ──
+  | { op: "cron_add"; daemon_id: string; schedule: string; prompt: string; tz?: string; skip_if_busy?: boolean; wake?: boolean; catchup?: boolean }
+  | { op: "cron_list" }
+  | { op: "cron_remove"; job_id: string }
+  | { op: "cron_enable"; job_id: string; enabled: boolean }
+  | { op: "cron_run"; job_id: string }
+  | { op: "cron_log"; job_id?: string; tail?: number };
 
 /** Replies sent supervisor → CLI. Tagged by `ok` boolean. */
 export type ControlReply<T = unknown> =
@@ -60,7 +70,17 @@ export interface ControlReplyShapes {
   send: { id: string; delivered: boolean };
   register: { id: string; cwd: string };
   unregister: { removed: boolean; cwd?: string };
+  // ── cron (plan/39) ──
+  cron_add: { job: CronJobView };
+  cron_list: { jobs: CronJobView[] };
+  cron_remove: { removed: boolean };
+  cron_enable: { job_id: string; enabled: boolean; updated: boolean };
+  cron_run: { job_id: string; result: string };
+  cron_log: { entries: CronLogEntry[] };
 }
+
+/** A cron job plus its computed `next_run` (ISO), for `cron list`. */
+export type CronJobView = CronJob & { next_run?: string | null };
 
 /** Convenience for typed `Client.request<...>("op")` calls. */
 export type ControlReplyFor<Op extends ControlRequest["op"]> =

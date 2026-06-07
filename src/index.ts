@@ -83,7 +83,7 @@ import {
 import { acquireCwdLock, type AcquiredLock } from "./session/cwd_lock.js";
 import { addDaemon, listDaemons, removeDaemon } from "./daemon/registry.js";
 import { callSupervisor, supervisorOnline, SupervisorOfflineError } from "./daemon/client.js";
-import type { DaemonInfo } from "./daemon/control_protocol.js";
+import type { ControlRequest, DaemonInfo } from "./daemon/control_protocol.js";
 import { EXIT_DAEMON_FRESH_SESSION } from "./daemon/rpc_child.js";
 import { installService, uninstallService, linkCliBinaries, unlinkCliBinaries } from "./daemon/install.js";
 import {
@@ -1193,6 +1193,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         // meaning "stop this local Pi" — the local UX shipped in plan/25.
         "daemon start", "daemon stop", "daemon restart",
         "daemon send", "daemon status",
+        "cron", "cron add", "cron list", "cron remove", "cron enable", "cron disable", "cron run", "cron log",
         "install", "uninstall",  // service install (plan/26 W3)
       ]
         .filter((o) => o.startsWith(prefix))
@@ -1218,6 +1219,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       else if (sub === "daemon restart" || sub.startsWith("daemon restart ")) { await _cmdDaemonRestart(ctx, sub.slice("daemon restart".length).trim() || undefined); }
       else if (sub === "daemon status")          { await _cmdDaemonStatus(ctx); }
       else if (sub.startsWith("daemon send"))    { await _cmdDaemonSend(sub.slice("daemon send".length).trim(), ctx); }
+      else if (sub === "cron" || sub.startsWith("cron ")) { await _cmdCron(sub.slice("cron".length).trim(), ctx); }
       else if (sub === "install")                { _cmdInstall(ctx, { linkCli: true }); }
       else if (sub === "uninstall")              { _cmdUninstall(ctx, { linkCli: true }); }
       else                                       { await _cmdRoot(ctx); }
@@ -1264,6 +1266,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   pi.registerCommand("remote-pi daemon restart", { description: "Restart daemons: all, or one by id (`daemon restart <id>`)", handler: async (args, ctx) => { _lastCtx = ctx; await _cmdDaemonRestart(ctx, args.trim() || undefined); } });
   pi.registerCommand("remote-pi daemon status",  { description: "Show fleet runtime status (pid, uptime, restarts)", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdDaemonStatus(ctx); } });
   pi.registerCommand("remote-pi daemon send",    { description: "Send a prompt to a daemon: `daemon send <id> \"<text>\"`", handler: async (args, ctx) => { _lastCtx = ctx; await _cmdDaemonSend(args.trim(), ctx); } });
+  pi.registerCommand("remote-pi cron",           { description: "Schedule recurring prompts to daemons: `cron <add|list|remove|enable|disable|run|log>`", handler: async (args, ctx) => { _lastCtx = ctx; await _cmdCron(args.trim(), ctx); } });
 
   // Service install / uninstall (plan/26 W3)
   pi.registerCommand("remote-pi install",   { description: "Install pi-supervisord as a system service + link the remote-pi CLI into ~/.local/bin (systemd/launchd)", handler: async (_, ctx) => { _lastCtx = ctx; _cmdInstall(ctx, { linkCli: true }); } });
@@ -2164,6 +2167,158 @@ async function _cmdDaemonSend(arg: string, ctx: Pick<ExtensionContext, "ui">): P
   }
 }
 
+// ── Cron — scheduled prompts for daemons (plan/39) ──────────────────────────
+
+/** Splits an arg string into tokens, honoring double-quoted groups. */
+function _tokenizeArgs(s: string): string[] {
+  const out: string[] = [];
+  const re = /"([^"]*)"|(\S+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(s)) !== null) out.push(m[1] !== undefined ? m[1] : m[2]!);
+  return out;
+}
+
+/**
+ * `/remote-pi cron <add|list|remove|enable|disable|run|log>` — schedules
+ * recurring prompts to daemons via the supervisor. All subcommands require the
+ * supervisor running (offline → friendly notice, not a crash).
+ */
+async function _cmdCron(arg: string, ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+  const trimmed = arg.trim();
+  const sp = trimmed.indexOf(" ");
+  const sub = (sp === -1 ? trimmed : trimmed.slice(0, sp)).toLowerCase();
+  const rest = sp === -1 ? "" : trimmed.slice(sp + 1).trim();
+  try {
+    switch (sub) {
+      case "":
+      case "list":    return await _cronList(ctx);
+      case "add":     return await _cronAdd(rest, ctx);
+      case "remove":
+      case "rm":      return await _cronMutate({ op: "cron_remove", job_id: rest.trim() }, rest.trim(), ctx);
+      case "enable":  return await _cronMutate({ op: "cron_enable", job_id: rest.trim(), enabled: true }, rest.trim(), ctx);
+      case "disable": return await _cronMutate({ op: "cron_enable", job_id: rest.trim(), enabled: false }, rest.trim(), ctx);
+      case "run":     return await _cronRun(rest.trim(), ctx);
+      case "log":     return await _cronLog(rest, ctx);
+      default:
+        ctx.ui.notify("[remote-pi] Usage: /remote-pi cron <add|list|remove|enable|disable|run|log>", "warning");
+    }
+  } catch (err) {
+    if (err instanceof SupervisorOfflineError) {
+      ctx.ui.notify(
+        "[remote-pi] Cron needs the supervisor running. Run `remote-pi install` " +
+        "(or start `pi-supervisord`).",
+        "warning",
+      );
+      return;
+    }
+    ctx.ui.notify(`[remote-pi] cron ${sub || "list"} failed: ${String(err)}`, "error");
+  }
+}
+
+async function _cronAdd(rest: string, ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+  const toks = _tokenizeArgs(rest);
+  let tz: string | undefined;
+  let wake = false;
+  let skipBusy = true;
+  let catchup = false;
+  const pos: string[] = [];
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i]!;
+    if (t === "--wake") wake = true;
+    else if (t === "--no-skip-busy") skipBusy = false;
+    else if (t === "--catchup") catchup = true;
+    else if (t === "--tz") tz = toks[++i];
+    else pos.push(t);
+  }
+  const [daemonId, schedule, prompt] = pos;
+  if (!daemonId || !schedule || !prompt) {
+    ctx.ui.notify(
+      '[remote-pi] Usage: /remote-pi cron add <daemonId> "<cron-expr>" "<prompt>" ' +
+      "[--tz Area/City] [--wake] [--no-skip-busy] [--catchup]",
+      "warning",
+    );
+    return;
+  }
+  const req: Extract<ControlRequest, { op: "cron_add" }> = {
+    op: "cron_add", daemon_id: daemonId, schedule, prompt,
+  };
+  if (tz) req.tz = tz;
+  if (wake) req.wake = true;
+  if (!skipBusy) req.skip_if_busy = false;
+  if (catchup) req.catchup = true;
+  const data = await callSupervisor(req);
+  ctx.ui.notify(
+    `[remote-pi] Cron ${data.job.id} added → daemon ${daemonId}: "${schedule}"` +
+    `${tz ? ` (${tz})` : ""}. Next run: ${data.job.next_run ?? "?"}`,
+    "info",
+  );
+}
+
+async function _cronList(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+  const data = await callSupervisor({ op: "cron_list" });
+  if (data.jobs.length === 0) {
+    ctx.ui.notify("[remote-pi] No cron jobs.", "info");
+    return;
+  }
+  const lines = data.jobs.map((j) =>
+    `${j.enabled ? "✓" : "✗"} ${j.id}  "${j.schedule}"${j.tz ? ` (${j.tz})` : ""}  → ${j.daemon_id}  ` +
+    `next:${j.next_run ?? "?"}  last:${j.last_status ?? "—"}${j.last_run ? `@${j.last_run}` : ""}`,
+  );
+  ctx.ui.notify(`[remote-pi] Cron jobs (${data.jobs.length}):\n${lines.join("\n")}`, "info");
+}
+
+async function _cronMutate(
+  req: Extract<ControlRequest, { op: "cron_remove" | "cron_enable" }>,
+  jobId: string,
+  ctx: Pick<ExtensionContext, "ui">,
+): Promise<void> {
+  if (!jobId) {
+    ctx.ui.notify(`[remote-pi] Usage: /remote-pi cron ${req.op === "cron_remove" ? "remove" : "enable|disable"} <jobId>`, "warning");
+    return;
+  }
+  if (req.op === "cron_remove") {
+    const data = await callSupervisor(req);
+    ctx.ui.notify(data.removed ? `[remote-pi] Cron ${jobId} removed.` : `[remote-pi] No cron job ${jobId}.`, data.removed ? "info" : "warning");
+  } else {
+    const data = await callSupervisor(req);
+    ctx.ui.notify(
+      data.updated ? `[remote-pi] Cron ${jobId} ${data.enabled ? "enabled" : "disabled"}.` : `[remote-pi] No cron job ${jobId}.`,
+      data.updated ? "info" : "warning",
+    );
+  }
+}
+
+async function _cronRun(jobId: string, ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+  if (!jobId) {
+    ctx.ui.notify("[remote-pi] Usage: /remote-pi cron run <jobId>", "warning");
+    return;
+  }
+  const data = await callSupervisor({ op: "cron_run", job_id: jobId });
+  ctx.ui.notify(`[remote-pi] Cron ${jobId} fired now → ${data.result}`, "info");
+}
+
+async function _cronLog(rest: string, ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+  const toks = _tokenizeArgs(rest);
+  let jobId: string | undefined;
+  let tail = 20;
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i]!;
+    if (t === "--tail") { const n = Number(toks[++i]); if (Number.isFinite(n)) tail = n; }
+    else if (!t.startsWith("--")) jobId = t;
+  }
+  const req: Extract<ControlRequest, { op: "cron_log" }> = { op: "cron_log", tail };
+  if (jobId) req.job_id = jobId;
+  const data = await callSupervisor(req);
+  if (data.entries.length === 0) {
+    ctx.ui.notify("[remote-pi] No cron log entries.", "info");
+    return;
+  }
+  const lines = data.entries.map((e) =>
+    `${new Date(e.ts).toISOString()}  ${e.fired ? "▶" : "∅"} ${e.result}  ${e.job_id} → ${e.daemon_id}  ${e.prompt_preview}`,
+  );
+  ctx.ui.notify(`[remote-pi] Cron log (last ${data.entries.length}):\n${lines.join("\n")}`, "info");
+}
+
 // ── Install/uninstall the supervisor service (plan/26 W3) ────────────────────
 //
 // Installs `pi-supervisord` as a user-level system service (systemd
@@ -3047,6 +3202,12 @@ if (_isDirectRun()) {
     else {
       console.log("Usage: remote-pi daemon <start|stop|restart [<id>]|status|send <id> \"<text>\">");
     }
+  } else if (subcmd === "cron") {
+    // `remote-pi cron <op> [args]`. Re-quote args with spaces so the shared
+    // parser sees the same shape as a Pi slash prompt.
+    const joined = cliArgs.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ");
+    const stubCtx = { ui: { notify: (msg: string) => console.log(msg) } as unknown as ExtensionContext["ui"] };
+    await _cmdCron(joined, stubCtx);
   } else if (subcmd === "claude") {
     await _cmdClaudeCli(cliArgs);
   } else if (subcmd === "install") {
@@ -3074,6 +3235,8 @@ if (_isDirectRun()) {
       "  daemon restart [<id>]           Restart all daemons, or one by id",
       "  daemon status                   Show pid / uptime / restarts",
       "  daemon send <id> \"<text>\"       Send a prompt to a daemon",
+      "  cron add <id> \"<expr>\" \"<txt>\"  Schedule a recurring prompt (≥60s; --tz, --wake)",
+      "  cron list|run|remove|log        Manage scheduled prompts (needs the supervisor)",
       "",
       "Service:",
       "  install                         Install pi-supervisord as a system service",

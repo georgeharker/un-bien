@@ -53,6 +53,39 @@ export interface RpcChildExitEvent {
 export const EXIT_DAEMON_FRESH_SESSION = 42;
 
 /**
+ * Maps an RPC stdout line to a busy-state transition: `message_start` → true
+ * (a message is streaming), `message_end` → false. Other lines → null (no
+ * change). Pure + exported for tests.
+ *
+ * NOTE (plan/39 detail 1): the Pi RPC stream has NO turn-level event — only
+ * per-message start/end (and `response{command:"prompt"}` is emitted at
+ * PREFLIGHT, i.e. turn START, not end). So this passive flag reflects
+ * "a message is being produced right now"; the authoritative turn-busy signal
+ * is `get_state.isStreaming` (see `RpcChild.refreshBusy`).
+ */
+export function busyTransition(line: string): boolean | null {
+  let obj: unknown;
+  try { obj = JSON.parse(line); } catch { return null; }
+  const t = (obj as { type?: unknown } | null)?.type;
+  if (t === "message_start") return true;
+  if (t === "message_end") return false;
+  return null;
+}
+
+/** Parses a `get_state` RPC response line, returning its id + isStreaming. */
+function parseGetStateResponse(line: string): { id?: string; isStreaming?: boolean } | null {
+  let obj: unknown;
+  try { obj = JSON.parse(line); } catch { return null; }
+  const o = obj as { type?: unknown; command?: unknown; id?: unknown; data?: unknown };
+  if (o.type !== "response" || o.command !== "get_state") return null;
+  const data = o.data as { isStreaming?: unknown } | undefined;
+  return {
+    id: typeof o.id === "string" ? o.id : undefined,
+    isStreaming: typeof data?.isStreaming === "boolean" ? data.isStreaming : undefined,
+  };
+}
+
+/**
  * CLI args for the daemon's `pi --mode rpc` child.
  *
  * `--continue` is the key bit: it resumes the **most recent** session for the
@@ -97,12 +130,20 @@ export class RpcChild extends EventEmitter {
   private forceFreshSessionOnNextSpawn = false;
   /** Accumulates partial stdout lines while waiting for `\n`. */
   private stdoutBuf = "";
+  /** Passive busy flag derived from the RPC stream (message_start/end). Hint
+   *  only; `refreshBusy` syncs it authoritatively via get_state.isStreaming. */
+  private _busy = false;
+  /** In-flight `get_state` requests, keyed by request id. */
+  private readonly _statePending = new Map<string, { resolve: (b: boolean) => void; timer: ReturnType<typeof setTimeout> }>();
 
   constructor(private readonly opts: RpcChildOptions) {
     super();
   }
 
   get state(): DaemonState { return this._state; }
+  /** Passive busy hint from the stream. Prefer `refreshBusy()` for an
+   *  authoritative check before acting on it (cron skip_if_busy). */
+  get isBusy(): boolean { return this._busy; }
   get pid(): number | undefined { return this.child?.pid; }
   get restartCount(): number { return this._restartCount; }
   get uptimeMs(): number | undefined {
@@ -116,6 +157,7 @@ export class RpcChild extends EventEmitter {
   spawn(): void {
     if (this.child) return;
     this._stopping = false;  // fresh start — a later signal IS a real crash
+    this._busy = false;
     this._state = "starting";
 
     const piBin = this.opts.piBin ?? "pi";
@@ -211,8 +253,54 @@ export class RpcChild extends EventEmitter {
       const line = this.stdoutBuf.slice(0, nl);
       this.stdoutBuf = this.stdoutBuf.slice(nl + 1);
       if (!line.trim()) continue;
-      this.emit("stdout", line);
+      this._handleStdoutLine(line);
     }
+  }
+
+  private _handleStdoutLine(line: string): void {
+    const t = busyTransition(line);
+    if (t !== null) this._busy = t;
+    const gs = parseGetStateResponse(line);
+    if (gs && gs.id) {
+      const pending = this._statePending.get(gs.id);
+      if (pending) {
+        clearTimeout(pending.timer);
+        this._statePending.delete(gs.id);
+        if (typeof gs.isStreaming === "boolean") this._busy = gs.isStreaming;
+        pending.resolve(this._busy);
+      }
+    }
+    this.emit("stdout", line);
+  }
+
+  /**
+   * Authoritative busy check: queries the child's `get_state` and syncs
+   * `_busy` to `isStreaming`. Resolves the passive flag on timeout (no
+   * response) or when the child isn't running. Used by the cron `skip_if_busy`
+   * gate, where a false "not busy" would pile a prompt onto a live turn.
+   */
+  async refreshBusy(timeoutMs = 1500): Promise<boolean> {
+    if (this._state !== "running" || !this.child?.stdin) return this._busy;
+    const id = `gs-${Date.now()}-${Math.round(Math.random() * 1e6)}`;
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        this._statePending.delete(id);
+        resolve(this._busy);
+      }, timeoutMs);
+      this._statePending.set(id, { resolve, timer });
+      try {
+        this.child!.stdin!.write(JSON.stringify({ id, type: "get_state" }) + "\n");
+      } catch {
+        clearTimeout(timer);
+        this._statePending.delete(id);
+        resolve(this._busy);
+      }
+    });
+  }
+
+  /** Test-only: feed a raw stdout line through the same handler. */
+  _ingestStdoutForTest(line: string): void {
+    this._handleStdoutLine(line);
   }
 
   private _onExit(code: number | null, signal: NodeJS.Signals | null): void {
@@ -226,6 +314,12 @@ export class RpcChild extends EventEmitter {
     this._state = isCrash ? "crashed" : "stopped";
     this.child = null;
     this._startedAt = null;
+    this._busy = false;
+    for (const p of this._statePending.values()) {
+      clearTimeout(p.timer);
+      p.resolve(false);
+    }
+    this._statePending.clear();
     this.emit("exit", { code, signal, isCrash } satisfies RpcChildExitEvent);
   }
 

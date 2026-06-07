@@ -9,10 +9,25 @@ import { EXIT_DAEMON_FRESH_SESSION, RpcChild, type RpcChildExitEvent, type RpcCh
 import {
   type ControlReply,
   type ControlRequest,
+  type CronJobView,
   type DaemonInfo,
   encodeReply,
   parseRequest,
 } from "./control_protocol.js";
+import { Cron } from "croner";
+import {
+  addJob as addCronJob,
+  getJob as getCronJob,
+  listJobs as listCronJobs,
+  nextRunFor,
+  recordRun,
+  removeJob as removeCronJob,
+  setJobEnabled,
+  validateSchedule,
+  type CronJob,
+  type NewJobInput,
+} from "./cron_registry.js";
+import { appendCronLog, readCronLog, type CronResult } from "./cron_log.js";
 
 /**
  * Central process that owns the daemon fleet (plan/26).
@@ -89,6 +104,20 @@ export interface SupervisorOptions {
   piBin?: string;
 }
 
+/** Pure decision for `fireJob` (plan/39) — picks the action from the daemon's
+ *  liveness/busy state + the job's flags. Tested in isolation for all 4 ramos. */
+export type FireAction = "send" | "wake_and_send" | "skip_down" | "skip_busy";
+export function decideFireAction(o: {
+  running: boolean;
+  busy: boolean;
+  wake: boolean;
+  skipIfBusy: boolean;
+}): FireAction {
+  if (!o.running) return o.wake ? "wake_and_send" : "skip_down";
+  if (o.skipIfBusy && o.busy) return "skip_busy";
+  return "send";
+}
+
 interface ChildSlot {
   id: string;
   cwd: string;
@@ -100,6 +129,8 @@ interface ChildSlot {
 export class Supervisor {
   private server: Server | null = null;
   private readonly children = new Map<string, ChildSlot>();
+  /** Live croner schedules, keyed by cron job id (plan/39). */
+  private readonly cronJobs = new Map<string, Cron>();
   private shuttingDown = false;
 
   constructor(private readonly opts: SupervisorOptions) {}
@@ -112,11 +143,17 @@ export class Supervisor {
     migrateRegistryNames();
     await this._bindUds();
     this._spawnAllFromRegistry();
+    // Cron (plan/39): schedule all enabled jobs, then run any missed catchup.
+    this._reconcileCron();
+    this._runCatchup();
   }
 
   /** Graceful shutdown: stop all children, close UDS. */
   async stop(): Promise<void> {
     this.shuttingDown = true;
+    // Stop all cron schedules (plan/39) so no fire races with teardown.
+    for (const c of this.cronJobs.values()) c.stop();
+    this.cronJobs.clear();
     // Cancel pending restart timers first so they don't race with stop().
     for (const slot of this.children.values()) {
       if (slot.restartTimer !== null) {
@@ -199,6 +236,12 @@ export class Supervisor {
       case "send":         return this._opSend(req.id, req.text);
       case "register":     return this._opRegister(req.cwd);
       case "unregister":   return this._opUnregister(req.id);
+      case "cron_add":     return this._opCronAdd(req);
+      case "cron_list":    return this._opCronList();
+      case "cron_remove":  return this._opCronRemove(req.job_id);
+      case "cron_enable":  return this._opCronEnable(req.job_id, req.enabled);
+      case "cron_run":     return this._opCronRun(req.job_id);
+      case "cron_log":     return this._opCronLog(req.job_id, req.tail);
       default: {
         const unknown = (req as { op: string }).op;
         return { ok: false, error: `unknown op: ${unknown}` };
@@ -360,6 +403,145 @@ export class Supervisor {
     } catch (e) {
       return { ok: false, error: (e as Error).message };
     }
+  }
+
+  // ── Cron ops + engine (plan/39) ────────────────────────────────────────────
+
+  private _opCronAdd(req: Extract<ControlRequest, { op: "cron_add" }>): ControlReply<unknown> {
+    const v = validateSchedule(req.schedule, req.tz);
+    if (!v.ok) return { ok: false, error: v.error ?? "invalid schedule" };
+    const input: NewJobInput = { daemon_id: req.daemon_id, schedule: req.schedule, prompt: req.prompt };
+    if (req.tz !== undefined) input.tz = req.tz;
+    if (req.skip_if_busy !== undefined) input.skip_if_busy = req.skip_if_busy;
+    if (req.wake !== undefined) input.wake = req.wake;
+    if (req.catchup !== undefined) input.catchup = req.catchup;
+    const job = addCronJob(input);
+    this._scheduleCron(job);
+    return { ok: true, data: { job: this._jobView(job) } };
+  }
+
+  private _opCronList(): ControlReply<unknown> {
+    const jobs = listCronJobs().map((j) => this._jobView(j));
+    return { ok: true, data: { jobs } };
+  }
+
+  private _opCronRemove(jobId: string): ControlReply<unknown> {
+    const removed = removeCronJob(jobId);
+    this._stopCron(jobId);
+    return { ok: true, data: { removed } };
+  }
+
+  private _opCronEnable(jobId: string, enabled: boolean): ControlReply<unknown> {
+    const updated = setJobEnabled(jobId, enabled);
+    if (updated) {
+      this._stopCron(jobId);
+      const job = getCronJob(jobId);
+      if (enabled && job) this._scheduleCron(job);
+    }
+    return { ok: true, data: { job_id: jobId, enabled, updated } };
+  }
+
+  private async _opCronRun(jobId: string): Promise<ControlReply<unknown>> {
+    if (!getCronJob(jobId)) return { ok: false, error: `no cron job with id ${jobId}` };
+    const result = await this.fireJob(jobId, { manual: true });
+    return { ok: true, data: { job_id: jobId, result } };
+  }
+
+  private _opCronLog(jobId: string | undefined, tail: number | undefined): ControlReply<unknown> {
+    const opts: { jobId?: string; tail?: number } = {};
+    if (jobId !== undefined) opts.jobId = jobId;
+    if (tail !== undefined) opts.tail = tail;
+    return { ok: true, data: { entries: readCronLog(opts) } };
+  }
+
+  private _jobView(job: CronJob): CronJobView {
+    const next = nextRunFor(job);
+    return { ...job, next_run: next ? next.toISOString() : null };
+  }
+
+  /** Rebuild all live `Cron` schedules from the registry (enabled jobs only).
+   *  Called on start; mutations reconcile incrementally via _scheduleCron/_stopCron. */
+  private _reconcileCron(): void {
+    for (const c of this.cronJobs.values()) c.stop();
+    this.cronJobs.clear();
+    for (const job of listCronJobs()) {
+      if (job.enabled) this._scheduleCron(job);
+    }
+  }
+
+  private _scheduleCron(job: CronJob): void {
+    this._stopCron(job.id);
+    try {
+      const opts = job.tz ? { timezone: job.tz, name: job.id } : { name: job.id };
+      const cron = new Cron(job.schedule, opts, () => { void this.fireJob(job.id); });
+      this.cronJobs.set(job.id, cron);
+    } catch (e) {
+      process.stderr.write(`[remote-pi-supervisord] cron schedule failed for ${job.id}: ${String(e)}\n`);
+    }
+  }
+
+  private _stopCron(jobId: string): void {
+    const c = this.cronJobs.get(jobId);
+    if (c) { c.stop(); this.cronJobs.delete(jobId); }
+  }
+
+  /** Detail 2: on start, run a catchup job once if its previous scheduled run
+   *  was missed while the supervisor was down. Opt-in (`catchup`), at most 1×. */
+  private _runCatchup(): void {
+    for (const job of listCronJobs()) {
+      if (!job.enabled || !job.catchup) continue;
+      try {
+        const cron = new Cron(job.schedule, job.tz ? { timezone: job.tz } : {});
+        const prev = cron.previousRun();
+        cron.stop();
+        if (!prev) continue;
+        const lastRunMs = job.last_run ? Date.parse(job.last_run) : 0;
+        if (prev.getTime() > lastRunMs) void this.fireJob(job.id, { manual: true });
+      } catch { /* skip a malformed schedule */ }
+    }
+  }
+
+  /**
+   * Fires a cron job: resolves the daemon, decides the action (decideFireAction),
+   * acts, and records the outcome — ALWAYS one `last_status` update + one JSONL
+   * line, for both fires and skips. Returns the result. `manual` bypasses the
+   * disabled-skip (used by `cron run` + catchup).
+   */
+  async fireJob(jobId: string, opts: { manual?: boolean } = {}): Promise<CronResult | "missing"> {
+    const job = getCronJob(jobId);
+    if (!job) return "missing";
+
+    let result: CronResult;
+    if (!job.enabled && !opts.manual) {
+      result = "skipped_disabled";
+    } else {
+      const slot = this.children.get(job.daemon_id);
+      const running = !!slot && slot.child.state === "running";
+      let busy = false;
+      if (running && job.skip_if_busy) busy = await slot!.child.refreshBusy();
+      const action = decideFireAction({ running, busy, wake: job.wake, skipIfBusy: job.skip_if_busy });
+      if (action === "skip_down") {
+        result = "skipped_down";
+      } else if (action === "skip_busy") {
+        result = "skipped_busy";
+      } else if (action === "wake_and_send") {
+        const entry = listDaemons().find((d) => d.id === job.daemon_id);
+        if (!entry) {
+          result = "skipped_down";
+        } else {
+          this._spawnEntry(entry.id, entry.cwd, entry.name);
+          const woke = this.children.get(job.daemon_id);
+          result = woke && woke.child.sendPrompt(job.prompt) ? "woke_and_delivered" : "deliver_failed";
+        }
+      } else {
+        result = slot!.child.sendPrompt(job.prompt) ? "delivered" : "deliver_failed";
+      }
+    }
+
+    const at = new Date().toISOString();
+    recordRun(job.id, at, result);
+    appendCronLog({ job_id: job.id, daemon_id: job.daemon_id, schedule: job.schedule, result, prompt: job.prompt });
+    return result;
   }
 
   // ── Child lifecycle ──────────────────────────────────────────────────────

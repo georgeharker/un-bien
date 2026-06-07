@@ -241,8 +241,8 @@ describe("extension default export", () => {
     const { pi, registeredCommands } = makeMockPi();
     (extension as ExtensionFactory)(pi);
     // 8 plan-25 + 2 daemon registry (W1) + 6 fleet ops (W2) + 2 install (W3)
-    // + 1 cross-PC inventory (plan-25 W D).
-    expect(registeredCommands).toHaveLength(19);
+    // + 1 cross-PC inventory (plan-25 W D) + 1 cron (plan-39).
+    expect(registeredCommands).toHaveLength(20);
     for (const removed of [
       "remote-pi join", "remote-pi leave", "remote-pi rename", "remote-pi sessions",
       "remote-pi relay", "remote-pi relay start", "remote-pi relay stop",
