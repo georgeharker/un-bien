@@ -1,6 +1,6 @@
 ---
 name: agent-network
-description: Use when the remote-pi mesh tools (`list_peers`, `agent_send`, and — on Claude — `get_messages`) are available. You are an agent (a Claude session or a Pi coding agent) connected to the remote-pi agent mesh over a local broker. This skill teaches how to discover who's online (`list_peers`), how to send messages with a delivery ACK (`agent_send`), how incoming messages reach you (via `get_messages` on Claude, or delivered into your turn on Pi), how to reply (echo `re`), and how cross-PC addressing works (`<pc_label>:<peer>`).
+description: Use when the remote-pi mesh tools (`list_peers`, `agent_send`, and — on Claude — `get_messages`) are available. You are an agent (a Claude session or a Pi coding agent) connected to the remote-pi agent mesh over a local broker. This skill teaches how to discover who's online (`list_peers`), how to send messages with a delivery ACK (`agent_send`), how incoming messages reach you (via `get_messages` on Claude, or delivered into your turn on Pi), how to reply (echo `re`), and how peer addresses work — `<cwd>@<name>` locally (echo verbatim, never compose), with a `<pc>:` prefix cross-PC.
 ---
 
 # Agent Network (remote-pi mesh)
@@ -55,26 +55,58 @@ Before sending anything, find out who's actually online:
 
 ```
 list_peers()
-→ backend
-  frontend
-  casa:agent-1
-  trab:worker
+→ /Users/jo/acme/backend@backend
+  /Users/jo/acme/backend@reviewer
+  /Users/jo/acme/web@web
+  casa:/Users/jo/acme/api@api
 ```
 
 Synchronous (resolves in milliseconds — not another agent's turn). Use it:
 
 - At the start of a session, to see what mesh you're in
-- Before any `agent_send` whose target name is uncertain
+- Before any `agent_send` whose target is uncertain
 - To refresh — peers join and leave over time
 
 **Presence is passive (pull, not push).** A peer joining or leaving does **not**
 wake your turn. When your view feels stale, just call `list_peers` again — it's
 the authoritative snapshot. Don't expect `peer_joined`/`peer_left` events.
 
-**Entry shape:**
-- `backend` → local peer (this machine, same broker)
-- `casa:agent-1` → cross-PC peer on the PC labeled `casa` (the Owner's other
-  machine, reached through the relay)
+**Each entry is an ADDRESS, not a bare name.** The form is `<cwd>@<name>`
+(with an optional `<pc>:` prefix for cross-PC peers). Read it by splitting on
+the `@`:
+
+- **after the `@` → the name** (`Orquestrador`, `App`, `backend`). It's a safe
+  token: it never contains a space, `/`, `:`, `#` or `@` — those are normalized
+  to `-` when the agent registers, so `"my agent"` becomes `my-agent`. (That's
+  why the `@` is unambiguous.)
+- **before the `@` → the folder path** (the agent's working directory, cwd).
+
+Two agents named `backend` in different folders are therefore distinct
+addresses, and several agents can live in the **same** folder
+(`…/backend@backend`, `…/backend@reviewer`).
+
+**Who's in my project? Read the folder path.** Agents whose cwd is the same
+folder — or share a parent/child path — are very likely the same project. Use
+the path prefix to decide who to coordinate with; the bare name alone doesn't
+tell you the project. Example:
+
+```
+list_peers()
+→ /home/jo/backlog@Orquestrador
+  /home/jo/backlog/app@App
+  /home/jo/backlog/backend@Backend
+  /home/jo/other-thing@solo
+```
+
+`backlog@Orquestrador` sits at the repo root `…/backlog`; `…/backlog/app@App`
+and `…/backlog/backend@Backend` are **subfolders** of it → almost certainly the
+**same project** (an orchestrator plus its app/backend agents). `…/other-thing@solo`
+shares no prefix → a different project, probably leave it alone.
+
+**An address is an opaque routing key. Echo it VERBATIM into `agent_send` /
+`agent_request` (and as your `to` when replying). NEVER build one by hand** —
+don't concatenate cwd and name yourself; copy the exact string `list_peers`
+gave you. The broker composes addresses; everyone else only echoes them.
 
 You are excluded from the result — no need to filter yourself out.
 
@@ -86,8 +118,8 @@ Each message carries: `from`, `to`, `id`, `re`, and `body`.
 
 | Field | Meaning |
 |---|---|
-| `from` | Who sent it. Use this verbatim as your `to` when replying. |
-| `to` | You (or `broadcast`, or a list of names including yours). |
+| `from` | Sender's ADDRESS (`<cwd>@<name>`). Use it verbatim as your `to` when replying — never reconstruct it. |
+| `to` | Your address (or `broadcast`, or a list of addresses including yours). |
 | `id` | Unique id of this message. Echo it as `re` when you reply. |
 | `re` | If set, this message is itself a REPLY to an earlier `id` of yours. Otherwise `null`. |
 | `body` | Free-form content — string or JSON, sender's choice. |
@@ -185,27 +217,28 @@ order — use `re` to identify what each reply answers.
 
 ---
 
-## Cross-PC addressing (`<pc_label>:<peer>`)
+## Cross-PC addressing (`<pc>:<cwd>@<name>`)
 
-When the Owner has paired multiple PCs, remote peers appear with a prefix:
-
-```
-list_peers() → backend  frontend  casa:agent-1  trab:worker
-```
-
-Send to a remote peer with the prefixed name verbatim:
+When the Owner has paired multiple PCs, remote peers appear with a `<pc>:` prefix
+on the address:
 
 ```
-agent_send({ to: "casa:agent-1", body: { ... } })
+list_peers() → /Users/jo/acme/backend@backend  casa:/Users/jo/acme/api@api
+```
+
+Send to a remote peer with its address verbatim:
+
+```
+agent_send({ to: "casa:/Users/jo/acme/api@api", body: { ... } })
 ```
 
 The relay routes it across the mesh; `received | denied | timeout` semantics
 are identical to local. When you **reply** to a cross-PC message, use the
-sender's `from` verbatim (it already carries the prefix) as your `to`. You
-never prefix your own name — the broker handles that.
+sender's `from` verbatim (it already carries the `<pc>:` prefix) as your `to`.
+You never prefix your own address — the broker handles that.
 
 Cross-PC failure notes:
-- `denied` → the remote broker has no peer by that name (left, or stale cache
+- `denied` → the remote broker has no peer at that address (left, or stale cache
   → call `list_peers` again).
 - `timeout` → the other PC is offline or the relay is unreachable. The relay
   may also synthesise a `transport_error` reply (`from: "_relay"`,
@@ -215,7 +248,9 @@ Cross-PC failure notes:
 
 ## Broadcast and multicast
 
-- `to: "broadcast"` → every other peer. `to: ["a", "b"]` → the listed names.
+- `to: "broadcast"` → every other peer **in your folder (same cwd)** — broadcast
+  is folder-scoped and local-only (it does NOT cross PCs or reach other folders).
+  `to: ["addr1", "addr2"]` → the listed addresses (echo them verbatim).
 - Use for announcements ("wave 2 started", "I'm taking the lock on /contracts"),
   never for questions (replies would be uncorrelated).
 - Broadcast/multicast skip the ACK — status is `sent`, you don't know who
@@ -252,15 +287,16 @@ inbox on a later turn. (Claude has no `agent_request` — use `agent_send`.)
 
 1. **Every turn**: read your inbox first — `get_messages()` on Claude; on Pi
    messages arrive as turn input automatically.
-2. **Discover**: `list_peers()` → locals + `<pc>:<peer>` cross-PC. Synchronous,
-   self-excluded. Presence is pull-based — join/leave don't wake you.
+2. **Discover**: `list_peers()` → addresses `<cwd>@<name>` (local) + `<pc>:…`
+   (cross-PC). Echo verbatim, never compose. Synchronous, self-excluded.
+   Presence is pull-based — join/leave don't wake you.
 3. **Send**: `agent_send({to, body, re?})` → inspect the status.
 4. **Unicast status**: `received | denied | timeout`. Delivery is reliable —
    `received` even if the peer is mid-turn (its harness queues it); abandon on
    `denied`; investigate on `timeout`. No retry-on-busy.
 5. **Broadcast/multicast**: status `sent`. Fire-and-forget.
-6. **Reply**: set `re` to their `id`, `to` to their `from` (prefix and all).
-   `re` is correlation only.
+6. **Reply**: set `re` to their `id`, `to` to their `from` (the full address,
+   prefix and all). `re` is correlation only.
 7. You never receive your own messages.
 
 Re-read when in doubt.
@@ -271,7 +307,8 @@ Re-read when in doubt.
 
 **Q: Can I send a message to myself?**
 A: No. `agent_send` refuses early (`status: "refused"`) when `to` matches your
-own name, and the broker drops unicast self-loops as a second line of defense.
+own address (or name), and the broker drops unicast self-loops as a second line
+of defense.
 
 **Q: What if the peer never replies?**
 A: Then you never see a reply. Your send returned `received` (the broker handed

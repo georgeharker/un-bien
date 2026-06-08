@@ -73,7 +73,10 @@ describe("loadLocalConfig — file vs REMOTE_PI_DIRECT_CONFIG", () => {
   });
 });
 
-describe("loadLocalConfig — workspace / worktree (plan 38 config layer)", () => {
+describe("loadLocalConfig — workspace / worktree removed (plan 38)", () => {
+  // The fields were dropped: the mesh identity is `(cwd, nome)`, with `cwd`
+  // subsuming folder + worktree disambiguation. A stale key from an old config
+  // (or one the Cockpit still injects) must be silently ignored on read.
   let cwd: string;
 
   beforeEach(() => {
@@ -85,28 +88,13 @@ describe("loadLocalConfig — workspace / worktree (plan 38 config layer)", () =
     rmSync(cwd, { recursive: true, force: true });
   });
 
-  test("surfaces workspace + worktree from the file", () => {
+  test("ignores a stale workspace/worktree key from the file", () => {
     writeFileConfig(cwd, { agent_name: "app", workspace: "acme", worktree: "feat-login" });
-    expect(loadLocalConfig(cwd)).toEqual({ agent_name: "app", workspace: "acme", worktree: "feat-login" });
+    expect(loadLocalConfig(cwd)).toEqual({ agent_name: "app" });
   });
 
-  test("surfaces workspace + worktree from the inline env", () => {
+  test("ignores a stale workspace/worktree key from the inline env", () => {
     process.env[ENV] = JSON.stringify({ agent_name: "app", workspace: "acme", worktree: "feat-login" });
-    expect(loadLocalConfig(cwd)).toEqual({ agent_name: "app", workspace: "acme", worktree: "feat-login" });
-  });
-
-  test("sanitizes separators (/ : # whitespace) into a mesh-safe token", () => {
-    process.env[ENV] = JSON.stringify({ workspace: "feat/login:x", worktree: "  my wt  " });
-    expect(loadLocalConfig(cwd)).toEqual({ workspace: "feat-login-x", worktree: "my-wt" });
-  });
-
-  test("drops reserved keywords (broadcast / broker), case-insensitive", () => {
-    process.env[ENV] = JSON.stringify({ workspace: "broadcast", worktree: "Broker" });
-    expect(loadLocalConfig(cwd)).toEqual({});
-  });
-
-  test("drops empty / non-string workspace + worktree", () => {
-    process.env[ENV] = JSON.stringify({ agent_name: "app", workspace: "", worktree: 42 });
     expect(loadLocalConfig(cwd)).toEqual({ agent_name: "app" });
   });
 });

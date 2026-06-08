@@ -100,7 +100,7 @@ export function registerAgentTools(
         };
       }
       const { to, body, re } = params as SendInput;
-      if (to === peer.name()) {
+      if (to === peer.address() || to === peer.name()) {
         const msg = `Refused: cannot agent_send to yourself ("${to}"). Just do the work directly.`;
         const details: SendDetails = { status: "refused", ok: false, error: msg };
         return {
@@ -158,14 +158,15 @@ export function registerAgentTools(
     name: "list_peers",
     label: "List Peers",
     description:
-      "Returns the current peer inventory in this session — local names " +
-      "(no prefix) plus cross-PC peers prefixed `<pc_label>:<peer>`. Use " +
-      "BEFORE `agent_send` whenever you're unsure who's available, or " +
-      "after a `peer_joined` / `peer_left` notification to refresh your " +
-      "mental model. Resolves in milliseconds — this is a metadata query " +
-      "to the broker, not a turn of another agent.",
+      "Returns the current peer inventory in this session as ADDRESSES of the " +
+      "form `<cwd>@<name>` (cross-PC peers prefixed `<pc>:`). An address is an " +
+      "opaque routing key — pass it to `agent_send`/`agent_request` VERBATIM, " +
+      "never build one by hand. Use BEFORE sending whenever you're unsure who's " +
+      "available, or after a `peer_joined` / `peer_left` notification to refresh " +
+      "your mental model. Resolves in milliseconds — a metadata query to the " +
+      "broker, not a turn of another agent.",
     promptSnippet:
-      "list_peers(): returns {peers: string[]} — locals + `<pc>:<peer>` remotes. Cheap; call freely before agent_send.",
+      "list_peers(): returns {peers: string[]} of addresses `<cwd>@<name>` (`<pc>:` prefix cross-PC). Echo an address verbatim to agent_send; never compose one. Cheap; call freely.",
     parameters: ListPeersParams,
     execute: async (_toolCallId) => {
       const peer = getSessionPeer();
@@ -189,9 +190,10 @@ export function registerAgentTools(
           ? (body!.peers as unknown[]).filter((p): p is string => typeof p === "string")
           : [];
         // Drop self from the list — the caller is the only one who can't
-        // address itself anyway, so listing it is noise.
-        const selfName = peer.name();
-        const filtered = peers.filter((p) => p !== selfName);
+        // address itself anyway, so listing it is noise. Peers are ADDRESSES
+        // (plan/38), so filter by address.
+        const selfAddress = peer.address();
+        const filtered = peers.filter((p) => p !== selfAddress);
         const text = filtered.length === 0 ? "(no peers)" : filtered.join("\n");
         return {
           content: [{ type: "text", text }],
@@ -228,7 +230,7 @@ export function registerAgentTools(
         };
       }
       const { to, body, timeout_ms } = params as RequestInput;
-      if (to === peer.name()) {
+      if (to === peer.address() || to === peer.name()) {
         const msg = `Refused: cannot agent_request to yourself ("${to}"). Just do the work directly.`;
         return {
           content: [{ type: "text", text: msg }],

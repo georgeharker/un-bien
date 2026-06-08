@@ -336,9 +336,14 @@ export class MeshNode {
     return this.peer_.onReconnect(handler);
   }
 
-  /** Assigned mesh name (after any #N collision suffix). */
+  /** Assigned clean mesh name (after any #N collision suffix). */
   name(): string {
     return this.peer_.name();
+  }
+
+  /** Canonical mesh address (`[<pc>:]<cwd>@<nome>`) — echo, never compose. */
+  address(): string {
+    return this.peer_.address();
   }
 
   /** "leader" | "follower". */
@@ -358,7 +363,8 @@ export class MeshNode {
   async listPeers(timeoutMs = 2_000): Promise<string[]> {
     const reply = await this.peer_.request("broker", { type: "list_peers" }, timeoutMs);
     const body = reply.body as { peers?: string[] } | null;
-    return (body?.peers ?? []).filter((p) => p !== this.peer_.name());
+    // Peers are ADDRESSES now — filter self by address, not the clean name.
+    return (body?.peers ?? []).filter((p) => p !== this.peer_.address());
   }
 
   /** Tear down the bridge (if any) and leave the mesh. */

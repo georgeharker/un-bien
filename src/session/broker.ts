@@ -2,6 +2,55 @@ import type { Server, Socket } from "node:net";
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { type Envelope, parse, serialize, uuidv7, EnvelopeError } from "./envelope.js";
+import { sanitizeSegment } from "./local_config.js";
+
+/**
+ * Structured view of one mesh peer (plan/38). The `address` is the canonical
+ * routing key; the other fields let a client group/label peers WITHOUT parsing
+ * the address string. `pc` is undefined for local peers (filled cross-PC in
+ * Fase 2). Returned by `list_peers` as `peers_detailed`.
+ */
+export interface PeerInfo {
+  /** Cross-PC label; undefined for a local peer. */
+  pc?: string;
+  /** Working directory (realpath). Empty string for a legacy peer (no cwd). */
+  cwd: string;
+  /** Clean leaf name (carries a `#N` only on a same-(cwd,name) collision). */
+  name: string;
+  /** Canonical address — the broker's Map key and the `to`/`from` on the wire. */
+  address: string;
+}
+
+/**
+ * THE sole encoder of a peer address (plan/38): `[<pc>:]<cwd>@<nome>`.
+ *
+ * - `cwd` present → `<cwd>@<nome>` (the `@` separates name from path so a `/`
+ *   in the path never confuses lookup, which is exact-match anyway).
+ * - `cwd` empty (legacy peer that sent no cwd) → `address == name`, preserving
+ *   pre-plan/38 behavior so a mixed mesh keeps routing.
+ * - `pc` present (cross-PC, Fase 2) → prefixed `<pc>:`.
+ *
+ * Does NOT sanitize — callers sanitize the `name` once (see `sanitizeMeshName`)
+ * before composing, so an already-appended `#N` collision suffix survives.
+ * Everyone else ECHOES `peer.address` verbatim; only the broker composes.
+ */
+export function composeAddress(parts: { pc?: string; cwd: string; name: string }): string {
+  const base = parts.cwd ? `${parts.cwd}@${parts.name}` : parts.name;
+  return parts.pc ? `${parts.pc}:${base}` : base;
+}
+
+/**
+ * Sanitize a requested mesh name to a safe leaf while PRESERVING a trailing
+ * `#N` collision suffix (which the cwd-lock or a prior assignment may have
+ * added — `sanitizeSegment` alone would mangle `#`→`-`). The base is run through
+ * `sanitizeSegment` (af66d04); an unusable base (empty / reserved keyword) falls
+ * back to `"agent"`.
+ */
+export function sanitizeMeshName(raw: string): string {
+  const m = /^(.*?)(#\d+)?$/.exec(raw);
+  const base = sanitizeSegment(m?.[1] ?? raw) ?? "agent";
+  return m?.[2] ? base + m[2] : base;
+}
 
 /**
  * Broker hosted by the session leader. Accepts UDS connections, maintains a
@@ -65,10 +114,14 @@ export interface RemoteRouter {
 export type RemoteInjectStatus = "received" | "denied";
 
 interface PeerConn {
+  /** Clean leaf name (may carry a `#N` on a same-(cwd,name) collision). */
   name: string;
   /** Working directory the peer registered with — the second half of the
    *  (cwd, name) identity. Empty string for legacy peers that sent no cwd. */
   cwd: string;
+  /** Canonical address `composeAddress({cwd, name})` — this conn's Map key and
+   *  the value forced onto `env.from`. Empty until registered. */
+  address: string;
   socket: Socket;
   buf: string;
 }
@@ -93,13 +146,24 @@ interface RegisterMsg {
 
 interface RegisterAck {
   type: "register_ack";
+  /** Canonical address (plan/38). New clients route by this. */
+  address_assigned: string;
+  /** Clean leaf name actually assigned (carries `#N` on a same-(cwd,name)
+   *  collision). New clients use it for display; for a legacy peer (no cwd)
+   *  it equals `address_assigned`. */
   name_assigned: string;
 }
 
 interface SystemBody {
   type: "peer_joined" | "peer_left" | "list_peers_reply";
+  /** Compat: carries the peer's ADDRESS (the Map key), not the bare name. */
   name?: string;
+  /** Explicit address (plan/38) for clients that prefer the typed field. */
+  address?: string;
+  /** Addresses (legacy clients route by these). */
   peers?: string[];
+  /** Structured roster (plan/38) — clients group by `cwd`/`pc` without parsing. */
+  peers_detailed?: PeerInfo[];
 }
 
 export class Broker {
@@ -170,7 +234,7 @@ export class Broker {
   // ── connection lifecycle ──────────────────────────────────────────────────
 
   private _handleConnection(socket: Socket): void {
-    const conn: PeerConn = { name: "", cwd: "", socket, buf: "" };
+    const conn: PeerConn = { name: "", cwd: "", address: "", socket, buf: "" };
     socket.setEncoding("utf8");
     socket.on("data", (chunk: string) => this._onData(conn, chunk));
     socket.on("close", () => this._onClose(conn));
@@ -205,8 +269,9 @@ export class Broker {
       if (e instanceof EnvelopeError) return;  // malformed; drop silently
       throw e;
     }
-    // Force `from` to the registered name (security: peer can't spoof).
-    env.from = conn.name;
+    // Force `from` to the registered ADDRESS (security: peer can't spoof; and
+    // replies/ACKs address back by the same canonical key the Map is keyed on).
+    env.from = conn.address;
     await this._route(env);
   }
 
@@ -229,27 +294,28 @@ export class Broker {
       return;
     }
 
-    // Stored as the second half of the (cwd, name) identity. Currently only
-    // metadata (surfaced for diagnostics / future scoping); collision handling
-    // stays name-based via `_uniqueName`. A forced "(cwd,name) take-over" was
-    // prototyped here but reverted: evicting a still-live peer makes it
-    // auto-reconnect (`SessionPeer._onSocketClose` → re-elect) and re-evict the
-    // newcomer, an infinite flap. The ghost is instead removed at the source —
-    // the outgoing instance leaves gracefully via the `session_shutdown`
-    // handler in index.ts before the replacement registers.
+    // (cwd, name) identity (plan/38). The cwd is the first-class axis: the
+    // address embeds it, so two same-named agents in DIFFERENT folders get
+    // distinct addresses and never collide — `#N` fires only on the same cwd +
+    // same name. A legacy peer (no cwd) → cwd "" → `address == name`, preserving
+    // the old global-name behavior so a mixed mesh keeps routing.
     conn.cwd = typeof req.cwd === "string" ? req.cwd : "";
 
-    const assigned = this._uniqueName(req.name);
-    conn.name = assigned;
-    this.peers.set(assigned, conn);
+    const { name, address } = this._uniqueIdentity(conn.cwd, req.name);
+    conn.name = name;
+    conn.address = address;
+    this.peers.set(address, conn);
 
-    const ack: RegisterAck = { type: "register_ack", name_assigned: assigned };
+    // `name_assigned` doubles as the compat alias: for a legacy peer it equals
+    // `address_assigned` (cwd empty → address == name), so old clients that read
+    // `name_assigned` still get a routable identity.
+    const ack: RegisterAck = { type: "register_ack", address_assigned: address, name_assigned: name };
     try {
       conn.socket.write(JSON.stringify(ack) + "\n");
     } catch { /* peer hung up */ }
 
-    // Notify others (peer_joined broadcast).
-    this._broadcastSystem({ type: "peer_joined", name: assigned }, assigned);
+    // Notify others (peer_joined broadcast). The field carries the ADDRESS.
+    this._broadcastSystem({ type: "peer_joined", name: address, address }, address);
   }
 
   /**
@@ -275,7 +341,11 @@ export class Broker {
       to: "observer",  // synthetic: the conn has no registered name
       id: uuidv7(),
       re: null,
-      body: { type: "list_peers_reply", peers: this._allPeerNames() } as SystemBody,
+      body: {
+        type: "list_peers_reply",
+        peers: this._allPeerNames(),
+        peers_detailed: this._allPeerInfos(),
+      } as SystemBody,
     };
     try { conn.socket.write(serialize(reply)); } catch { /* probe hung up */ }
     return true;
@@ -289,19 +359,48 @@ export class Broker {
     return [...this.peerNames(), ...remote];
   }
 
-  private _uniqueName(requested: string): string {
-    if (!this.peers.has(requested)) return requested;
+  /** Structured roster (plan/38): local peers carry their `(cwd, name)`; remote
+   *  entries are best-effort (`address`-only) until Fase 2 enriches the cross-PC
+   *  inventory with `pc`/`cwd`. */
+  private _allPeerInfos(): PeerInfo[] {
+    const local: PeerInfo[] = [...this.peers.values()].map((p) => ({
+      cwd: p.cwd,
+      name: p.name,
+      address: p.address,
+    }));
+    const remote: PeerInfo[] = (this.remoteRouter?.listRemotePeers() ?? []).map((addr) => ({
+      cwd: "",
+      name: addr,
+      address: addr,
+    }));
+    return [...local, ...remote];
+  }
+
+  /**
+   * Resolve a free `(name, address)` for a register, keyed by **(cwd, name)**
+   * (plan/38): the collision check is on the composed ADDRESS, so a name only
+   * collides with another peer in the SAME cwd. `#N` is appended to the name
+   * (matching the cwd-lock's suffix scheme) until the address is free; for a
+   * legacy peer (cwd "") the address is the name, preserving global-name `#N`.
+   */
+  private _uniqueIdentity(cwd: string, requested: string): { name: string; address: string } {
+    const sanitized = sanitizeMeshName(requested);
+    let address = composeAddress({ cwd, name: sanitized });
+    if (!this.peers.has(address)) return { name: sanitized, address };
+    // Collision: strip any client-provided `#N`, then re-suffix from #2.
+    const base = sanitized.replace(/#\d+$/, "");
     for (let n = 2; n < 1000; n++) {
-      const candidate = `${requested}#${n}`;
-      if (!this.peers.has(candidate)) return candidate;
+      const name = `${base}#${n}`;
+      address = composeAddress({ cwd, name });
+      if (!this.peers.has(address)) return { name, address };
     }
-    throw new Error(`name space exhausted for ${requested}`);
+    throw new Error(`name space exhausted for ${base} in ${cwd || "(no cwd)"}`);
   }
 
   private _onClose(conn: PeerConn): void {
-    if (!conn.name) return;
-    this.peers.delete(conn.name);
-    this._broadcastSystem({ type: "peer_left", name: conn.name }, conn.name);
+    if (!conn.address) return;
+    this.peers.delete(conn.address);
+    this._broadcastSystem({ type: "peer_left", name: conn.address, address: conn.address }, conn.address);
   }
 
   // ── routing ───────────────────────────────────────────────────────────────
@@ -354,7 +453,15 @@ export class Broker {
 
   private _resolveTargets(env: Envelope): string[] {
     if (env.to === "broadcast") {
-      return this.peerNames().filter((n) => n !== env.from);
+      // plan/38 decision C: broadcast is scoped to the sender's cwd (folder
+      // colleagues), local-only. A peer in /a/b never hears /a/c. The sender is
+      // keyed by its address (= env.from); legacy peers (cwd "") broadcast among
+      // other cwd-less peers, matching pre-plan/38 behavior.
+      const sender = this.peers.get(env.from);
+      const scope = sender?.cwd ?? "";
+      return [...this.peers.values()]
+        .filter((p) => p.address !== env.from && p.cwd === scope)
+        .map((p) => p.address);
     }
     if (Array.isArray(env.to)) {
       return env.to.filter((n) => n !== env.from);
@@ -393,13 +500,16 @@ export class Broker {
     const body = env.body as { type?: string; peers?: unknown } | null;
     if (!body || typeof body !== "object") return;
     if (body.type === "list_peers") {
-      const peers = this._allPeerNames();
       const reply: Envelope = {
         from: BROKER_NAME,
         to: env.from,
         id: uuidv7(),
         re: env.id,
-        body: { type: "list_peers_reply", peers } as SystemBody,
+        body: {
+          type: "list_peers_reply",
+          peers: this._allPeerNames(),       // addresses — legacy clients route by these
+          peers_detailed: this._allPeerInfos(),  // plan/38 — clients group without parsing
+        } as SystemBody,
       };
       const peer = this.peers.get(env.from);
       if (peer) {
@@ -412,12 +522,12 @@ export class Broker {
     // as room_meta over the relay (index.ts), independent of the broker.
   }
 
-  private _broadcastSystem(body: SystemBody, excludeName: string): void {
-    for (const [name, peer] of this.peers) {
-      if (name === excludeName) continue;
+  private _broadcastSystem(body: SystemBody, excludeAddress: string): void {
+    for (const [address, peer] of this.peers) {
+      if (address === excludeAddress) continue;
       const env: Envelope = {
         from: BROKER_NAME,
-        to: name,
+        to: address,
         id: uuidv7(),
         re: null,
         body,

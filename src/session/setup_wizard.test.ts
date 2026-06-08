@@ -233,14 +233,12 @@ describe("localConfig integration with the wizard", () => {
 });
 
 describe("defaultAgentName", () => {
-  test("returns parent/folder when both are meaningful", () => {
-    expect(defaultAgentName("/Users/jacob/Projects/remote_pi")).toBe("Projects/remote_pi");
-    expect(defaultAgentName("/home/dev/myapp/backend")).toBe("myapp/backend");
-  });
-
-  test("returns just folder when parent isn't meaningful", () => {
-    expect(defaultAgentName("/")).toBe("agent");
-    expect(defaultAgentName("/foo")).toBe("foo");  // parent is "/"
+  // plan/38 decision D: the name is the LEAF only — the cwd now travels as its
+  // own address axis, so the old `parent/folder` prefix is gone.
+  test("returns the leaf (basename) of the cwd", () => {
+    expect(defaultAgentName("/Users/jacob/Projects/remote_pi")).toBe("remote_pi");
+    expect(defaultAgentName("/home/dev/myapp/backend")).toBe("backend");
+    expect(defaultAgentName("/foo")).toBe("foo");
   });
 
   test("falls back to 'agent' for empty/root edge cases", () => {

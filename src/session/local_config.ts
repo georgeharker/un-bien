@@ -23,20 +23,11 @@ export interface LocalConfig {
    * configs without this field are treated as `true` for backward compat.
    */
   auto_start_relay?: boolean;
-  /**
-   * Logical project namespace (plan/38). When set, it's prefixed onto this
-   * agent's mesh identity so agents of different projects — or different git
-   * worktrees of the same repo — don't collide on the local broker and stay
-   * scoped to their own group. Sanitized to a mesh-safe token on read.
-   */
-  workspace?: string;
-  /**
-   * OPTIONAL override of the worktree label (plan/38). Normally LEFT UNSET —
-   * the effective worktree is derived from git at runtime (branch / dir) and
-   * is NOT a persisted preference. Set this only to pin a custom label.
-   * Sanitized to a mesh-safe token on read.
-   */
-  worktree?: string;
+  // `workspace?`/`worktree?` were removed (plan/38, reescrito 2026-06-08): the
+  // mesh identity is `(cwd, nome)`, with `cwd` subsuming folder + worktree
+  // disambiguation. Neither axis is derived anymore, so the config fields are
+  // gone. Any stale `workspace`/`worktree` key in an on-disk/inline config is
+  // simply ignored on read (parseLocalConfig surfaces only known fields).
 }
 
 function pathFor(cwd: string): string {
@@ -44,19 +35,43 @@ function pathFor(cwd: string): string {
 }
 
 /**
- * Normalize a workspace/worktree segment to a mesh-safe token: trim, replace
- * the addressing separators (`/ : #`) and whitespace runs with `-`, collapse
- * repeats, strip edges. Returns undefined when the input isn't a usable
- * non-empty string, sanitizes to empty, or is a reserved addressing keyword
- * (`broadcast` / `broker`). Keeps these dimensions safe to compose into a
- * peer address (plan/38) regardless of source (file or inline env).
+ * Normalize a name segment to a mesh-safe token: trim, replace the addressing
+ * separators (`/ : @ #`) and whitespace runs with `-`, collapse repeats, strip
+ * edges. The `@` is included so a sanitized name can never contain the address
+ * separator — `<cwd>@<name>` stays unambiguous on the wire. Returns undefined
+ * when the input isn't a usable non-empty string, sanitizes to empty, or is a
+ * reserved addressing keyword (`broadcast` / `broker`). Used by the broker's
+ * `sanitizeMeshName` to keep the `<nome>` half of a peer address safe to
+ * compose (plan/38).
  */
-function sanitizeSegment(v: unknown): string | undefined {
+export function sanitizeSegment(v: unknown): string | undefined {
   if (typeof v !== "string") return undefined;
-  const token = v.trim().replace(/[/:#\s]+/g, "-").replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "");
+  const token = v.trim().replace(/[/:@#\s]+/g, "-").replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "");
   if (!token) return undefined;
   if (token.toLowerCase() === "broadcast" || token.toLowerCase() === "broker") return undefined;
   return token;
+}
+
+/**
+ * Migrate a persisted `agent_name` to the plan/38 leaf-name model (decision E).
+ * Two legacy shapes get rewritten on read so a pre-fix config never fossilizes a
+ * runtime accident as if it were an explicit choice:
+ *
+ *   - **`#N` collision suffix** — could only have come from a broker/lock
+ *     assignment (the user can't type `#`: `sanitizeSegment` maps it to `-`), so
+ *     a trailing `#<digits>` is stripped and the clean base re-derived.
+ *   - **legacy `parent/folder`** — the old `defaultAgentName` shape; the `/`
+ *     means it predates the leaf-only model, so we keep only the leaf segment.
+ *
+ * Returns the cleaned name, or undefined when nothing usable remains (so the
+ * caller falls back to `defaultAgentName(cwd)`).
+ */
+export function migrateAgentName(raw: string): string | undefined {
+  // Legacy `parent/folder` (or any path-ish value) → keep the trailing segment.
+  const leaf = raw.includes("/") ? raw.slice(raw.lastIndexOf("/") + 1) : raw;
+  // Drop a runtime collision suffix a pre-fix build may have frozen into config.
+  const clean = leaf.replace(/#\d+$/, "").trim();
+  return clean.length > 0 ? clean : undefined;
 }
 
 /**
@@ -75,12 +90,13 @@ function parseLocalConfig(raw: string): LocalConfig | null {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
   const src = parsed as Record<string, unknown>;
   const cfg: LocalConfig = {};
-  if (typeof src["agent_name"] === "string") cfg.agent_name = src["agent_name"];
+  if (typeof src["agent_name"] === "string") {
+    // Migrate on read (plan/38 decision E): strip a frozen `#N` and the legacy
+    // `parent/folder` shape so neither fossilizes as an explicit name.
+    const migrated = migrateAgentName(src["agent_name"]);
+    if (migrated) cfg.agent_name = migrated;
+  }
   if (typeof src["auto_start_relay"] === "boolean") cfg.auto_start_relay = src["auto_start_relay"];
-  const workspace = sanitizeSegment(src["workspace"]);
-  if (workspace) cfg.workspace = workspace;
-  const worktree = sanitizeSegment(src["worktree"]);
-  if (worktree) cfg.worktree = worktree;
   return cfg;
 }
 
@@ -127,18 +143,15 @@ export function saveLocalConfig(cwd: string, patch: Partial<LocalConfig>): void 
 }
 
 /**
- * Default agent name when none is configured: `<parent>/<folder>` of the
- * given cwd. Falls back gracefully when the parent isn't meaningful
- * (root, current dir, single-segment paths) — in those cases just the
- * folder name. Purpose: surface a non-empty string the user can accept
- * by pressing enter in the wizard.
+ * Default agent name when none is configured (plan/38 decision D): the **leaf**
+ * of the cwd, `basename(cwd)`. The cwd now travels as its own address axis
+ * (`<cwd>@<nome>`), so the name no longer needs the `parent/folder` prefix that
+ * used to disambiguate folders — the broker keys peers by `(cwd, nome)`, and a
+ * clean leaf means `#N` almost never fires. Falls back to `"agent"` for a
+ * path with no usable basename (root / empty).
  */
 export function defaultAgentName(cwd: string): string {
-  const folder = basename(cwd);
-  const parent = basename(dirname(cwd));
-  if (!folder) return "agent";
-  if (!parent || parent === "/" || parent === folder || parent === ".") return folder;
-  return `${parent}/${folder}`;
+  return basename(cwd) || "agent";
 }
 
 /** Resolves auto_start_relay with backward-compat (undefined → true). */

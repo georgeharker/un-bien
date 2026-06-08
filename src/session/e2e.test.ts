@@ -8,6 +8,8 @@ import { ipcAddress } from "./ipc.js";
 import { SessionPeer } from "./peer.js";
 import type { Envelope } from "./envelope.js";
 import { probeListPeers } from "../index.js";
+import { composeAddress, sanitizeMeshName, type PeerInfo } from "./broker.js";
+import { migrateAgentName } from "./local_config.js";
 
 function tmpSock(): string {
   // Per-test unique IPC address. POSIX → a `.sock` file in a fresh tmpdir;
@@ -539,5 +541,127 @@ describe("ACK protocol (plan/25 Wave 0)", () => {
     const sock = tmpSock();  // fresh path, nothing bound to it
     const peers = await probeListPeers(sock, 500);
     expect(peers).toBeNull();
+  });
+});
+
+// ── plan/38: address encoder + name migration (pure) ─────────────────────────
+
+describe("plan/38 — address encoder + name migration (pure)", () => {
+  test("composeAddress renders [<pc>:]<cwd>@<nome>; cwd-less → name", () => {
+    // The render matrix from the plan.
+    expect(composeAddress({ cwd: "/Users/jacob/acme/backend", name: "backend" }))
+      .toBe("/Users/jacob/acme/backend@backend");
+    expect(composeAddress({ cwd: "/Users/jacob/acme/backend", name: "reviewer" }))
+      .toBe("/Users/jacob/acme/backend@reviewer");
+    expect(composeAddress({ cwd: "/Users/jacob/.wt/feat-login", name: "backend" }))
+      .toBe("/Users/jacob/.wt/feat-login@backend");
+    expect(composeAddress({ cwd: "/x/backend", name: "backend#2" }))
+      .toBe("/x/backend@backend#2");               // collision suffix is part of the name
+    expect(composeAddress({ pc: "MacMini", cwd: "/Users/jose/work/acme", name: "app" }))
+      .toBe("MacMini:/Users/jose/work/acme@app");   // cross-PC prefix
+    expect(composeAddress({ cwd: "", name: "legacy" })).toBe("legacy");  // no cwd → name only
+  });
+
+  test("sanitizeMeshName cleans the name but preserves a trailing #N", () => {
+    expect(sanitizeMeshName("a/b")).toBe("a-b");          // `/` sanitized
+    expect(sanitizeMeshName("two words")).toBe("two-words");  // space sanitized
+    expect(sanitizeMeshName("a@b")).toBe("a-b");          // `@` sanitized → address stays unambiguous
+    expect(sanitizeMeshName("name#2")).toBe("name#2");    // collision suffix kept
+    expect(sanitizeMeshName("a/b#3")).toBe("a-b#3");      // base cleaned, suffix kept
+    expect(sanitizeMeshName("broker")).toBe("agent");     // reserved keyword → fallback
+  });
+
+  test("migrateAgentName strips a frozen #N and the legacy parent/folder shape", () => {
+    expect(migrateAgentName("backend")).toBe("backend");
+    expect(migrateAgentName("backend#2")).toBe("backend");       // frozen runtime suffix
+    expect(migrateAgentName("Projects/remote_pi")).toBe("remote_pi");  // legacy parent/folder
+    expect(migrateAgentName("myapp/backend#3")).toBe("backend");  // both at once
+    expect(migrateAgentName("")).toBeUndefined();
+    expect(migrateAgentName("#2")).toBeUndefined();
+  });
+});
+
+// ── plan/38: (cwd, name) mesh addressing (e2e over real UDS) ──────────────────
+
+describe("plan/38 — (cwd, name) mesh addressing (e2e)", () => {
+  async function makePeerCwd(sockPath: string, name: string, cwd: string): Promise<SessionPeer> {
+    const peer = new SessionPeer({ sockPath, name, cwd, defaultTimeoutMs: 3000 });
+    await peer.start();
+    return peer;
+  }
+
+  test("register with cwd → clean name() + address() = <cwd>@<name>", async () => {
+    const sock = tmpSock();
+    const p = await makePeerCwd(sock, "backend", "/a/backend");
+    expect(p.name()).toBe("backend");
+    expect(p.address()).toBe("/a/backend@backend");
+    await p.leave();
+  });
+
+  test("legacy peer (no cwd) → address() == name() (mixed-mesh compat)", async () => {
+    const sock = tmpSock();
+    const p = await makePeer(sock, "backend");  // no cwd in register
+    expect(p.name()).toBe("backend");
+    expect(p.address()).toBe("backend");
+    await p.leave();
+  });
+
+  test("same name in DIFFERENT folders coexist — no #N, distinct addresses", async () => {
+    const sock = tmpSock();
+    const a = await makePeerCwd(sock, "backend", "/a/backend");
+    const b = await makePeerCwd(sock, "backend", "/b/backend");
+    expect(a.name()).toBe("backend");
+    expect(b.name()).toBe("backend");                 // NOT backend#2 — different cwd
+    expect(a.address()).toBe("/a/backend@backend");
+    expect(b.address()).toBe("/b/backend@backend");
+
+    const reply = await a.request("broker", { type: "list_peers" });
+    const peers = (reply.body as { peers?: string[] }).peers ?? [];
+    expect(peers).toContain("/a/backend@backend");
+    expect(peers).toContain("/b/backend@backend");
+    await a.leave(); await b.leave();
+  });
+
+  test("same name SAME folder → second gets a runtime #2", async () => {
+    const sock = tmpSock();
+    const a = await makePeerCwd(sock, "backend", "/a/backend");
+    const b = await makePeerCwd(sock, "backend", "/a/backend");
+    expect(a.name()).toBe("backend");
+    expect(b.name()).toBe("backend#2");
+    expect(b.address()).toBe("/a/backend@backend#2");
+    await a.leave(); await b.leave();
+  });
+
+  test("list_peers_reply carries peers_detailed ({cwd,name,address})", async () => {
+    const sock = tmpSock();
+    const a = await makePeerCwd(sock, "backend", "/a/backend");
+    const b = await makePeerCwd(sock, "web", "/a/web");
+    const reply = await a.request("broker", { type: "list_peers" });
+    const body = reply.body as { peers?: string[]; peers_detailed?: PeerInfo[] };
+    expect(body.peers).toEqual(expect.arrayContaining(["/a/backend@backend", "/a/web@web"]));
+    expect(body.peers_detailed).toEqual(expect.arrayContaining([
+      expect.objectContaining({ cwd: "/a/backend", name: "backend", address: "/a/backend@backend" }),
+      expect.objectContaining({ cwd: "/a/web", name: "web", address: "/a/web@web" }),
+    ]));
+    await a.leave(); await b.leave();
+  });
+
+  test("broadcast is scoped to the sender's cwd (folder colleagues only)", async () => {
+    const sock = tmpSock();
+    const a = await makePeerCwd(sock, "a", "/proj/x");          // sender
+    const sameFolder = await makePeerCwd(sock, "b", "/proj/x");
+    const otherFolder = await makePeerCwd(sock, "c", "/proj/y");
+    const gotSame: Envelope[] = [];
+    const gotOther: Envelope[] = [];
+    sameFolder.onMessage((e) => { if (e.from !== "broker") gotSame.push(e); });
+    otherFolder.onMessage((e) => { if (e.from !== "broker") gotOther.push(e); });
+
+    await a.send("broadcast", { hello: 1 });
+    await wait(150);
+
+    expect(gotSame.length).toBe(1);     // same folder hears it
+    expect(gotOther.length).toBe(0);    // different folder does NOT
+    expect(gotSame[0]!.from).toBe("/proj/x@a");  // from is the sender's address
+    await a.leave(); await sameFolder.leave(); await otherFolder.leave();
   });
 });

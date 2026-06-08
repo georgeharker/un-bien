@@ -22,6 +22,7 @@ import { loadLocalConfig, defaultAgentName, localConfigExists } from "../session
 import { sessionSockPath, sessionAuditPath, LOCAL_SESSION_NAME } from "../session/global_config.js";
 import { resolveRelayUrl } from "../config.js";
 import { acquireCwdLock, type AcquiredLock } from "../session/cwd_lock.js";
+import { realpathSync } from "node:fs";
 
 // ── Args / config ─────────────────────────────────────────────────────────────
 
@@ -86,9 +87,15 @@ process.on("uncaughtException", (err) => {
   logErr(`uncaughtException: ${err.stack ?? err.message}`);
 });
 
+// Canonicalize so the (cwd, name) the broker keys us by matches roomIdForCwd
+// and the Pi extension's own register (symlinked cwds map to one identity).
+let _canonCwd = _cwd;
+try { _canonCwd = realpathSync(_cwd); } catch { /* cwd missing — use raw path */ }
+
 const mesh = new MeshNode({
   sockPath: BROKER_SOCK,
   name: AGENT_NAME,
+  cwd: _canonCwd,  // plan/38: register with (cwd, name) → address `<cwd>@<name>`
   auditPath: AUDIT_PATH,
   // Own Pi-key cross-PC bridge — active only when this node leads (no Pi /
   // daemon already hosting the broker for this cwd). As a follower the
@@ -114,9 +121,9 @@ const mcp = new McpServer(
       `You are connected to the remote-pi agent mesh as "${AGENT_NAME}".`,
       "At the start of each turn call get_messages to check for incoming messages from other agents.",
       "Use list_peers to discover available agents.",
-      "Use agent_send to send messages — use the exact peer name returned by list_peers.",
-      'Use "broadcast" as the target to send to all peers at once.',
-      "Follow the agent-network protocol (in your system prompt) for the full details (ACK statuses, replies via re, cross-PC <pc>:<peer> addressing).",
+      "Use agent_send to send messages — pass the exact address returned by list_peers (form `<cwd>@<name>`, `<pc>:` prefix cross-PC) VERBATIM; never build one by hand.",
+      'Use "broadcast" as the target to send to all peers in your folder (cwd) at once.',
+      "Follow the agent-network protocol (in your system prompt) for the full details (ACK statuses, replies via re, `<cwd>@<name>` addresses, cross-PC `<pc>:` prefix).",
     ].join("\n"),
   },
 );
@@ -144,13 +151,13 @@ mcp.registerTool("list_peers", {
 mcp.registerTool("agent_send", {
   description: 'Send a message to another agent. Use "broadcast" to send to all peers.',
   inputSchema: {
-    to: z.string().describe('Peer name (from list_peers, may be "<pc>:<name>" cross-PC) or "broadcast"'),
+    to: z.string().describe('Peer address from list_peers (form "<cwd>@<name>", or "<pc>:<cwd>@<name>" cross-PC) echoed verbatim, or "broadcast"'),
     body: z.unknown().describe("Message body — any JSON value"),
     re: z.string().optional().describe("Optional: id of the message you are replying to"),
   },
 }, async ({ to, body, re }) => {
   if (!meshReady) return notReady();
-  if (to === mesh.name()) {
+  if (to === mesh.address() || to === mesh.name()) {
     return { content: [{ type: "text" as const, text: "Cannot send to yourself" }], isError: true };
   }
   try {

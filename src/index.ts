@@ -2026,9 +2026,9 @@ async function _cmdCreate(arg: string, ctx: Pick<ExtensionContext, "ui">): Promi
   }
 
   // No local `.pi/remote-pi/config.json` is written anymore — the name lives
-  // in the registry and the supervisor injects the full config (workspace
-  // "assistent", auto_start_relay true, no worktree) via REMOTE_PI_DIRECT_CONFIG
-  // when it spawns the daemon. The cwd needs no init folder.
+  // in the registry and the supervisor injects the full config (agent_name,
+  // auto_start_relay true) via REMOTE_PI_DIRECT_CONFIG when it spawns the
+  // daemon. The cwd needs no init folder.
 
   ctx.ui.notify(
     `[remote-pi] Daemon registered: id=${result.id} name="${result.name}" cwd=${result.cwd}`,
@@ -2741,14 +2741,18 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
     // broker for the live peer list to seed the count correctly on join.
     _refreshSessionPeerCount(peer, ctx);
     // Tell RPC clients (e.g. Cockpit) the EFFECTIVE mesh name. The broker
-    // appends a `#N` suffix on a name collision, so the name we requested and
-    // the one actually assigned can differ. Emit a pure-data event
+    // appends a `#N` suffix only on a same-(cwd,name) collision, so the name we
+    // requested and the one actually assigned can differ. Emit a pure-data event
     // (display:false) carrying both + a `changed` flag so the client can rename
     // the agent in its own UI to match what the mesh/relay will show. Fired on
     // every join (incl. failover re-elect, which can re-assign the name), so the
-    // client always reflects the live name, not just the first one. Emitted
-    // BEFORE persisting config so a read-only-cwd write failure never swallows
-    // the name signal the client depends on.
+    // client always reflects the live name, not just the first one.
+    //
+    // plan/38 decision E: we deliberately DO NOT persist `assigned`. A `#N` is a
+    // RUNTIME collision resolution; freezing it into `agent_name` fossilizes an
+    // accident and causes cross-folder name ping-pong across restarts. The clean
+    // name (wizard / explicit `agent_name`) already lives in config or re-derives
+    // from `basename(cwd)`; the event above carries the live `#N` for the UI.
     _pi?.sendMessage({
       customType: "remote-pi:name-assigned",
       content: assigned === requestedName
@@ -2757,7 +2761,6 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
       details: { requested: requestedName, assigned, changed: assigned !== requestedName },
       display: false,
     });
-    saveLocalConfig(cwd, { agent_name: assigned });
     ctx.ui.notify(
       `[remote-pi] Joined local mesh as "${assigned}" (${peer.currentRole()})`,
       "info",

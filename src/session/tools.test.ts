@@ -26,6 +26,7 @@ function makeMockPeer(
   const { name: _name, ...rest } = overrides;
   return {
     name: () => myName,
+    address: () => myName,  // plan/38: tests treat address == name (no cwd)
     send: vi.fn().mockResolvedValue(undefined),
     sendWithAck: vi.fn().mockResolvedValue(
       { status: "received", id: "uuid-out", target: "backend" } satisfies AckResult,
@@ -232,6 +233,7 @@ describe("list_peers tool", () => {
     const myName = overrides.name ?? "orq";
     return {
       name: () => myName,
+      address: () => myName,  // plan/38: tests treat address == name (no cwd)
       send: vi.fn(),
       sendWithAck: vi.fn(),
       request: overrides.request ?? vi.fn().mockResolvedValue({

@@ -52,10 +52,6 @@ import { appendCronLog, readCronLog, type CronResult } from "./cron_log.js";
 
 const SUPERVISOR_SOCK_NAME = "supervisor.sock";
 
-/** Fixed workspace for supervisor-launched daemons. Injected via
- *  REMOTE_PI_DIRECT_CONFIG so all daemons share one mesh scope. */
-const DAEMON_WORKSPACE = "assistent";
-
 /** Backoff schedule for auto-restart after a crash. After exhausting, the
  *  child stays in `crashed` state until manual `restart_all` or fresh
  *  registry add. Keeps logs sane when the agent dies on every boot. */
@@ -573,11 +569,11 @@ export class Supervisor {
     }
 
     // Build the daemon's config and inject it via REMOTE_PI_DIRECT_CONFIG —
-    // no per-cwd config file needed. workspace is fixed; no worktree; relay on.
+    // no per-cwd config file needed. The daemon scopes by (cwd, name) like any
+    // agent (plan/38); relay on.
     const config: LocalConfig = {
       agent_name: name ?? defaultAgentName(cwd),
       auto_start_relay: true,
-      workspace: DAEMON_WORKSPACE,
     };
     const childOpts: RpcChildOptions = {
       extensionPath: this.opts.extensionPath,

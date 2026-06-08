@@ -54,8 +54,13 @@ interface AckBody {
 
 export class SessionPeer {
   private readonly opts: SessionPeerOptions;
-  /** Name actually assigned by the broker (may differ via #N collision suffix). */
+  /** Clean leaf name actually assigned by the broker (may carry a `#N`
+   *  collision suffix). Used for display + self-filtering. */
   private assignedName: string;
+  /** Canonical address assigned by the broker (`[<pc>:]<cwd>@<nome>`, or just
+   *  the name for a legacy broker). This is the routing/identity key the mesh
+   *  uses; callers ECHO it, never compose it. */
+  private assignedAddress: string;
   private role: "leader" | "follower" = "follower";
   private broker: Broker | null = null;
   private socket: Socket | null = null;
@@ -78,6 +83,7 @@ export class SessionPeer {
   constructor(opts: SessionPeerOptions) {
     this.opts = opts;
     this.assignedName = opts.name;
+    this.assignedAddress = opts.name;
   }
 
   // ── public API ────────────────────────────────────────────────────────────
@@ -87,9 +93,16 @@ export class SessionPeer {
     return this._joinOrLead();
   }
 
-  /** Returns the name as assigned by the broker (after collision suffix). */
+  /** Returns the clean leaf name as assigned by the broker (after any `#N`). */
   name(): string {
     return this.assignedName;
+  }
+
+  /** Returns the canonical address (`[<pc>:]<cwd>@<nome>`) assigned by the
+   *  broker — the key the mesh routes on. Equals `name()` against a legacy
+   *  broker that returns no address. */
+  address(): string {
+    return this.assignedAddress;
   }
 
   /** Returns "leader" or "follower" — current role. */
@@ -263,11 +276,18 @@ export class SessionPeer {
       const wait = setTimeout(() => reject(new Error("register_ack timeout")), 5_000);
       const onceListener = (raw: unknown) => {
         clearTimeout(wait);
-        const ack = raw as { type?: string; name_assigned?: string };
-        if (ack && ack.type === "register_ack" && typeof ack.name_assigned === "string") {
-          this.assignedName = ack.name_assigned;
+        // plan/38: a new broker returns `address_assigned` (canonical key) +
+        // `name_assigned` (clean leaf). Read both with cross-fallback so we work
+        // against either a new broker OR a legacy one (only `name_assigned`,
+        // where address == name).
+        const ack = raw as { type?: string; name_assigned?: string; address_assigned?: string };
+        const name = typeof ack?.name_assigned === "string" ? ack.name_assigned : ack?.address_assigned;
+        const address = typeof ack?.address_assigned === "string" ? ack.address_assigned : ack?.name_assigned;
+        if (ack && ack.type === "register_ack" && typeof name === "string" && typeof address === "string") {
+          this.assignedName = name;
+          this.assignedAddress = address;
           this._preAckListener = null;
-          resolve(ack.name_assigned);
+          resolve(name);
         } else {
           reject(new Error(`expected register_ack, got: ${JSON.stringify(raw)}`));
         }
