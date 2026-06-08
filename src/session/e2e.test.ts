@@ -2,13 +2,17 @@ import { describe, expect, test } from "vitest";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { setTimeout as wait } from "node:timers/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { ipcAddress } from "./ipc.js";
 import { SessionPeer } from "./peer.js";
 import type { Envelope } from "./envelope.js";
 
 function tmpSock(): string {
+  // Per-test unique IPC address. POSIX → a `.sock` file in a fresh tmpdir;
+  // Windows → a named pipe whose name embeds the unique tmpdir basename
+  // (pipes are machine-global, so the suffix must be unique — plan/40).
   const dir = mkdtempSync(join(tmpdir(), "pi-e2e-"));
-  return join(dir, "broker.sock");
+  return ipcAddress(`e2e-${basename(dir)}`, join(dir, "broker.sock"));
 }
 
 async function makePeer(sockPath: string, name: string, auditPath?: string): Promise<SessionPeer> {

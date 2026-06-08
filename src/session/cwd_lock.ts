@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import type { Server } from "node:net";
 import { roomIdForCwd } from "../rooms.js";
 import { removeStaleSock, tryBind, tryConnect } from "./leader_election.js";
+import { ipcAddress, usesNamedPipe } from "./ipc.js";
 
 /**
  * Per-cwd singleton lock for `/remote-pi`. At most one Pi process per
@@ -53,9 +54,14 @@ export interface RefusedLock {
 
 export type CwdLockResult = AcquiredLock | RefusedLock;
 
-/** Path of the lock socket for a given cwd. Pure helper (no IO). */
+/**
+ * Local-IPC address of the lock for a given cwd. Pure helper (no IO).
+ * POSIX → a `.sock` file under `locksDir()`; Windows → a per-user named pipe
+ * keyed by the room id (plan/40 — this file was missed in the Bloco A pass).
+ */
 export function lockPathForCwd(cwd: string): string {
-  return join(locksDir(), `${roomIdForCwd(cwd)}.sock`);
+  const room = roomIdForCwd(cwd);
+  return ipcAddress(`lock-${room}`, join(locksDir(), `${room}.sock`));
 }
 
 /**
@@ -74,7 +80,9 @@ export function lockPathForCwd(cwd: string): string {
  */
 export async function acquireCwdLock(cwd: string): Promise<CwdLockResult> {
   const lockPath = lockPathForCwd(cwd);
-  mkdirSync(dirname(lockPath), { recursive: true });
+  // POSIX: the lock socket is a file under locksDir → ensure the dir exists.
+  // Windows: lockPath is a named pipe (`\\.\pipe\…`) — no parent dir to create.
+  if (!usesNamedPipe()) mkdirSync(dirname(lockPath), { recursive: true });
 
   // First attempt: bind directly.
   let server: Server | null = await tryBind(lockPath);
@@ -87,8 +95,10 @@ export async function acquireCwdLock(cwd: string): Promise<CwdLockResult> {
     return { ok: false, lockPath };
   }
 
-  // Socket is stale (no listener answered). Clean up + retry bind once.
-  removeStaleSock(lockPath);
+  // POSIX: a leftover stale `.sock` file blocks the bind → clean it + retry.
+  // Windows: a named pipe auto-disappears when its owner exits, so there is
+  // never a stale pipe to remove.
+  if (!usesNamedPipe()) removeStaleSock(lockPath);
   server = await tryBind(lockPath);
   if (server) return _acquired(server, lockPath);
 

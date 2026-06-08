@@ -1,12 +1,16 @@
 import { describe, expect, test } from "vitest";
 import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { joinOrLead } from "./leader_election.js";
+import { ipcAddress } from "./ipc.js";
 
 function tmpSock(): string {
+  // Per-test unique IPC address (pipe on Windows; `.sock` file on POSIX). The
+  // suffix embeds the unique tmpdir basename so machine-global pipe names don't
+  // collide across tests/workers (plan/40).
   const dir = mkdtempSync(join(tmpdir(), "pi-le-"));
-  return join(dir, "broker.sock");
+  return ipcAddress(`le-${basename(dir)}`, join(dir, "broker.sock"));
 }
 
 describe("joinOrLead", () => {
