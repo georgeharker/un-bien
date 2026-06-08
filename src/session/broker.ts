@@ -103,9 +103,15 @@ export interface RemoteRouter {
    * prefix at all.
    */
   tryRouteOutbound(env: Envelope): boolean;
-  /** Aggregated remote peer names (`<pc_label>:<peer_name>`) for the
-   *  `list_peers` reply. Returns empty when nothing is known yet. */
+  /** Aggregated remote peer addresses (`<pc_label>:<cwd>@<nome>`) for the
+   *  `list_peers` reply's `peers` (string) field. Empty when nothing known. */
   listRemotePeers(): string[];
+  /** Structured remote roster (plan/38 Fase 2): one `PeerInfo` per cross-PC
+   *  peer with `pc` filled (the sibling label), `cwd`/`name` from the sibling's
+   *  inventory, and `address` prefixed `<pc>:<cwd>@<nome>`. Powers the
+   *  `peers_detailed` half of `list_peers` so clients group by `pc`/`cwd`
+   *  without parsing. Empty when nothing known. */
+  listRemotePeerInfos(): PeerInfo[];
 }
 
 /** Local outcome of a cross-PC envelope injection. broker_remote uses this
@@ -359,21 +365,23 @@ export class Broker {
     return [...this.peerNames(), ...remote];
   }
 
-  /** Structured roster (plan/38): local peers carry their `(cwd, name)`; remote
-   *  entries are best-effort (`address`-only) until Fase 2 enriches the cross-PC
-   *  inventory with `pc`/`cwd`. */
-  private _allPeerInfos(): PeerInfo[] {
-    const local: PeerInfo[] = [...this.peers.values()].map((p) => ({
+  /** Structured roster of LOCAL UDS peers (plan/38): one `PeerInfo` each, no
+   *  `pc` (they're on this machine). Public so the cross-PC router
+   *  (`broker_remote`) can read the authoritative local inventory directly to
+   *  push to siblings — no `list_peers` round-trip, no stale cache. */
+  localPeerInfos(): PeerInfo[] {
+    return [...this.peers.values()].map((p) => ({
       cwd: p.cwd,
       name: p.name,
       address: p.address,
     }));
-    const remote: PeerInfo[] = (this.remoteRouter?.listRemotePeers() ?? []).map((addr) => ({
-      cwd: "",
-      name: addr,
-      address: addr,
-    }));
-    return [...local, ...remote];
+  }
+
+  /** Structured roster (plan/38): local peers (no `pc`) + cross-PC peers with
+   *  `pc`/`cwd`/`name` filled by the remote router (Fase 2). */
+  private _allPeerInfos(): PeerInfo[] {
+    const remote = this.remoteRouter?.listRemotePeerInfos() ?? [];
+    return [...this.localPeerInfos(), ...remote];
   }
 
   /**

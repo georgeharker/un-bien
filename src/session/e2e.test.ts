@@ -367,6 +367,7 @@ describe("ACK protocol (plan/25 Wave 0)", () => {
     broker.setRemoteRouter({
       tryRouteOutbound: () => false,
       listRemotePeers: () => ["trab:agent-1", "movel:agent-2"],
+      listRemotePeerInfos: () => [],
     });
 
     const reply = await orq.request("broker", { type: "list_peers" }, 1000);
@@ -374,6 +375,37 @@ describe("ACK protocol (plan/25 Wave 0)", () => {
     expect(peers).toContain("orq");
     expect(peers).toContain("trab:agent-1");
     expect(peers).toContain("movel:agent-2");
+
+    broker.setRemoteRouter(null);
+    await orq.leave();
+  });
+
+  test("Broker.list_peers surfaces remote peers_detailed with pc (plan/38 Fase 2)", async () => {
+    const sock = tmpSock();
+    const orq = new SessionPeer({ sockPath: sock, name: "orq", cwd: "/w/orq", defaultTimeoutMs: 3000 });
+    await orq.start();
+    const broker = orq.localBroker()!;
+
+    broker.setRemoteRouter({
+      tryRouteOutbound: () => false,
+      listRemotePeers: () => ["casa:/w/api@api"],
+      listRemotePeerInfos: () => [
+        { pc: "casa", cwd: "/w/api", name: "api", address: "casa:/w/api@api" },
+      ],
+    });
+
+    const reply = await orq.request("broker", { type: "list_peers" }, 1000);
+    const body = reply.body as { peers: string[]; peers_detailed: Array<{ pc?: string; cwd: string; name: string; address: string }> };
+
+    // Legacy `peers` field still carries the prefixed address.
+    expect(body.peers).toContain("casa:/w/api@api");
+    // Local self has no pc; the remote entry carries pc="casa", real cwd/name.
+    expect(body.peers_detailed).toEqual(expect.arrayContaining([
+      expect.objectContaining({ cwd: "/w/orq", name: "orq", address: "/w/orq@orq" }),  // local, no pc
+      { pc: "casa", cwd: "/w/api", name: "api", address: "casa:/w/api@api" },           // remote, pc filled
+    ]));
+    const localEntry = body.peers_detailed.find((p) => p.address === "/w/orq@orq");
+    expect(localEntry!.pc).toBeUndefined();
 
     broker.setRemoteRouter(null);
     await orq.leave();
@@ -388,6 +420,7 @@ describe("ACK protocol (plan/25 Wave 0)", () => {
     broker.setRemoteRouter({
       tryRouteOutbound: (env) => { claimed.push(env); return true; },
       listRemotePeers: () => [],
+      listRemotePeerInfos: () => [],
     });
 
     await orq.send("trab:agent-1", { hello: 1 });
@@ -479,6 +512,7 @@ describe("ACK protocol (plan/25 Wave 0)", () => {
     broker.setRemoteRouter({
       tryRouteOutbound: () => false,
       listRemotePeers: () => ["casa:sess-9"],
+      listRemotePeerInfos: () => [],
     });
 
     // Sniff anything the registered peers receive, so we can prove the probe
@@ -644,6 +678,24 @@ describe("plan/38 — (cwd, name) mesh addressing (e2e)", () => {
       expect.objectContaining({ cwd: "/a/web", name: "web", address: "/a/web@web" }),
     ]));
     await a.leave(); await b.leave();
+  });
+
+  test("Windows-style local cwd (drive-letter ':') is classified LOCAL, not remote", async () => {
+    // plan/38 Fase 2 gap 3: a local address like `C:\proj\app@app` contains a
+    // ':' but is NOT cross-PC. The broker tags it with no `pc` in
+    // peers_detailed, so the consumer (index.ts) keys on `!pc` instead of a
+    // naive `:`-split and counts/pushes it as local.
+    const sock = tmpSock();
+    const p = await makePeerCwd(sock, "app", "C:\\proj\\app");
+    expect(p.address()).toBe("C:\\proj\\app@app");  // contains ':' yet local
+
+    const reply = await p.request("broker", { type: "list_peers" });
+    const detailed = (reply.body as { peers_detailed?: Array<{ pc?: string; address: string }> })
+      .peers_detailed ?? [];
+    const self = detailed.find((e) => e.address === "C:\\proj\\app@app");
+    expect(self).toBeDefined();
+    expect(self!.pc).toBeUndefined();  // no pc → LOCAL despite the ':'
+    await p.leave();
   });
 
   test("broadcast is scoped to the sender's cwd (folder colleagues only)", async () => {

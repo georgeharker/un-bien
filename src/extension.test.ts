@@ -151,6 +151,8 @@ const {
   _hasMeshNodeForTest,
   _getLockedNameForTest,
   _resetCwdLockForTest,
+  _handleControl,
+  CTRL_PREFIX,
 } = await import("./index.js");
 const { acquireCwdLock } = await import("./session/cwd_lock.js");
 
@@ -2446,6 +2448,94 @@ describe("remote-pi:name-assigned event", () => {
     expect(typeof ev!.details!["requested"]).toBe("string");
     // No collision in this isolated broker → assigned === requested.
     expect(ev!.details!["assigned"]).toBe(ev!.details!["requested"]);
+  });
+});
+
+// ── relay control channel + relay-state event (Cockpit on/off button) ──────────
+
+describe("relay control channel + relay-state event", () => {
+  function makeSpyPi(sendMessage: ReturnType<typeof vi.fn>) {
+    return {
+      on: () => undefined, registerCommand: () => undefined,
+      registerTool: () => undefined, registerShortcut: () => undefined,
+      registerFlag: () => undefined, getFlag: () => undefined,
+      registerMessageRenderer: () => undefined,
+      sendMessage, sendUserMessage: () => undefined,
+    } as unknown as ExtensionAPI;
+  }
+  const lastRelayState = (sendMessage: ReturnType<typeof vi.fn>) =>
+    sendMessage.mock.calls
+      .map((c) => c[0] as { customType?: string; display?: boolean; details?: Record<string, unknown> })
+      .reverse()
+      .find((m) => m?.customType === "remote-pi:relay-state");
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    _knownPeers.length = 0;
+    _consumeCalls.length = 0;
+    _setRelayCalls.length = 0;
+    _savedRelayUrl = null;
+    _tokenStatus = "ok";
+    relayRef.current = null;
+    relayInstances.length = 0;
+    _defaultConnectImpl = async () => undefined;
+    _setDisposedForTest(false);
+    const stop = captureHandler("remote-pi stop");
+    await stop("", makeMockCtx());
+  });
+
+  // Transparency: a CTRL_PREFIX-tagged input is swallowed by the `input` hook
+  // so it never reaches the LLM or the transcript — the path the Cockpit button
+  // uses to toggle the relay without a visible turn.
+  test("input hook swallows a CTRL_PREFIX control message (action:handled)", () => {
+    const input = captureEventHandler("input");
+    const result = input({ type: "input", text: `${CTRL_PREFIX}relay:status`, source: "rpc" });
+    expect(result).toEqual({ action: "handled" });
+  });
+
+  test("a normal (non-control) input is NOT swallowed", () => {
+    const input = captureEventHandler("input");
+    const result = input({ type: "input", text: "hello world", source: "rpc" });
+    expect(result).toBeUndefined();
+  });
+
+  test("relay:status emits remote-pi:relay-state 'disconnected' while idle", async () => {
+    const sendMessage = vi.fn();
+    captureHandler("remote-pi");
+    _setPiForTest(makeSpyPi(sendMessage));
+    expect(_getState()).toBe("idle");
+
+    await _handleControl("relay:status");
+
+    const ev = lastRelayState(sendMessage);
+    expect(ev).toBeDefined();
+    expect(ev!.display).toBe(false);
+    expect(ev!.details).toMatchObject({ status: "disconnected", connected: false });
+  });
+
+  test("relay:on → relay up + 'connected'; relay:off → relay down + 'disconnected'", async () => {
+    const sendMessage = vi.fn();
+    captureHandler("remote-pi");
+    _setPiForTest(makeSpyPi(sendMessage));
+
+    await _handleControl("relay:on");
+    expect(_getState()).toBe("started");
+    expect(lastRelayState(sendMessage)!.details).toMatchObject({ status: "connected", connected: true });
+
+    sendMessage.mockClear();
+    await _handleControl("relay:off");
+    expect(_getState()).toBe("idle");
+    expect(lastRelayState(sendMessage)!.details).toMatchObject({ status: "disconnected", connected: false });
+  });
+
+  test("relay:toggle flips idle → started → idle", async () => {
+    captureHandler("remote-pi");
+    _setPiForTest(makeSpyPi(vi.fn()));
+    expect(_getState()).toBe("idle");
+    await _handleControl("relay:toggle");
+    expect(_getState()).toBe("started");
+    await _handleControl("relay:toggle");
+    expect(_getState()).toBe("idle");
   });
 });
 

@@ -1,4 +1,4 @@
-import type { Broker, RemoteInjectStatus, RemoteRouter } from "./broker.js";
+import type { Broker, RemoteInjectStatus, RemoteRouter, PeerInfo } from "./broker.js";
 import { type Envelope, envelope, uuidv7 } from "./envelope.js";
 import type { PiForwardClient } from "../transport/pi_forward_client.js";
 
@@ -40,8 +40,18 @@ const CACHE_TTL_MS = 5 * 60_000;
 const PEERS_REQUEST_TIMEOUT_MS = 2_000;
 const BROKER_NAME = "broker";
 
+/** A sibling peer as carried on the wire in `peers_update.peers_detailed`:
+ *  the sibling's LOCAL `(cwd, name, address)` — no `pc`/prefix (the receiver
+ *  fills `pc` from the verified sibling label). */
+export interface WirePeerInfo {
+  cwd: string;
+  name: string;
+  address: string;
+}
+
 export interface RemotePeerEntry {
-  peers: string[];
+  /** The sibling's local peers (unprefixed `(cwd, name, address)`). */
+  infos: WirePeerInfo[];
   pcPubkey: string;
   ts: number;
 }
@@ -66,7 +76,12 @@ export interface BrokerRemoteOptions {
 
 interface PeersUpdateBody {
   type: "peers_update";
+  /** Addresses — always sent for back-compat with Fase-1-only siblings. */
   peers: string[];
+  /** Structured roster (plan/38 Fase 2). Optional: a Fase-1-only sibling omits
+   *  it, and the receiver synthesizes `{cwd:"", name:addr, address:addr}` from
+   *  `peers`. A new sibling sends both. */
+  peers_detailed?: WirePeerInfo[];
 }
 
 interface PeersRequestBody {
@@ -103,9 +118,6 @@ export class BrokerRemote implements RemoteRouter {
   /** In-flight `peers_request` calls, keyed by pc_label. */
   private readonly pendingFills = new Map<string, Set<PendingFill>>();
 
-  /** Local peers (UDS) at the moment of last `onLocalPeersChanged` call. */
-  private lastLocalPeers: string[] = [];
-
   private readonly onIncoming: (env: Envelope, fromPc: string) => void;
   private detached = false;
 
@@ -124,13 +136,6 @@ export class BrokerRemote implements RemoteRouter {
 
     this.broker.setRemoteRouter(this);
 
-    // Seed `lastLocalPeers` from the live broker so the first
-    // `onLocalPeersChanged`-triggered push (or the bootstrap pushes below)
-    // already carry real state. Without seeding, the same single-peer
-    // mesh bug applies to OUTGOING `peers_update`s too: we'd announce
-    // ourselves to siblings as having zero peers.
-    this.lastLocalPeers = this.broker.peerNames();
-
     // Plan/25 Wave B bootstrap: kick a `peers_request` at every known
     // sibling so the cache is warm before anyone calls `list_peers` or
     // `agent_send` cross-PC. Also push our current peer list proactively
@@ -144,13 +149,25 @@ export class BrokerRemote implements RemoteRouter {
    *  Single helper so `_addSibling` can reuse half of it when a new
    *  sibling appears via `setSiblings`. */
   private _bootstrapWithSiblings(): void {
+    const body = this._localPeersBody();
     for (const [, pcPubkey] of this.siblingByLabel) {
       this._sendControlEnvelope(pcPubkey, { type: "peers_request" });
-      this._sendControlEnvelope(pcPubkey, {
-        type: "peers_update",
-        peers: this.lastLocalPeers,
-      });
+      this._sendControlEnvelope(pcPubkey, body);
     }
+  }
+
+  /** Fresh local inventory for a `peers_update` push, read straight from the
+   *  broker (authoritative + sync — no stale cache, drive-letter-safe: the
+   *  broker knows its real local peers, no `:`-heuristic). Always carries BOTH
+   *  `peers` (addresses, back-compat for Fase-1-only siblings) and the
+   *  structured `peers_detailed` (plan/38 Fase 2). */
+  private _localPeersBody(): PeersUpdateBody {
+    const detailed = this.broker.localPeerInfos();
+    return {
+      type: "peers_update",
+      peers: detailed.map((p) => p.address),
+      peers_detailed: detailed.map((p) => ({ cwd: p.cwd, name: p.name, address: p.address })),
+    };
   }
 
   detach(): void {
@@ -178,13 +195,11 @@ export class BrokerRemote implements RemoteRouter {
     // For newly-added pubkeys: do the same announce+request pair the
     // constructor does. Re-pinging siblings we already knew about would
     // be wasteful (and triggers redundant audit lines on their side).
+    const body = this._localPeersBody();
     for (const [, pcPubkey] of this.siblingByLabel) {
       if (prevPubkeys.has(pcPubkey)) continue;
       this._sendControlEnvelope(pcPubkey, { type: "peers_request" });
-      this._sendControlEnvelope(pcPubkey, {
-        type: "peers_update",
-        peers: this.lastLocalPeers,
-      });
+      this._sendControlEnvelope(pcPubkey, body);
     }
   }
 
@@ -198,16 +213,22 @@ export class BrokerRemote implements RemoteRouter {
 
   // ── Public cache API ──────────────────────────────────────────────────────
 
-  /** Returns the cached peer list for a remote pc_label, or [] when
-   *  unknown / expired. */
-  getRemotePeers(pcLabel: string): string[] {
+  /** Structured cached peers for a remote pc_label (the sibling's local
+   *  `(cwd,name,address)`), or [] when unknown / expired. */
+  private _remoteInfos(pcLabel: string): WirePeerInfo[] {
     const entry = this.remotePeers.get(pcLabel);
     if (!entry) return [];
     if (Date.now() - entry.ts > this.cacheTtlMs) return [];
-    return [...entry.peers];
+    return entry.infos;
   }
 
-  /** Returns the full cross-PC inventory: pc_label → peers (TTL-respected). */
+  /** Returns the cached peer ADDRESSES for a remote pc_label (the sibling's
+   *  local, unprefixed addresses), or [] when unknown / expired. */
+  getRemotePeers(pcLabel: string): string[] {
+    return this._remoteInfos(pcLabel).map((i) => i.address);
+  }
+
+  /** Returns the full cross-PC inventory: pc_label → addresses (TTL-respected). */
   getAllRemote(): Record<string, string[]> {
     const out: Record<string, string[]> = {};
     for (const [label] of this.remotePeers) {
@@ -217,13 +238,26 @@ export class BrokerRemote implements RemoteRouter {
     return out;
   }
 
-  /** Returns aggregated remote peer names (`<pc>:<peer>`) for the broker's
-   *  `list_peers` reply. Skips siblings with no cache entry. */
+  /** Aggregated remote peer addresses (`<pc>:<cwd>@<nome>`) for the broker's
+   *  `list_peers` `peers` field. Skips siblings with no cache entry. */
   listRemotePeers(): string[] {
     const out: string[] = [];
     for (const [label] of this.remotePeers) {
-      for (const peer of this.getRemotePeers(label)) {
-        out.push(`${label}:${peer}`);
+      for (const info of this._remoteInfos(label)) {
+        out.push(`${label}:${info.address}`);
+      }
+    }
+    return out;
+  }
+
+  /** Structured remote roster (plan/38 Fase 2): one `PeerInfo` per cross-PC
+   *  peer with `pc` = sibling label, `cwd`/`name` from the sibling's inventory,
+   *  and `address` prefixed `<pc>:<cwd>@<nome>`. Powers `peers_detailed`. */
+  listRemotePeerInfos(): PeerInfo[] {
+    const out: PeerInfo[] = [];
+    for (const [label] of this.remotePeers) {
+      for (const info of this._remoteInfos(label)) {
+        out.push({ pc: label, cwd: info.cwd, name: info.name, address: `${label}:${info.address}` });
       }
     }
     return out;
@@ -236,10 +270,13 @@ export class BrokerRemote implements RemoteRouter {
    * (peer_joined/peer_left). We push a `peers_update` envelope to every
    * sibling so their caches stay fresh without polling.
    */
-  onLocalPeersChanged(peers: string[]): void {
-    this.lastLocalPeers = [...peers];
+  onLocalPeersChanged(_peers: string[]): void {
+    // The arg is just a change TRIGGER — we push the broker's authoritative
+    // inventory (`_localPeersBody`), not the caller's list, so a caller that
+    // miscomputed "local" (e.g. a naive `:`-split on Windows) can't poison what
+    // siblings see.
     if (this.siblingByLabel.size === 0) return;
-    const body: PeersUpdateBody = { type: "peers_update", peers: this.lastLocalPeers };
+    const body = this._localPeersBody();
     for (const [, pcPubkey] of this.siblingByLabel) {
       this._sendControlEnvelope(pcPubkey, body);
     }
@@ -332,10 +369,7 @@ export class BrokerRemote implements RemoteRouter {
 
     // ── control: peers_update ──────────────────────────────────────────────
     if (bodyType === "peers_update") {
-      const peers = Array.isArray((body as PeersUpdateBody).peers)
-        ? (body as PeersUpdateBody).peers.filter((p) => typeof p === "string")
-        : [];
-      this._setRemoteCache(claimedLabel, fromPc, peers);
+      this._setRemoteCache(claimedLabel, fromPc, _parsePeersUpdate(body as PeersUpdateBody));
       return;
     }
 
@@ -350,11 +384,7 @@ export class BrokerRemote implements RemoteRouter {
       // siblings see us as "no peers" → cache populates empty → cross-PC
       // `list_peers` misses us. Querying broker.peerNames() resolves
       // sync (Map keys), so this is essentially free.
-      const currentLocal = this.broker.peerNames();
-      this._sendControlEnvelope(fromPc, {
-        type: "peers_update",
-        peers: currentLocal,
-      });
+      this._sendControlEnvelope(fromPc, this._localPeersBody());
       return;
     }
 
@@ -405,9 +435,9 @@ export class BrokerRemote implements RemoteRouter {
   private _setRemoteCache(
     pcLabel: string,
     pcPubkey: string,
-    peers: string[],
+    infos: WirePeerInfo[],
   ): void {
-    this.remotePeers.set(pcLabel, { peers, pcPubkey, ts: Date.now() });
+    this.remotePeers.set(pcLabel, { infos, pcPubkey, ts: Date.now() });
     // Resolve any pending `peers_request` waiters for this label.
     const pending = this.pendingFills.get(pcLabel);
     if (pending) {
@@ -485,4 +515,32 @@ export function parseAddress(
   const idx = to.indexOf(":");
   if (idx <= 0 || idx === to.length - 1) return null;
   return { pcLabel: to.slice(0, idx), peerName: to.slice(idx + 1) };
+}
+
+/**
+ * Parse an inbound `peers_update` body into structured `WirePeerInfo[]`
+ * (plan/38 Fase 2), tolerant of two sender generations:
+ *
+ *   - **Fase 2 sibling** sends `peers_detailed` → use it (validating each entry
+ *     has string `cwd`/`name`/`address`).
+ *   - **Fase 1-only sibling** sends only `peers: string[]` (addresses) → each
+ *     becomes `{cwd:"", name:addr, address:addr}` so the mesh stays mixed-safe.
+ *
+ * Untrusted input: every field is shape-checked; malformed entries are dropped.
+ */
+function _parsePeersUpdate(body: PeersUpdateBody): WirePeerInfo[] {
+  const detailed = body.peers_detailed;
+  if (Array.isArray(detailed)) {
+    return detailed.filter(
+      (e): e is WirePeerInfo =>
+        !!e && typeof e === "object" &&
+        typeof (e as WirePeerInfo).cwd === "string" &&
+        typeof (e as WirePeerInfo).name === "string" &&
+        typeof (e as WirePeerInfo).address === "string",
+    );
+  }
+  const peers = Array.isArray(body.peers) ? body.peers : [];
+  return peers
+    .filter((p): p is string => typeof p === "string")
+    .map((address) => ({ cwd: "", name: address, address }));
 }

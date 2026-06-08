@@ -32,6 +32,7 @@ function makeFakeBroker(opts: FakeBrokerOptions = {}): {
   injectFromRemote: ReturnType<typeof vi.fn>;
   setRemoteRouter: ReturnType<typeof vi.fn>;
   peerNames: ReturnType<typeof vi.fn>;
+  localPeerInfos: ReturnType<typeof vi.fn>;
   injected: Envelope[];
 } {
   const injected: Envelope[] = [];
@@ -43,6 +44,9 @@ function makeFakeBroker(opts: FakeBrokerOptions = {}): {
   const setRemoteRouter = vi.fn();
   let _localPeers = opts.localPeers ?? ["self"];
   const peerNames = vi.fn(() => [..._localPeers]);
+  // plan/38 Fase 2: the cross-PC push reads the structured local inventory.
+  // Synthesize `{cwd:"", name:addr, address:addr}` from the same address list.
+  const localPeerInfos = vi.fn(() => _localPeers.map((address) => ({ cwd: "", name: address, address })));
   // Expose a setter for tests that mutate the local set mid-test.
   (peerNames as unknown as { set: (p: string[]) => void }).set = (p: string[]) => {
     _localPeers = p;
@@ -51,8 +55,9 @@ function makeFakeBroker(opts: FakeBrokerOptions = {}): {
     injectFromRemote,
     setRemoteRouter,
     peerNames,
+    localPeerInfos,
   } as unknown as Broker;
-  return { broker, injectFromRemote, setRemoteRouter, peerNames, injected };
+  return { broker, injectFromRemote, setRemoteRouter, peerNames, localPeerInfos, injected };
 }
 
 // ── parseAddress ─────────────────────────────────────────────────────────────
@@ -315,6 +320,60 @@ describe("BrokerRemote: control envelopes (peers_update / peers_request)", () =>
     expect(br.listRemotePeers()).toEqual(["trab:agent-1", "trab:agent-2"]);
   });
 
+  test("peers_update with peers_detailed → listRemotePeerInfos fills pc + prefixes address (plan/38 Fase 2)", () => {
+    const fakePi = new FakePi();
+    const { broker } = makeFakeBroker();
+    const br = new BrokerRemote({
+      broker, pi: fakePi as never,
+      selfPcLabel: "casa", selfPcPubkey: "K_A",
+      siblings: [{ pcLabel: "trab", pcPubkey: "K_B" }],
+    });
+
+    fakePi.emit("envelope", envelope(
+      "trab:_broker_remote", "casa:_broker_remote",
+      {
+        type: "peers_update",
+        peers: ["/w/app@App", "/w/api@Api"],
+        peers_detailed: [
+          { cwd: "/w/app", name: "App", address: "/w/app@App" },
+          { cwd: "/w/api", name: "Api", address: "/w/api@Api" },
+        ],
+      },
+    ), "K_B");
+
+    // Addresses (the `peers` half) get the sibling-label prefix.
+    expect(br.listRemotePeers()).toEqual(["trab:/w/app@App", "trab:/w/api@Api"]);
+    // Structured: `pc` filled from the verified sibling label, cwd/name preserved,
+    // address prefixed `<pc>:<cwd>@<nome>` — this is what powers `peers_detailed`.
+    expect(br.listRemotePeerInfos()).toEqual([
+      { pc: "trab", cwd: "/w/app", name: "App", address: "trab:/w/app@App" },
+      { pc: "trab", cwd: "/w/api", name: "Api", address: "trab:/w/api@Api" },
+    ]);
+  });
+
+  test("back-compat: peers_update with ONLY peers[] (Fase-1 sibling) → synthesized infos, mesh not broken", () => {
+    const fakePi = new FakePi();
+    const { broker } = makeFakeBroker();
+    const br = new BrokerRemote({
+      broker, pi: fakePi as never,
+      selfPcLabel: "casa", selfPcPubkey: "K_A",
+      siblings: [{ pcLabel: "trab", pcPubkey: "K_B" }],
+    });
+
+    // An older sibling sends addresses only — no peers_detailed.
+    fakePi.emit("envelope", envelope(
+      "trab:_broker_remote", "casa:_broker_remote",
+      { type: "peers_update", peers: ["/w/app@App"] },
+    ), "K_B");
+
+    expect(br.listRemotePeers()).toEqual(["trab:/w/app@App"]);
+    // Synthesized: cwd "", name == address, pc filled, address prefixed. Routing
+    // still works (address is intact); only cwd/name grouping is degraded.
+    expect(br.listRemotePeerInfos()).toEqual([
+      { pc: "trab", cwd: "", name: "/w/app@App", address: "trab:/w/app@App" },
+    ]);
+  });
+
   test("cache TTL expires entries", () => {
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker();
@@ -362,12 +421,12 @@ describe("BrokerRemote: control envelopes (peers_update / peers_request)", () =>
     expect((reply!.env.body as { peers: string[] }).peers).toEqual(["sess-3", "agent-1"]);
   });
 
-  test("peers_request reply pulls from live broker.peerNames(), not just lastLocalPeers", () => {
+  test("peers_request reply pulls the LIVE local inventory (broker.localPeerInfos), not a stale cache", () => {
     // Regression: in a single-peer mesh (only the wrapper itself), no
-    // peer_joined event ever fires for the joiner, so `lastLocalPeers`
-    // stays []. Querying broker.peerNames() directly bypasses that.
+    // peer_joined event ever fires for the joiner, so a cached local list
+    // would stay []. Reading the broker's live inventory bypasses that.
     const fakePi = new FakePi();
-    const { broker, peerNames } = makeFakeBroker({ localPeers: ["MacMini"] });
+    const { broker, localPeerInfos } = makeFakeBroker({ localPeers: ["MacMini"] });
     new BrokerRemote({
       broker, pi: fakePi as never,
       selfPcLabel: "MacMini", selfPcPubkey: "K_B",
@@ -386,8 +445,11 @@ describe("BrokerRemote: control envelopes (peers_update / peers_request)", () =>
       (s.env.body as { type?: string } | null)?.type === "peers_update",
     );
     expect(reply).toBeDefined();
-    expect((reply!.env.body as { peers: string[] }).peers).toEqual(["MacMini"]);
-    expect(peerNames).toHaveBeenCalled();
+    const body = reply!.env.body as { peers: string[]; peers_detailed: Array<{ cwd: string; name: string; address: string }> };
+    expect(body.peers).toEqual(["MacMini"]);
+    // plan/38 Fase 2: the reply also carries the structured roster.
+    expect(body.peers_detailed).toEqual([{ cwd: "", name: "MacMini", address: "MacMini" }]);
+    expect(localPeerInfos).toHaveBeenCalled();
   });
 
   test("onLocalPeersChanged pushes peers_update to every sibling", () => {
