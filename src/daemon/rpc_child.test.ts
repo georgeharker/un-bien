@@ -16,20 +16,25 @@ import { RpcChild, busyTransition, resolvePiBin, rpcSpawnArgs, type RpcChildExit
 describe("rpcSpawnArgs", () => {
   test("includes --continue so a restart resumes the latest session (not a new one)", () => {
     expect(rpcSpawnArgs("/path/to/dist/index.js")).toEqual([
-      "--mode", "rpc", "--continue", "-e", "/path/to/dist/index.js",
+      "--mode", "rpc", "--approve", "--continue", "-e", "/path/to/dist/index.js",
     ]);
   });
 
   test("pins the session display name via --name when one is given", () => {
     expect(rpcSpawnArgs("/path/to/dist/index.js", "PC")).toEqual([
-      "--mode", "rpc", "--continue", "--name", "PC", "-e", "/path/to/dist/index.js",
+      "--mode", "rpc", "--approve", "--continue", "--name", "PC", "-e", "/path/to/dist/index.js",
     ]);
   });
 
   test("can omit --continue for one daemon fresh-session restart", () => {
     expect(rpcSpawnArgs("/path/to/dist/index.js", "PC", false)).toEqual([
-      "--mode", "rpc", "--name", "PC", "-e", "/path/to/dist/index.js",
+      "--mode", "rpc", "--approve", "--name", "PC", "-e", "/path/to/dist/index.js",
     ]);
+  });
+
+  test("always passes --approve (pi >=0.79 project trust; RPC is non-interactive)", () => {
+    expect(rpcSpawnArgs("/path/to/dist/index.js")).toContain("--approve");
+    expect(rpcSpawnArgs("/path/to/dist/index.js", "PC", false)).toContain("--approve");
   });
 });
 

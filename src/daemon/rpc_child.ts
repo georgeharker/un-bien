@@ -122,6 +122,17 @@ function parseGetStateResponse(line: string): { id?: string; isStreaming?: boole
  * same stable name in the picker/app instead of an auto-generated one. The
  * daemon's name is set at registration (`remote-pi create <cwd> --name "…"`).
  * Omitted when no name resolves, so the arg list stays minimal.
+ *
+ * `--approve` is mandatory for a daemon (pi ≥0.79 project trust): RPC mode is
+ * non-interactive, so without an override Pi resolves an untrusted project
+ * folder (any folder with `.pi/` or CLAUDE.md/AGENTS.md) to NOT trusted and
+ * silently skips its `.pi/settings.json` (model/provider/keys), instructions,
+ * resources and project extensions — the daemon then comes up with no model
+ * and fails on the first turn. The operator already authorized this folder by
+ * registering/launching a daemon in it, so `--approve` (trust-for-this-run) is
+ * the correct non-interactive stance. (Does NOT affect the separate "extension
+ * loaded twice" conflict, which comes from the extension being BOTH installed
+ * in ~/.pi/agent/extensions or cwd/.pi/extensions AND passed via `-e`.)
  */
 export function rpcSpawnArgs(
   extensionPath: string,
@@ -130,6 +141,7 @@ export function rpcSpawnArgs(
 ): string[] {
   return [
     "--mode", "rpc",
+    "--approve",
     ...(useContinue ? ["--continue"] : []),
     ...(sessionName ? ["--name", sessionName] : []),
     "-e", extensionPath,
