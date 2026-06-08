@@ -17,6 +17,12 @@ import { realpathSync } from "node:fs";
  * `/Users/x/Movies` and `/Users/x/link-to-Movies` map to the same daemon.
  * Falls back to the raw path when realpath fails (cwd doesn't exist —
  * shouldn't happen in production but covers test sandboxes).
+ *
+ * plan/41 audit (2026-06-08): this stays **per-cwd** (no name axis). The
+ * multiagent-per-folder model (plan/38/41) applies to the App↔Pi room and the
+ * mesh address; a *supervisor daemon* is **one per cwd** by design — the
+ * registry keys exactly one entry per cwd (`registry.ts`), so a daemon id never
+ * needs the name to disambiguate. Decision: leave `daemonIdForCwd` cwd-only.
  */
 export function daemonIdForCwd(cwd: string): string {
   let target: string;

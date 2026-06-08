@@ -1,9 +1,8 @@
-import { mkdirSync, realpathSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { createHash } from "node:crypto";
 import type { Server } from "node:net";
-import { roomIdForCwd } from "../rooms.js";
+import { roomIdFor } from "../rooms.js";
 import { removeStaleSock, tryBind, tryConnect } from "./leader_election.js";
 import { ipcAddress, usesNamedPipe } from "./ipc.js";
 
@@ -24,7 +23,7 @@ import { ipcAddress, usesNamedPipe } from "./ipc.js";
  * is `sha256(realpath(cwd))[:12]` and `<root>` is `$REMOTE_PI_HOME` or the
  * home dir), NOT inside the cwd itself, to dodge:
  *   - The 104/108-char path-length limit on UDS sockets on macOS/Linux.
- *   - Symlinked cwds (realpath canonicalization happens in `roomIdForCwd`).
+ *   - Symlinked cwds (realpath canonicalization happens in `roomIdFor`).
  *   - Read-only cwds (the home directory is always writable).
  *
  * Caller workflow:
@@ -58,18 +57,17 @@ export type CwdLockResult = AcquiredLock | RefusedLock;
 /**
  * Lock id for an agent. Keyed by **(cwd, name)** so several agents can run in
  * the SAME folder as long as their names differ — the per-folder singleton is
- * now a per-(folder,name) singleton. With no `name` (legacy / MCP path) it
- * falls back to the pure cwd room id, preserving the old one-per-folder lock.
+ * now a per-(folder,name) singleton.
  *
- * Canonicalize the cwd via realpath (matches `roomIdForCwd`) so symlinked cwds
- * map to one identity; the name is appended with a NUL separator so it can't be
- * confused with the path bytes.
+ * plan/41: this is the SAME derivation as the App↔Pi `room_id` — `lockIdFor`
+ * delegates to the shared `roomIdFor(cwd, name)`. So the per-(folder,name) lock
+ * and the announced room stay in lockstep: a default/unnamed agent locks the
+ * legacy cwd id (and owns the legacy room); a custom or `#N`-suffixed name gets
+ * a name-scoped id for both. Symlinks canonicalize via `realpath` inside
+ * `roomIdFor`.
  */
 function lockIdFor(cwd: string, name?: string): string {
-  if (!name) return roomIdForCwd(cwd);
-  let target: string;
-  try { target = realpathSync(cwd); } catch { target = cwd; }
-  return createHash("sha256").update(target + "\u0000" + name).digest("base64url").slice(0, 12);
+  return roomIdFor(cwd, name);
 }
 
 /**

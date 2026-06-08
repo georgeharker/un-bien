@@ -7,7 +7,7 @@ import { RelayClient } from "../transport/relay_client.js";
 import { attachCrossPcBridge } from "./bridge.js";
 import { getOrCreateEd25519Keypair } from "../pairing/storage.js";
 import type { Ed25519Keypair } from "./../pairing/crypto.js";
-import { roomIdForCwd } from "../rooms.js";
+import { roomIdFor } from "../rooms.js";
 import { toWebSocketUrl } from "../config.js";
 
 /**
@@ -181,8 +181,12 @@ export class MeshNode {
       this.relayOwned = false;
     } else {
       if (!this.keypair) this.keypair = params.keypair ?? (await getOrCreateEd25519Keypair());
-      const roomId = roomIdForCwd(params.cwd!);
-      const roomMeta = { name: params.sessionName ?? this.peer_.name(), cwd: params.cwd! };
+      // plan/41: room is keyed by (cwd, name) so two agents in the same folder
+      // get distinct App↔Pi rooms. Use the SAME name as room_meta.name so the
+      // derivation and the announced label agree.
+      const roomName = params.sessionName ?? this.peer_.name();
+      const roomId = roomIdFor(params.cwd!, roomName);
+      const roomMeta = { name: roomName, cwd: params.cwd! };
       const r = new RelayClient(toWebSocketUrl(params.relayUrl), this.keypair);
       try {
         await r.connect({ roomId, roomMeta });
