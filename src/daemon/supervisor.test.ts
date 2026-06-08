@@ -51,12 +51,16 @@ beforeEach(async () => {
   process.env["REMOTE_PI_HOME"] = testHome;
   supervisor = new Supervisor({
     // Point at a non-existent extension. The supervisor will try to
-    // spawn `pi --mode rpc -e <path>` and the child will exit immediately
-    // (or never even start) — that's fine for testing the IPC surface.
+    // spawn `<piBin> --mode rpc -e <path>` and the child exits immediately —
+    // fine for testing the control surface (we assert on op replies, not on
+    // the child's exit code).
     extensionPath: "/no/such/extension.js",
-    // Use a stub binary that exits cleanly to avoid hanging waiting on
-    // `pi` to be installed in the test environment.
-    piBin: "/usr/bin/true",
+    // Cross-platform stub: `process.execPath` (node) exists on every OS, so
+    // spawn never ENOENTs (a POSIX-only path like `/usr/bin/true` failed on
+    // Windows CI). Node rejects the `--mode` arg and exits non-zero right away,
+    // which is harmless here — the spawning tests only check `started/restarted`
+    // booleans, returned synchronously at spawn time.
+    piBin: process.execPath,
   });
   await supervisor.start();
 });

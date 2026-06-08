@@ -40,7 +40,9 @@ describe("RpcChild — deliberate stop is not a crash", () => {
     try { rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
   });
 
-  test("stop() emits isCrash:false though the child dies by signal", async () => {
+  // POSIX-only: uses a `.sh` stub + SIGTERM/SIGKILL semantics. The RpcChild
+  // stop() logic is cross-platform; only this stub/signal harness is POSIX.
+  test.skipIf(process.platform === "win32")("stop() emits isCrash:false though the child dies by signal", async () => {
     dir = mkdtempSync(join(tmpdir(), "pi-rpcchild-"));
     const bin = join(dir, "staysalive.sh");
     writeFileSync(bin, "#!/bin/sh\nexec sleep 30\n");
@@ -102,7 +104,10 @@ describe("RpcChild — isBusy", () => {
     expect(child.isBusy).toBe(false);
   });
 
-  test("refreshBusy syncs from get_state.isStreaming (authoritative)", async () => {
+  // POSIX-only harness: the stub is a `#!/usr/bin/env node` shebang script,
+  // which Windows can't spawn directly. refreshBusy itself is cross-platform;
+  // the get_state correlation logic is also covered by the unit pieces above.
+  test.skipIf(process.platform === "win32")("refreshBusy syncs from get_state.isStreaming (authoritative)", async () => {
     dir = mkdtempSync(join(tmpdir(), "pi-busy-gs-"));
     // Stub that answers get_state with isStreaming:true (ignores rpc args).
     const stub = join(dir, "stub.mjs");

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import {
   addDaemon,
   listDaemons,
@@ -48,7 +48,7 @@ describe("normalizeCwd", () => {
     // `.` resolves to the test runner's cwd (project root). Just verify
     // it's absolute and canonicalized.
     const got = normalizeCwd(".");
-    expect(got.startsWith("/")).toBe(true);
+    expect(isAbsolute(got)).toBe(true); // `/...` POSIX, `C:\...` win32
     expect(got).toBe(realpathSync("."));
   });
 

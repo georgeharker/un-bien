@@ -303,11 +303,17 @@ describe("state machine + pair_request flow", () => {
 
   test("pair without start → warning, state stays idle", async () => {
     expect(_getState()).toBe("idle");
+    // Isolated empty cwd so `localConfigExists` is deterministically false on
+    // every OS. The old fake path (`/home/user/...`) is non-writable on macOS
+    // (config never exists → first-time path) but writable on Windows (a config
+    // could exist → wrong auto-bootstrap path, slow real-socket work).
+    const cwd = mkdtempSync(join(tmpdir(), "pi-ext-cwd-"));
     const pair = captureHandler("remote-pi pair");
-    const ctx = makeMockCtx();
+    const ctx = makeMockCtx(cwd);
     await pair("", ctx);
     expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Run /remote-pi"), "warning");
     expect(_getState()).toBe("idle");
+    rmSync(cwd, { recursive: true, force: true });
   });
 
   test("valid pair_request → pair_ok + state paired + peer persisted", async () => {
@@ -651,10 +657,12 @@ describe("/remote-pi revoke", () => {
   test("idle (relay off) → refuses instead of a silent peers.json edit", async () => {
     _knownPeers.push({ name: "Phone", remote_epk: "aaaa1111zzzz", paired_at: "now" });
 
-    // beforeEach stopped the relay and the synthetic cwd has no local config,
-    // so revoke now bails (mirrors pair) rather than editing the file offline.
+    // beforeEach stopped the relay; an isolated empty cwd guarantees no local
+    // config on every OS, so revoke bails (mirrors pair) rather than editing
+    // the file offline. (Fresh tmpdir — see the "pair without start" test.)
+    const cwd = mkdtempSync(join(tmpdir(), "pi-ext-cwd-"));
     const revoke = captureHandler("remote-pi revoke");
-    const ctx = makeMockCtx();
+    const ctx = makeMockCtx(cwd);
     await revoke("aaaa1111", ctx);
 
     expect(_removedPeers).toHaveLength(0);
@@ -663,6 +671,7 @@ describe("/remote-pi revoke", () => {
       expect.stringContaining("First-time setup needed"),
       "warning",
     );
+    rmSync(cwd, { recursive: true, force: true });
   });
 
   test("valid shortid → peer removed + success notify", async () => {
@@ -871,16 +880,19 @@ describe("multi-channel broadcast (W2D)", () => {
   });
 
   test("/remote-pi pair without config (idle, first-time) → warns + no QR", async () => {
-    // Default test cwd has no local config, so we expect the focused
-    // first-time message instead of an attempt to auto-bootstrap.
+    // Isolated empty cwd → no local config on every OS, so we expect the
+    // focused first-time message instead of an auto-bootstrap. (Fresh tmpdir —
+    // see the "pair without start" test for the cross-platform rationale.)
     expect(_getState()).toBe("idle");
+    const cwd = mkdtempSync(join(tmpdir(), "pi-ext-cwd-"));
     const pair = captureHandler("remote-pi pair");
-    const ctx = makeMockCtx();
+    const ctx = makeMockCtx(cwd);
     await pair("", ctx);
 
     const calls = ctx.ui.notify.mock.calls.map((c) => c[0] as string);
     expect(calls.some((m) => m.includes("First-time setup needed"))).toBe(true);
     expect(calls.every((m) => !m.includes("QR ready"))).toBe(true);
+    rmSync(cwd, { recursive: true, force: true });
   });
 
   test("/remote-pi pair generates QR even when an owner is already attached", async () => {

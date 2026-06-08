@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { existsSync, lstatSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
+
+/** POSIX-only describes: features the Bloco C (plan/40) intentionally skips on
+ *  Windows (symlinks/`~/.local/bin`, systemd, launchd). */
+const posixOnly = process.platform === "win32";
 import {
   defaultRenderVars,
   detectPlatform,
@@ -35,13 +39,14 @@ describe("detectPlatform", () => {
 describe("findNodeBinary", () => {
   test("returns process.execPath (absolute)", () => {
     expect(findNodeBinary()).toBe(process.execPath);
-    expect(findNodeBinary().startsWith("/")).toBe(true);
+    expect(isAbsolute(findNodeBinary())).toBe(true); // `/...` POSIX, `C:\...` win32
   });
 });
 
 describe("findSupervisorScript", () => {
   test("ends with bin/supervisord.js (whatever distRoot is)", () => {
-    expect(findSupervisorScript().endsWith("/bin/supervisord.js")).toBe(true);
+    // `join` yields the platform separator (`/` POSIX, `\` win32).
+    expect(findSupervisorScript().endsWith(join("bin", "supervisord.js"))).toBe(true);
   });
 });
 
@@ -126,7 +131,8 @@ describe("renderTemplate", () => {
   });
 });
 
-describe("paths", () => {
+// systemd/launchd paths are POSIX-only (Windows uses Task Scheduler — plan/40).
+describe.skipIf(posixOnly)("paths", () => {
   test("systemdUnitPath lives under ~/.config/systemd/user/", () => {
     expect(systemdUnitPath()).toMatch(/\.config\/systemd\/user\/remote-pi-supervisord\.service$/);
   });
@@ -140,8 +146,8 @@ describe("defaultRenderVars", () => {
   test("populates all required fields", () => {
     const vars = defaultRenderVars();
     expect(vars.node).toBe(process.execPath);
-    expect(vars.supervisor.endsWith("/bin/supervisord.js")).toBe(true);
-    expect(vars.home.startsWith("/")).toBe(true);
+    expect(vars.supervisor.endsWith(join("bin", "supervisord.js"))).toBe(true);
+    expect(isAbsolute(vars.home)).toBe(true);
     expect(vars.user.length).toBeGreaterThan(0);
     expect(vars.path.length).toBeGreaterThan(0);
   });
@@ -151,16 +157,15 @@ describe("defaultRenderVars", () => {
 
 describe("findRemotePiScript", () => {
   test("resolves to dist/index.js sibling of supervisord", () => {
-    const path = findRemotePiScript();
-    expect(path.endsWith("/index.js")).toBe(true);
-    // Same dist root as supervisord.
-    expect(path.replace(/\/[^/]+$/, "")).toBe(
-      findSupervisorScript().replace(/\/bin\/[^/]+$/, ""),
-    );
+    const p = findRemotePiScript();
+    expect(basename(p)).toBe("index.js");
+    // Same dist root as supervisord: dirname(index.js) === dirname(dist/bin).
+    expect(dirname(p)).toBe(dirname(dirname(findSupervisorScript())));
   });
 });
 
-describe("userLocalBinDir + isOnPath", () => {
+// `~/.local/bin` + `:`-delimited PATH are POSIX-only (Windows skips CLI symlinks).
+describe.skipIf(posixOnly)("userLocalBinDir + isOnPath", () => {
   test("userLocalBinDir composes ~/.local/bin from given homedir", () => {
     expect(userLocalBinDir("/tmp/fakehome")).toBe("/tmp/fakehome/.local/bin");
   });
@@ -174,7 +179,9 @@ describe("userLocalBinDir + isOnPath", () => {
   });
 });
 
-describe("linkCliBinaries / unlinkCliBinaries", () => {
+// CLI symlinks are POSIX-only — linkCliBinaries returns early on Windows
+// (npm-global provides the `.cmd` shims there), so these don't apply.
+describe.skipIf(posixOnly)("linkCliBinaries / unlinkCliBinaries", () => {
   let tmpHome: string;
   let fakePaths: { remotePi: string; supervisord: string };
 

@@ -187,11 +187,14 @@ describe("getOrCreateEd25519Keypair — headless Linux fallback", () => {
 
     // File exists at the expected path with restrictive perms.
     expect(existsSync(_IDENTITY_FILE_FOR_TEST)).toBe(true);
-    const stat = statSync(_IDENTITY_FILE_FOR_TEST);
-    // Mode mask 0o777 isolates the perm bits (on Linux/macOS); on other
-    // systems we just assert the bits are no looser than 0o600.
-    const perms = stat.mode & 0o777;
-    expect(perms & 0o077).toBe(0);  // group + other bits zero
+    // POSIX-only: `chmod 0o600` is a no-op on Windows (NTFS perms aren't the
+    // POSIX bits + Node reports a fixed mode), so only assert the perm bits
+    // off Windows. The file-creation + fallback behavior is checked above.
+    if (process.platform !== "win32") {
+      const stat = statSync(_IDENTITY_FILE_FOR_TEST);
+      const perms = stat.mode & 0o777;
+      expect(perms & 0o077).toBe(0);  // group + other bits zero
+    }
 
     // Round-trip: parse and check it deserializes to the same key.
     const parsed = JSON.parse(readFileSync(_IDENTITY_FILE_FOR_TEST, "utf8")) as { pk: string; sk: string };
