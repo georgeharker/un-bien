@@ -19,6 +19,14 @@ export type ReconnectHandler = () => void;
 export interface SessionPeerOptions {
   sockPath: string;
   name: string;
+  /**
+   * Working directory of this agent. Sent in the `register` so the broker can
+   * key peers by the (cwd, name) pair: two agents in the SAME folder with the
+   * same name are the SAME logical agent reincarnating (switch_session /
+   * restart), so the broker take-over the name instead of suffixing `#N`.
+   * Optional for backward-compat with peers that predate this field.
+   */
+  cwd?: string;
   auditPath?: string;
   /** Per-request default timeout (ms). Override per call if needed. */
   defaultTimeoutMs?: number;
@@ -265,7 +273,14 @@ export class SessionPeer {
         }
       };
       this._preAckListener = onceListener;
-      const req = JSON.stringify({ type: "register", name: this.opts.name }) + "\n";
+      const req = JSON.stringify({
+        type: "register",
+        name: this.opts.name,
+        // Only include cwd when set — keeps the wire identical to the legacy
+        // payload for callers that don't supply it (broker treats absent cwd
+        // as "no take-over", i.e. the old #N behavior).
+        ...(this.opts.cwd !== undefined ? { cwd: this.opts.cwd } : {}),
+      }) + "\n";
       try {
         sock.write(req);
       } catch (e) {

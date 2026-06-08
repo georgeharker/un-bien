@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { acquireCwdLock, lockPathForCwd } from "./cwd_lock.js";
+import { acquireCwdLock, lockPathForCwd, lockPathFor } from "./cwd_lock.js";
 
 /** A fresh tmp cwd per test — each gets a unique room hash, so tests in
  *  parallel don't fight over the same lock socket. */
@@ -84,6 +84,42 @@ describe("acquireCwdLock", () => {
   // to cover the OS primitive, and trust that `acquireCwdLock` composes
   // it correctly. Manual repro: `kill -9` a Pi process holding the lock,
   // then run `/remote-pi` again — acquires cleanly.
+
+  test("same cwd, DIFFERENT names → independent locks (multi-agent per folder)", async () => {
+    const cwd = tmpCwd();
+    const a = await acquireCwdLock(cwd, "backend");
+    const b = await acquireCwdLock(cwd, "frontend");
+
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true); // different name in the same folder is allowed
+    expect(lockPathFor(cwd, "backend")).not.toBe(lockPathFor(cwd, "frontend"));
+
+    if (a.ok) a.release();
+    if (b.ok) b.release();
+  });
+
+  test("same cwd, SAME name → refused (per-(cwd,name) singleton)", async () => {
+    const cwd = tmpCwd();
+    const first = await acquireCwdLock(cwd, "backend");
+    expect(first.ok).toBe(true);
+
+    const second = await acquireCwdLock(cwd, "backend");
+    expect(second.ok).toBe(false);
+    if (!second.ok) expect(second.lockPath).toBe(lockPathFor(cwd, "backend"));
+
+    if (first.ok) first.release();
+  });
+
+  test("named lock is independent from the legacy cwd-only lock", async () => {
+    const cwd = tmpCwd();
+    const named = await acquireCwdLock(cwd, "backend");
+    const legacy = await acquireCwdLock(cwd); // no name → old room-id lock
+    expect(named.ok).toBe(true);
+    expect(legacy.ok).toBe(true);
+    expect(lockPathFor(cwd, "backend")).not.toBe(lockPathForCwd(cwd));
+    if (named.ok) named.release();
+    if (legacy.ok) legacy.release();
+  });
 
   test("refused result includes the canonical lockPath", async () => {
     const cwd = tmpCwd();

@@ -100,7 +100,7 @@ import { fileURLToPath } from "node:url";
 import { mkdirSync, copyFileSync, existsSync, unlinkSync, readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { spawnSync } from "node:child_process";
-import { hostname } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import {
   kDefaultRelayUrl,
   resolveRelayUrl,
@@ -160,6 +160,16 @@ let _currentThinking: ThinkingLevel | undefined = undefined;  // last-known thin
 let _meshNode: MeshNode | null = null;
 let _sessionName: string | null = null;
 let _sessionPeerCount = 0;
+// Set true by the `session_shutdown` handler. The daemon auto-init defers the
+// connect (`setTimeout(_cmdRoot, 0)`) and connecting is async, so a shutdown can
+// land WHILE this instance's `_cmdRoot` is still mid-connect (`_meshNode` not
+// assigned yet) — the handler would then find nothing to close, and the connect
+// would finish afterwards as an unreachable ghost. `_cmdRoot`/`_cmdJoin` check
+// this flag after each await and abort (closing any peer that already connected)
+// so a torn-down instance never lingers on the broker. Per-module (jiti
+// re-evaluates the module on every session replacement), so the replacement
+// instance starts fresh with `_disposed = false`.
+let _disposed = false;
 
 // Cached state of global pairings (`peers.json`). Pairing is per-machine, so a
 // device paired in any Pi process is paired everywhere. Refreshed on boot,
@@ -315,6 +325,25 @@ export async function _stopForTest(ctx: unknown): Promise<void> {
   await _cmdStop(ctx as Parameters<typeof _cmdStop>[0]);
 }
 
+/** Test-only: read/reset the `_disposed` flag. In production it's per-module
+ *  and never reset (a disposed instance is discarded), but tests share one
+ *  module across cases, so they reset it to avoid cross-test pollution. */
+export function _getDisposedForTest(): boolean { return _disposed; }
+export function _setDisposedForTest(v: boolean): void { _disposed = v; }
+
+/** Test-only: true when this instance holds a live local-mesh node. */
+export function _hasMeshNodeForTest(): boolean { return _meshNode !== null; }
+
+/** Test-only: the effective (possibly `#N`-suffixed) name the cwd-lock reserved. */
+export function _getLockedNameForTest(): string | null { return _lockedName; }
+
+/** Test-only: release + clear the cwd lock (the lock normally survives stop). */
+export function _resetCwdLockForTest(): void {
+  try { _cwdLock?.release(); } catch { /* ignored */ }
+  _cwdLock = null;
+  _lockedName = null;
+}
+
 /**
  * Test-only: relay-only startup, no UDS mesh join. Replaces the old
  * `remote-pi relay start` handler that some tests captured to bring up
@@ -400,6 +429,12 @@ let _selfRevoke: SelfRevoke | null = null;
 // releases on crash too). Stays held across `/remote-pi stop` cycles —
 // only released when the Node process itself dies.
 let _cwdLock: AcquiredLock | null = null;
+// Effective mesh name this instance locked. Equals the configured/derived name,
+// OR a `#N`-suffixed variant when another agent already holds that (cwd, name)
+// in this folder (same-name agents coexist instead of being refused). `_cmdJoin`
+// registers under this name; the broker confirms it (and may bump it again under
+// a live race). Null until the lock is acquired.
+let _lockedName: string | null = null;
 
 // ── Session sync limit (mirror cache cap) ─────────────────────────────────────
 //
@@ -1168,6 +1203,53 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     _lastEventCtx = ctx;
   });
 
+  // Tear down THIS instance's live handles when the SDK replaces the session
+  // (switch_session / new / fork / reload / quit). This is the fix for the
+  // "double mesh connection" the Cockpit hits when it restores a saved
+  // conversation via switch_session on boot.
+  //
+  // Why it happens: the Pi SDK loads extensions through jiti with
+  // `moduleCache: false`, so every session replacement re-evaluates THIS module
+  // FRESH — a brand-new instance whose `_meshNode`, `_relay`, and `_cwdLock`
+  // start back at null. The OUTGOING instance's broker socket, relay WS, and
+  // cwd-lock UDS keep running regardless (module state is gone, but the OS
+  // handles aren't). In daemon mode (REMOTE_PI_DAEMON=1, set by the Cockpit) the
+  // fresh instance re-runs `_cmdRoot` on load, so without releasing the old
+  // handles first we end up with TWO mesh peers under the same name on the
+  // broker + two rooms on the relay. The per-cwd lock is meant to stop the
+  // second connect, but its 500 ms connect-probe can miss the still-bound old
+  // socket while the event loop is saturated at boot, fall through to the
+  // stale-socket unlink path, and let the fresh instance bind a second lock.
+  //
+  // `session_shutdown` fires on the OUTGOING extension runner and is AWAITED by
+  // the SDK (`teardownCurrent`) BEFORE the replacement runtime — and thus the
+  // fresh extension instance — is created. Closing the mesh node, relay, and
+  // lock here guarantees the next instance starts from a clean slate and stands
+  // up exactly ONE connection bound to the restored session. Idempotent +
+  // best-effort: every step is guarded so a partially-initialised instance
+  // (e.g. shutdown lands mid-`_cmdRoot`) tears down without throwing.
+  pi.on("session_shutdown", async () => {
+    // Mark disposed FIRST so an in-flight `_cmdRoot`/`_cmdJoin` (the deferred
+    // daemon connect) aborts instead of finishing as a ghost after we've torn
+    // down — the race that left a mute `Backoffice` behind when the Cockpit
+    // fired switch_session right after boot.
+    _disposed = true;
+    if (_meshNode) {
+      try { await _meshNode.close(); } catch { /* best-effort */ }
+      _meshNode = null;
+      _sessionName = null;
+      _sessionPeerCount = 0;
+    }
+    // No bye reason: the process keeps running and the fresh instance re-joins
+    // the SAME relay room, so an explicit offline→online flap would be wrong.
+    if (_state !== "idle") _goIdle();
+    if (_cwdLock) {
+      try { _cwdLock.release(); } catch { /* best-effort */ }
+      _cwdLock = null;
+      _lockedName = null;
+    }
+  });
+
   // ── Commands ──────────────────────────────────────────────────────────────
   //
   // Final surface: 8 commands. Pre-2026-05-23 we had 20 commands covering
@@ -1362,25 +1444,38 @@ async function _cmdPeers(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
  * idempotent connect + status display.
  */
 async function _cmdRoot(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
-  const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd();
+  // This instance was torn down (session replacement) before its deferred
+  // auto-init ran — don't connect, or we'd resurrect a ghost the broker can't
+  // reach. The replacement instance (fresh module) drives the live connect.
+  if (_disposed) return;
 
-  // Per-cwd singleton: at most one Pi process per folder may run /remote-pi.
-  // Bind a UDS socket as the lock (kernel auto-releases on process exit, even
-  // crash); a second invocation in the same cwd sees the live socket and is
-  // refused here, before any wizard / mesh / relay side-effect can run.
-  // Once acquired, the lock is bound to the lifetime of THIS process — repeat
-  // calls to /remote-pi from the same terminal are idempotent (no re-acquire).
+  const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd();
+  // Lock identity is (cwd, name). Several agents may run in the SAME folder; the
+  // requested name just has to be made unique. Derive the name the same way
+  // `_cmdJoin` does so the lock and the mesh registration agree on identity.
+  const requestedName = loadLocalConfig(cwd).agent_name || defaultAgentName(cwd);
+
+  // Per-(cwd,name) lock, but COLLISION DOESN'T REFUSE — it auto-suffixes. If
+  // `(cwd, "Backoffice")` is already held by a live agent, try
+  // `(cwd, "Backoffice#2")`, `#3`, … until one binds. So a second agent with the
+  // same name in the same folder comes up as `Backoffice#2` (matching the
+  // broker's `_uniqueName` suffix scheme) instead of being turned away. The
+  // suffix N matches the broker's (`#2`-based) so lock + mesh name line up. The
+  // lock is a UDS socket (kernel auto-releases on exit/crash) bound for THIS
+  // process's lifetime; repeat `/remote-pi` calls are idempotent.
   if (_cwdLock === null) {
-    const result = await acquireCwdLock(cwd);
-    if (!result.ok) {
+    for (let n = 1; n <= 1000; n++) {
+      const candidate = n === 1 ? requestedName : `${requestedName}#${n}`;
+      const result = await acquireCwdLock(cwd, candidate);
+      if (result.ok) { _cwdLock = result; _lockedName = candidate; break; }
+    }
+    if (_cwdLock === null) {
       ctx.ui.notify(
-        "[remote-pi] Another agent is already running in this folder. " +
-        "Use the existing terminal or run from a different folder.",
+        `[remote-pi] Could not start: too many agents named "${requestedName}" already running in this folder.`,
         "warning",
       );
       return;
     }
-    _cwdLock = result;
   }
 
   // First-time wizard: no local config in this cwd → run interactive setup.
@@ -1410,12 +1505,19 @@ async function _cmdRoot(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
     return;
   }
 
-  // Returning user with config: auto-start if requested + currently inactive.
+  // Returning user with config: ALWAYS join the local UDS mesh on connect; the
+  // relay is the only thing gated by auto_start_relay. So auto_start_relay:false
+  // now means "local mesh, no relay" (matching the first-time/wizard path and
+  // the field's documented intent) — previously a false flag skipped the mesh
+  // join entirely, leaving the agent (incl. daemons) fully idle.
   const config = loadLocalConfig(cwd);
-  if (effectiveAutoStartRelay(config) && !_meshNode) {
-    await _cmdJoin(ctx);
-    if (_state === "idle") await _cmdStart(ctx);
-  }
+  if (!_meshNode) await _cmdJoin(ctx);
+  // `_cmdJoin` aborts cleanly when a `session_shutdown` lands mid-connect, but
+  // returns void — so recheck here before bringing the relay up, or we'd start
+  // a ghost relay connection on an already-disposed instance (the replacement
+  // instance owns the live connect).
+  if (_disposed) return;
+  if (effectiveAutoStartRelay(config) && _state === "idle") await _cmdStart(ctx);
   _cmdStatus(ctx);
 }
 
@@ -1538,6 +1640,21 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
       return;
     }
     ctx.ui.notify(`[remote-pi] relay connect failed: ${String(err)}`, "error");
+    return;
+  }
+
+  // Race guard: a `session_shutdown` may have landed while we were awaiting the
+  // keypair or `relay.connect()` (the Cockpit fires switch_session right after
+  // boot, tearing down THIS instance mid-`_cmdStart`). At that point `_state` is
+  // still "idle" — `_cmdStart` only sets "started" below — so the shutdown
+  // handler's `_goIdle()` is skipped and CANNOT close this still-local `relay`.
+  // Without this guard the WS finishes connecting as a ghost that holds the
+  // relay room (keyed by pubkey + roomIdForCwd), and the replacement instance's
+  // own connect is refused with `room_already_open` — the agent never enters
+  // the cross-PC mesh. Close the fresh relay and bail; the replacement instance
+  // (fresh module) drives the real connect. Mirrors the `_cmdJoin` guard.
+  if (_disposed) {
+    try { relay.close(); } catch { /* best-effort */ }
     return;
   }
 
@@ -2538,7 +2655,13 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
   const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd();
   const local = loadLocalConfig(cwd);
   const sessionName = LOCAL_SESSION_NAME;
-  const agentName = local.agent_name || defaultAgentName(cwd);
+  // What the user configured for this agent…
+  const requestedName = local.agent_name || defaultAgentName(cwd);
+  // …and what we actually register: the name the cwd-lock reserved, which is
+  // `requestedName` or a `#N` variant when same-named agents share this folder.
+  // Falls back to requestedName when join runs without a prior `_cmdRoot` lock
+  // (e.g. legacy/test paths).
+  const agentName = _lockedName ?? requestedName;
 
   if (_meshNode) {
     ctx.ui.notify("[remote-pi] Already on the local mesh.", "warning");
@@ -2550,7 +2673,13 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
 
   const sock = sessionSockPath(sessionName);
   const audit = sessionAuditPath(sessionName);
-  const peer = new MeshNode({ sockPath: sock, name: agentName, auditPath: audit });
+  // Forward the cwd so the broker keys this peer by (cwd, name): a same-folder
+  // same-name reincarnation (switch_session re-eval, app restart) takes over the
+  // name instead of registering behind a mute `name#N` ghost. Canonicalize via
+  // realpath so symlinked cwds map to one identity (matches roomIdForCwd).
+  let canonCwd = cwd;
+  try { canonCwd = realpathSync(cwd); } catch { /* cwd missing — use raw path */ }
+  const peer = new MeshNode({ sockPath: sock, name: agentName, cwd: canonCwd, auditPath: audit });
 
   peer.onMessage((env) => {
     const body = env.body as { type?: string } | null;
@@ -2596,6 +2725,14 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
 
   try {
     const assigned = await peer.connect();
+    // Race guard: a `session_shutdown` may have landed while `connect()` was
+    // in flight (the broker now has us registered, but this instance is being
+    // discarded). Leave immediately instead of publishing a ghost peer that
+    // the replacement instance would then collide with as `name#2`.
+    if (_disposed) {
+      try { await peer.close(); } catch { /* best-effort */ }
+      return;
+    }
     _meshNode = peer;
     _sessionName = sessionName;
     _sessionPeerCount = 1;  // optimistic — overwritten by list_peers below
@@ -2603,6 +2740,23 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
     // arrives — the newcomer doesn't get retroactive joined events. Ask the
     // broker for the live peer list to seed the count correctly on join.
     _refreshSessionPeerCount(peer, ctx);
+    // Tell RPC clients (e.g. Cockpit) the EFFECTIVE mesh name. The broker
+    // appends a `#N` suffix on a name collision, so the name we requested and
+    // the one actually assigned can differ. Emit a pure-data event
+    // (display:false) carrying both + a `changed` flag so the client can rename
+    // the agent in its own UI to match what the mesh/relay will show. Fired on
+    // every join (incl. failover re-elect, which can re-assign the name), so the
+    // client always reflects the live name, not just the first one. Emitted
+    // BEFORE persisting config so a read-only-cwd write failure never swallows
+    // the name signal the client depends on.
+    _pi?.sendMessage({
+      customType: "remote-pi:name-assigned",
+      content: assigned === requestedName
+        ? `Mesh name: ${assigned}`
+        : `Mesh name reassigned: "${requestedName}" → "${assigned}" (collision)`,
+      details: { requested: requestedName, assigned, changed: assigned !== requestedName },
+      display: false,
+    });
     saveLocalConfig(cwd, { agent_name: assigned });
     ctx.ui.notify(
       `[remote-pi] Joined local mesh as "${assigned}" (${peer.currentRole()})`,
@@ -3195,6 +3349,64 @@ function _isDirectRun(): boolean {
   }
 }
 
+/**
+ * Read-only probe of the local UDS broker for the mesh roster, backing
+ * `remote-pi peers`. Opens a raw connection to `sockPath`, sends a single
+ * unregistered `list_peers` request, and resolves with the peer names from the
+ * broker's reply (local UDS peers + cross-PC `<pc>:<peer>` entries).
+ *
+ * The probe deliberately does NOT register as a peer: the broker answers
+ * observer probes without assigning a name or broadcasting peer_joined/left
+ * (see Broker._tryObserverProbe), so a shell query never perturbs the mesh —
+ * no phantom peer flashes in anyone's roster, local or cross-PC.
+ *
+ * Resolves null when no broker is reachable (connection refused / no socket
+ * file — i.e. no Pi or daemon is leading the mesh on this machine), or on
+ * timeout, so the caller can print an "offline" message instead of an empty
+ * roster.
+ */
+export async function probeListPeers(
+  sockPath: string,
+  timeoutMs = 2000,
+): Promise<string[] | null> {
+  const { createConnection } = await import("node:net");
+  return new Promise<string[] | null>((resolve) => {
+    const sock = createConnection({ path: sockPath });
+    let buf = "";
+    let settled = false;
+    const done = (result: string[] | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { sock.destroy(); } catch { /* already gone */ }
+      resolve(result);
+    };
+    const timer = setTimeout(() => done(null), timeoutMs);
+    sock.setEncoding("utf8");
+    sock.on("connect", () => {
+      try { sock.write(JSON.stringify({ type: "list_peers" }) + "\n"); }
+      catch { done(null); }
+    });
+    sock.on("data", (chunk: string) => {
+      buf += chunk;
+      const nl = buf.indexOf("\n");
+      if (nl < 0) return;  // wait for a full line
+      const line = buf.slice(0, nl);
+      try {
+        const env = JSON.parse(line) as { body?: { type?: string; peers?: unknown } };
+        const body = env.body;
+        if (body && body.type === "list_peers_reply" && Array.isArray(body.peers)) {
+          done(body.peers.filter((p): p is string => typeof p === "string"));
+          return;
+        }
+      } catch { /* fall through */ }
+      done(null);  // a line arrived but it wasn't the reply we expected
+    });
+    sock.on("error", () => done(null));  // ECONNREFUSED / ENOENT → mesh offline
+    sock.on("close", () => done(null));
+  });
+}
+
 if (_isDirectRun()) {
   const [, , subcmd, ...cliArgs] = process.argv;
   if (subcmd === "devices" || subcmd === "list") {
@@ -3270,6 +3482,18 @@ if (_isDirectRun()) {
     const joined = cliArgs.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ");
     const stubCtx = { ui: { notify: (msg: string) => console.log(msg) } as unknown as ExtensionContext["ui"] };
     await _cmdCron(joined, stubCtx);
+  } else if (subcmd === "peers") {
+    // Read-only roster of the local + cross-PC mesh. Unlike `devices` (which
+    // reads paired phones from peers.json), the mesh roster lives only in the
+    // running broker's memory, so we probe the UDS broker. The probe never
+    // registers as a peer — it leaves no trace on the mesh (see
+    // Broker._tryObserverProbe). Null = no broker reachable on this machine.
+    const peers = await probeListPeers(sessionSockPath(LOCAL_SESSION_NAME));
+    if (peers === null) {
+      console.log("[remote-pi] Mesh offline — no agent is running on this machine.");
+    } else {
+      console.log(`[remote-pi] peers:\n${formatPeerInventory(peers)}`);
+    }
   } else if (subcmd === "claude") {
     await _cmdClaudeCli(cliArgs);
   } else if (subcmd === "install") {
@@ -3310,13 +3534,14 @@ if (_isDirectRun()) {
       "  restart-supervisor              Restart the pi-supervisord process",
       "",
       "Devices:",
-      "  devices                         List paired devices",
+      "  devices                         List paired phones (peers.json)",
       "  revoke <shortid>                Revoke a paired device",
       "",
       "Config:",
       "  set-relay <url>                 Set the relay URL (http:// or https://)",
       "",
       "Agent mesh:",
+      "  peers                           List agents on the local + cross-PC mesh",
       "  claude [cwd]                    Start Claude Code connected to the agent mesh",
     ].join("\n"));
   }
@@ -3376,43 +3601,39 @@ async function _cmdClaudeCli(args: string[]): Promise<void> {
   const absCwd = resolve(targetCwd);
   const SERVER_NAME = "remote-pi-mesh";
 
-  // The channel feature (claude/channel push) only recognizes MCP servers
-  // registered in one of the persistent scopes Claude Code enumerates:
-  // enterprise / user / project / local. A server passed via `--mcp-config`
-  // on the command line is loaded for tool calls but is NOT in any of those
-  // scopes, so `--dangerously-load-development-channels server:<name>` can't
-  // match it ("no MCP server configured with that name").
+  // The mesh MCP must be visible ONLY inside a `remote-pi claude` session — a
+  // plain `claude` in the same repo must NOT inherit it (otherwise every
+  // ordinary session silently joins the mesh as a stray agent).
   //
-  // We therefore register in the **local** scope, stored in `~/.claude.json`
-  // (NOT written into the project dir, NOT committed to VCS, NOT global) so the
-  // dev-channel flag matches it. Caveat that drives the next decision: `-s
-  // local` is keyed by the **git repo root** and shares ONE entry per server
-  // name across every subdir of the repo — a same-name re-add overwrites it.
+  // Older builds registered the server with `claude mcp add -s local`. That
+  // scope lives in `~/.claude.json` keyed by the **git repo root** and is
+  // inherited by EVERY claude session under that root — which is exactly the
+  // leak we're closing. So we no longer write any persistent scope; we load
+  // the server through an ephemeral `--mcp-config <tmpfile>` passed on the
+  // launch command line (see below). That config is session-only: it is never
+  // recorded in any scope `claude mcp list` enumerates, so a normal `claude`
+  // sees nothing.
   //
-  // remove-then-add makes it idempotent and refreshes the path if the
-  // extension moved (Pi can reinstall to a new hash dir on upgrade).
-  //
-  // Crucially we do NOT bake `--cwd <absCwd>` into the registration. In a
-  // monorepo (app/, relay/, site/, …) every subproject is its own agent, but
-  // they'd all share this single repo-keyed entry — so whichever agent ran
-  // `remote-pi claude` LAST would leak its cwd to every other session, and the
-  // repo-root session would then spawn a peer that locks a subdir another agent
-  // owns ("Failed to connect"). Instead, the server resolves its folder from
-  // its own `process.cwd()`, which Claude sets to the directory each `claude`
-  // session was launched in (verified empirically — NOT the git root, NOT
-  // CLAUDE_PROJECT_DIR). We launch claude with `cwd: absCwd` below, so a single
-  // shared registration self-identifies as the right agent in every session.
+  // Migration: best-effort scrub of the stale `-s local` entry that prior
+  // versions left behind (and that is the source of the inherited-mesh bug).
+  // Idempotent — a no-op (non-zero, ignored) when the entry is already gone.
   spawnSync("claude", ["mcp", "remove", SERVER_NAME, "-s", "local"], {
     cwd: absCwd, stdio: "ignore", shell: false,
   });
-  const add = spawnSync("claude", [
-    "mcp", "add", SERVER_NAME, "-s", "local", "--",
-    process.execPath, meshServerPath,
-  ], { cwd: absCwd, stdio: ["ignore", "pipe", "pipe"], shell: false, encoding: "utf8" });
-  if (add.status !== 0) {
-    console.log(`[remote-pi] failed to register MCP server: ${add.stderr || add.stdout}`);
-    process.exit(1);
-  }
+
+  // Ephemeral MCP config consumed by `--mcp-config` below. We do NOT bake a
+  // `cwd` into it: the server resolves its folder from its own `process.cwd()`,
+  // which Claude sets to the directory the session was launched in (verified
+  // empirically — NOT the git root, NOT CLAUDE_PROJECT_DIR). We spawn claude
+  // with `cwd: absCwd`, the MCP child inherits it, so the server self-identifies
+  // as the right agent without leaking that path to any other session.
+  // Unique per pid so concurrent `remote-pi claude` launches don't collide.
+  const mcpConfigPath = join(tmpdir(), `remote-pi-mesh-mcp-${process.pid}.json`);
+  writeFileSync(mcpConfigPath, JSON.stringify({
+    mcpServers: {
+      [SERVER_NAME]: { command: process.execPath, args: [meshServerPath] },
+    },
+  }));
 
   // Inject the agent-network protocol as a system prompt instead of deploying a
   // skill file into ~/.claude. Anyone running `remote-pi claude` is here to use
@@ -3422,12 +3643,19 @@ async function _cmdClaudeCli(args: string[]): Promise<void> {
   const skillPath = _agentNetworkSkillPath();
 
   // Launch flags:
+  //   --mcp-config <tmpfile>                       — load the mesh server for
+  //       THIS session only (never a persistent scope). We intentionally omit
+  //       `--strict-mcp-config` so the user's own persistent MCP servers stay
+  //       available alongside the mesh.
   //   --dangerously-load-development-channels TAG  — enable claude/channel push
   //       for our local (non-allowlisted) server, so incoming mesh messages
   //       wake Claude instead of waiting for a get_messages poll. Entries must
   //       be tagged: `server:<name>` for a manually configured MCP server
   //       (`plugin:<name>@<marketplace>` is the plugin form). Shows a one-time
-  //       confirmation dialog at startup.
+  //       confirmation dialog at startup. Works against the `--mcp-config`
+  //       server in current Claude Code; if a build ever fails to match it, the
+  //       per-turn `get_messages` poll (mandated by the mesh protocol) still
+  //       delivers — we lose the wake, not the messages.
   //   --dangerously-skip-permissions               — auto-approve tool calls
   //   --append-system-prompt-file=<skill>           — load the mesh protocol
   // `--append-system-prompt-file` uses the glued `--flag=value` form (a SINGLE
@@ -3437,18 +3665,26 @@ async function _cmdClaudeCli(args: string[]): Promise<void> {
   // → `claude` aborts with "argument missing" and the session never comes back.
   // As one token, the worst case is the whole flag being dropped: claude still
   // starts (just without the injected protocol), which is recoverable instead
-  // of fatal. (The channels flag stays a separate pair — it's never last, so
-  // it isn't affected, and we don't risk a parser that may not accept `=`.)
+  // of fatal. (The other flags stay separate pairs — never last, so unaffected,
+  // and we don't risk a parser that may not accept `=`.)
   // Any extra args the user passed (e.g. `--resume`, `-c`) are appended last so
   // they reach the claude binary; ours come first as sensible defaults.
-  spawnSync("claude", [
-    "--dangerously-load-development-channels", `server:${SERVER_NAME}`,
-    "--dangerously-skip-permissions",
-    ...(skillPath ? [`--append-system-prompt-file=${skillPath}`] : []),
-    ...passthroughArgs,
-  ], {
-    cwd: absCwd,
-    stdio: "inherit",
-    shell: false,
-  });
+  try {
+    spawnSync("claude", [
+      "--mcp-config", mcpConfigPath,
+      "--dangerously-load-development-channels", `server:${SERVER_NAME}`,
+      "--dangerously-skip-permissions",
+      ...(skillPath ? [`--append-system-prompt-file=${skillPath}`] : []),
+      ...passthroughArgs,
+    ], {
+      cwd: absCwd,
+      stdio: "inherit",
+      shell: false,
+    });
+  } finally {
+    // Session over — drop the ephemeral config so it never lingers as a stray
+    // file. spawnSync blocks until claude exits, so claude has long since read
+    // it. Best-effort: ignore if already gone.
+    try { unlinkSync(mcpConfigPath); } catch { /* already removed */ }
+  }
 }

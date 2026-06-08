@@ -66,6 +66,9 @@ export type RemoteInjectStatus = "received" | "denied";
 
 interface PeerConn {
   name: string;
+  /** Working directory the peer registered with — the second half of the
+   *  (cwd, name) identity. Empty string for legacy peers that sent no cwd. */
+  cwd: string;
   socket: Socket;
   buf: string;
 }
@@ -83,6 +86,9 @@ interface AckBody {
 interface RegisterMsg {
   type: "register";
   name: string;
+  /** Optional working directory — enables (cwd,name) take-over (see
+   *  `_handleRegister`). Absent → legacy `#N`-on-collision behavior. */
+  cwd?: string;
 }
 
 interface RegisterAck {
@@ -164,7 +170,7 @@ export class Broker {
   // ── connection lifecycle ──────────────────────────────────────────────────
 
   private _handleConnection(socket: Socket): void {
-    const conn: PeerConn = { name: "", socket, buf: "" };
+    const conn: PeerConn = { name: "", cwd: "", socket, buf: "" };
     socket.setEncoding("utf8");
     socket.on("data", (chunk: string) => this._onData(conn, chunk));
     socket.on("close", () => this._onClose(conn));
@@ -183,8 +189,11 @@ export class Broker {
   }
 
   private async _handleLine(conn: PeerConn, line: string): Promise<void> {
-    // Unregistered conn must send a `register` control message first.
+    // Unregistered conn: a read-only `list_peers` probe (the `remote-pi peers`
+    // CLI — answered without registering, so it leaves no trace on the mesh) or
+    // the mandatory `register` handshake. Anything else `_handleRegister` drops.
     if (!conn.name) {
+      if (this._tryObserverProbe(conn, line)) return;
       this._handleRegister(conn, line);
       return;
     }
@@ -220,6 +229,16 @@ export class Broker {
       return;
     }
 
+    // Stored as the second half of the (cwd, name) identity. Currently only
+    // metadata (surfaced for diagnostics / future scoping); collision handling
+    // stays name-based via `_uniqueName`. A forced "(cwd,name) take-over" was
+    // prototyped here but reverted: evicting a still-live peer makes it
+    // auto-reconnect (`SessionPeer._onSocketClose` → re-elect) and re-evict the
+    // newcomer, an infinite flap. The ghost is instead removed at the source —
+    // the outgoing instance leaves gracefully via the `session_shutdown`
+    // handler in index.ts before the replacement registers.
+    conn.cwd = typeof req.cwd === "string" ? req.cwd : "";
+
     const assigned = this._uniqueName(req.name);
     conn.name = assigned;
     this.peers.set(assigned, conn);
@@ -231,6 +250,43 @@ export class Broker {
 
     // Notify others (peer_joined broadcast).
     this._broadcastSystem({ type: "peer_joined", name: assigned }, assigned);
+  }
+
+  /**
+   * Answer a read-only `list_peers` request from an UNREGISTERED connection
+   * (the `remote-pi peers` CLI probe). Returns true when the line was such a
+   * probe — the reply is written and the connection stays unregistered: no
+   * name assigned, no `peer_joined`/`peer_left` broadcast, no sibling push, so
+   * querying the roster from the shell never perturbs the mesh. Returns false
+   * (not a probe) so the caller falls through to the register handshake.
+   */
+  private _tryObserverProbe(conn: PeerConn, line: string): boolean {
+    let parsed: { type?: unknown };
+    try {
+      parsed = JSON.parse(line) as { type?: unknown };
+    } catch {
+      return false;  // not JSON → let _handleRegister destroy it
+    }
+    if (!parsed || typeof parsed !== "object" || parsed.type !== "list_peers") {
+      return false;
+    }
+    const reply: Envelope = {
+      from: BROKER_NAME,
+      to: "observer",  // synthetic: the conn has no registered name
+      id: uuidv7(),
+      re: null,
+      body: { type: "list_peers_reply", peers: this._allPeerNames() } as SystemBody,
+    };
+    try { conn.socket.write(serialize(reply)); } catch { /* probe hung up */ }
+    return true;
+  }
+
+  /** Local UDS peer names plus cross-PC `<pc>:<peer>` entries from the remote
+   *  router (empty when no bridge). Shared by the registered `list_peers`
+   *  handler and the unregistered observer probe. */
+  private _allPeerNames(): string[] {
+    const remote = this.remoteRouter ? this.remoteRouter.listRemotePeers() : [];
+    return [...this.peerNames(), ...remote];
   }
 
   private _uniqueName(requested: string): string {
@@ -337,8 +393,7 @@ export class Broker {
     const body = env.body as { type?: string; peers?: unknown } | null;
     if (!body || typeof body !== "object") return;
     if (body.type === "list_peers") {
-      const remote = this.remoteRouter ? this.remoteRouter.listRemotePeers() : [];
-      const peers = [...this.peerNames(), ...remote];
+      const peers = this._allPeerNames();
       const reply: Envelope = {
         from: BROKER_NAME,
         to: env.from,

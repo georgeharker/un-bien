@@ -147,7 +147,12 @@ const {
   _hasActivePeerForTest,
   _getActivePeerCountForTest,
   _restartSupervisorCommand,
+  _setDisposedForTest,
+  _hasMeshNodeForTest,
+  _getLockedNameForTest,
+  _resetCwdLockForTest,
 } = await import("./index.js");
+const { acquireCwdLock } = await import("./session/cwd_lock.js");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -2277,6 +2282,216 @@ describe("bye on teardown", () => {
     // stays up, ready for new pairings. Pre-W2D this dropped to idle.
     expect(_hasActivePeerForTest(ACTIVE)).toBe(false);
     expect(_getState()).toBe("started");
+  });
+});
+
+// ── session_shutdown teardown (cockpit double-conn fix) ────────────────────────
+
+describe("session_shutdown teardown", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    _knownPeers.length = 0;
+    _addedPeers.length = 0;
+    _removedPeers.length = 0;
+    _consumeCalls.length = 0;
+    _setRelayCalls.length = 0;
+    _savedRelayUrl = null;
+    _tokenStatus = "ok";
+    relayRef.current = null;
+    relayInstances.length = 0;
+    _defaultConnectImpl = async () => undefined;
+    _setDisposedForTest(false); // shared module — clear the per-instance flag
+    const stop = captureHandler("remote-pi stop");
+    await stop("", makeMockCtx());
+  });
+
+  // Regression: the Pi SDK re-evaluates this module FRESH on every session
+  // replacement (jiti `moduleCache: false`), and in daemon mode the fresh
+  // instance re-runs `_cmdRoot` on load. Without releasing the OUTGOING
+  // instance's mesh + relay first, the Cockpit's boot-time `switch_session`
+  // leaves two live connections (the "double mesh connection" bug). The SDK
+  // emits + awaits `session_shutdown` on the outgoing runner before the
+  // replacement loads, so the handler MUST exist and tear everything down.
+  test("a session_shutdown handler is registered", () => {
+    expect(() => captureEventHandler("session_shutdown")).not.toThrow();
+  });
+
+  test("firing session_shutdown while started tears down mesh + relay → idle", async () => {
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
+    expect(_getState()).toBe("started");
+    const relay = relayRef.current!;
+
+    const shutdown = captureEventHandler("session_shutdown");
+    await shutdown({ type: "session_shutdown", reason: "resume" });
+
+    // Relay WS closed + state back to idle: the outgoing instance is gone, so
+    // the re-evaluated instance starts from a clean slate (one connection).
+    expect(relay.close).toHaveBeenCalled();
+    expect(_getState()).toBe("idle");
+  });
+
+  test("firing session_shutdown while idle is a no-op (no throw)", async () => {
+    const shutdown = captureEventHandler("session_shutdown");
+    expect(_getState()).toBe("idle");
+    await expect(shutdown({ type: "session_shutdown", reason: "quit" })).resolves.toBeUndefined();
+    expect(_getState()).toBe("idle");
+  });
+
+  // Race guard: the daemon defers its connect (`setTimeout(_cmdRoot, 0)`), so a
+  // shutdown can land while that connect is still in flight. The flag must make
+  // the in-flight connect abort instead of resurrecting a mute ghost peer.
+  test("session_shutdown sets _disposed → a deferred connect brings up NOTHING (mesh + relay both bail)", async () => {
+    const shutdown = captureEventHandler("session_shutdown");
+    await shutdown({ type: "session_shutdown", reason: "resume" });
+
+    // Now the deferred connect runs AFTER shutdown. Both halves must bail:
+    // _cmdJoin connects-then-leaves (no lingering mesh node) AND _cmdStart's
+    // post-connect `_disposed` guard closes the relay instead of promoting it
+    // to a ghost that holds the room.
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
+    expect(_hasMeshNodeForTest()).toBe(false);
+    expect(_getState()).toBe("idle");                 // relay never became "started"
+    expect(relayRef.current?.close).toHaveBeenCalled(); // ghost WS closed → room freed
+  });
+
+  // The precise Cockpit race: switch_session → session_shutdown lands WHILE
+  // `_cmdStart` is parked in `relay.connect()` (network RTT). At that moment
+  // `_state` is still "idle" (cmdStart only sets "started" after connect), so
+  // the shutdown handler's `_goIdle()` is skipped and cannot see the in-flight
+  // relay. Without the post-connect `_disposed` guard the WS finishes
+  // connecting as a ghost that holds the room — and the replacement instance is
+  // then refused with `room_already_open`, never entering the cross-PC mesh.
+  test("session_shutdown DURING _cmdStart's relay.connect() closes the relay (no ghost holds the room)", async () => {
+    captureHandler("remote-pi");
+
+    // Park relay.connect() until we release it — emulates the RTT window.
+    let releaseConnect!: () => void;
+    _defaultConnectImpl = () =>
+      new Promise<void>((resolve) => { releaseConnect = resolve; });
+
+    // Kick off the connect but do NOT await — it blocks inside relay.connect().
+    const connecting = _connectForTest(makeMockCtx());
+    // Wait until _cmdJoin finished and _cmdStart constructed + called connect.
+    await vi.waitFor(() => expect(relayRef.current).not.toBeNull());
+    const relay = relayRef.current!;
+    expect(_getState()).toBe("idle");  // still mid-connect — not yet "started"
+
+    // session_shutdown fires mid-connect (the outgoing instance is discarded).
+    const shutdown = captureEventHandler("session_shutdown");
+    await shutdown({ type: "session_shutdown", reason: "resume" });
+
+    // The parked connect now resolves: the guard must close it, not promote it.
+    releaseConnect();
+    await connecting;
+
+    expect(relay.close).toHaveBeenCalled();  // ghost WS closed → room available
+    expect(_getState()).toBe("idle");         // never transitioned to "started"
+  });
+
+  test("after a clean reset, connect works again (flag is per-instance, not sticky)", async () => {
+    // beforeEach already reset _disposed → a fresh connect must join the mesh.
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
+    expect(_hasMeshNodeForTest()).toBe(true);
+  });
+});
+
+// ── remote-pi:name-assigned event (Cockpit consumes the effective name) ────────
+
+describe("remote-pi:name-assigned event", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    _knownPeers.length = 0;
+    _addedPeers.length = 0;
+    _removedPeers.length = 0;
+    _consumeCalls.length = 0;
+    _setRelayCalls.length = 0;
+    _savedRelayUrl = null;
+    _tokenStatus = "ok";
+    relayRef.current = null;
+    relayInstances.length = 0;
+    _defaultConnectImpl = async () => undefined;
+    _setDisposedForTest(false);
+    const stop = captureHandler("remote-pi stop");
+    await stop("", makeMockCtx());
+  });
+
+  // Contract for the Cockpit: on join the extension emits a pure-data
+  // (display:false) custom message carrying the requested + effective mesh
+  // name, so the client can rename the agent when the broker appended a `#N`.
+  test("join emits remote-pi:name-assigned with requested + assigned + changed", async () => {
+    const sendMessage = vi.fn();
+    const spyPi = {
+      on: () => undefined, registerCommand: () => undefined,
+      registerTool: () => undefined, registerShortcut: () => undefined,
+      registerFlag: () => undefined, getFlag: () => undefined,
+      registerMessageRenderer: () => undefined,
+      sendMessage, sendUserMessage: () => undefined,
+    } as unknown as ExtensionAPI;
+    captureHandler("remote-pi");   // factory side-effects (matches other connect tests)
+    _setPiForTest(spyPi);          // …then route sendMessage through the spy
+    expect(_hasMeshNodeForTest()).toBe(false);
+
+    await _connectForTest(makeMockCtx());
+    expect(_hasMeshNodeForTest()).toBe(true); // join succeeded → emit ran
+
+    const ev = sendMessage.mock.calls
+      .map((c) => c[0] as { customType?: string; display?: boolean; details?: Record<string, unknown> })
+      .find((m) => m?.customType === "remote-pi:name-assigned");
+    expect(ev).toBeDefined();
+    expect(ev!.display).toBe(false);
+    expect(ev!.details).toMatchObject({ changed: false });
+    expect(typeof ev!.details!["requested"]).toBe("string");
+    // No collision in this isolated broker → assigned === requested.
+    expect(ev!.details!["assigned"]).toBe(ev!.details!["requested"]);
+  });
+});
+
+// ── multi-agent in the same folder: lock suffixes instead of refusing ──────────
+
+describe("same-folder same-name → #N suffix (no refusal)", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    _knownPeers.length = 0;
+    _consumeCalls.length = 0;
+    _setRelayCalls.length = 0;
+    _savedRelayUrl = null;
+    _tokenStatus = "ok";
+    relayRef.current = null;
+    relayInstances.length = 0;
+    _defaultConnectImpl = async () => undefined;
+    _setDisposedForTest(false);
+    _resetCwdLockForTest();
+    const stop = captureHandler("remote-pi stop");
+    await stop("", makeMockCtx());
+  });
+
+  // The reported case: a folder already has an agent "Backoffice"; creating a
+  // second "Backoffice" must NOT be refused — it comes up as "Backoffice#2"
+  // (and the name-assigned event reports the change), matching the broker.
+  test("a second same-name agent joins as <name>#2 instead of being refused", async () => {
+    process.env["REMOTE_PI_DIRECT_CONFIG"] = JSON.stringify({
+      agent_name: "Backoffice",
+      auto_start_relay: false, // keep the test off the relay
+    });
+    const cwd = "/home/user/projects/remote_pi";
+    // Simulate the first agent already holding (cwd, "Backoffice").
+    const first = await acquireCwdLock(cwd, "Backoffice");
+    expect(first.ok).toBe(true);
+    try {
+      const root = captureHandler("remote-pi");
+      await root("", makeMockCtx(cwd));
+      // Lock seeker skipped the taken base name and reserved the #2 variant…
+      expect(_getLockedNameForTest()).toBe("Backoffice#2");
+      // …and the agent actually joined the mesh (not refused).
+      expect(_hasMeshNodeForTest()).toBe(true);
+    } finally {
+      if (first.ok) first.release();
+      delete process.env["REMOTE_PI_DIRECT_CONFIG"];
+      _resetCwdLockForTest();
+    }
   });
 });
 

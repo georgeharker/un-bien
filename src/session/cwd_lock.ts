@@ -1,6 +1,7 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { createHash } from "node:crypto";
 import type { Server } from "node:net";
 import { roomIdForCwd } from "../rooms.js";
 import { removeStaleSock, tryBind, tryConnect } from "./leader_election.js";
@@ -55,13 +56,34 @@ export interface RefusedLock {
 export type CwdLockResult = AcquiredLock | RefusedLock;
 
 /**
- * Local-IPC address of the lock for a given cwd. Pure helper (no IO).
- * POSIX → a `.sock` file under `locksDir()`; Windows → a per-user named pipe
- * keyed by the room id (plan/40 — this file was missed in the Bloco A pass).
+ * Lock id for an agent. Keyed by **(cwd, name)** so several agents can run in
+ * the SAME folder as long as their names differ — the per-folder singleton is
+ * now a per-(folder,name) singleton. With no `name` (legacy / MCP path) it
+ * falls back to the pure cwd room id, preserving the old one-per-folder lock.
+ *
+ * Canonicalize the cwd via realpath (matches `roomIdForCwd`) so symlinked cwds
+ * map to one identity; the name is appended with a NUL separator so it can't be
+ * confused with the path bytes.
  */
+function lockIdFor(cwd: string, name?: string): string {
+  if (!name) return roomIdForCwd(cwd);
+  let target: string;
+  try { target = realpathSync(cwd); } catch { target = cwd; }
+  return createHash("sha256").update(target + "\u0000" + name).digest("base64url").slice(0, 12);
+}
+
+/**
+ * Local-IPC address of the lock for a given (cwd, name). Pure helper (no IO).
+ * POSIX → a `.sock` file under `locksDir()`; Windows → a per-user named pipe.
+ */
+export function lockPathFor(cwd: string, name?: string): string {
+  const id = lockIdFor(cwd, name);
+  return ipcAddress(`lock-${id}`, join(locksDir(), `${id}.sock`));
+}
+
+/** Back-compat alias: the cwd-only lock path (no name component). */
 export function lockPathForCwd(cwd: string): string {
-  const room = roomIdForCwd(cwd);
-  return ipcAddress(`lock-${room}`, join(locksDir(), `${room}.sock`));
+  return lockPathFor(cwd);
 }
 
 /**
@@ -78,8 +100,8 @@ export function lockPathForCwd(cwd: string): string {
  * useful — the next-Pi-attempt's `tryConnect` succeeding is the entire
  * signal we care about.
  */
-export async function acquireCwdLock(cwd: string): Promise<CwdLockResult> {
-  const lockPath = lockPathForCwd(cwd);
+export async function acquireCwdLock(cwd: string, name?: string): Promise<CwdLockResult> {
+  const lockPath = lockPathFor(cwd, name);
   // POSIX: the lock socket is a file under locksDir → ensure the dir exists.
   // Windows: lockPath is a named pipe (`\\.\pipe\…`) — no parent dir to create.
   if (!usesNamedPipe()) mkdirSync(dirname(lockPath), { recursive: true });

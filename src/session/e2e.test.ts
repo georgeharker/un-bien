@@ -3,9 +3,11 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { setTimeout as wait } from "node:timers/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { createConnection } from "node:net";
 import { ipcAddress } from "./ipc.js";
 import { SessionPeer } from "./peer.js";
 import type { Envelope } from "./envelope.js";
+import { probeListPeers } from "../index.js";
 
 function tmpSock(): string {
   // Per-test unique IPC address. POSIX → a `.sock` file in a fresh tmpdir;
@@ -463,5 +465,79 @@ describe("ACK protocol (plan/25 Wave 0)", () => {
     expect(ackMessages.length).toBe(0);
 
     await orq.leave(); await a.leave(); await b.leave();
+  });
+
+  // ── `remote-pi peers` observer probe (read-only roster) ─────────────────────
+
+  test("unregistered list_peers probe returns the roster without joining", async () => {
+    const sock = tmpSock();
+    const orq = await makePeer(sock, "orq");
+    const backend = await makePeer(sock, "backend");
+    const broker = orq.localBroker()!;
+    broker.setRemoteRouter({
+      tryRouteOutbound: () => false,
+      listRemotePeers: () => ["casa:sess-9"],
+    });
+
+    // Sniff anything the registered peers receive, so we can prove the probe
+    // produced no peer_joined / peer_left noise on the mesh. Flush the genuine
+    // backend-join broadcast first so only probe-induced traffic remains.
+    const orqSystem: Envelope[] = [];
+    orq.onMessage((env) => { if (env.from === "broker") orqSystem.push(env); });
+    await wait(50);
+    orqSystem.length = 0;
+
+    const reply = await new Promise<Envelope>((resolve, reject) => {
+      const probe = createConnection({ path: sock });
+      let buf = "";
+      const timer = setTimeout(() => { probe.destroy(); reject(new Error("probe timeout")); }, 2000);
+      probe.setEncoding("utf8");
+      probe.on("connect", () => probe.write(JSON.stringify({ type: "list_peers" }) + "\n"));
+      probe.on("data", (chunk: string) => {
+        buf += chunk;
+        const nl = buf.indexOf("\n");
+        if (nl < 0) return;
+        clearTimeout(timer);
+        probe.destroy();
+        resolve(JSON.parse(buf.slice(0, nl)) as Envelope);
+      });
+      probe.on("error", reject);
+    });
+
+    const peers = (reply.body as { type: string; peers: string[] });
+    expect(peers.type).toBe("list_peers_reply");
+    expect(peers.peers).toEqual(expect.arrayContaining(["orq", "backend", "casa:sess-9"]));
+
+    // The probe must NOT have registered: roster unchanged, no observer leaked.
+    expect(broker.peerNames().sort()).toEqual(["backend", "orq"]);
+
+    // And no peer_joined/peer_left reached the real peers because of the probe.
+    await wait(50);
+    const joins = orqSystem.filter((e) => {
+      const b = e.body as { type?: string } | null;
+      return !!b && (b.type === "peer_joined" || b.type === "peer_left");
+    });
+    expect(joins.length).toBe(0);
+
+    broker.setRemoteRouter(null);
+    await orq.leave(); await backend.leave();
+  });
+
+  test("probeListPeers returns the roster against a live broker", async () => {
+    const sock = tmpSock();
+    const orq = await makePeer(sock, "orq");
+    const backend = await makePeer(sock, "backend");
+
+    const peers = await probeListPeers(sock);
+    expect(peers).not.toBeNull();
+    expect(peers!.sort()).toEqual(["backend", "orq"]);
+
+    await orq.leave(); await backend.leave();
+  });
+
+  test("probeListPeers resolves null when no broker is listening", async () => {
+    const sock = tmpSock();  // fresh path, nothing bound to it
+    const peers = await probeListPeers(sock, 500);
+    expect(peers).toBeNull();
   });
 });
