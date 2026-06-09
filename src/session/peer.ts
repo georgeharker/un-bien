@@ -266,7 +266,7 @@ export class SessionPeer {
     this.buf = "";
     sock.setEncoding("utf8");
     sock.on("data", (chunk: string) => this._onData(chunk));
-    sock.on("close", () => this._onSocketClose());
+    sock.on("close", () => this._onSocketClose(sock));
     sock.on("error", () => { /* close will follow */ });
   }
 
@@ -393,12 +393,21 @@ export class SessionPeer {
     this.socket.write(serialize(env));
   }
 
-  private async _onSocketClose(): Promise<void> {
+  private async _onSocketClose(closedSock: Socket): Promise<void> {
     if (this.leftFlag) return;  // intentional leave
+    // Only the CURRENT socket dying is a real failover. A close from a socket
+    // we've already replaced — `rename()` (teardown + rejoin) or a prior
+    // reconnect — must NOT trigger another `_joinOrLead`, or we'd double-
+    // register (the broker suffixes the second as `#N`) and leave an orphaned
+    // still-open socket as a ghost peer. `this.socket` is null mid-rename
+    // (teardown done, rejoin in flight) or already the new socket — either way
+    // `!== closedSock`, so we skip. Genuine leader death: `this.socket` is still
+    // the (now-closed) follower socket → identity matches → we re-elect.
+    if (this.socket !== closedSock) return;
     // Attempt to re-elect once. New leader will bind sockPath; we either
     // become leader ourselves or rejoin as follower.
     await delay(FAILOVER_RETRY_MS);
-    if (this.leftFlag) return;
+    if (this.leftFlag || this.socket !== closedSock) return;
     try {
       await this._joinOrLead();
       // The new broker's peers map starts fresh — consumers must re-query

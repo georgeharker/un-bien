@@ -2537,6 +2537,36 @@ describe("relay control channel + relay-state event", () => {
     await _handleControl("relay:toggle");
     expect(_getState()).toBe("idle");
   });
+
+  test("rename:<name> renames live (broker re-register + relay swap), process/session survive", async () => {
+    const sendMessage = vi.fn();
+    captureHandler("remote-pi");
+    _setPiForTest(makeSpyPi(sendMessage));
+    await _connectForTest(makeMockCtx());
+    expect(_getState()).toBe("started");
+    expect(_hasMeshNodeForTest()).toBe(true);
+
+    sendMessage.mockClear();
+    await _handleControl("rename:Renamed");
+
+    // The mesh node + relay survive (no process restart); relay back up.
+    expect(_hasMeshNodeForTest()).toBe(true);
+    expect(_getState()).toBe("started");
+    // Cockpit is told the new effective name via remote-pi:name-assigned.
+    const ev = sendMessage.mock.calls
+      .map((c) => c[0] as { customType?: string; display?: boolean; details?: Record<string, unknown> })
+      .reverse()
+      .find((m) => m?.customType === "remote-pi:name-assigned");
+    expect(ev).toBeDefined();
+    expect(ev!.display).toBe(false);
+    expect(ev!.details).toMatchObject({ requested: "Renamed", assigned: "Renamed", changed: false });
+  });
+
+  test("empty rename is a no-op", async () => {
+    captureHandler("remote-pi");
+    _setPiForTest(makeSpyPi(vi.fn()));
+    await expect(_handleControl("rename:")).resolves.toBeUndefined();
+  });
 });
 
 // ── multi-agent in the same folder: lock suffixes instead of refusing ──────────

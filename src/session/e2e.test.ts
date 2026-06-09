@@ -717,3 +717,29 @@ describe("plan/38 — (cwd, name) mesh addressing (e2e)", () => {
     await a.leave(); await sameFolder.leave(); await otherFolder.leave();
   });
 });
+
+// ── SessionPeer.rename: no duplicate / no ghost ───────────────────────────────
+
+describe("SessionPeer.rename (live rename)", () => {
+  test("renames in place — no `#N` duplicate, no stale old name (single rejoin)", async () => {
+    const sock = tmpSock();
+    const observer = await makePeer(sock, "observer");  // leader; used to query the roster
+    const p = await makePeer(sock, "alice");            // follower we rename
+    expect(p.name()).toBe("alice");
+
+    const assigned = await p.rename("bob");
+    expect(assigned).toBe("bob");
+    // Wait past FAILOVER_RETRY_MS (100ms): the old bug fired a spurious
+    // `_onSocketClose` → second `_joinOrLead` → "bob#2" + an orphaned "alice".
+    await wait(300);
+
+    const reply = await observer.request("broker", { type: "list_peers" });
+    const names = ((reply.body as { peers?: string[] }).peers ?? [])
+      .filter((x) => x === "alice" || x.startsWith("bob"));
+    expect(names).toEqual(["bob"]);  // exactly one, no ghost "alice", no "bob#2"
+
+    expect(p.name()).toBe("bob");
+    await p.leave();
+    await observer.leave();
+  });
+});

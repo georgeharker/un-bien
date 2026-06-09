@@ -350,6 +350,17 @@ export class MeshNode {
     return this.peer_.address();
   }
 
+  /**
+   * Rename this peer on the broker via a soft leave+rejoin (re-registers under
+   * `newName`; the broker may append a `#N` on collision — returns the assigned
+   * name). Keeps the process + onMessage handlers alive. Does NOT touch the
+   * cross-PC bridge or the relay room — the caller must cycle the relay so the
+   * App↔Pi room (keyed by `(cwd, name)`, plan/41) follows the new name.
+   */
+  async rename(newName: string): Promise<string> {
+    return this.peer_.rename(newName);
+  }
+
   /** "leader" | "follower". */
   currentRole(): "leader" | "follower" {
     return this.peer_.currentRole();
