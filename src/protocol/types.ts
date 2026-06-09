@@ -9,6 +9,8 @@ export type ClientMessage =
   // Plan/30: optional `images` carry inline base64 attachments (one today).
   // Omitted entirely on text-only messages — the no-image path is unchanged.
   | { type: "user_message"; id: string; text: string; images?: WireImage[] }
+  | { type: "queued_message_set"; id: string; text: string }
+  | { type: "queued_message_clear"; id: string }
   | { type: "approve_tool"; id: string; tool_call_id: string; decision: "allow" | "deny" }
   | { type: "cancel"; id: string; target_id: string }
   | { type: "ping"; id: string }
@@ -115,6 +117,7 @@ export type ServerMessage =
   // future dedup logic use id as a stable key). See plan/24 W2D fix.
   // Plan/30: `images` echoed back so every owner renders the same image bubble.
   | { type: "user_message"; id: string; text: string; images?: WireImage[] }
+  | { type: "queued_message_state"; id?: string; text?: string }
   | { type: "agent_chunk"; in_reply_to: string; delta: string }
   | { type: "agent_done"; in_reply_to: string; usage?: Usage }
   | { type: "agent_message"; in_reply_to: string; text: string; usage?: Usage }

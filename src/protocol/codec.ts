@@ -4,6 +4,7 @@ const SERVER_TYPES = new Set<ServerMessage["type"]>([
   "pair_ok",
   "pair_error",
   "user_input",
+  "queued_message_state",
   "agent_chunk",
   "agent_done",
   "agent_message",
