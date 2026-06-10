@@ -1,5 +1,7 @@
 import { ChildProcess, execFileSync, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { DaemonState } from "./control_protocol.js";
 import { defaultAgentName, loadLocalConfig, type LocalConfig } from "../session/local_config.js";
 
@@ -52,6 +54,12 @@ export interface RpcChildExitEvent {
 
 export const EXIT_DAEMON_FRESH_SESSION = 42;
 
+/** Windows extensions `spawn` (without `shell`) can actually launch, in
+ *  preference order: native `.exe` first, then the `.cmd`/`.bat` shims (run via
+ *  cmd.exe). An extensionless `pi` is a Unix shell script Node CANNOT spawn on
+ *  Windows — picking it yields `spawn … ENOENT` and the daemon shows "crashed". */
+const WIN_EXECUTABLE_EXTS = [".exe", ".cmd", ".bat", ".com"];
+
 /**
  * Resolve the `pi` executable for `spawn` (plan/40, decision C). On Windows a
  * bare `pi` is actually `pi.cmd`/`pi.ps1`, and `spawn` won't find it without an
@@ -59,18 +67,72 @@ export const EXIT_DAEMON_FRESH_SESSION = 42;
  * which risks shell injection). An explicit path or an already-suffixed name is
  * used as-is. POSIX returns the name unchanged. Best-effort: if `where` fails,
  * fall back to the bare name (spawn will surface ENOENT honestly).
+ *
+ * `where` lists every match in PATH order, which on pi-node installs puts the
+ * extensionless `pi` (a shell script) BEFORE `pi.cmd`. Naively taking the first
+ * line spawns the unrunnable script → ENOENT → "crashed". So we prefer a result
+ * with a real Windows executable extension and only fall back to the first line.
  */
 export function resolvePiBin(piBin: string, plat: NodeJS.Platform = process.platform): string {
   if (plat !== "win32") return piBin;
   if (piBin.includes("\\") || piBin.includes("/") || /\.[a-z0-9]+$/i.test(piBin)) return piBin;
   try {
     const out = execFileSync("where", [piBin], { encoding: "utf8" });
-    const first = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)[0];
-    if (first) return first;
+    const lines = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const runnable = lines.find((l) =>
+      WIN_EXECUTABLE_EXTS.some((ext) => l.toLowerCase().endsWith(ext)),
+    );
+    const chosen = runnable ?? lines[0];
+    if (chosen) return chosen;
   } catch {
     /* `where` unavailable or `pi` not found — fall back to the bare name */
   }
   return piBin;
+}
+
+/** What to pass to `spawn`: the executable and any args to prepend before the
+ *  caller's args. On POSIX (and for `.exe`) `prefixArgs` is empty. */
+export interface PiSpawnTarget { command: string; prefixArgs: string[] }
+
+/**
+ * Resolve `pi` to a directly-spawnable target (plan/40). On Windows `pi` is an
+ * npm `.cmd` shim, which modern Node refuses to `spawn` without `shell:true`
+ * (EINVAL, post CVE-2024-27980). Wrapping it in `cmd.exe` would (a) add a layer
+ * that orphans the real `node` on kill and (b) complicate stdio — both fatal for
+ * a long-lived RPC daemon the supervisor must stop/restart cleanly. Instead we
+ * parse the shim to recover the underlying `node <cli.js>` and spawn that
+ * directly: one process, clean signals, clean stdio.
+ *
+ * Falls back to the bare resolved path when not a parseable shim (e.g. a real
+ * `pi.exe`, or POSIX) so `spawn` surfaces any real error honestly.
+ */
+export function resolvePiSpawn(
+  piBin: string,
+  plat: NodeJS.Platform = process.platform,
+  nodeExe: string = process.execPath,
+): PiSpawnTarget {
+  const resolved = resolvePiBin(piBin, plat);
+  if (plat !== "win32") return { command: resolved, prefixArgs: [] };
+  if (/\.(cmd|bat)$/i.test(resolved)) {
+    const target = _npmShimTarget(resolved);
+    if (target) return { command: nodeExe, prefixArgs: [target] };
+  }
+  return { command: resolved, prefixArgs: [] };
+}
+
+/**
+ * Extract the JS entry an npm `.cmd` shim launches. npm shims invoke
+ * `"%_prog%"  "%dp0%\<relative>\entry.js" %*`; we recover `<dir>\<relative>\entry.js`
+ * (dir = the shim's own folder, i.e. `%dp0%`). Returns null when the shim
+ * doesn't match the expected shape or the target is missing.
+ */
+export function _npmShimTarget(cmdPath: string): string | null {
+  let content: string;
+  try { content = readFileSync(cmdPath, "utf8"); } catch { return null; }
+  const m = content.match(/"%dp0%\\([^"]+\.[cm]?js)"/i);
+  if (!m) return null;
+  const target = join(dirname(cmdPath), m[1]);
+  return existsSync(target) ? target : null;
 }
 
 /**
@@ -193,7 +255,7 @@ export class RpcChild extends EventEmitter {
     this._busy = false;
     this._state = "starting";
 
-    const piBin = resolvePiBin(this.opts.piBin ?? "pi");
+    const piTarget = resolvePiSpawn(this.opts.piBin ?? "pi");
     // Name the (single) daemon session after the daemon's configured identity,
     // so it shows up stably instead of an auto-generated name on each restart.
     // Prefer the supervisor-injected config; fall back to the on-disk file.
@@ -201,7 +263,9 @@ export class RpcChild extends EventEmitter {
     const sessionName = cfg.agent_name ?? defaultAgentName(this.opts.cwd);
     const useContinue = !this.forceFreshSessionOnNextSpawn;
     this.forceFreshSessionOnNextSpawn = false;
-    const args = rpcSpawnArgs(this.opts.extensionPath, sessionName, useContinue);
+    // On Windows `prefixArgs` carries pi's cli.js (we spawn node directly); on
+    // POSIX it's empty and `command` is `pi` itself.
+    const args = [...piTarget.prefixArgs, ...rpcSpawnArgs(this.opts.extensionPath, sessionName, useContinue)];
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       ...this.opts.env,
@@ -212,10 +276,15 @@ export class RpcChild extends EventEmitter {
       ...(this.opts.config ? { REMOTE_PI_DIRECT_CONFIG: JSON.stringify(this.opts.config) } : {}),
     };
 
-    const child = spawn(piBin, args, {
+    const child = spawn(piTarget.command, args, {
       cwd: this.opts.cwd,
       env,
       stdio: ["pipe", "pipe", "pipe"],
+      // Windows: suppress any console window the child might allocate. With the
+      // node+cli.js path (resolvePiSpawn) there's no cmd.exe layer, but keep this
+      // as belt-and-suspenders alongside the supervisor's hidden wscript launcher
+      // (service-templates/task-launcher.vbs.template). No-op on POSIX.
+      windowsHide: process.platform === "win32",
     });
     this.child = child;
     this._startedAt = Date.now();

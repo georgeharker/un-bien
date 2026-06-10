@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { delimiter } from "node:path";
-import { homedir, platform, userInfo } from "node:os";
+import { homedir, platform, tmpdir, userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -83,7 +83,7 @@ export function findNodeBinary(): string {
   return process.execPath;
 }
 
-export function findTemplate(name: "systemd" | "launchd" | "taskscheduler"): string {
+export function findTemplate(name: "systemd" | "launchd" | "taskscheduler" | "vbs-launcher"): string {
   // Templates ship next to the compiled `dist/` (via `files` in package.json).
   // From `dist/daemon/install.js` go up two levels and into
   // `service-templates/`. In the published npm tarball the layout is the
@@ -93,6 +93,7 @@ export function findTemplate(name: "systemd" | "launchd" | "taskscheduler"): str
   const file =
     name === "systemd" ? "systemd.service.template" :
     name === "launchd" ? "launchd.plist.template" :
+    name === "vbs-launcher" ? "task-launcher.vbs.template" :
     "task-scheduler.xml.template";
   return resolve(pkgRoot, "service-templates", file);
 }
@@ -118,6 +119,25 @@ export function taskXmlPath(): string {
   return join(homedir(), ".pi", "remote", "RemotePiSupervisor.xml");
 }
 
+/**
+ * Path of the rendered VBScript launcher the Task Scheduler action invokes
+ * via `wscript.exe` (plan/40, Windows). Launching node through this hidden
+ * wrapper is what keeps the supervisor from flashing a console window.
+ */
+export function vbsLauncherPath(): string {
+  return join(homedir(), ".pi", "remote", "RemotePiSupervisorLauncher.vbs");
+}
+
+/**
+ * Combined stdout/stderr log for the Windows supervisor. The Task Scheduler
+ * launches it hidden via wscript, so without this redirect its output (and the
+ * forwarded daemon-child stderr) would vanish — mirrors launchd/systemd, which
+ * already log to `~/.pi/remote/supervisord.log`.
+ */
+export function supervisordLogPath(): string {
+  return join(homedir(), ".pi", "remote", "supervisord.log");
+}
+
 // ── Template rendering ─────────────────────────────────────────────────────
 
 export interface RenderVars {
@@ -128,6 +148,12 @@ export interface RenderVars {
   /** PATH inherited so `pi --mode rpc` resolves the same way it does
    *  interactively. We snapshot `process.env.PATH` at install time. */
   path: string;
+  /** Windows only: absolute path of the VBScript launcher the Task Scheduler
+   *  action runs via `wscript.exe`. Empty on POSIX (templates ignore `{VBS}`). */
+  vbs: string;
+  /** Windows only: combined stdout/stderr log the hidden supervisor appends to.
+   *  Empty on POSIX (templates ignore `{LOG}`). */
+  logPath: string;
 }
 
 export function defaultRenderVars(): RenderVars {
@@ -137,17 +163,21 @@ export function defaultRenderVars(): RenderVars {
     home: homedir(),
     user: userInfo().username,
     path: process.env["PATH"] ?? "/usr/local/bin:/usr/bin:/bin",
+    vbs: vbsLauncherPath(),
+    logPath: supervisordLogPath(),
   };
 }
 
-/** Replace `{NODE}` / `{SUPERVISOR}` / `{USER}` / `{HOME}` / `{PATH}`. */
+/** Replace `{NODE}` / `{SUPERVISOR}` / `{USER}` / `{HOME}` / `{PATH}` / `{VBS}` / `{LOG}`. */
 export function renderTemplate(template: string, vars: RenderVars): string {
   return template
     .replace(/\{NODE\}/g, vars.node)
     .replace(/\{SUPERVISOR\}/g, vars.supervisor)
     .replace(/\{USER\}/g, vars.user)
     .replace(/\{HOME\}/g, vars.home)
-    .replace(/\{PATH\}/g, vars.path);
+    .replace(/\{PATH\}/g, vars.path)
+    .replace(/\{VBS\}/g, vars.vbs)
+    .replace(/\{LOG\}/g, vars.logPath);
 }
 
 // ── Install / uninstall API ────────────────────────────────────────────────
@@ -171,7 +201,7 @@ export function installService(vars: RenderVars = defaultRenderVars()): InstallR
   const log: string[] = [];
 
   if (plat === "unsupported") {
-    throw new Error(`unsupported platform: ${platform()}. Only macOS and Linux.`);
+    throw new Error(`unsupported platform: ${platform()}. Only macOS, Linux, and Windows.`);
   }
 
   // Sanity: supervisor script must exist on disk.
@@ -217,12 +247,27 @@ export function installService(vars: RenderVars = defaultRenderVars()): InstallR
     _exec("systemctl", ["--user", "enable", "--now", "remote-pi-supervisord.service"], log);
     log.push("activated via systemctl --user enable --now");
   } else {
-    // windows — Task Scheduler (plan/40). End any prior instance, (re)create
-    // the task from the rendered XML (user-level, restart-on-failure), run now.
+    // windows — Task Scheduler (plan/40). The action runs `wscript.exe
+    // <launcher.vbs>` (not node directly) so the supervisor starts hidden,
+    // with no console window. Render + write that launcher first.
+    const vbsTpl = findTemplate("vbs-launcher");
+    if (!existsSync(vbsTpl)) throw new Error(`vbs launcher template missing: ${vbsTpl}`);
+    const vbsPath = vars.vbs;
+    writeFileSync(vbsPath, renderTemplate(readFileSync(vbsTpl, "utf8"), vars));
+    log.push(`wrote ${vbsPath}`);
+
+    // Only `schtasks /Create` modifies the root task store → that single op
+    // needs admin (elevate it via UAC). `/End` (stop a prior instance) and
+    // `/Run` (start it) act on a task we already own and work un-elevated — the
+    // very ops `remote-pi restart-supervisor` runs without elevation. Keeping
+    // them un-elevated narrows the admin surface to the one operation that
+    // truly requires it.
     _tryExec("schtasks", ["/End", "/TN", WINDOWS_TASK_NAME], log);
-    _exec("schtasks", ["/Create", "/XML", unitPath, "/TN", WINDOWS_TASK_NAME, "/F"], log);
+    _execElevatedWindows([
+      `schtasks /Create /XML "${unitPath}" /TN ${WINDOWS_TASK_NAME} /F`,
+    ], log);
     _exec("schtasks", ["/Run", "/TN", WINDOWS_TASK_NAME], log);
-    log.push(`activated via schtasks /Create + /Run (${WINDOWS_TASK_NAME})`);
+    log.push(`activated via schtasks /Create (elevated) + /Run (${WINDOWS_TASK_NAME})`);
   }
 
   return { platform: plat, unitPath, log };
@@ -240,7 +285,7 @@ export function uninstallService(): UninstallResult {
   const log: string[] = [];
 
   if (plat === "unsupported") {
-    throw new Error(`unsupported platform: ${platform()}. Only macOS and Linux.`);
+    throw new Error(`unsupported platform: ${platform()}. Only macOS, Linux, and Windows.`);
   }
 
   const unitPath = plat === "macos" ? launchdPlistPath() : plat === "linux" ? systemdUnitPath() : taskXmlPath();
@@ -254,16 +299,32 @@ export function uninstallService(): UninstallResult {
     _tryExec("systemctl", ["--user", "disable", "--now", "remote-pi-supervisord.service"], log);
     log.push("deactivated via systemctl --user disable --now");
   } else {
-    // windows — Task Scheduler (plan/40): stop + delete the task.
+    // windows — Task Scheduler (plan/40): stop + delete the task. Only
+    // `/Delete` modifies the root task store → that's the op that needs admin.
+    // `/End` stops the running task and works un-elevated (own task), like
+    // restart-supervisor. `exit /b 0` keeps uninstall best-effort: a missing
+    // task (already removed) is success, not an error.
     _tryExec("schtasks", ["/End", "/TN", WINDOWS_TASK_NAME], log);
-    _tryExec("schtasks", ["/Delete", "/TN", WINDOWS_TASK_NAME, "/F"], log);
-    log.push(`deactivated via schtasks /Delete (${WINDOWS_TASK_NAME})`);
+    _execElevatedWindows([
+      `schtasks /Delete /TN ${WINDOWS_TASK_NAME} /F`,
+      `exit /b 0`,
+    ], log);
+    log.push(`deactivated via elevated schtasks /Delete (${WINDOWS_TASK_NAME})`);
   }
 
   let removed = false;
   if (existsSync(unitPath)) {
     try { unlinkSync(unitPath); removed = true; log.push(`removed ${unitPath}`); }
     catch (e) { log.push(`failed to remove ${unitPath}: ${String(e)}`); }
+  }
+
+  // Windows: also drop the hidden VBScript launcher we wrote alongside the XML.
+  if (plat === "windows") {
+    const vbsPath = vbsLauncherPath();
+    if (existsSync(vbsPath)) {
+      try { unlinkSync(vbsPath); log.push(`removed ${vbsPath}`); }
+      catch (e) { log.push(`failed to remove ${vbsPath}: ${String(e)}`); }
+    }
   }
 
   if (plat === "linux") {
@@ -296,6 +357,71 @@ function _exec(cmd: string, args: string[], log: string[]): void {
  *  is expected (e.g., "unload" before "load" when nothing was loaded). */
 function _tryExec(cmd: string, args: string[], log: string[]): void {
   try { _exec(cmd, args, log); } catch { /* expected, suppress */ }
+}
+
+// ── Windows elevation (plan/40) ────────────────────────────────────────────
+//
+// `schtasks /Create` and `/Delete` register/remove the task in the root folder,
+// which requires administrator rights. We can't elevate the current Node
+// process, so we render the schtasks sequence into a temp `.cmd`, run it
+// through an elevated `cmd.exe` via PowerShell `Start-Process -Verb RunAs`
+// (one UAC prompt), and read the output back from a log file the script
+// redirects into.
+
+/**
+ * Build the batch script run elevated. Each command line redirects its output
+ * to `logFile` so the (separate, elevated) process's output can be read back by
+ * the parent. Control-flow lines (`if`/`exit`/`rem`/`@`) run bare — redirecting
+ * them would swallow the exit code. Pure + exported for tests.
+ */
+export function buildElevatedCmd(lines: string[], logFile: string): string {
+  const redirect = ` >> "${logFile}" 2>&1`;
+  const body = lines.map((ln) =>
+    /^\s*(if|exit|rem|@)/i.test(ln) ? ln : ln + redirect,
+  );
+  return ["@echo off", ...body].join("\r\n") + "\r\n";
+}
+
+function _readIfExists(p: string): string {
+  try { return readFileSync(p, "utf8"); } catch { return ""; }
+}
+
+/**
+ * Run a schtasks command sequence elevated (UAC). Throws a clear error when the
+ * prompt is declined or the task operation fails (`Start-Process -Verb RunAs`
+ * throws → PowerShell exits non-zero → `execFileSync` throws). Captured schtasks
+ * output is appended to `log` either way.
+ */
+function _execElevatedWindows(lines: string[], log: string[]): void {
+  const base = join(tmpdir(), `remote-pi-elevate-${process.pid}`);
+  const cmdPath = `${base}.cmd`;
+  const logFile = `${base}.log`;
+  writeFileSync(cmdPath, buildElevatedCmd(lines, logFile));
+  try { unlinkSync(logFile); } catch { /* none yet */ }
+
+  let thrown: unknown = null;
+  try {
+    execFileSync("powershell", [
+      "-NoProfile", "-NonInteractive", "-Command",
+      `$p = Start-Process -FilePath cmd.exe -ArgumentList '/c','"${cmdPath}"' ` +
+      "-Verb RunAs -Wait -PassThru -WindowStyle Hidden; exit $p.ExitCode",
+    ], { stdio: ["ignore", "pipe", "pipe"] });
+  } catch (e) {
+    thrown = e;
+  }
+
+  const out = _readIfExists(logFile).trim();
+  if (out) log.push(out);
+  try { unlinkSync(cmdPath); } catch { /* best-effort */ }
+  try { unlinkSync(logFile); } catch { /* best-effort */ }
+
+  if (thrown) {
+    throw new Error(
+      "administrator privileges required — the UAC prompt was declined or the " +
+      "schtasks operation failed. Run the command again and accept the Windows " +
+      `elevation prompt.${out ? `\n${out}` : ""}`,
+    );
+  }
 }
 
 // ── CLI bin linking (plan/27) ─────────────────────────────────────────────────
@@ -359,19 +485,15 @@ export function isOnPath(dir: string, envPath: string = process.env["PATH"] ?? "
 export function linkCliBinaries(
   home: string = homedir(),
   paths: { remotePi?: string; supervisord?: string } = {},
+  opts: { node?: string; mutatePath?: boolean } = {},
 ): LinkBinariesResult {
   const binDir = userLocalBinDir(home);
 
-  // Windows (plan/40): no POSIX symlinks / `~/.local/bin`. The supported path
-  // is `npm install -g remote-pi`, which provides the `remote-pi` /
-  // `pi-supervisord` command shims (`.cmd`) on PATH. Skip linking, don't fail.
+  // Windows (plan/40): no POSIX symlinks. Installing via Pi (`pi install
+  // npm:remote-pi`) never reaches PATH, so write real `.cmd` shims into
+  // `~/.local/bin` and add that dir to the user's PATH (HKCU — no admin).
   if (platform() === "win32") {
-    return {
-      binDir,
-      links: [],
-      onPath: true,
-      log: ["Windows: skipping CLI symlinks — `npm install -g remote-pi` provides the command shims."],
-    };
+    return _linkCliBinariesWindows(home, binDir, paths, opts);
   }
 
   const log: string[] = [];
@@ -422,6 +544,88 @@ export function linkCliBinaries(
 }
 
 /**
+ * Windows variant of `linkCliBinaries`: writes `remote-pi.cmd` +
+ * `pi-supervisord.cmd` shims into `~/.local/bin` and ensures that dir is on the
+ * user's PATH (User scope — no admin). `opts.node` overrides the node binary
+ * (tests); `opts.mutatePath === false` skips the real PATH mutation (tests).
+ */
+function _linkCliBinariesWindows(
+  home: string,
+  binDir: string,
+  paths: { remotePi?: string; supervisord?: string },
+  opts: { node?: string; mutatePath?: boolean },
+): LinkBinariesResult {
+  void home;
+  const log: string[] = [];
+  mkdirSync(binDir, { recursive: true });
+  log.push(`ensured ${binDir}`);
+
+  const node = opts.node ?? findNodeBinary();
+  const remotePi = paths.remotePi ?? findRemotePiScript();
+  const supervisord = paths.supervisord ?? findSupervisorScript();
+  if (!existsSync(remotePi)) {
+    throw new Error(
+      `remote-pi script not found at ${remotePi}. ` +
+      "Run `pnpm build` (dev) or reinstall the extension.",
+    );
+  }
+  if (!existsSync(supervisord)) {
+    throw new Error(
+      `supervisor script not found at ${supervisord}. ` +
+      "Run `pnpm build` (dev) or reinstall the extension.",
+    );
+  }
+
+  const links: LinkBinariesResult["links"] = [
+    { name: "remote-pi.cmd",      path: join(binDir, "remote-pi.cmd"),      target: remotePi },
+    { name: "pi-supervisord.cmd", path: join(binDir, "pi-supervisord.cmd"), target: supervisord },
+  ];
+  for (const link of links) {
+    writeFileSync(link.path, buildCmdShim(node, link.target));
+    log.push(`wrote ${link.path}`);
+  }
+
+  const onPath = isOnPath(binDir);
+  if (!onPath && opts.mutatePath !== false) {
+    try {
+      _addUserPath(binDir);
+      log.push(`added ${binDir} to your user PATH — open a NEW terminal for \`remote-pi\` to resolve.`);
+    } catch (e) {
+      log.push(
+        `WARNING: ${binDir} is not on PATH and auto-add failed (${String(e)}). ` +
+        `Add it manually: setx PATH "%PATH%;${binDir}"`,
+      );
+    }
+  }
+
+  return { binDir, links, onPath, log };
+}
+
+/** A Windows `.cmd` shim that forwards all args to `node "<target>"`. Pure. */
+export function buildCmdShim(node: string, target: string): string {
+  return `@echo off\r\n"${node}" "${target}" %*\r\n`;
+}
+
+/**
+ * Append `dir` to the User-scope PATH via PowerShell (HKCU\Environment — no
+ * admin). Idempotent: skips when `dir` is already an exact PATH segment. Single-
+ * quoted PS literal (backslashes are literal in PS single quotes) with embedded
+ * `'` doubled.
+ */
+function _addUserPath(dir: string): void {
+  const lit = `'${dir.replace(/'/g, "''")}'`;
+  execFileSync("powershell", [
+    "-NoProfile", "-NonInteractive", "-Command",
+    `$d = ${lit}; ` +
+    "$p = [Environment]::GetEnvironmentVariable('Path','User'); " +
+    "if (-not $p) { $p = '' }; " +
+    "$parts = $p.Split(';') | Where-Object { $_ -ne '' }; " +
+    "if ($parts -notcontains $d) { " +
+    "[Environment]::SetEnvironmentVariable('Path', (($parts + $d) -join ';'), 'User') }",
+  ], { stdio: ["ignore", "pipe", "pipe"] });
+}
+
+/**
  * Remove the symlinks `linkCliBinaries` created. Idempotent — missing
  * links are a no-op. Returns whether each link was actually present so
  * the caller can render a useful summary. Targets (the extension files)
@@ -436,7 +640,11 @@ export interface UnlinkBinariesResult {
 export function unlinkCliBinaries(home: string = homedir()): UnlinkBinariesResult {
   const binDir = userLocalBinDir(home);
   const log: string[] = [];
-  const names = ["remote-pi", "pi-supervisord"];
+  // Windows shims are `.cmd` files (linkCliBinaries writes those); POSIX uses
+  // extensionless symlinks. Match what was actually created on this platform.
+  const names = platform() === "win32"
+    ? ["remote-pi.cmd", "pi-supervisord.cmd"]
+    : ["remote-pi", "pi-supervisord"];
   const removed: UnlinkBinariesResult["removed"] = [];
 
   for (const name of names) {

@@ -23,7 +23,7 @@
     <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
     <Enabled>true</Enabled>
-    <Hidden>false</Hidden>
+    <Hidden>true</Hidden>
     <RestartOnFailure>
       <Interval>PT1M</Interval>
       <Count>999</Count>
@@ -31,8 +31,8 @@
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>{NODE}</Command>
-      <Arguments>"{SUPERVISOR}"</Arguments>
+      <Command>wscript.exe</Command>
+      <Arguments>"{VBS}"</Arguments>
     </Exec>
   </Actions>
 </Task>

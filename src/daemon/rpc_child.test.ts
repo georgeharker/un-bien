@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RpcChild, busyTransition, resolvePiBin, rpcSpawnArgs, type RpcChildExitEvent } from "./rpc_child.js";
+import { RpcChild, busyTransition, resolvePiBin, resolvePiSpawn, _npmShimTarget, rpcSpawnArgs, type RpcChildExitEvent } from "./rpc_child.js";
 
 /**
  * Regression for the orphaned-daemon bug: a deliberate `stop()` kills the
@@ -79,6 +79,67 @@ describe("resolvePiBin (plan/40 — Windows pi.cmd)", () => {
   });
   // The bare-`pi`-on-win32 lookup uses `where` (Windows-only); not unit-tested
   // here (no `where` on the POSIX dev host) — covered by the real Windows smoke.
+});
+
+describe("_npmShimTarget (plan/40 — parse the .cmd shim)", () => {
+  let tmp: string;
+  afterEach(() => { if (tmp) rmSync(tmp, { recursive: true, force: true }); });
+
+  test("recovers the cli.js the npm shim launches (relative to the shim dir)", () => {
+    tmp = mkdtempSync(join(tmpdir(), "pi-shim-"));
+    // Mimic the npm-generated shim layout: <dir>\pi.cmd + <dir>\node_modules\…\cli.js
+    const rel = join("node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js");
+    const target = join(tmp, rel);
+    require("node:fs").mkdirSync(join(target, ".."), { recursive: true });
+    writeFileSync(target, "// cli\n");
+    const shim = join(tmp, "pi.cmd");
+    // The relevant line of a real npm cmd shim (forward-slash dp0 segment varies;
+    // the launcher always quotes "%dp0%\<relative>").
+    writeFileSync(shim, `@ECHO off\r\n"%_prog%"  "%dp0%\\${rel}" %*\r\n`);
+    expect(_npmShimTarget(shim)).toBe(target);
+  });
+
+  test("returns null when the shim doesn't match / target missing", () => {
+    tmp = mkdtempSync(join(tmpdir(), "pi-shim-"));
+    const shim = join(tmp, "weird.cmd");
+    writeFileSync(shim, "@echo off\r\necho nope\r\n");
+    expect(_npmShimTarget(shim)).toBeNull();
+    // points at a non-existent target → null (don't hand spawn a bad path)
+    const shim2 = join(tmp, "pi.cmd");
+    writeFileSync(shim2, `"%_prog%" "%dp0%\\does-not-exist.js" %*\r\n`);
+    expect(_npmShimTarget(shim2)).toBeNull();
+  });
+});
+
+describe("resolvePiSpawn (plan/40 — directly-spawnable target)", () => {
+  test("POSIX → command is pi, no prefix args", () => {
+    expect(resolvePiSpawn("pi", "linux")).toEqual({ command: "pi", prefixArgs: [] });
+    expect(resolvePiSpawn("/usr/bin/pi", "darwin")).toEqual({ command: "/usr/bin/pi", prefixArgs: [] });
+  });
+
+  test("Windows .cmd shim → spawn node + parsed cli.js (no cmd.exe layer)", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "pi-spawn-"));
+    try {
+      const rel = join("node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js");
+      const target = join(tmp, rel);
+      require("node:fs").mkdirSync(join(target, ".."), { recursive: true });
+      writeFileSync(target, "// cli\n");
+      const shim = join(tmp, "pi.cmd");
+      writeFileSync(shim, `"%_prog%" "%dp0%\\${rel}" %*\r\n`);
+      const r = resolvePiSpawn(shim, "win32", "C:\\node\\node.exe");
+      expect(r.command).toBe("C:\\node\\node.exe");
+      expect(r.prefixArgs).toEqual([target]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("Windows explicit .exe → used as-is, no prefix args", () => {
+    expect(resolvePiSpawn("C:\\tools\\pi.exe", "win32")).toEqual({
+      command: "C:\\tools\\pi.exe",
+      prefixArgs: [],
+    });
+  });
 });
 
 describe("busyTransition (stream markers)", () => {

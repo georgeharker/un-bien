@@ -7,6 +7,8 @@ import { basename, dirname, isAbsolute, join } from "node:path";
  *  Windows (symlinks/`~/.local/bin`, systemd, launchd). */
 const posixOnly = process.platform === "win32";
 import {
+  buildCmdShim,
+  buildElevatedCmd,
   defaultRenderVars,
   detectPlatform,
   findNodeBinary,
@@ -20,6 +22,7 @@ import {
   systemdUnitPath,
   unlinkCliBinaries,
   userLocalBinDir,
+  vbsLauncherPath,
 } from "./install.js";
 
 /**
@@ -79,11 +82,29 @@ describe("findTemplate", () => {
     expect(content).toContain("<Task ");
     expect(content).toContain("<LogonTrigger>");
     expect(content).toContain("<RestartOnFailure>");
-    expect(content).toContain("{NODE}");
-    expect(content).toContain("{SUPERVISOR}");
+    // {NODE}/{SUPERVISOR} now live in the VBS launcher, not the XML — the XML's
+    // action invokes wscript.exe with {VBS} (asserted below).
     // Must declare UTF-16 to match the UTF-16LE+BOM bytes install.ts writes —
     // schtasks /Create /XML rejects a mismatch ("unable to switch the encoding").
     expect(content).toContain('encoding="UTF-16"');
+    // The action runs the hidden VBScript launcher (plan/40), not node directly,
+    // so the supervisor starts with no console window.
+    expect(content).toContain("wscript.exe");
+    expect(content).toContain("{VBS}");
+    expect(content).toContain("<Hidden>true</Hidden>");
+  });
+
+  test("vbs-launcher (Windows) template file exists on disk (plan/40)", () => {
+    const p = findTemplate("vbs-launcher");
+    expect(p.endsWith("task-launcher.vbs.template")).toBe(true);
+    const content = readFileSync(p, "utf8");
+    // Hidden window (style 0), wait=True, propagate exit code, tee to {LOG}.
+    expect(content).toContain(".Run(");
+    expect(content).toContain("WScript.Quit");
+    expect(content).toContain("cmd /c");
+    expect(content).toContain("{NODE}");
+    expect(content).toContain("{SUPERVISOR}");
+    expect(content).toContain("{LOG}");
   });
 });
 
@@ -94,6 +115,8 @@ describe("renderTemplate", () => {
     home: "/Users/x",
     user: "jacob",
     path: "/usr/local/bin:/usr/bin:/bin",
+    vbs: "/Users/x/.pi/remote/RemotePiSupervisorLauncher.vbs",
+    logPath: "/Users/x/.pi/remote/supervisord.log",
   };
 
   test("substitutes every placeholder in systemd template", () => {
@@ -131,6 +154,66 @@ describe("renderTemplate", () => {
     // And the value appears more than once (logs + EnvironmentVariables).
     const matches = out.match(new RegExp(vars.home.replace(/[/.]/g, "\\$&"), "g"));
     expect(matches && matches.length > 1).toBe(true);
+  });
+
+  test("substitutes {VBS} in the task-scheduler template, action calls wscript", () => {
+    const tpl = readFileSync(findTemplate("taskscheduler"), "utf8");
+    const out = renderTemplate(tpl, vars);
+    expect(out).not.toContain("{VBS}");
+    expect(out).toContain(vars.vbs);
+    // {NODE}/{SUPERVISOR} no longer appear in the XML — they moved to the VBS.
+    expect(out).not.toContain("{NODE}");
+    expect(out).not.toContain("{SUPERVISOR}");
+  });
+
+  test("substitutes {NODE}/{SUPERVISOR}/{LOG} in the vbs-launcher template", () => {
+    const tpl = readFileSync(findTemplate("vbs-launcher"), "utf8");
+    const out = renderTemplate(tpl, vars);
+    expect(out).not.toContain("{NODE}");
+    expect(out).not.toContain("{SUPERVISOR}");
+    expect(out).not.toContain("{LOG}");
+    expect(out).toContain(vars.node);
+    expect(out).toContain(vars.supervisor);
+    expect(out).toContain(vars.logPath);
+  });
+});
+
+describe("vbsLauncherPath", () => {
+  test("is absolute and ends with the launcher .vbs under ~/.pi/remote", () => {
+    const p = vbsLauncherPath();
+    expect(isAbsolute(p)).toBe(true);
+    expect(p.endsWith("RemotePiSupervisorLauncher.vbs")).toBe(true);
+    expect(p.endsWith(join(".pi", "remote", "RemotePiSupervisorLauncher.vbs"))).toBe(true);
+  });
+});
+
+describe("buildCmdShim", () => {
+  test("forwards all args to node with quoted node + target", () => {
+    const shim = buildCmdShim("C:\\node\\node.exe", "C:\\ext\\dist\\index.js");
+    expect(shim).toContain('@echo off');
+    expect(shim).toContain('"C:\\node\\node.exe" "C:\\ext\\dist\\index.js" %*');
+    expect(shim.endsWith("\r\n")).toBe(true);
+  });
+});
+
+describe("buildElevatedCmd", () => {
+  test("redirects schtasks lines to the log but leaves control-flow bare", () => {
+    const out = buildElevatedCmd(
+      [
+        "schtasks /End /TN RemotePiSupervisor",
+        "schtasks /Create /XML \"x.xml\" /TN RemotePiSupervisor /F",
+        "if errorlevel 1 exit /b 1",
+        "schtasks /Run /TN RemotePiSupervisor",
+      ],
+      "C:\\Temp\\out.log",
+    );
+    expect(out.startsWith("@echo off\r\n")).toBe(true);
+    // schtasks lines get the redirect…
+    expect(out).toContain('schtasks /End /TN RemotePiSupervisor >> "C:\\Temp\\out.log" 2>&1');
+    expect(out).toContain('schtasks /Run /TN RemotePiSupervisor >> "C:\\Temp\\out.log" 2>&1');
+    // …control flow does NOT (redirecting it would swallow the exit code).
+    expect(out).toContain("if errorlevel 1 exit /b 1\r\n");
+    expect(out).not.toContain('exit /b 1 >> ');
   });
 });
 
@@ -276,5 +359,61 @@ describe.skipIf(posixOnly)("linkCliBinaries / unlinkCliBinaries", () => {
       // The target file (the actual dist/index.js etc) still exists.
       expect(existsSync(link.target)).toBe(true);
     }
+  });
+});
+
+// Windows variant (plan/40): real `.cmd` shims, not symlinks. `mutatePath:false`
+// keeps the test from touching the real user PATH; `node` is injected so the
+// shim contents are deterministic.
+describe.skipIf(!posixOnly)("linkCliBinaries / unlinkCliBinaries (Windows .cmd shims)", () => {
+  let tmpHome: string;
+  let fakePaths: { remotePi: string; supervisord: string };
+  const node = "C:\\Program Files\\nodejs\\node.exe";
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(join(tmpdir(), "pi-link-win-"));
+    const stub = join(tmpHome, "fake-ext");
+    mkdirSync(join(stub, "bin"), { recursive: true });
+    fakePaths = {
+      remotePi: join(stub, "index.js"),
+      supervisord: join(stub, "bin", "supervisord.js"),
+    };
+    writeFileSync(fakePaths.remotePi, "// stub\n");
+    writeFileSync(fakePaths.supervisord, "// stub\n");
+  });
+
+  afterEach(() => {
+    rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  test("link writes remote-pi.cmd + pi-supervisord.cmd pointing at node + targets", () => {
+    const result = linkCliBinaries(tmpHome, fakePaths, { node, mutatePath: false });
+    expect(result.binDir).toBe(join(tmpHome, ".local", "bin"));
+    const names = result.links.map((l) => l.name).sort();
+    expect(names).toEqual(["pi-supervisord.cmd", "remote-pi.cmd"]);
+    for (const link of result.links) {
+      expect(existsSync(link.path)).toBe(true);
+      const content = readFileSync(link.path, "utf8");
+      expect(content).toContain(`"${node}"`);
+      expect(content).toContain(`"${link.target}"`);
+      expect(content).toContain("%*");
+    }
+  });
+
+  test("link is idempotent (re-running overwrites the same .cmd files)", () => {
+    linkCliBinaries(tmpHome, fakePaths, { node, mutatePath: false });
+    const second = linkCliBinaries(tmpHome, fakePaths, { node, mutatePath: false });
+    for (const link of second.links) {
+      expect(readFileSync(link.path, "utf8")).toBe(buildCmdShim(node, link.target));
+    }
+  });
+
+  test("unlink removes both .cmd shims, idempotent on second call", () => {
+    linkCliBinaries(tmpHome, fakePaths, { node, mutatePath: false });
+    const first = unlinkCliBinaries(tmpHome);
+    expect(first.removed.map((r) => r.existed)).toEqual([true, true]);
+    for (const r of first.removed) expect(existsSync(r.path)).toBe(false);
+    const second = unlinkCliBinaries(tmpHome);
+    expect(second.removed.map((r) => r.existed)).toEqual([false, false]);
   });
 });
