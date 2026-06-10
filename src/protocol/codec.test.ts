@@ -104,4 +104,14 @@ describe("encodeClient roundtrip", () => {
     const msg = { type: "user_message" as const, id: "018f9c2a", text: "hello" };
     expect(JSON.parse(encodeClient(msg).trim())).toEqual(msg);
   });
+
+  test("user_message with steer streaming behavior", () => {
+    const msg = {
+      type: "user_message" as const,
+      id: "018f9c2a",
+      text: "refine this",
+      streaming_behavior: "steer" as const,
+    };
+    expect(JSON.parse(encodeClient(msg).trim())).toEqual(msg);
+  });
 });

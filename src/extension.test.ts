@@ -143,6 +143,7 @@ const {
   _getMessageBufferForTest,
   _setCurrentModelForTest,
   _setPiForTest,
+  _getCurrentTurnIdForTest,
   _connectForTest,
   _hasActivePeerForTest,
   _getActivePeerCountForTest,
@@ -992,7 +993,7 @@ describe("multi-channel broadcast (W2D)", () => {
   // ── Source-of-truth rebroadcast (plan/24 W2D fix) ──────────────────────────
   //
   // When app A sends a user_message, the Pi must echo it to every
-  // _activePeers entry (A included) BEFORE handing off to the agent.
+  // _activePeers entry (A included) after the SDK accepts the handoff.
   // App side renders from the echo, not from local optimistic state — keeps
   // every paired device's session view bit-identical.
 
@@ -1061,6 +1062,11 @@ describe("multi-channel broadcast (W2D)", () => {
 
   test("plan/30: user_message without images → no `images` key on the echo (text path unchanged)", async () => {
     await _pairForTest("ownerA__1234567890");
+    const sendUserMessage = vi.fn();
+    _setPiForTest({
+      sendUserMessage,
+      sendMessage: () => undefined,
+    });
     const sendsBefore = relayRef.current!.send.mock.calls.length;
     relayRef.current!.emit("message", JSON.stringify({
       peer: "ownerA__1234567890",
@@ -1069,11 +1075,193 @@ describe("multi-channel broadcast (W2D)", () => {
       })).toString("base64"),
     }));
     await new Promise<void>((r) => setImmediate(r));
+    expect(sendUserMessage).toHaveBeenCalledWith("hi", { deliverAs: "steer" });
     const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
       .map((c) => c[0] as string).map(decodeSentCt);
     const echo = sent.find((d) => d.inner.type === "user_message");
     expect(echo?.inner).toMatchObject({ type: "user_message", id: "msg-txt", text: "hi" });
     expect(echo?.inner).not.toHaveProperty("images");
+    expect(echo?.inner).not.toHaveProperty("streaming_behavior");
+  });
+
+  test(
+    "plan/43: active steering calls sendUserMessage(deliverAs='steer')",
+    async () => {
+      await _pairForTest("ownerA__1234567890");
+      const onInput = captureEventHandler("input");
+      onInput({ type: "input", text: "primary", source: "interactive" });
+      await new Promise<void>((r) => setImmediate(r));
+
+      const sendUserMessage = vi.fn();
+      _setPiForTest({
+        sendUserMessage,
+        sendMessage: () => undefined,
+      });
+      const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+      relayRef.current!.emit("message", JSON.stringify({
+        peer: "ownerA__1234567890",
+        ct: Buffer.from(JSON.stringify({
+          type: "user_message",
+          id: "msg-steer",
+          text: "refine this",
+          streaming_behavior: "steer",
+        })).toString("base64"),
+      }));
+      await new Promise<void>((r) => setImmediate(r));
+
+      expect(sendUserMessage).toHaveBeenCalledTimes(1);
+      expect(sendUserMessage).toHaveBeenCalledWith("refine this", { deliverAs: "steer" });
+      const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+        .map((c) => c[0] as string).map(decodeSentCt);
+      const echo = sent.find((d) => d.inner.type === "user_message");
+      expect(echo?.inner).toMatchObject({
+        type: "user_message",
+        id: "msg-steer",
+        text: "refine this",
+        streaming_behavior: "steer",
+      });
+    },
+  );
+
+  test("plan/43: steering without a known turn id still reaches SDK as steer", async () => {
+    await _pairForTest("ownerA__1234567890");
+    expect(_getCurrentTurnIdForTest()).toBeNull();
+    const sendUserMessage = vi.fn();
+    _setPiForTest({
+      sendUserMessage,
+      sendMessage: () => undefined,
+    });
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "ownerA__1234567890",
+      ct: Buffer.from(JSON.stringify({
+        type: "user_message",
+        id: "msg-stale-steer",
+        text: "refine while stale",
+        streaming_behavior: "steer",
+      })).toString("base64"),
+    }));
+    await new Promise<void>((r) => setImmediate(r));
+
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(sendUserMessage).toHaveBeenCalledWith("refine while stale", { deliverAs: "steer" });
+    expect(_getCurrentTurnIdForTest()).toBe("msg-stale-steer");
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string).map(decodeSentCt);
+    const echo = sent.find((d) => d.inner.type === "user_message");
+    expect(echo?.inner).toMatchObject({
+      type: "user_message",
+      id: "msg-stale-steer",
+      text: "refine while stale",
+      streaming_behavior: "steer",
+    });
+  });
+
+  test("plan/43: busy app message without wire behavior is defensively steered", async () => {
+    await _pairForTest("ownerA__1234567890");
+    const onTurnStart = captureEventHandler("turn_start");
+    onTurnStart({ type: "turn_start", turnIndex: 0, timestamp: 0 });
+    expect(_getCurrentTurnIdForTest()).toBeNull();
+    const sendUserMessage = vi.fn();
+    _setPiForTest({
+      sendUserMessage,
+      sendMessage: () => undefined,
+    });
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "ownerA__1234567890",
+      ct: Buffer.from(JSON.stringify({
+        type: "user_message",
+        id: "msg-busy-no-mode",
+        text: "late correction",
+      })).toString("base64"),
+    }));
+    await new Promise<void>((r) => setImmediate(r));
+
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(sendUserMessage).toHaveBeenCalledWith("late correction", { deliverAs: "steer" });
+    expect(_getCurrentTurnIdForTest()).toBe("msg-busy-no-mode");
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string).map(decodeSentCt);
+    const echo = sent.find((d) => d.inner.type === "user_message");
+    expect(echo?.inner).toMatchObject({
+      type: "user_message",
+      id: "msg-busy-no-mode",
+      text: "late correction",
+      streaming_behavior: "steer",
+    });
+  });
+
+  test("plan/43: steering sendUserMessage throw returns correlated error and no echo", async () => {
+    await _pairForTest("ownerA__1234567890");
+    const onInput = captureEventHandler("input");
+    onInput({ type: "input", text: "primary", source: "interactive" });
+    await new Promise<void>((r) => setImmediate(r));
+    const priorTurn = _getCurrentTurnIdForTest();
+    expect(priorTurn).toMatch(/^local_/);
+
+    _setPiForTest({
+      sendUserMessage: vi.fn(() => { throw new Error("steer rejected"); }),
+      sendMessage: () => undefined,
+    });
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "ownerA__1234567890",
+      ct: Buffer.from(JSON.stringify({
+        type: "user_message",
+        id: "msg-steer-fail",
+        text: "bad steer",
+        streaming_behavior: "steer",
+      })).toString("base64"),
+    }));
+    await new Promise<void>((r) => setImmediate(r));
+
+    expect(_getCurrentTurnIdForTest()).toBe(priorTurn);
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string).map(decodeSentCt);
+    expect(sent.some((d) => d.inner.type === "user_message" && d.inner.id === "msg-steer-fail")).toBe(false);
+    const error = sent.find((d) => d.inner.type === "error");
+    expect(error?.inner).toMatchObject({
+      type: "error",
+      in_reply_to: "msg-steer-fail",
+      code: "internal_error",
+    });
+    expect((error?.inner as { message?: string } | undefined)?.message).toContain("steer rejected");
+  });
+
+  test("plan/43: steering does not overwrite current turn id", async () => {
+    await _pairForTest("ownerA__1234567890");
+    // Seed by terminal input (local user turn) so _currentTurnId exists.
+    const onInput = captureEventHandler("input");
+    onInput({ type: "input", text: "primary", source: "interactive" });
+
+    // Wait for async input handler effects.
+    await new Promise<void>((r) => setImmediate(r));
+    expect(_getCurrentTurnIdForTest()).toMatch(/^local_/);
+    const priorTurn = _getCurrentTurnIdForTest();
+    expect(priorTurn).toBeTruthy();
+
+    _setPiForTest({
+      sendUserMessage: () => undefined,
+      sendMessage: () => undefined,
+    });
+
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "ownerA__1234567890",
+      ct: Buffer.from(JSON.stringify({
+        type: "user_message",
+        id: "msg-steer",
+        text: "steer this",
+        streaming_behavior: "steer",
+      })).toString("base64"),
+    }));
+    await new Promise<void>((r) => setImmediate(r));
+
+    expect(_getCurrentTurnIdForTest()).toBe(priorTurn);
   });
 
   test("plan/32: session_compact → broadcasts compaction, working=false, buffers a marker", async () => {
@@ -2653,7 +2841,10 @@ describe("remote-pi:name-assigned event", () => {
     _setPiForTest(spyPi);          // …then route sendMessage through the spy
     expect(_hasMeshNodeForTest()).toBe(false);
 
-    await _connectForTest(makeMockCtx());
+    const ctx = makeMockCtx(
+      `/tmp/remote-pi-name-assigned-${process.pid}-${Date.now()}`,
+    );
+    await _connectForTest(ctx);
     expect(_hasMeshNodeForTest()).toBe(true); // join succeeded → emit ran
 
     const ev = sendMessage.mock.calls
