@@ -1383,6 +1383,19 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // bound to the current session.
   pi.on("session_start", (_event, ctx) => {
     _lastEventCtx = ctx;
+    // Rearm a reused-but-disposed instance. The session_shutdown teardown (below)
+    // sets _disposed=true assuming the host re-evaluates THIS module fresh for the
+    // replacement session, yielding a new instance with _disposed=false. Some hosts
+    // instead REUSE the same module instance across ctx.newSession() — then the
+    // _disposed latch is never cleared (nothing else resets it), so the relay never
+    // reconnects and /remote-pi (via _cmdRoot) silently early-returns until a full
+    // Pi restart. Clearing the latch + re-running the idempotent connect path
+    // restores the relay automatically. No-op when a fresh instance IS created
+    // (_disposed=false there → never fires) and at first boot.
+    if (_disposed) {
+      _disposed = false;
+      void _cmdRoot(ctx);
+    }
   });
 
   // Tear down THIS instance's live handles when the SDK replaces the session

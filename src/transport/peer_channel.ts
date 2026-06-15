@@ -67,7 +67,19 @@ export class PlainPeerChannel implements PeerChannel {
     // `room_id`/`room_meta` in the WS-level `hello` — outer routing stays by
     // `peer` alone. Re-add the field once downstream is ready.
     const outer: OuterEnvelope = { peer: this.remotePeerId, ct };
-    this.relay.send(JSON.stringify(outer));
+    // Best-effort delivery. The relay WS can be mid-reconnect (idle/NAT drop, or
+    // a session_new/session-replacement teardown) when we push a server→app frame
+    // — notably the action_ok/action_error ack a handler emits right after
+    // newSession. `relay.send` throws "relay: not connected" in that window; since
+    // this runs inside an async SDK event callback, letting it propagate becomes an
+    // uncaughtException that kills the whole pi process. The relay auto-reconnects
+    // and the app re-syncs via session_sync, so a dropped frame is recoverable — a
+    // crash is not. Mirrors RelayClient.sendControl's no-op-when-closed policy.
+    try {
+      this.relay.send(JSON.stringify(outer));
+    } catch {
+      /* relay down — drop this frame; reconnect + session_sync will recover */
+    }
   }
 
   /** Detaches from relay (does not close the relay itself). */
