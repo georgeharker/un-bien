@@ -200,7 +200,7 @@ describe("handleModelSet", () => {
       setModel: async (m) => { setModelArgs.push(m as SdkModelLike); return true; },
     });
     const sender = makeSender();
-    await handleModelSet(pi, reg, sender, {
+    await handleModelSet(pi, null, reg, sender, {
       type: "model_set", id: "r4", provider: "anthropic", model_id: "claude-opus-4-7",
     });
     expect(setModelArgs).toHaveLength(1);
@@ -213,7 +213,7 @@ describe("handleModelSet", () => {
   test("unknown model → action_error", async () => {
     const reg = fakeRegistry([sampleModel]);
     const sender = makeSender();
-    await handleModelSet(fakePi(), reg, sender, {
+    await handleModelSet(fakePi(), null, reg, sender, {
       type: "model_set", id: "r4", provider: "anthropic", model_id: "nope-3",
     });
     expect(sender.sent[0]).toMatchObject({
@@ -226,7 +226,7 @@ describe("handleModelSet", () => {
     const reg = fakeRegistry([sampleModel]);
     const pi = fakePi({ setModel: async () => false });
     const sender = makeSender();
-    await handleModelSet(pi, reg, sender, {
+    await handleModelSet(pi, null, reg, sender, {
       type: "model_set", id: "r4", provider: "anthropic", model_id: "claude-opus-4-7",
     });
     expect(sender.sent[0]).toMatchObject({
@@ -241,7 +241,7 @@ describe("handleModelSet", () => {
     const sender = makeSender();
     const persisted: Array<{ provider: string; modelId: string }> = [];
     await handleModelSet(
-      pi, reg, sender,
+      pi, null, reg, sender,
       { type: "model_set", id: "r4", provider: "anthropic", model_id: "claude-opus-4-7" },
       (provider, modelId) => persisted.push({ provider, modelId }),
     );
@@ -255,7 +255,7 @@ describe("handleModelSet", () => {
     const sender = makeSender();
     let persistCalls = 0;
     await handleModelSet(
-      pi, reg, sender,
+      pi, null, reg, sender,
       { type: "model_set", id: "r4", provider: "anthropic", model_id: "claude-opus-4-7" },
       () => { persistCalls += 1; },
     );
@@ -268,7 +268,7 @@ describe("handleModelSet", () => {
     const sender = makeSender();
     let persistCalls = 0;
     await handleModelSet(
-      fakePi(), reg, sender,
+      fakePi(), null, reg, sender,
       { type: "model_set", id: "r4", provider: "anthropic", model_id: "nope-3" },
       () => { persistCalls += 1; },
     );
@@ -309,6 +309,34 @@ describe("handleListModels", () => {
     expect(reply.type).toBe("models_list");
     if (reply.type !== "models_list") throw new Error("type guard");
     expect(reply.current).toBeUndefined();
+  });
+
+  test("prefers ctx.modelRegistry over the fallback registry", () => {
+    const fallback = fakeRegistry([sampleModel]);
+    const liveModel: SdkModelLike = {
+      id: "gpt-oss-20b",
+      name: "GPT OSS 20B",
+      provider: "lemonade",
+      reasoning: false,
+      contextWindow: 131_072,
+    };
+    const live = fakeRegistry([liveModel]);
+    const ctx: ActionCtx = { modelRegistry: live };
+    const sender = makeSender();
+    handleListModels(ctx, fallback, sender, { type: "list_models", id: "r5" });
+    const reply = sender.sent[0];
+    expect(reply.type).toBe("models_list");
+    if (reply.type !== "models_list") throw new Error("type guard");
+    expect(reply.models).toEqual([
+      {
+        id: "gpt-oss-20b",
+        name: "GPT OSS 20B",
+        provider: "lemonade",
+        reasoning: false,
+        context_window: 131_072,
+        vision: false,
+      },
+    ]);
   });
 
   test("registry refresh failure surfaces as error envelope", () => {

@@ -3208,13 +3208,20 @@ export function _routeClientMessageFrom(
       break;
     }
     case "model_set":
-      void handleModelSet(_pi, ensureModelRegistry(), sender, msg, _persistModelDefault);
+      void handleModelSet(
+        _pi,
+        (_lastEventCtx ?? _lastCtx) as ActionCtx | null,
+        ensureModelRegistry(),
+        sender,
+        msg,
+        _persistModelDefault,
+      );
       break;
     case "thinking_set":
       handleThinkingSet(_pi, sender, msg);
       break;
     case "list_models":
-      handleListModels(_lastCtx as ActionCtx | null, ensureModelRegistry(), sender, msg);
+      handleListModels(((_lastEventCtx ?? _lastCtx) as ActionCtx | null), ensureModelRegistry(), sender, msg);
       break;
   }
 }

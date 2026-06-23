@@ -92,6 +92,12 @@ export interface ActionCtx {
     withSession?: (ctx: ActionCtx) => Promise<void>;
   }) => Promise<{ cancelled: boolean }>;
   getModel?: () => Model<any> | undefined;
+  /**
+   * Live session registry from Pi's extension ctx. Includes providers/models
+   * registered dynamically via `pi.registerProvider(...)`, unlike the fallback
+   * disk-backed registry remote-pi can build on its own.
+   */
+  modelRegistry?: ActionModelRegistry;
 }
 
 /**
@@ -233,15 +239,20 @@ export function handleThinkingSet(
 
 export async function handleModelSet(
   pi: ActionPi,
+  ctx: ActionCtx | null,
   reg: ActionModelRegistry,
   sender: ActionReplySender,
   msg: ModelSetMsg,
   onPersist?: (provider: string, modelId: string) => void,
 ): Promise<void> {
   await runAsync(sender, msg, "model_set", async () => {
+    // Prefer Pi's LIVE session registry when available so the app sees models
+    // registered dynamically by extensions via `pi.registerProvider(...)`.
+    // Fall back to remote-pi's own disk-backed registry when no ctx exists.
+    const liveReg = ctx?.modelRegistry ?? reg;
     // Refresh first so a model just-added via `/login` is visible.
-    reg.refresh();
-    const model = reg.find(msg.provider, msg.model_id);
+    liveReg.refresh();
+    const model = liveReg.find(msg.provider, msg.model_id);
     if (!model) {
       throw new Error(`model "${msg.provider}/${msg.model_id}" not in registry`);
     }
@@ -266,8 +277,12 @@ export function handleListModels(
   // refresh() can throw if `models.json` is malformed — wrap in try so the
   // app gets an explicit error reply instead of a silent drop.
   try {
-    reg.refresh();
-    const models = reg.getAvailable().map(wireFromModel);
+    // Prefer Pi's LIVE session registry when available so the app sees models
+    // registered dynamically by extensions via `pi.registerProvider(...)`.
+    // Fall back to remote-pi's own disk-backed registry when no ctx exists.
+    const liveReg = ctx?.modelRegistry ?? reg;
+    liveReg.refresh();
+    const models = liveReg.getAvailable().map(wireFromModel);
     const current = ctx?.getModel?.();
     sender.send({
       type: "models_list",
