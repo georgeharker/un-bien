@@ -188,6 +188,12 @@ let _sessionPeerCount = 0;
 // re-evaluates the module on every session replacement), so the replacement
 // instance starts fresh with `_disposed = false`.
 let _disposed = false;
+// True once the auto-init has run on the first session_start for this
+// process. Prevents re-running on session replacements (those re-init via
+// the _disposed re-arm path above). The session_start handler below auto-starts
+// remote-pi for ANY session whose local config has auto_start_relay (default
+// true) — interactive AND daemon — instead of only REMOTE_PI_DAEMON=1.
+let _autoInited = false;
 
 // Cached state of global pairings (`peers.json`). Pairing is per-machine, so a
 // device paired in any Pi process is paired everywhere. Refreshed on boot,
@@ -1397,6 +1403,38 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       _disposed = false;
       void _cmdRoot(ctx);
     }
+    // Auto-start remote-pi on a fresh boot when the cwd's local config has
+    // auto_start_relay enabled (default true). Covers BOTH interactive
+    // sessions (previously required typing /remote-pi each session) AND
+    // headless daemons. We init here — on session_start — NOT via a
+    // factory-return setTimeout(0): the SDK only calls bindCore() (which
+    // replaces the throwing action-method stubs like pi.sendMessage) right
+    // before emitting session_start, so a setTimeout(0) from the factory
+    // raced it and crashed with "Extension runtime not initialized" inside
+    // _emitRelayState -> sendMessage. session_start fires strictly AFTER
+    // bindCore (agent-session bindExtensions), so pi.sendMessage is a real
+    // function here. Guarded by _autoInited so session replacements re-init
+    // only via the _disposed path above. Daemon mode has no interactive UI →
+    // use the headless ctx; interactive sessions use the real session_start
+    // ctx (has ui.notify + dialogs for the first-run wizard).
+    if (!_autoInited) {
+      // Daemon: always init (supervisor sets REMOTE_PI_DIRECT_CONFIG so a config
+      // is present at process.cwd()). Interactive: only init when the
+      // session_start ctx announces its cwd AND a local config already exists
+      // there — never auto-pop the first-run wizard on session_start (a new dir
+      // with no config stays idle until the user runs /remote-pi once). The
+      // cwd guard also keeps tests with a minimal ctx (no cwd) from triggering
+      // the wizard path.
+      const isDaemon = process.env["REMOTE_PI_DAEMON"] === "1";
+      const cwd = isDaemon ? process.cwd() : "cwd" in ctx ? ctx.cwd : undefined;
+      if (cwd && localConfigExists(cwd) && effectiveAutoStartRelay(loadLocalConfig(cwd))) {
+        _autoInited = true;
+        const initCtx = isDaemon
+          ? ({ ui: _headlessUi(), cwd: process.cwd() } as Pick<ExtensionContext, "ui" | "cwd">)
+          : ctx;
+        void _cmdRoot(initCtx);
+      }
+    }
   });
 
   // Tear down THIS instance's live handles when the SDK replaces the session
@@ -1550,21 +1588,13 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   pi.registerCommand("remote-pi install",   { description: "Install pi-supervisord as a system service + link the remote-pi CLI (systemd/launchd/Task Scheduler; Windows prompts for admin)", handler: async (_, ctx) => { _lastCtx = ctx; _cmdInstall(ctx, { linkCli: true }); } });
   pi.registerCommand("remote-pi uninstall", { description: "Remove the pi-supervisord system service + the CLI shims (daemons registry preserved; Windows prompts for admin)", handler: async (_, ctx) => { _lastCtx = ctx; _cmdUninstall(ctx, { linkCli: true }); } });
 
-  // Daemon mode: when spawned by pi-supervisord (REMOTE_PI_DAEMON=1) there is
-  // no human to type /remote-pi, so we auto-init after the factory returns.
-  // _cmdRoot checks localConfig.auto_start_relay and connects to the relay +
-  // local broker automatically; if no config exists it is a no-op (no wizard
-  // in headless mode).
-  if (process.env["REMOTE_PI_DAEMON"] === "1") {
-    const daemonCtx = {
-      // Headless: only warnings/errors reach stderr; the RPC client sees state
-      // via structured events, so info chatter is dropped (was stderr noise in
-      // the Cockpit).
-      ui: _headlessUi(),
-      cwd: process.cwd(),
-    } as unknown as Pick<ExtensionContext, "ui" | "cwd">;
-    setTimeout(() => { void _cmdRoot(daemonCtx); }, 0);
-  }
+  // Auto-init now runs from the session_start handler (above), AFTER the
+  // SDK calls bindCore(). The original setTimeout(0) here fired before bindCore
+  // replaced the throwing action-method stubs, so the first pi.sendMessage in
+  // _emitRelayState crashed the headless pi process with "Extension runtime not
+  // initialized" in a 5s supervisor crash-loop. The session_start handler now
+  // auto-starts for ANY session with auto_start_relay (default true), so new
+  // interactive pi sessions are on remote automatically — no /remote-pi needed.
 };
 
 export default extension;
