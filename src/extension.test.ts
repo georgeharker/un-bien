@@ -276,16 +276,26 @@ describe("extension default export", () => {
     const { pi, registeredCommands } = makeMockPi();
     (extension as ExtensionFactory)(pi);
     // 8 plan-25 + 2 daemon registry (W1) + 6 fleet ops (W2) + 2 install (W3)
-    // + 1 cross-PC inventory (plan-25 W D) + 1 cron (plan-39).
-    expect(registeredCommands).toHaveLength(20);
+    // + 1 cross-PC inventory (plan-25 W D) + 1 cron (plan-39) + 1 rename (plan/41).
+    expect(registeredCommands).toHaveLength(21);
     for (const removed of [
-      "remote-pi join", "remote-pi leave", "remote-pi rename", "remote-pi sessions",
+      "remote-pi join", "remote-pi leave", "remote-pi sessions",
       "remote-pi relay", "remote-pi relay start", "remote-pi relay stop",
       "remote-pi relay status", "remote-pi relay url",
       "remote-pi config", "remote-pi start", "remote-pi list", "remote-pi add-relay",
     ]) {
       expect(registeredCommands).not.toContain(removed);
     }
+  });
+
+  // README documents `/remote-pi rename <new>` but the verb had been dropped
+  // from the TUI dispatcher (only the Cockpit `rename:` control path worked).
+  // Re-adding it aligns the implementation with the documented surface.
+  test("/remote-pi rename is registered and dispatches to _renameAgent", async () => {
+    const rename = captureHandler("remote-pi rename");
+    expect(typeof rename).toBe("function");
+    // Empty arg → _renameAgent no-ops (same contract as the control channel).
+    await expect(rename("", makeMockCtx())).resolves.toBeUndefined();
   });
 });
 

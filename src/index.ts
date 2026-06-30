@@ -1502,6 +1502,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       return [
         "setup", "status", "stop",
         "pair", "devices", "revoke",
+        "rename",
         "set-relay",
         "peers",  // plan/25 Wave D — local + cross-PC inventory
         "create", "remove", "daemons",  // daemon registry (plan/26 W1)
@@ -1526,6 +1527,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       else if (sub === "devices")                { await _cmdList(ctx); }
       else if (sub.startsWith("revoke"))         { await _cmdRevoke(sub.slice("revoke".length).trim(), ctx); }
       else if (sub.startsWith("set-relay"))      { _cmdSetRelay(sub.slice("set-relay".length).trim(), ctx); }
+      else if (sub === "rename" || sub.startsWith("rename ")) { await _renameAgent(sub.slice("rename".length).trim()); }
       else if (sub === "peers")                  { await _cmdPeers(ctx); }
       else if (sub.startsWith("create"))         { await _cmdCreate(sub.slice("create".length).trim(), ctx); }
       else if (sub.startsWith("remove"))         { await _cmdRemove(sub.slice("remove".length).trim(), ctx); }
@@ -1550,6 +1552,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   pi.registerCommand("remote-pi stop",     { description: "Stop everything (leave local mesh + disconnect relay)", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdStop(ctx); } });
   pi.registerCommand("remote-pi pair",     { description: "Show a QR code to pair a new mobile device (optional: --ttl <seconds>)", handler: async (args, ctx) => { _lastCtx = ctx; await _cmdPair(ctx, args.trim()); } });
   pi.registerCommand("remote-pi devices",  { description: "List paired mobile devices", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdList(ctx); } });
+  pi.registerCommand("remote-pi rename",  { description: "Rename this agent in the current session (updates mesh + relay room)", handler: async (args, ctx) => { _lastCtx = ctx; await _renameAgent(args.trim()); } });
   pi.registerCommand("remote-pi revoke", {
     description: "Revoke a paired device by its shortid",
     getArgumentCompletions: async (prefix) => _shortidCompletions(prefix),
