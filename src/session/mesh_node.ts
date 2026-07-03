@@ -56,6 +56,9 @@ export interface MeshNodeOptions {
    *  keyed by (cwd, name) and a same-folder same-name reincarnation takes over
    *  instead of colliding into `#N`. Optional (legacy peers omit it). */
   cwd?: string;
+  /** Replace an existing same-(cwd,name) mesh registration. Intended for
+   *  stable process identities such as supervised daemons. */
+  takeoverExisting?: boolean;
   /** Optional audit log path passed through to SessionPeer. */
   auditPath?: string;
   /** Self-managed relay bridge — brought up if this node leads. */
@@ -103,6 +106,7 @@ export class MeshNode {
     this.log = opts.log ?? ((): void => {});
     const peerOpts: SessionPeerOptions = { sockPath: opts.sockPath, name: opts.name };
     if (opts.cwd !== undefined) peerOpts.cwd = opts.cwd;
+    if (opts.takeoverExisting !== undefined) peerOpts.takeoverExisting = opts.takeoverExisting;
     if (opts.auditPath !== undefined) peerOpts.auditPath = opts.auditPath;
     this.peer_ = new SessionPeer(peerOpts);
     if (opts.bridge) {

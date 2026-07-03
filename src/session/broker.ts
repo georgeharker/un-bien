@@ -148,6 +148,10 @@ interface RegisterMsg {
   /** Optional working directory — enables (cwd,name) take-over (see
    *  `_handleRegister`). Absent → legacy `#N`-on-collision behavior. */
   cwd?: string;
+  /** Replace an existing same-(cwd,name) peer instead of suffixing `#N`.
+   *  Used by stable identities such as supervised daemons and session
+   *  replacement, where a second registration is the same logical agent. */
+  takeover?: boolean;
 }
 
 interface RegisterAck {
@@ -302,12 +306,12 @@ export class Broker {
 
     // (cwd, name) identity (plan/38). The cwd is the first-class axis: the
     // address embeds it, so two same-named agents in DIFFERENT folders get
-    // distinct addresses and never collide — `#N` fires only on the same cwd +
-    // same name. A legacy peer (no cwd) → cwd "" → `address == name`, preserving
-    // the old global-name behavior so a mixed mesh keeps routing.
+    // distinct addresses and never collide. Legacy peers (no cwd) keep the old
+    // global-name behavior. New peers can opt into exact-address takeover for
+    // same-folder reincarnations such as daemon restarts.
     conn.cwd = typeof req.cwd === "string" ? req.cwd : "";
 
-    const { name, address } = this._uniqueIdentity(conn.cwd, req.name);
+    const { name, address } = this._identityForRegister(conn.cwd, req.name, req.takeover === true);
     conn.name = name;
     conn.address = address;
     this.peers.set(address, conn);
@@ -391,9 +395,13 @@ export class Broker {
    * (matching the cwd-lock's suffix scheme) until the address is free; for a
    * legacy peer (cwd "") the address is the name, preserving global-name `#N`.
    */
-  private _uniqueIdentity(cwd: string, requested: string): { name: string; address: string } {
+  private _identityForRegister(cwd: string, requested: string, takeover: boolean): { name: string; address: string } {
     const sanitized = sanitizeMeshName(requested);
     let address = composeAddress({ cwd, name: sanitized });
+    if (takeover && cwd && this.peers.has(address)) {
+      this._dropPeerAt(address);
+      return { name: sanitized, address };
+    }
     if (!this.peers.has(address)) return { name: sanitized, address };
     // Collision: strip any client-provided `#N`, then re-suffix from #2.
     const base = sanitized.replace(/#\d+$/, "");
@@ -405,8 +413,19 @@ export class Broker {
     throw new Error(`name space exhausted for ${base} in ${cwd || "(no cwd)"}`);
   }
 
+  private _dropPeerAt(address: string): void {
+    const existing = this.peers.get(address);
+    if (!existing) return;
+    this.peers.delete(address);
+    // The old socket's close event may arrive after the replacement has been
+    // inserted. Clear its address so it cannot delete the replacement.
+    existing.address = "";
+    try { existing.socket.destroy(); } catch { /* ignored */ }
+  }
+
   private _onClose(conn: PeerConn): void {
     if (!conn.address) return;
+    if (this.peers.get(conn.address) !== conn) return;
     this.peers.delete(conn.address);
     this._broadcastSystem({ type: "peer_left", name: conn.address, address: conn.address }, conn.address);
   }

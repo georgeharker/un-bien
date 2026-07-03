@@ -1684,23 +1684,23 @@ async function _cmdRoot(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
   // `_cmdJoin` does so the lock and the mesh registration agree on identity.
   const requestedName = loadLocalConfig(cwd).agent_name || defaultAgentName(cwd);
 
-  // Per-(cwd,name) lock, but COLLISION DOESN'T REFUSE — it auto-suffixes. If
-  // `(cwd, "Backoffice")` is already held by a live agent, try
-  // `(cwd, "Backoffice#2")`, `#3`, … until one binds. So a second agent with the
-  // same name in the same folder comes up as `Backoffice#2` (matching the
-  // broker's `_uniqueName` suffix scheme) instead of being turned away. The
-  // suffix N matches the broker's (`#2`-based) so lock + mesh name line up. The
-  // lock is a UDS socket (kernel auto-releases on exit/crash) bound for THIS
-  // process's lifetime; repeat `/remote-pi` calls are idempotent.
+  // Per-(cwd,name) lock. Interactive agents may coexist by auto-suffixing
+  // (`name#2`, `name#3`, …), but supervised daemons must be singletons for their
+  // registered cwd/name. If a daemon silently came up as `#2`, the supervisor
+  // would report "running" while the mesh had duplicate peers for one repo.
   if (_cwdLock === null) {
-    for (let n = 1; n <= 1000; n++) {
+    const isDaemon = process.env["REMOTE_PI_DAEMON"] === "1";
+    const maxAttempts = isDaemon ? 1 : 1000;
+    for (let n = 1; n <= maxAttempts; n++) {
       const candidate = n === 1 ? requestedName : `${requestedName}#${n}`;
       const result = await acquireCwdLock(cwd, candidate);
       if (result.ok) { _cwdLock = result; _lockedName = candidate; break; }
     }
     if (_cwdLock === null) {
       ctx.ui.notify(
-        `[remote-pi] Could not start: too many agents named "${requestedName}" already running in this folder.`,
+        process.env["REMOTE_PI_DAEMON"] === "1"
+          ? `[remote-pi] Daemon not started: another live agent already owns "${requestedName}" in this folder. Stop the old Pi process, then restart the daemon.`
+          : `[remote-pi] Could not start: too many agents named "${requestedName}" already running in this folder.`,
         "warning",
       );
       return;
@@ -2953,7 +2953,13 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
   // realpath so symlinked cwds map to one identity (matches roomIdForCwd).
   let canonCwd = cwd;
   try { canonCwd = realpathSync(cwd); } catch { /* cwd missing — use raw path */ }
-  const peer = new MeshNode({ sockPath: sock, name: agentName, cwd: canonCwd, auditPath: audit });
+  const peer = new MeshNode({
+    sockPath: sock,
+    name: agentName,
+    cwd: canonCwd,
+    auditPath: audit,
+    takeoverExisting: process.env["REMOTE_PI_DAEMON"] === "1",
+  });
 
   peer.onMessage((env) => {
     const body = env.body as { type?: string } | null;

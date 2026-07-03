@@ -666,6 +666,32 @@ describe("plan/38 — (cwd, name) mesh addressing (e2e)", () => {
     await a.leave(); await b.leave();
   });
 
+  test("takeoverExisting replaces the same cwd/name instead of creating #2", async () => {
+    const sock = tmpSock();
+    const first = await makePeerCwd(sock, "backend", "/a/backend");
+    const replacement = new SessionPeer({
+      sockPath: sock,
+      name: "backend",
+      cwd: "/a/backend",
+      takeoverExisting: true,
+      defaultTimeoutMs: 3000,
+    });
+    await replacement.start();
+
+    expect(replacement.name()).toBe("backend");
+    expect(replacement.address()).toBe("/a/backend@backend");
+
+    const reply = await replacement.request("broker", { type: "list_peers" });
+    const peers = (reply.body as { peers?: string[] }).peers ?? [];
+    expect(peers.filter((p) => p.startsWith("/a/backend@backend"))).toEqual([
+      "/a/backend@backend",
+    ]);
+
+    await expect(first.send("broadcast", { stale: true })).rejects.toThrow("session peer not connected");
+    await first.leave();
+    await replacement.leave();
+  });
+
   test("list_peers_reply carries peers_detailed ({cwd,name,address})", async () => {
     const sock = tmpSock();
     const a = await makePeerCwd(sock, "backend", "/a/backend");

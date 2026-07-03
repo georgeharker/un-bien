@@ -27,6 +27,10 @@ export interface SessionPeerOptions {
    * Optional for backward-compat with peers that predate this field.
    */
   cwd?: string;
+  /** Replace an existing same-(cwd,name) registration instead of accepting a
+   *  broker-assigned `#N`. Use only for stable logical identities; ordinary
+   *  multi-agent sessions should leave this false. */
+  takeoverExisting?: boolean;
   auditPath?: string;
   /** Per-request default timeout (ms). Override per call if needed. */
   defaultTimeoutMs?: number;
@@ -300,6 +304,7 @@ export class SessionPeer {
         // payload for callers that don't supply it (broker treats absent cwd
         // as "no take-over", i.e. the old #N behavior).
         ...(this.opts.cwd !== undefined ? { cwd: this.opts.cwd } : {}),
+        ...(this.opts.takeoverExisting === true ? { takeover: true } : {}),
       }) + "\n";
       try {
         sock.write(req);

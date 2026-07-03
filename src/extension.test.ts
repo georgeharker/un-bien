@@ -3038,6 +3038,34 @@ describe("same-folder same-name → #N suffix (no refusal)", () => {
       _resetCwdLockForTest();
     }
   });
+
+  test("a supervised daemon refuses a busy base lock instead of joining as <name>#2", async () => {
+    process.env["REMOTE_PI_DAEMON"] = "1";
+    process.env["REMOTE_PI_DIRECT_CONFIG"] = JSON.stringify({
+      agent_name: "Backoffice",
+      auto_start_relay: false,
+    });
+    const cwd = "/home/user/projects/remote_pi";
+    const first = await acquireCwdLock(cwd, "Backoffice");
+    expect(first.ok).toBe(true);
+    try {
+      const root = captureHandler("remote-pi");
+      const ctx = makeMockCtx(cwd);
+      await root("", ctx);
+
+      expect(_getLockedNameForTest()).toBeNull();
+      expect(_hasMeshNodeForTest()).toBe(false);
+      expect(ctx.ui.notify).toHaveBeenCalledWith(
+        expect.stringContaining("Daemon not started"),
+        "warning",
+      );
+    } finally {
+      if (first.ok) first.release();
+      delete process.env["REMOTE_PI_DAEMON"];
+      delete process.env["REMOTE_PI_DIRECT_CONFIG"];
+      _resetCwdLockForTest();
+    }
+  });
 });
 
 // ── relay reconnect with backoff ──────────────────────────────────────────────
@@ -3725,4 +3753,3 @@ describe("model meta", () => {
     }
   });
 });
-
