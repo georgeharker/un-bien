@@ -608,7 +608,22 @@ function _displayName(cwd: string): string {
 let _syncingName = false;
 async function _syncNameFromPi(): Promise<void> {
   if (_disposed || _syncingName) return;
-  const piName = _pi?.getSessionName?.();
+  // Best-effort name sync. This is invoked fire-and-forget (`void
+  // _syncNameFromPi()`) from turn_start and session_start, so any rejection
+  // here escapes the runner's per-handler try/catch and crashes pi as an
+  // uncaughtException. After ctx.newSession()/fork()/switchSession()/reload()
+  // the captured _pi is stale and getSessionName() throws via assertActive —
+  // guard the read so a stale ctx degrades to a SKIPPED sync instead of a
+  // process exit. (The event ctx passed to these handlers does not carry
+  // getSessionName; only the pi ExtensionAPI does, and it is permanently
+  // stale once invalidated, so there is no fresh source to fall back to —
+  // skipping until the module is re-evaluated with a fresh _pi is correct.)
+  let piName: string | undefined;
+  try {
+    piName = _pi?.getSessionName?.();
+  } catch {
+    return; // stale ctx mid session-replacement — nothing to sync this turn
+  }
   if (!piName || !piName.trim()) return;
   const requested = sanitizeSegment(piName.trim());
   if (!requested) return;
@@ -621,6 +636,8 @@ async function _syncNameFromPi(): Promise<void> {
   _syncingName = true;
   try {
     await _renameAgent(requested);
+  } catch {
+    /* best-effort — never let a rename failure crash name sync */
   } finally {
     _syncingName = false;
   }
@@ -1766,7 +1783,14 @@ async function _cmdRoot(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
   // Pi session name (`pi --name` / `/name`) is the source of truth — when set,
   // it wins over the persisted agent_name so the mesh identity follows the pi
   // session label. Falls back to config, then to basename(cwd).
-  const _piSessionName = _pi?.getSessionName?.();
+  let _piSessionName: string | undefined;
+  try {
+    _piSessionName = _pi?.getSessionName?.();
+  } catch {
+    // _pi is stale after session replacement/reload — fall back to the
+    // persisted agent_name / default rather than crashing the /remote-pi command.
+    _piSessionName = undefined;
+  }
   const requestedName =
     (_piSessionName && _piSessionName.trim() && sanitizeSegment(_piSessionName.trim()))
     || loadLocalConfig(cwd).agent_name
