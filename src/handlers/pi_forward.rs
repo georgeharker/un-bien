@@ -74,6 +74,7 @@ impl MeshAuthCache {
             }
         };
 
+        let mut union = HashSet::new();
         for blob in blobs {
             let parsed: serde_json::Value = match serde_json::from_slice(&blob) {
                 Ok(v) => v,
@@ -91,18 +92,21 @@ impl MeshAuthCache {
                 })
                 .collect();
             if set.contains(pi_pk) {
-                let mut g = self.inner.lock().unwrap();
-                g.insert(
-                    pi_pk.to_string(),
-                    CachedMembers {
-                        members: set.clone(),
-                        cached_at: Instant::now(),
-                    },
-                );
-                return Some(set);
+                union.extend(set);
             }
         }
-        None
+        if union.is_empty() {
+            return None;
+        }
+        let mut g = self.inner.lock().unwrap();
+        g.insert(
+            pi_pk.to_string(),
+            CachedMembers {
+                members: union.clone(),
+                cached_at: Instant::now(),
+            },
+        );
+        Some(union)
     }
 
     /// `true` iff both Pis belong to the same Owner's mesh.
