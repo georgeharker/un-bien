@@ -484,6 +484,9 @@ function _getSyncLimit(): number {
 const RECONNECT_BACKOFFS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 let _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let _reconnectAttempt = 0;
+// Coalesces concurrent `/remote-pi` startup paths inside ONE extension instance.
+// Separate Pi processes still keep the existing #N behavior via the cwd lock.
+let _cmdRootInFlight: Promise<void> | null = null;
 
 /** Test-only: exposes pending reconnect timer state. */
 export function _hasPendingReconnect(): boolean {
@@ -1707,6 +1710,22 @@ async function _cmdPeers(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
  * idempotent connect + status display.
  */
 async function _cmdRoot(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
+  if (_cmdRootInFlight) {
+    await _cmdRootInFlight;
+    _cmdStatus(ctx);
+    return;
+  }
+
+  const run = _cmdRootInner(ctx);
+  _cmdRootInFlight = run;
+  try {
+    await run;
+  } finally {
+    if (_cmdRootInFlight === run) _cmdRootInFlight = null;
+  }
+}
+
+async function _cmdRootInner(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
   // This instance was torn down (session replacement) before its deferred
   // auto-init ran — don't connect, or we'd resurrect a ghost the broker can't
   // reach. The replacement instance (fresh module) drives the live connect.

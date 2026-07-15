@@ -3068,6 +3068,27 @@ describe("same-folder same-name → #N suffix (no refusal)", () => {
     }
   });
 
+  test("concurrent startup in one extension instance does not self-suffix", async () => {
+    process.env["REMOTE_PI_DIRECT_CONFIG"] = JSON.stringify({
+      agent_name: "Backoffice",
+      auto_start_relay: false,
+    });
+    const cwd = "/home/user/projects/remote_pi-concurrent";
+    try {
+      const root = captureHandler("remote-pi");
+      await Promise.all([
+        root("", makeMockCtx(cwd)),
+        root("", makeMockCtx(cwd)),
+      ]);
+
+      expect(_getLockedNameForTest()).toBe("Backoffice");
+      expect(_hasMeshNodeForTest()).toBe(true);
+    } finally {
+      delete process.env["REMOTE_PI_DIRECT_CONFIG"];
+      _resetCwdLockForTest();
+    }
+  });
+
   test("a supervised daemon refuses a busy base lock instead of joining as <name>#2", async () => {
     process.env["REMOTE_PI_DAEMON"] = "1";
     process.env["REMOTE_PI_DIRECT_CONFIG"] = JSON.stringify({
