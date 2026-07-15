@@ -162,6 +162,7 @@ const {
   _setCurrentModelForTest,
   _setPiForTest,
   _getCurrentTurnIdForTest,
+  _getPendingSteerIdsForTest,
   _connectForTest,
   _hasActivePeerForTest,
   _getActivePeerCountForTest,
@@ -852,6 +853,47 @@ function captureEventHandler(eventName: string): EventHandler {
   return captured;
 }
 
+function captureEventHarness(): {
+  handler: (eventName: string) => EventHandler;
+  emitBus: (channel: string, data: unknown) => void;
+} {
+  const handlers = new Map<string, EventHandler>();
+  const busHandlers = new Map<string, Array<(data: unknown) => void>>();
+  const pi = {
+    on(e: string, h: EventHandler) { handlers.set(e, h); },
+    events: {
+      emit(channel: string, data: unknown) {
+        for (const h of busHandlers.get(channel) ?? []) h(data);
+      },
+      on(channel: string, h: (data: unknown) => void) {
+        const list = busHandlers.get(channel) ?? [];
+        list.push(h);
+        busHandlers.set(channel, list);
+        return () => {
+          const current = busHandlers.get(channel) ?? [];
+          busHandlers.set(channel, current.filter((item) => item !== h));
+        };
+      },
+    },
+    registerCommand: () => undefined,
+    registerTool: () => undefined, registerShortcut: () => undefined,
+    registerFlag: () => undefined, getFlag: () => undefined,
+    registerMessageRenderer: () => undefined,
+    sendMessage: () => undefined, sendUserMessage: () => undefined,
+  } as unknown as ExtensionAPI;
+  (extension as ExtensionFactory)(pi);
+  return {
+    handler(eventName: string) {
+      const h = handlers.get(eventName);
+      if (!h) throw new Error(`event "${eventName}" handler not registered`);
+      return h;
+    },
+    emitBus(channel: string, data: unknown) {
+      (pi.events as unknown as { emit: (channel: string, data: unknown) => void }).emit(channel, data);
+    },
+  };
+}
+
 function captureMessageRenderer(): {
   getRenderer(): (message: { details?: unknown }, options: unknown, theme: unknown) => unknown;
 } {
@@ -1078,6 +1120,175 @@ describe("multi-channel broadcast (W2D)", () => {
     // Both owners received the echo (sender included).
     const recipients = new Set(echoes.map((d) => d.peer));
     expect(recipients).toEqual(new Set(["ownerA__1234567890", "ownerB__abcdefghij"]));
+  });
+
+  test("queued_message_set while working broadcasts editable queue and targeted clear", async () => {
+    await _pairForTest("ownerA__1234567890");
+    await _pairAdditionalForTest("ownerB__abcdefghij", "Android");
+    const harness = captureEventHarness();
+    const onInput = harness.handler("input");
+    onInput({ type: "input", text: "primary", source: "interactive" });
+    await new Promise<void>((r) => setImmediate(r));
+
+    const sendUserMessage = vi.fn();
+    _setPiForTest({ sendUserMessage, sendMessage: () => undefined });
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "ownerA__1234567890",
+      ct: Buffer.from(JSON.stringify({
+        type: "queued_message_set", id: "q1", text: " next ",
+      })).toString("base64"),
+    }));
+    await new Promise<void>((r) => setImmediate(r));
+
+    expect(sendUserMessage).not.toHaveBeenCalled();
+    let sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string).map(decodeSentCt);
+    const states = sent.filter((d) => d.inner.type === "queued_message_state");
+    expect(states).toHaveLength(2);
+    expect(new Set(states.map((d) => d.peer))).toEqual(new Set(["ownerA__1234567890", "ownerB__abcdefghij"]));
+    for (const state of states) {
+      expect(state.inner).toMatchObject({
+        type: "queued_message_state",
+        id: "q1",
+        text: "next",
+        items: [expect.objectContaining({ id: "q1", text: "next", editable: true })],
+      });
+    }
+
+    const syncBefore = relayRef.current!.send.mock.calls.length;
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "ownerA__1234567890",
+      ct: Buffer.from(JSON.stringify({ type: "session_sync", id: "sync-q", limit: 50 })).toString("base64"),
+    }));
+    await new Promise<void>((r) => setImmediate(r));
+    sent = relayRef.current!.send.mock.calls.slice(syncBefore)
+      .map((c) => c[0] as string).map(decodeSentCt);
+    expect(sent[0]?.inner.type).toBe("queued_message_state");
+    expect(sent[1]?.inner.type).toBe("session_history");
+
+    const clearBefore = relayRef.current!.send.mock.calls.length;
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "ownerA__1234567890",
+      ct: Buffer.from(JSON.stringify({
+        type: "queued_message_clear", id: "clear-q", target_id: "q1",
+      })).toString("base64"),
+    }));
+    await new Promise<void>((r) => setImmediate(r));
+    sent = relayRef.current!.send.mock.calls.slice(clearBefore)
+      .map((c) => c[0] as string).map(decodeSentCt);
+    expect(sent.filter((d) => d.inner.type === "queued_message_state").every((d) => (
+      Array.isArray(d.inner.items) && d.inner.items.length === 0
+    ))).toBe(true);
+  });
+
+  test("queued_message_set while idle drains immediately as a normal user turn", async () => {
+    await _pairForTest("ownerA__1234567890");
+    await _pairAdditionalForTest("ownerB__abcdefghij", "Android");
+    const sendUserMessage = vi.fn();
+    _setPiForTest({ sendUserMessage, sendMessage: () => undefined });
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "ownerA__1234567890",
+      ct: Buffer.from(JSON.stringify({
+        type: "queued_message_set", id: "q-idle", text: "after this",
+      })).toString("base64"),
+    }));
+    await new Promise<void>((r) => setImmediate(r));
+
+    expect(sendUserMessage).toHaveBeenCalledWith("after this", { deliverAs: "steer" });
+    expect(_getCurrentTurnIdForTest()).toBe("q-idle");
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string).map(decodeSentCt);
+    const lastState = sent.filter((d) => d.inner.type === "queued_message_state").at(-1);
+    expect(lastState?.inner.items).toEqual([]);
+    const echoes = sent.filter((d) => d.inner.type === "user_message");
+    expect(echoes).toHaveLength(2);
+    for (const echo of echoes) {
+      expect(echo.inner).toMatchObject({ type: "user_message", id: "q-idle", text: "after this" });
+      expect(echo.inner).not.toHaveProperty("streaming_behavior");
+    }
+  });
+
+  test("queued drain waits for both agent_end and turn_end regardless of ordering", async () => {
+    await _pairForTest("ownerA__1234567890");
+    const harness = captureEventHarness();
+    const sendUserMessage = vi.fn();
+    _setPiForTest({ sendUserMessage, sendMessage: () => undefined });
+
+    harness.handler("input")({ type: "input", text: "primary", source: "interactive" });
+    harness.handler("turn_start")({ type: "turn_start", turnIndex: 0, timestamp: 0 });
+    await new Promise<void>((r) => setImmediate(r));
+    const sendsBeforeA = relayRef.current!.send.mock.calls.length;
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "ownerA__1234567890",
+      ct: Buffer.from(JSON.stringify({ type: "queued_message_set", id: "q-order-a", text: "after A" })).toString("base64"),
+    }));
+    await new Promise<void>((r) => setImmediate(r));
+    expect(sendUserMessage).not.toHaveBeenCalledWith("after A", undefined);
+
+    harness.handler("agent_end")({ type: "agent_end" });
+    expect(sendUserMessage).not.toHaveBeenCalledWith("after A", { deliverAs: "steer" });
+    harness.handler("turn_end")({ type: "turn_end", turnIndex: 0, timestamp: 0 });
+    expect(sendUserMessage).toHaveBeenCalledWith("after A", { deliverAs: "steer" });
+    const statesA = relayRef.current!.send.mock.calls.slice(sendsBeforeA)
+      .map((c) => c[0] as string).map(decodeSentCt)
+      .filter((d) => d.inner.type === "queued_message_state");
+    expect(statesA.at(-1)?.inner.items).toEqual([]);
+
+    sendUserMessage.mockClear();
+    harness.handler("input")({ type: "input", text: "primary 2", source: "interactive" });
+    harness.handler("turn_start")({ type: "turn_start", turnIndex: 1, timestamp: 1 });
+    await new Promise<void>((r) => setImmediate(r));
+    const sendsBeforeB = relayRef.current!.send.mock.calls.length;
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "ownerA__1234567890",
+      ct: Buffer.from(JSON.stringify({ type: "queued_message_set", id: "q-order-b", text: "after B" })).toString("base64"),
+    }));
+    await new Promise<void>((r) => setImmediate(r));
+    harness.handler("turn_end")({ type: "turn_end", turnIndex: 1, timestamp: 1 });
+    expect(sendUserMessage).not.toHaveBeenCalledWith("after B", { deliverAs: "steer" });
+    harness.handler("agent_end")({ type: "agent_end" });
+    expect(sendUserMessage).toHaveBeenCalledWith("after B", { deliverAs: "steer" });
+    const statesB = relayRef.current!.send.mock.calls.slice(sendsBeforeB)
+      .map((c) => c[0] as string).map(decodeSentCt)
+      .filter((d) => d.inner.type === "queued_message_state");
+    expect(statesB.at(-1)?.inner.items).toEqual([]);
+  });
+
+  test("queued drain restores item on synchronous sendUserMessage rejection", async () => {
+    await _pairForTest("ownerA__1234567890");
+    _setPiForTest({
+      sendUserMessage: vi.fn(() => { throw new Error("queue rejected"); }),
+      sendMessage: () => undefined,
+    });
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "ownerA__1234567890",
+      ct: Buffer.from(JSON.stringify({
+        type: "queued_message_set", id: "q-fail", text: "after fail",
+      })).toString("base64"),
+    }));
+    await new Promise<void>((r) => setImmediate(r));
+
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string).map(decodeSentCt);
+    expect(sent.some((d) => d.inner.type === "user_message" && d.inner.id === "q-fail")).toBe(false);
+    expect(sent.find((d) => d.inner.type === "error")?.inner).toMatchObject({
+      type: "error",
+      code: "internal_error",
+      in_reply_to: "q-fail",
+    });
+    const lastState = sent.filter((d) => d.inner.type === "queued_message_state").at(-1);
+    expect(lastState?.inner).toMatchObject({
+      type: "queued_message_state",
+      id: "q-fail",
+      text: "after fail",
+      items: [expect.objectContaining({ id: "q-fail", text: "after fail" })],
+    });
   });
 
   test("plan/30: user_message with an image → save preview + send metadata-only custom message", async () => {
@@ -1460,6 +1671,131 @@ describe("multi-channel broadcast (W2D)", () => {
       });
     },
   );
+
+  test("plan/43: persisted user message clears the oldest pending steer", async () => {
+    await _pairForTest("ownerA__1234567890");
+    const sendUserMessage = vi.fn();
+    _setPiForTest({
+      sendUserMessage,
+      sendMessage: () => undefined,
+    });
+    const onMessageEnd = captureEventHandler("message_end");
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "ownerA__1234567890",
+      ct: Buffer.from(JSON.stringify({
+        type: "user_message",
+        id: "msg-steer-end-consumed",
+        text: "consume this persisted steer",
+        streaming_behavior: "steer",
+      })).toString("base64"),
+    }));
+    await new Promise<void>((r) => setImmediate(r));
+    expect(_getPendingSteerIdsForTest("consume this persisted steer")).toEqual(["msg-steer-end-consumed"]);
+
+    onMessageEnd({
+      type: "message_end",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "consume this persisted steer" }],
+        timestamp: Date.now(),
+      },
+    });
+    await new Promise<void>((r) => setImmediate(r));
+    expect(_getPendingSteerIdsForTest("consume this persisted steer")).toEqual([]);
+
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string).map(decodeSentCt);
+    expect(sent.some((d) => (
+      d.inner.type === "steer_consumed" && d.inner.id === "msg-steer-end-consumed"
+    ))).toBe(true);
+  });
+
+  test("plan/43: started user message clears the oldest pending steer", async () => {
+    await _pairForTest("ownerA__1234567890");
+    const sendUserMessage = vi.fn();
+    _setPiForTest({
+      sendUserMessage,
+      sendMessage: () => undefined,
+    });
+    const onMessageStart = captureEventHandler("message_start");
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "ownerA__1234567890",
+      ct: Buffer.from(JSON.stringify({
+        type: "user_message",
+        id: "msg-steer-consumed",
+        text: "consume this exact steer",
+        streaming_behavior: "steer",
+      })).toString("base64"),
+    }));
+    await new Promise<void>((r) => setImmediate(r));
+    expect(_getPendingSteerIdsForTest("consume this exact steer")).toEqual(["msg-steer-consumed"]);
+
+    onMessageStart({
+      type: "message_start",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "SDK-rendered text differed" }],
+        timestamp: Date.now(),
+      },
+    });
+    await new Promise<void>((r) => setImmediate(r));
+    expect(_getPendingSteerIdsForTest("consume this exact steer")).toEqual([]);
+    expect(_getActivePeerCountForTest()).toBe(1);
+
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string).map(decodeSentCt);
+    expect(sent.some((d) => (
+      d.inner.type === "steer_consumed" && d.inner.id === "msg-steer-consumed"
+    ))).toBe(true);
+  });
+
+  test("plan/43: message_start plus message_end consumes one steer only", async () => {
+    await _pairForTest("ownerA__1234567890");
+    _setPiForTest({
+      sendUserMessage: vi.fn(),
+      sendMessage: () => undefined,
+    });
+    const onMessageStart = captureEventHandler("message_start");
+    const onMessageEnd = captureEventHandler("message_end");
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+    for (const [id, text] of [["steer-1", "1"], ["steer-2", "2"]]) {
+      relayRef.current!.emit("message", JSON.stringify({
+        peer: "ownerA__1234567890",
+        ct: Buffer.from(JSON.stringify({
+          type: "user_message",
+          id,
+          text,
+          streaming_behavior: "steer",
+        })).toString("base64"),
+      }));
+    }
+    await new Promise<void>((r) => setImmediate(r));
+
+    const event = {
+      type: "message_start",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "1" }],
+        timestamp: Date.now(),
+      },
+    };
+    onMessageStart(event);
+    onMessageEnd({ ...event, type: "message_end" });
+    await new Promise<void>((r) => setImmediate(r));
+
+    expect(_getPendingSteerIdsForTest("1")).toEqual([]);
+    expect(_getPendingSteerIdsForTest("2")).toEqual(["steer-2"]);
+    const consumed = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string)
+      .map(decodeSentCt)
+      .filter((d) => d.inner.type === "steer_consumed");
+    expect(consumed.map((d) => (d.inner as { id: string }).id)).toEqual(["steer-1"]);
+  });
 
   test("plan/43: steering without a known turn id still reaches SDK as steer", async () => {
     await _pairForTest("ownerA__1234567890");

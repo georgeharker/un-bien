@@ -58,6 +58,7 @@ import type {
   SessionHistoryEvent,
   ThinkingLevel,
   WireImage,
+  QueuedMessageItem,
 } from "./protocol/types.js";
 import { RelayClient, RoomAlreadyOpenError } from "./transport/relay_client.js";
 import { PlainPeerChannel } from "./transport/peer_channel.js";
@@ -678,6 +679,7 @@ async function _deliverImageUserMessage(
     return;
   }
 
+  if (shouldSteer) _trackPendingSteer(msg.id, msg.text);
   _echoUserMessage(msg, shouldSteer);
 }
 
@@ -796,6 +798,114 @@ type BufferMsg = {
   tokensBefore?: number;
 };
 let _messageBuffer: BufferMsg[] = [];
+type PendingSteer = { id: string; text: string };
+let _pendingSteers: PendingSteer[] = [];
+let _lastConsumedSteerText: string | null = null;
+
+type AndroidQueuedItem = QueuedMessageItem & { editable: true };
+let _queuedItems: AndroidQueuedItem[] = [];
+
+function _queuedStateMessage(): ServerMessage {
+  const first = _queuedItems[0];
+  return {
+    type: "queued_message_state",
+    ...(first ? { id: first.id, text: first.text } : {}),
+    items: _queuedItems.map((item) => ({ ...item })),
+  };
+}
+
+function _sendQueuedState(sender: PlainPeerChannel): void {
+  sender.send(_queuedStateMessage());
+}
+
+function _broadcastQueuedState(): void {
+  _broadcastToActive(_queuedStateMessage());
+}
+
+function _resetQueuedItems({ broadcast = false }: { broadcast?: boolean } = {}): void {
+  _queuedItems = [];
+  if (broadcast) _broadcastQueuedState();
+}
+
+function _upsertQueuedItem(item: AndroidQueuedItem): void {
+  const index = _queuedItems.findIndex((existing) => existing.id === item.id);
+  if (index === -1) {
+    _queuedItems = [..._queuedItems, item];
+  } else {
+    _queuedItems = [
+      ..._queuedItems.slice(0, index),
+      item,
+      ..._queuedItems.slice(index + 1),
+    ];
+  }
+  _broadcastQueuedState();
+}
+
+function _clearQueuedItems(targetId?: string): void {
+  _queuedItems = targetId
+    ? _queuedItems.filter((item) => item.id !== targetId)
+    : [];
+  _broadcastQueuedState();
+}
+
+function _isBusyForQueueDrain(): boolean {
+  return _currentTurnId !== null || _myRoomMeta?.working === true;
+}
+
+function _normalizeSteerText(text: string): string {
+  return text.trim();
+}
+
+function _trackPendingSteer(id: string, text: string): void {
+  const key = _normalizeSteerText(text);
+  if (!key) return;
+  _pendingSteers.push({ id, text: key });
+}
+
+function _consumePendingSteerForStartedUser(text: string): string | null {
+  if (_pendingSteers.length === 0) return null;
+  const key = _normalizeSteerText(text);
+  const index = key ? _pendingSteers.findIndex((item) => item.text === key) : -1;
+  const [item] = _pendingSteers.splice(index >= 0 ? index : 0, 1);
+  return item?.id ?? null;
+}
+
+function _broadcastConsumedSteerForUserContent(content: unknown): void {
+  const text = _stringifyContent(content);
+  if (_lastConsumedSteerText === text) {
+    _lastConsumedSteerText = null;
+    return;
+  }
+  const id = _consumePendingSteerForStartedUser(text);
+  if (!id) return;
+  _lastConsumedSteerText = text;
+  _broadcastToActive({ type: "steer_consumed", id });
+}
+
+function _maybeDrainQueuedItem(): void {
+  if (_isBusyForQueueDrain()) return;
+  const item = _queuedItems.shift();
+  if (!item) return;
+  _broadcastQueuedState();
+
+  const previousTurnId = _currentTurnId;
+  _currentTurnId = item.id;
+  const msg: ClientUserMessage = { type: "user_message", id: item.id, text: item.text };
+  const wake = _wakeAgent(item.text, `queued app user_message id=${item.id}`, "steer");
+  if (!wake.ok) {
+    _currentTurnId = previousTurnId;
+    _queuedItems = [item, ..._queuedItems];
+    _broadcastQueuedState();
+    _broadcastToActive({
+      type: "error",
+      code: "internal_error",
+      in_reply_to: item.id,
+      message: `Agent rejected queued message: ${wake.detail}`,
+    });
+    return;
+  }
+  _echoUserMessage(msg, false);
+}
 
 /** Test-only override of the message buffer. */
 /**
@@ -870,6 +980,11 @@ export function _setCurrentModelForTest(name: string | undefined): void {
 /** Test-only: read the active turn id used for plain `cancel` routing. */
 export function _getCurrentTurnIdForTest(): string | null {
   return _currentTurnId;
+}
+
+export function _getPendingSteerIdsForTest(text: string): string[] {
+  const key = _normalizeSteerText(text);
+  return _pendingSteers.filter((item) => item.text === key).map((item) => item.id);
 }
 
 /** Test-only: override the bound AgentSession so a spy can capture the
@@ -1098,6 +1213,8 @@ function _goIdle(byeReason?: import("./protocol/types.js").ByeReason): void {
   _stopAutoListener?.();
   _stopAutoListener = null;
 
+  if (_queuedItems.length > 0) _resetQueuedItems({ broadcast: true });
+
   // Tear down every per-owner channel and clear the map.
   for (const ch of _activePeers.values()) {
     try { ch.detach(); } catch { /* best-effort */ }
@@ -1106,6 +1223,9 @@ function _goIdle(byeReason?: import("./protocol/types.js").ByeReason): void {
   _peerShort = "";
   _currentTurnId = null;
   _pendingReceivedImagePreviews.length = 0;
+  _pendingSteers = [];
+  _lastConsumedSteerText = null;
+  _resetQueuedItems();
 
   _relay?.close();
   _relay = null;
@@ -1153,9 +1273,13 @@ function _onRelayClose(): void {
   for (const ch of _activePeers.values()) {
     try { ch.detach(); } catch { /* best-effort */ }
   }
+  if (_queuedItems.length > 0) _resetQueuedItems({ broadcast: true });
   _activePeers.clear();
   _peerShort = "";
   _currentTurnId = null;
+  _pendingSteers = [];
+  _lastConsumedSteerText = null;
+  _resetQueuedItems();
 
   _relay = null;  // _relayUrl preserved for retry
 
@@ -1777,6 +1901,12 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     });
   });
 
+  pi.on("message_start", (event) => {
+    const message = event?.message as BufferMsg | undefined;
+    if (!_anyPeerActive() || message?.role !== "user") return;
+    _broadcastConsumedSteerForUserContent(message.content);
+  });
+
   pi.on("message_update", (event) => {
     if (!_anyPeerActive() || !_currentTurnId) return;
     const ae = event.assistantMessageEvent;
@@ -1820,8 +1950,11 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // or RPC. Previous impl overwrote on `agent_end` and lost everything but the
   // last turn (see diagnostics 14, 15).
   pi.on("message_end", (event) => {
-    const m = event?.message as { role?: string; stopReason?: string; errorMessage?: string } | undefined;
+    const m = event?.message as { role?: string; content?: unknown; stopReason?: string; errorMessage?: string } | undefined;
     if (!m) return;
+    if (m.role === "user" && _anyPeerActive()) {
+      _broadcastConsumedSteerForUserContent(m.content);
+    }
     if (m.role === "user" || m.role === "assistant" || m.role === "toolResult") {
       _messageBuffer.push(m as unknown as BufferMsg);
     }
@@ -1850,6 +1983,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       _currentTurnId = null;
     }
     _flushPendingReceivedImagePreviews();
+    _lastConsumedSteerText = null;
+    _maybeDrainQueuedItem();
   });
 
   // plan/34: the broker no longer gates delivery on busy state, so we no
@@ -1880,6 +2015,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     if (_relay && _myRoomId) {
       _relay.sendControl({ type: "room_meta_update", room_id: _myRoomId, meta: { working: false } });
     }
+    _maybeDrainQueuedItem();
   });
 
   // Plan/32: compaction feedback. compact() doesn't run a turn, so bracket it
@@ -1909,6 +2045,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     _broadcastToActive({ type: "compaction", summary, tokens_before: tokensBefore, ts });
     // (3) Working ends.
     _publishWorking(false);
+    _maybeDrainQueuedItem();
   });
 
   // Re-capture the freshest base ctx on every session replacement so compact
@@ -3697,6 +3834,19 @@ export function _routeClientMessageFrom(
   }
   if (!_pi) return;
   switch (msg.type) {
+    case "queued_message_set": {
+      const text = msg.text.trim();
+      if (!text) {
+        _clearQueuedItems(msg.id);
+        break;
+      }
+      _upsertQueuedItem({ id: msg.id, text, editable: true, created_at: Date.now() });
+      _maybeDrainQueuedItem();
+      break;
+    }
+    case "queued_message_clear":
+      _clearQueuedItems(msg.target_id);
+      break;
     case "user_message": {
       // Source-of-truth rebroadcast (plan/24 W2D fix). Echo the message
       // back to every attached owner (sender included) after the SDK accepts
@@ -3753,6 +3903,7 @@ export function _routeClientMessageFrom(
         });
         break;
       }
+      if (shouldSteer) _trackPendingSteer(msg.id, msg.text);
       _echoUserMessage(msg, shouldSteer);
       break;
     }
@@ -3898,6 +4049,7 @@ function _handleSessionSync(
   sender: PlainPeerChannel,
   msg: Extract<ClientMessage, { type: "session_sync" }>,
 ): void {
+  _sendQueuedState(sender);
   if (_sessionStartedAt === null) {
     sender.send({
       type: "session_history",
@@ -3947,6 +4099,9 @@ function _handleSessionSync(
  */
 function _resetSessionForNew(inReplyTo: string): void {
   _messageBuffer = [];
+  _pendingSteers = [];
+  _lastConsumedSteerText = null;
+  _resetQueuedItems({ broadcast: true });
   _sessionStartedAt = Date.now();
   _broadcastToActive({
     type: "session_history",
