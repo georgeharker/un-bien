@@ -935,6 +935,9 @@ export async function _stopForTest(ctx: unknown): Promise<void> {
 export function _getDisposedForTest(): boolean { return _disposed; }
 export function _setDisposedForTest(v: boolean): void { _disposed = v; }
 
+/** Test-only: reset the once-per-session auto-init gate so session_start re-runs it. */
+export function _resetAutoInitedForTest(): void { _autoInited = false; }
+
 /** Test-only: true when this instance holds a live local-mesh node. */
 export function _hasMeshNodeForTest(): boolean { return _meshNode !== null; }
 
@@ -2091,8 +2094,21 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       // cwd guard also keeps tests with a minimal ctx (no cwd) from triggering
       // the wizard path.
       const isDaemon = process.env["REMOTE_PI_DAEMON"] === "1";
+      // One-shot / non-interactive Pi (`pi -p` / `pi --print`) is documented as
+      // "process the prompt and exit". Auto-starting the relay there opens a WS
+      // that is never `.unref()`'d, so the idle Node event loop never drains and
+      // the process hangs forever after printing its answer (issue #44). Daemon
+      // mode (REMOTE_PI_DAEMON=1) and normal interactive sessions never pass
+      // `-p`/`--print`, so they still auto-start the relay exactly as before.
+      const isPrintMode =
+        process.argv.includes("-p") || process.argv.includes("--print");
       const cwd = isDaemon ? process.cwd() : "cwd" in ctx ? ctx.cwd : undefined;
-      if (cwd && localConfigExists(cwd) && effectiveAutoStartRelay(loadLocalConfig(cwd))) {
+      if (
+        !isPrintMode &&
+        cwd &&
+        localConfigExists(cwd) &&
+        effectiveAutoStartRelay(loadLocalConfig(cwd))
+      ) {
         _autoInited = true;
         const initCtx = isDaemon
           ? ({ ui: _headlessUi(), cwd: process.cwd() } as Pick<ExtensionContext, "ui" | "cwd">)

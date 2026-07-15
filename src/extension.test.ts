@@ -168,6 +168,7 @@ const {
   _getActivePeerCountForTest,
   _restartSupervisorCommand,
   _setDisposedForTest,
+  _resetAutoInitedForTest,
   _hasMeshNodeForTest,
   _getLockedNameForTest,
   _resetCwdLockForTest,
@@ -3821,6 +3822,63 @@ describe("same-folder same-name → #N suffix (no refusal)", () => {
       delete process.env["REMOTE_PI_DIRECT_CONFIG"];
       _resetCwdLockForTest();
     }
+  });
+});
+
+// ── print/-p mode never auto-starts the relay (issue #44) ────────────────────
+describe("session_start auto-init skips relay in print/-p mode (#44)", () => {
+  const savedArgv = process.argv;
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    _knownPeers.length = 0;
+    _consumeCalls.length = 0;
+    relayRef.current = null;
+    relayInstances.length = 0;
+    _defaultConnectImpl = async () => undefined;
+    _setDisposedForTest(false);
+    _resetAutoInitedForTest();
+    _resetCwdLockForTest();
+    const stop = captureHandler("remote-pi stop");
+    await stop("", makeMockCtx());
+    _resetAutoInitedForTest();
+  });
+  afterEach(() => {
+    process.argv = savedArgv;
+    delete process.env["REMOTE_PI_DIRECT_CONFIG"];
+    _resetCwdLockForTest();
+  });
+
+  // A one-shot `pi -p "..."` prints its answer and must exit. Auto-starting the
+  // relay opens a WS that is never `.unref()`'d, so the process would hang.
+  test("`pi -p` does NOT bring up the mesh/relay on session_start", async () => {
+    process.env["REMOTE_PI_DIRECT_CONFIG"] = JSON.stringify({
+      agent_name: "PrintAgent",
+      auto_start_relay: true,
+    });
+    process.argv = ["node", "pi", "-p", "Say hello in one word."];
+    const onSessionStart = captureEventHandler("session_start");
+    _resetAutoInitedForTest();
+    onSessionStart({ type: "session_start" }, makeMockCtx("/home/user/projects/rp-print"));
+    await new Promise<void>((r) => setTimeout(r, 20));
+
+    expect(_hasMeshNodeForTest()).toBe(false);
+    expect(relayInstances).toHaveLength(0);
+  });
+
+  // Guard the negative: a normal interactive session_start (no -p/--print) still
+  // auto-starts exactly as before, so the fix doesn't disable auto-init at large.
+  test("interactive session_start (no -p) still auto-starts the mesh", async () => {
+    process.env["REMOTE_PI_DIRECT_CONFIG"] = JSON.stringify({
+      agent_name: "InteractiveAgent",
+      auto_start_relay: true,
+    });
+    process.argv = ["node", "pi"];
+    const onSessionStart = captureEventHandler("session_start");
+    _resetAutoInitedForTest();
+    onSessionStart({ type: "session_start" }, makeMockCtx("/home/user/projects/rp-interactive"));
+    await new Promise<void>((r) => setTimeout(r, 20));
+
+    expect(_hasMeshNodeForTest()).toBe(true);
   });
 });
 
