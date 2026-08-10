@@ -44,6 +44,7 @@ import {
   addPeer,
   getOrCreateEd25519Keypair,
   KeyringUnavailableError,
+  PairedIdentityMissingError,
   listPeers,
   removePeer,
   snapshotOwnerPubkeys,
@@ -2862,6 +2863,23 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
         "keychain is locked or access was denied. Unlock it (open the app / " +
         "log in) and run /remote-pi again. Your pairing is NOT lost. " +
         "(Set REMOTE_PI_ALLOW_FILE_IDENTITY=1 only for headless hosts.)",
+        "error",
+      );
+      return;
+    }
+    if (err instanceof PairedIdentityMissingError) {
+      // Issues #95/#69: this process can't reach the keyring that holds the
+      // paired identity (classically a `systemd --user` daemon vs. the desktop
+      // session that paired). Minting a fresh key here would make SelfRevoke
+      // wipe peers.json seconds later and take the phone offline, so storage
+      // refuses. Surface the actionable fix instead of failing silently.
+      ctx.ui.notify(
+        "[remote-pi] Could not read this machine's identity, but devices are " +
+        "already paired — refusing to generate a new one (that would revoke " +
+        "them). This process likely cannot reach the same keyring as the " +
+        "session that paired (e.g. a systemd --user daemon). Give the service " +
+        "keyring access, or copy the paired keypair to ~/.pi/remote/identity.json " +
+        "(0600) so both contexts read the same identity.",
         "error",
       );
       return;
