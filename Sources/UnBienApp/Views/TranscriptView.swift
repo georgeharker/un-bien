@@ -65,6 +65,7 @@ struct TranscriptView: View {
         )
     }
 
+
     @ViewBuilder
     private var queuedChips: some View {
         let items = model.queued[session.id] ?? []
