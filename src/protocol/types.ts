@@ -304,6 +304,10 @@ export type ServerMessage =
   | { type: "queued_message_state"; id?: string; text?: string; items?: QueuedMessageItem[] }
   | { type: "steer_consumed"; id: string }
   | { type: "agent_chunk"; in_reply_to: string; delta: string }
+  // un-bien extension: streamed model reasoning (thinking) delta. Mirrors
+  // agent_chunk but carries reasoning content from the SDK's `thinking_delta`
+  // assistantMessageEvent. Additive + optional — stock clients ignore it.
+  | { type: "agent_reasoning"; in_reply_to: string; delta: string }
   | { type: "agent_done"; in_reply_to: string; usage?: Usage }
   | { type: "agent_message"; in_reply_to: string; text: string; usage?: Usage }
   // Plan/32: pushed after a context compaction (live, and replayed on history

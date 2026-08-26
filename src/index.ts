@@ -2185,6 +2185,10 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     const ae = event.assistantMessageEvent;
     if (ae.type === "text_delta") {
       _broadcastToActive({ type: "agent_chunk", in_reply_to: _currentTurnId, delta: ae.delta });
+    } else if (ae.type === "thinking_delta") {
+      // un-bien extension: stream model reasoning so paired apps can render a
+      // (collapsible) thinking block. Additive — stock clients ignore it.
+      _broadcastToActive({ type: "agent_reasoning", in_reply_to: _currentTurnId, delta: ae.delta });
     }
   });
 
