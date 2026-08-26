@@ -93,4 +93,8 @@ public struct ExtensionUiRequest: Equatable, Sendable {
     public enum Method: String, Codable, Sendable {
         case select, confirm, input, editor, notify
     }
+
+    /// The pi-ask rich flow, when this prompt carries one (else nil → render
+    /// the degraded base method).
+    public var askFlow: AskEnrichment? { AskEnrichment.from(ask) }
 }

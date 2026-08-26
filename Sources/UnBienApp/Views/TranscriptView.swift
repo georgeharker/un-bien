@@ -40,12 +40,20 @@ struct TranscriptView: View {
         .task { await model.openSession(session) }
         .sheet(isPresented: promptPresented) {
             if let request = model.prompts[session.id] {
-                ExtensionUIPromptView(
-                    request: request,
-                    onRespond: { response in Task { await model.respondToPrompt(response, session: session) } },
-                    onCancel: { model.prompts[session.id] = nil }
-                )
-                .presentationDetents([.medium, .large])
+                let respond: (ExtensionUiResponse) -> Void = { response in
+                    Task { await model.respondToPrompt(response, session: session) }
+                }
+                if let flow = request.askFlow {
+                    RichAskFlowView(flow: flow, requestID: request.id, onRespond: respond)
+                        .presentationDetents([.large])
+                } else {
+                    ExtensionUIPromptView(
+                        request: request,
+                        onRespond: respond,
+                        onCancel: { model.prompts[session.id] = nil }
+                    )
+                    .presentationDetents([.medium, .large])
+                }
             }
         }
     }

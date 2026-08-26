@@ -51,6 +51,43 @@ final class CodecTests: XCTestCase {
         XCTAssertTrue(encoded.hasSuffix("\n"))
     }
 
+    func testAskEnrichmentDecodesFromExtensionUiRequest() throws {
+        let ask = #""ask":{"flow_id":"f1","tool_call_id":null,"source":"tool","title":"Choose","# +
+            #""questions":[{"id":"q1","label":"L","prompt":"Which?","type":"multi","required":true,"# +
+            #""options":[{"value":"a","label":"A","freeform":false},{"value":"b","label":"B"}]}]}"#
+        let line = #"{"type":"extension_ui_request","id":"r1","method":"select","# +
+            #""title":"Pick","options":["a"],"# + ask + "}"
+        guard case let .extensionUiRequest(request) = try Codec.decodeServer(line) else {
+            return XCTFail("not an extension_ui_request")
+        }
+        let flow = try XCTUnwrap(request.askFlow)
+        XCTAssertEqual(flow.flowID, "f1")
+        XCTAssertNil(flow.toolCallID)
+        XCTAssertEqual(flow.questions.first?.type, .multi)
+        XCTAssertTrue(flow.questions.first?.required ?? false)
+        XCTAssertEqual(flow.questions.first?.options.count, 2)
+    }
+
+    func testAskResponseEnrichmentEncodesRichSubmit() throws {
+        let enrichment = AskResponseEnrichment.answer(
+            flowID: "f1",
+            answers: ["q1": AskAnswer(values: ["a", "b"], customText: "x", note: "n")])
+        let message = ClientMessage.extensionUiResponse(.rich(id: "r1", enrichment: enrichment))
+        let data = try Codec.encodeClientBody(message)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(object["type"] as? String, "extension_ui_response")
+        XCTAssertEqual(object["id"] as? String, "r1")
+        let ask = try XCTUnwrap(object["ask"] as? [String: Any])
+        XCTAssertEqual(ask["flow_id"] as? String, "f1")
+        XCTAssertEqual(ask["kind"] as? String, "answer")
+        let answers = try XCTUnwrap(ask["answers"] as? [String: Any])
+        let q1 = try XCTUnwrap(answers["q1"] as? [String: Any])
+        XCTAssertEqual(q1["customText"] as? String, "x") // camelCase VERBATIM
+        XCTAssertEqual((q1["values"] as? [String])?.sorted(), ["a", "b"])
+        XCTAssertNil(object["value"])
+        XCTAssertNil(object["confirmed"])
+    }
+
     func testClientRoundTrip() throws {
         let messages: [ClientMessage] = [
             .ping(id: "018f9c2a"),

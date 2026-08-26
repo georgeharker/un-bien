@@ -61,4 +61,10 @@ public struct ExtensionUiResponse: Equatable, Sendable {
         self.cancelled = cancelled
         self.ask = ask
     }
+
+    /// Rich pi-ask submit: carries ONLY the structured `ask` envelope (no
+    /// value/confirmed/cancelled) — routing keys off `ask.kind` (DESIGN §4).
+    public static func rich(id: String, enrichment: AskResponseEnrichment) -> ExtensionUiResponse {
+        ExtensionUiResponse(id: id, ask: enrichment.toJSONValue())
+    }
 }
