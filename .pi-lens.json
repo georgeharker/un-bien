@@ -1,0 +1,9 @@
+{
+  "ignore": [
+    "**/.build/**",
+    ".build/**",
+    ".build",
+    "**/.swiftpm/**",
+    ".swiftpm/**"
+  ]
+}

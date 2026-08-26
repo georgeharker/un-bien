@@ -1,0 +1,15 @@
+---
+identifier_name:
+  min_length: 2
+  allowed_symbols: ["_"]
+  excluded:
+    - ts
+    - id
+    - pk
+    - sk
+
+cyclomatic_complexity:
+  ignores_case_statements: true
+
+excluded:
+  - .build

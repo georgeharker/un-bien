@@ -1,0 +1,61 @@
+---
+name: UnBien
+options:
+  bundleIdPrefix: work.un-bien
+  deploymentTarget:
+    iOS: "17.0"
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+packages:
+  UnBien:
+    path: .
+
+targets:
+  UnBien-iOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: App/Shared
+    dependencies:
+      - package: UnBien
+        product: UnBienApp
+    info:
+      path: App/iOS/Info.plist
+      properties:
+        CFBundleDisplayName: un-bien
+        UILaunchScreen: {}
+        NSCameraUsageDescription: Scan a pairing QR code.
+        # Relays are user-specified plaintext ws:// endpoints on private
+        # networks (localhost / LAN / Tailnet) — allow non-TLS loads.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: work.un-bien.app
+        GENERATE_INFOPLIST_FILE: "NO"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "6.0"
+
+  UnBien-macOS:
+    type: application
+    platform: macOS
+    sources:
+      - path: App/Shared
+    dependencies:
+      - package: UnBien
+        product: UnBienApp
+    info:
+      path: App/macOS/Info.plist
+      properties:
+        CFBundleDisplayName: un-bien
+        LSMinimumSystemVersion: "14.0"
+        NSCameraUsageDescription: Scan a pairing QR code.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: work.un-bien.app
+        GENERATE_INFOPLIST_FILE: "NO"
+        SWIFT_VERSION: "6.0"
+        ENABLE_HARDENED_RUNTIME: "YES"
