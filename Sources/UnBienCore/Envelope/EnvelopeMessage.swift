@@ -11,14 +11,17 @@ public struct EnvelopeMessage: Codable, Sendable {
     public let ts: Double?
     /// Handshake (`type == "hello"`): the fork's advertised capabilities.
     public let caps: [String]?
+    /// Handshake: stable pi session id — disambiguates reused session names.
+    public let sessionId: String?
     public let rpc: JSONValue?
     public let evt: EnvelopeEvt?
 
     public init(type: String? = nil, ts: Double? = nil, caps: [String]? = nil,
-                rpc: JSONValue? = nil, evt: EnvelopeEvt? = nil) {
+                sessionId: String? = nil, rpc: JSONValue? = nil, evt: EnvelopeEvt? = nil) {
         self.type = type
         self.ts = ts
         self.caps = caps
+        self.sessionId = sessionId
         self.rpc = rpc
         self.evt = evt
     }
