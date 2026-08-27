@@ -16,6 +16,10 @@ public enum ClientMessage: Equatable, Sendable {
     case modelSet(id: String, provider: String, modelID: String)
     case thinkingSet(id: String, level: ThinkingLevel)
     case listModels(id: String)
+    /// un-bien remote launch: spawn a NEW pi session on the paired machine
+    /// (owner-key + config gated; shown only when the `remote_launch` cap is
+    /// advertised). `mode` = "tmux" | "rpc".
+    case sessionLaunch(id: String, mode: String, cwd: String?, name: String?)
     /// Response to an `extension_ui_request` (select/confirm/input/editor).
     case extensionUiResponse(ExtensionUiResponse)
 
@@ -39,6 +43,7 @@ public enum ClientMessage: Equatable, Sendable {
         case .modelSet: return "model_set"
         case .thinkingSet: return "thinking_set"
         case .listModels: return "list_models"
+        case .sessionLaunch: return "session_launch"
         case .extensionUiResponse: return "extension_ui_response"
         }
     }

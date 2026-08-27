@@ -22,6 +22,9 @@ extension ClientMessage: Codable {
         static let provider = CodingKeys("provider")
         static let modelID = CodingKeys("model_id")
         static let level = CodingKeys("level")
+        static let mode = CodingKeys("mode")
+        static let cwd = CodingKeys("cwd")
+        static let name = CodingKeys("name")
         static let value = CodingKeys("value")
         static let confirmed = CodingKeys("confirmed")
         static let cancelled = CodingKeys("cancelled")
@@ -72,6 +75,11 @@ extension ClientMessage: Codable {
             try container.encode(level, forKey: .level)
         case let .listModels(id):
             try container.encode(id, forKey: .id)
+        case let .sessionLaunch(id, mode, cwd, name):
+            try container.encode(id, forKey: .id)
+            try container.encode(mode, forKey: .mode)
+            try container.encodeIfPresent(cwd, forKey: .cwd)
+            try container.encodeIfPresent(name, forKey: .name)
         case let .extensionUiResponse(response):
             try container.encode(response.id, forKey: .id)
             try container.encodeIfPresent(response.value, forKey: .value)

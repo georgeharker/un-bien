@@ -42,6 +42,24 @@ final class CodecTests: XCTestCase {
         XCTAssertNil(caps)
     }
 
+    func testSessionLaunchEncodes() throws {
+        let data = try JSONEncoder().encode(
+            ClientMessage.sessionLaunch(id: "l1", mode: "tmux", cwd: "/w", name: "job"))
+        let obj = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(obj["type"] as? String, "session_launch")
+        XCTAssertEqual(obj["mode"] as? String, "tmux")
+        XCTAssertEqual(obj["cwd"] as? String, "/w")
+        XCTAssertEqual(obj["name"] as? String, "job")
+    }
+
+    func testSessionLaunchOmitsNilCwdName() throws {
+        let data = try JSONEncoder().encode(
+            ClientMessage.sessionLaunch(id: "l1", mode: "tmux", cwd: nil, name: nil))
+        let obj = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertNil(obj["cwd"])
+        XCTAssertNil(obj["name"])
+    }
+
     func testInvalidJSONIsInvalidMessage() {
         XCTAssertThrowsError(try Codec.decodeServer("not json {{{")) { error in
             XCTAssertEqual(error as? DecodeError, .invalidMessage("not JSON: The data couldn’t be read because it isn’t in the correct format."))
