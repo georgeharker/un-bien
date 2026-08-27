@@ -21,6 +21,28 @@ final class PlanModelTests: XCTestCase {
         XCTAssertTrue(rows.first { $0.id == "a" }?.actionable ?? false)
     }
 
+    func testWaveSectionsGroupByDependencyWave() {
+        let sections = PlanModel.waveSections([
+            item("a"),
+            item("b", deps: ["a"]),
+            item("c", deps: ["b"]),
+            item("old", status: "done"),
+        ])
+        XCTAssertEqual(sections.map(\.title), ["Available now", "Wave 1", "Wave 2", "Done"])
+        XCTAssertEqual(sections.first?.rows.map(\.id), ["a"])
+        XCTAssertEqual(sections.last?.rows.map(\.id), ["old"])
+    }
+
+    func testWaveSectionsPutCyclesInTheirOwnGroup() {
+        let sections = PlanModel.waveSections([
+            item("free"),
+            item("a", deps: ["b"]),
+            item("b", deps: ["a"]),
+        ])
+        XCTAssertEqual(sections.map(\.title), ["Available now", "Cycle"])
+        XCTAssertEqual(Set(sections.last?.rows.map(\.id) ?? []), ["a", "b"])
+    }
+
     func testDoneDepIsSatisfiedSoDependentIsWaveZero() {
         let rows = PlanModel.waveOrder([
             item("a", status: "done"),

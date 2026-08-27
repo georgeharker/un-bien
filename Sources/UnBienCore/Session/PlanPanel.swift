@@ -120,6 +120,34 @@ public enum PlanModel {
         }
     }
 
+    /// One dependency wave as a titled group of rows.
+    public struct WaveSection: Equatable, Sendable, Identifiable {
+        public let title: String
+        public let rows: [PlanRow]
+        public var id: String { title }
+    }
+
+    /// Split the wave-ordered rows into visible dependency waves: `Available
+    /// now` (wave 0) → `Wave N` (deeper) → `Cycle` → a trailing `Done`. Rows are
+    /// already sorted by (done, wave, kind, id), so consecutive rows sharing a
+    /// bucket form each section without reordering — the layering pi-plan's
+    /// widget conveys by order, surfaced here as groups.
+    public static func waveSections(_ items: [PlanItem]) -> [WaveSection] {
+        func bucket(_ row: PlanRow) -> String {
+            if isDone(row.item) { return "Done" }
+            guard !row.circular, let wave = row.wave else { return "Cycle" }
+            return wave == 0 ? "Available now" : "Wave \(wave)"
+        }
+        var order: [String] = []
+        var grouped: [String: [PlanRow]] = [:]
+        for row in waveOrder(items) {
+            let key = bucket(row)
+            if grouped[key] == nil { order.append(key) }
+            grouped[key, default: []].append(row)
+        }
+        return order.map { WaveSection(title: $0, rows: grouped[$0] ?? []) }
+    }
+
     /// Extract plan items from a `panel_update` data payload (`{ items: [...] }`).
     public static func items(from data: JSONValue) -> [PlanItem] {
         guard let encoded = try? JSONEncoder().encode(data),

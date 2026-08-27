@@ -40,40 +40,50 @@ struct PlanPanelView: View {
     private let theme = AppTheme.tokyoNight
 
     private var rows: [PlanRow] { PlanModel.waveOrder(items) }
+    private var sections: [PlanModel.WaveSection] { PlanModel.waveSections(items) }
 
     var body: some View {
         List {
             if !summary.isEmpty {
                 Section { Text(summary).font(.caption).foregroundStyle(theme.secondaryText) }
             }
-            ForEach(rows) { row in
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: statusIcon(row))
-                        .foregroundStyle(statusColor(row))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(row.item.name)
-                            .foregroundStyle(row.actionable ? theme.text : theme.secondaryText)
-                            .fontWeight(row.actionable ? .semibold : .regular)
-                        HStack(spacing: 6) {
-                            if row.item.kind != "plan" {
-                                Text(row.item.kind).font(.caption2)
-                                    .padding(.horizontal, 5).padding(.vertical, 1)
-                                    .background(theme.surface, in: Capsule())
-                                    .foregroundStyle(theme.secondaryText)
-                            }
-                            if row.blockedCount > 0 {
-                                Label("\(row.blockedCount)", systemImage: "hourglass")
-                                    .font(.caption2).foregroundStyle(theme.secondaryText)
-                            }
-                            if row.circular {
-                                Label("cycle", systemImage: "arrow.triangle.2.circlepath")
-                                    .font(.caption2).foregroundStyle(theme.error)
-                            }
-                            if row.item.tainted == true {
-                                Label("tainted", systemImage: "exclamationmark.triangle")
-                                    .font(.caption2).foregroundStyle(theme.error)
-                            }
-                        }
+            ForEach(sections) { section in
+                Section(section.title) {
+                    ForEach(section.rows) { row in
+                        planRow(row)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func planRow(_ row: PlanRow) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: statusIcon(row))
+                .foregroundStyle(statusColor(row))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(row.item.name)
+                    .foregroundStyle(row.actionable ? theme.text : theme.secondaryText)
+                    .fontWeight(row.actionable ? .semibold : .regular)
+                HStack(spacing: 6) {
+                    if row.item.kind != "plan" {
+                        Text(row.item.kind).font(.caption2)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(theme.surface, in: Capsule())
+                            .foregroundStyle(theme.secondaryText)
+                    }
+                    if row.blockedCount > 0 {
+                        Label("\(row.blockedCount)", systemImage: "hourglass")
+                            .font(.caption2).foregroundStyle(theme.secondaryText)
+                    }
+                    if row.circular {
+                        Label("cycle", systemImage: "arrow.triangle.2.circlepath")
+                            .font(.caption2).foregroundStyle(theme.error)
+                    }
+                    if row.item.tainted == true {
+                        Label("tainted", systemImage: "exclamationmark.triangle")
+                            .font(.caption2).foregroundStyle(theme.error)
                     }
                 }
             }
