@@ -94,14 +94,18 @@ public struct ToolCard: Equatable, Sendable {
     public var result: JSONValue?
     public var error: String?
     public var state: State
+    /// Images returned in the tool result (screenshots/plots), rendered on the card.
+    public var images: [WireImage]
     public init(toolCallID: String, tool: String, args: [String: JSONValue],
-                result: JSONValue? = nil, error: String? = nil, state: State = .running) {
+                result: JSONValue? = nil, error: String? = nil, state: State = .running,
+                images: [WireImage] = []) {
         self.toolCallID = toolCallID
         self.tool = tool
         self.args = args
         self.result = result
         self.error = error
         self.state = state
+        self.images = images
     }
 }
 

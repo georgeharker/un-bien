@@ -315,30 +315,37 @@ private struct ToolCardView: View {
     @State private var expanded = false
 
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
-            VStack(alignment: .leading, spacing: 6) {
-                if !card.args.isEmpty {
-                    labeled("input", JSONValue.object(card.args).prettyString)
+        VStack(alignment: .leading, spacing: 8) {
+            DisclosureGroup(isExpanded: $expanded) {
+                VStack(alignment: .leading, spacing: 6) {
+                    if !card.args.isEmpty {
+                        labeled("input", JSONValue.object(card.args).prettyString)
+                    }
+                    if let result = card.result {
+                        labeled("output", result.prettyString)
+                    }
+                    if let error = card.error {
+                        labeled("error", error).foregroundStyle(theme.error)
+                    }
                 }
-                if let result = card.result {
-                    labeled("output", result.prettyString)
-                }
-                if let error = card.error {
-                    labeled("error", error).foregroundStyle(theme.error)
+                .font(.system(.caption, design: .monospaced))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 4)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: icon).foregroundStyle(color)
+                    Text(card.tool).font(.callout.weight(.medium)).foregroundStyle(theme.text)
                 }
             }
-            .font(.system(.caption, design: .monospaced))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, 4)
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: icon).foregroundStyle(color)
-                Text(card.tool).font(.callout.weight(.medium)).foregroundStyle(theme.text)
+            .tint(theme.toolAccent)
+            // Tool-emitted images (screenshots/plots) sit below the card, always
+            // visible so you don't have to expand to see them.
+            ForEach(Array(card.images.enumerated()), id: \.offset) { _, image in
+                WireImageView(image: image, theme: theme)
             }
         }
         .padding(10)
         .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
-        .tint(theme.toolAccent)
     }
 
     private func labeled(_ label: String, _ value: String) -> some View {

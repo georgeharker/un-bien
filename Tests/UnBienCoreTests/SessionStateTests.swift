@@ -19,6 +19,16 @@ final class SessionStateTests: XCTestCase {
         XCTAssertEqual(state.items.count, 2)
     }
 
+    func testToolResultImagesAttachToCard() {
+        var state = SessionState()
+        state.apply(.toolRequest(toolCallID: "tc1", tool: "screenshot", args: [:]))
+        let img = WireImage(data: "AAAA", mime: "image/png")
+        state.apply(.toolResult(toolCallID: "tc1", result: .string("captured"), error: nil, images: [img]))
+        guard case let .tool(card) = state.items[0] else { return XCTFail("no tool card") }
+        XCTAssertEqual(card.images, [img])
+        XCTAssertEqual(card.state, .ok)
+    }
+
     func testAgentMessageImagesAttachToBubble() {
         var state = SessionState()
         state.apply(.agentChunk(inReplyTo: "u1", delta: "Here is a plot:"))
@@ -70,7 +80,7 @@ final class SessionStateTests: XCTestCase {
         state.apply(.userMessage(id: "u1", text: "go", images: nil, streamingBehavior: nil))
         state.apply(.agentChunk(inReplyTo: "u1", delta: "Let me check. "))
         state.apply(.toolRequest(toolCallID: "tc1", tool: "bash", args: [:]))
-        state.apply(.toolResult(toolCallID: "tc1", result: .string("ok"), error: nil))
+        state.apply(.toolResult(toolCallID: "tc1", result: .string("ok"), error: nil, images: nil))
         state.apply(.agentChunk(inReplyTo: "u1", delta: "Found it."))
         state.apply(.agentDone(inReplyTo: "u1", usage: nil))
 
@@ -99,7 +109,7 @@ final class SessionStateTests: XCTestCase {
         guard case let .tool(running) = state.items[0] else { return XCTFail("no tool") }
         XCTAssertEqual(running.state, .running)
 
-        state.apply(.toolResult(toolCallID: "tc1", result: .string("done"), error: nil))
+        state.apply(.toolResult(toolCallID: "tc1", result: .string("done"), error: nil, images: nil))
         XCTAssertEqual(state.items.count, 1, "result fills the existing card, not a new row")
         guard case let .tool(filled) = state.items[0] else { return XCTFail("no tool") }
         XCTAssertEqual(filled.state, .ok)
@@ -109,7 +119,7 @@ final class SessionStateTests: XCTestCase {
     func testToolErrorMarksFailed() {
         var state = SessionState()
         state.apply(.toolRequest(toolCallID: "tc1", tool: "bash", args: [:]))
-        state.apply(.toolResult(toolCallID: "tc1", result: nil, error: "boom"))
+        state.apply(.toolResult(toolCallID: "tc1", result: nil, error: "boom", images: nil))
         guard case let .tool(card) = state.items[0] else { return XCTFail("no tool") }
         XCTAssertEqual(card.state, .failed)
         XCTAssertEqual(card.error, "boom")
@@ -128,7 +138,7 @@ final class SessionStateTests: XCTestCase {
         let events: [SessionHistoryEvent] = [
             .userInput(timestamp: 1, id: "u1", text: "list files", images: nil),
             .toolRequest(timestamp: 2, toolCallID: "tc1", tool: "bash", args: ["command": .string("ls")]),
-            .toolResult(timestamp: 3, toolCallID: "tc1", result: .string("a\nb"), error: nil),
+            .toolResult(timestamp: 3, toolCallID: "tc1", result: .string("a\nb"), error: nil, images: nil),
             .agentMessage(timestamp: 4, inReplyTo: "u1", text: "two files", usage: nil, images: nil),
         ]
         state.loadHistory(events, sessionStartedAt: 1_716_234_500_000)

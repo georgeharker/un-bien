@@ -45,8 +45,8 @@ public struct SessionState: Equatable, Sendable {
             append(.user(UserBubble(id: id, text: text, images: images ?? [])))
         case let .toolRequest(_, toolCallID, tool, args):
             openToolCard(toolCallID: toolCallID, tool: tool, args: args)
-        case let .toolResult(_, toolCallID, result, error):
-            fillToolCard(toolCallID: toolCallID, result: result, error: error)
+        case let .toolResult(_, toolCallID, result, error, images):
+            fillToolCard(toolCallID: toolCallID, result: result, error: error, images: images ?? [])
         case let .agentMessage(_, inReplyTo, text, usage, images):
             settleAssistant(inReplyTo: inReplyTo, text: text, usage: usage, images: images ?? [])
         case let .compaction(_, summary, tokensBefore):
@@ -81,8 +81,8 @@ public struct SessionState: Equatable, Sendable {
         case let .toolRequest(toolCallID, tool, args):
             openToolCard(toolCallID: toolCallID, tool: tool, args: args)
             return true
-        case let .toolResult(toolCallID, result, error):
-            fillToolCard(toolCallID: toolCallID, result: result, error: error)
+        case let .toolResult(toolCallID, result, error, images):
+            fillToolCard(toolCallID: toolCallID, result: result, error: error, images: images ?? [])
             return true
         case let .compaction(summary, tokensBefore, _):
             appendCompaction(summary: summary, tokensBefore: tokensBefore)
@@ -188,11 +188,13 @@ public struct SessionState: Equatable, Sendable {
         }
     }
 
-    private mutating func fillToolCard(toolCallID: String, result: JSONValue?, error: String?) {
+    private mutating func fillToolCard(toolCallID: String, result: JSONValue?, error: String?,
+                                       images: [WireImage] = []) {
         guard let index = toolIndex[toolCallID], case var .tool(card) = items[index] else { return }
         card.result = result
         card.error = error
         card.state = error == nil ? .ok : .failed
+        if !images.isEmpty { card.images = images }
         items[index] = .tool(card)
     }
 

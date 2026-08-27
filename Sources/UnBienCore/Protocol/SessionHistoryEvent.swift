@@ -4,7 +4,7 @@ import Foundation
 public enum SessionHistoryEvent: Equatable, Sendable, Codable {
     case userInput(timestamp: Int, id: String, text: String, images: [WireImage]?)
     case toolRequest(timestamp: Int, toolCallID: String, tool: String, args: [String: JSONValue])
-    case toolResult(timestamp: Int, toolCallID: String, result: JSONValue?, error: String?)
+    case toolResult(timestamp: Int, toolCallID: String, result: JSONValue?, error: String?, images: [WireImage]?)
     case agentMessage(timestamp: Int, inReplyTo: String, text: String, usage: Usage?, images: [WireImage]?)
     case compaction(timestamp: Int, summary: String, tokensBefore: Int)
 
@@ -41,7 +41,8 @@ public enum SessionHistoryEvent: Equatable, Sendable, Codable {
                 timestamp: timestamp,
                 toolCallID: try container.decode(String.self, forKey: .toolCallID),
                 result: try container.decodeIfPresent(JSONValue.self, forKey: .result),
-                error: try container.decodeIfPresent(String.self, forKey: .error)
+                error: try container.decodeIfPresent(String.self, forKey: .error),
+                images: try container.decodeIfPresent([WireImage].self, forKey: .images)
             )
         case "agent_message":
             self = .agentMessage(
@@ -77,12 +78,13 @@ public enum SessionHistoryEvent: Equatable, Sendable, Codable {
             try container.encode(toolCallID, forKey: .toolCallID)
             try container.encode(tool, forKey: .tool)
             try container.encode(args, forKey: .args)
-        case let .toolResult(timestamp, toolCallID, result, error):
+        case let .toolResult(timestamp, toolCallID, result, error, images):
             try container.encode(timestamp, forKey: .ts)
             try container.encode("tool_result", forKey: .type)
             try container.encode(toolCallID, forKey: .toolCallID)
             try container.encodeIfPresent(result, forKey: .result)
             try container.encodeIfPresent(error, forKey: .error)
+            try container.encodeIfPresent(images, forKey: .images)
         case let .agentMessage(timestamp, inReplyTo, text, usage, images):
             try container.encode(timestamp, forKey: .ts)
             try container.encode("agent_message", forKey: .type)

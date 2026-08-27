@@ -97,7 +97,8 @@ extension ServerMessage: Codable {
         case "tool_result":
             self = .toolResult(toolCallID: try str(.toolCallID),
                                result: try container.decodeIfPresent(JSONValue.self, forKey: .result),
-                               error: try container.decodeIfPresent(String.self, forKey: .error))
+                               error: try container.decodeIfPresent(String.self, forKey: .error),
+                               images: try container.decodeIfPresent([WireImage].self, forKey: .images))
         case "error":
             self = .error(inReplyTo: try container.decodeIfPresent(String.self, forKey: .inReplyTo),
                           code: try str(.code), message: try str(.message))
@@ -200,11 +201,12 @@ extension ServerMessage: Codable {
             try container.encode(toolCallID, forKey: .toolCallID)
             try container.encode(tool, forKey: .tool)
             try container.encode(args, forKey: .args)
-        case let .toolResult(toolCallID, result, error):
+        case let .toolResult(toolCallID, result, error, images):
             try container.encode("tool_result", forKey: .type)
             try container.encode(toolCallID, forKey: .toolCallID)
             try container.encodeIfPresent(result, forKey: .result)
             try container.encodeIfPresent(error, forKey: .error)
+            try container.encodeIfPresent(images, forKey: .images)
         case let .error(inReplyTo, code, message):
             try container.encode("error", forKey: .type)
             try container.encodeIfPresent(inReplyTo, forKey: .inReplyTo)

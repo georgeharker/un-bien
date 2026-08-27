@@ -17,7 +17,7 @@ public enum ServerMessage: Equatable, Sendable {
     case agentMessage(inReplyTo: String, text: String, usage: Usage?, images: [WireImage]?)
     case compaction(summary: String, tokensBefore: Int, timestamp: Int?)
     case toolRequest(toolCallID: String, tool: String, args: [String: JSONValue])
-    case toolResult(toolCallID: String, result: JSONValue?, error: String?)
+    case toolResult(toolCallID: String, result: JSONValue?, error: String?, images: [WireImage]?)
     case error(inReplyTo: String?, code: String, message: String)
     case cancelled(inReplyTo: String, targetID: String)
     case pong(inReplyTo: String)
