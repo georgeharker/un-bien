@@ -32,4 +32,15 @@ public struct RoutedEnvelope: Codable, Equatable, Sendable {
         }
         return try Codec.decodeServer(line)
     }
+
+    /// Decode the carried rpc-envelope ``EnvelopeMessage`` (`{rpc|evt}`) from
+    /// `ct`. A stock ``ServerMessage`` body decodes to an `EnvelopeMessage`
+    /// whose `rpc` AND `evt` are both nil (neither key present) — callers use
+    /// that to discriminate the envelope route from the stock route.
+    public func decodeEnvelope() throws -> EnvelopeMessage {
+        guard let data = Data(base64Encoded: ct) else {
+            throw DecodeError.invalidMessage("ct not base64")
+        }
+        return try JSONDecoder().decode(EnvelopeMessage.self, from: data)
+    }
 }

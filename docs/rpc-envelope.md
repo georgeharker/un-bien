@@ -17,8 +17,19 @@ arbitration).
 
 ```ts
 interface EnvelopeMessage {
+  /** Wrapper-kind discriminator, stamped at the outbound choke. `"env"` = the
+   *  session {rpc|evt} plane (today). OPEN string — other values are reserved
+   *  for future handshake/control envelopes on the same bidirectional wire.
+   *  Also satisfies the relay-peer channel's inbound guard (a frame without a
+   *  top-level `type` string is dropped) and lets each end tell this route from
+   *  the stock protocol without probing. */
+  type?: string;   // "env"
+  /** Epoch ms, stamped at send (ordering / dedup / debug). */
+  ts?: number;
   /** A VERBATIM pi rpc frame, forwarded opaquely. The app parses only what it
-   *  renders and IGNORES unknown types (forward-compatible). */
+   *  renders and IGNORES unknown types (forward-compatible). Byte-faithful to
+   *  pi — its own `.type` (message_update/response/...) is a DIFFERENT level
+   *  from the wrapper `type` above and never clashes. */
   rpc?: RpcFrame;
   /** An ephemeral, NON-persisted forwarded in-process bus event (the {evt}
    *  plane): plan/subagents/... The fork produces these; they never appear on

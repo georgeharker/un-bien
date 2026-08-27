@@ -40,6 +40,10 @@ public final class AppModel: ObservableObject {
     @Published public var relayHealth: [UUID: RelayHealth] = [:]
     @Published public var sessions: [String: LiveSession] = [:]
     @Published public var transcripts: [String: SessionState] = [:]
+    /// Per-session rpc-envelope reducers, keyed like `transcripts`. Populated
+    /// when a fork speaks the `{rpc|evt}` route; each fold updates the matching
+    /// `transcripts[key]` from `reducer.session`.
+    private var envelopeReducers: [String: EnvelopeReducer] = [:]
     /// Pending interactive prompt per session (extension_ui_request).
     @Published public var prompts: [String: ExtensionUiRequest] = [:]
     /// Pending queued follow-up messages per session (queued_message_state).
@@ -213,6 +217,19 @@ public final class AppModel: ObservableObject {
     private func handle(frame: InboundFrame, relayID: UUID) {
         switch frame {
         case let .routed(envelope):
+            let key = "\(relayID.uuidString):\(envelope.peer):\(envelope.room)"
+            // Envelope route ({rpc|evt}): a fork advertising `rpc_envelope`
+            // carries the transcript as pi rpc frames inside `ct`. Discriminate
+            // by SHAPE — a stock ServerMessage decodes to an EnvelopeMessage with
+            // both fields nil. The reducer owns the transcript for this key;
+            // stock session-content is suppressed in `route`.
+            if let env = try? envelope.decodeEnvelope(), env.rpc != nil || env.evt != nil {
+                var reducer = envelopeReducers[key] ?? EnvelopeReducer()
+                reducer.apply(env)
+                envelopeReducers[key] = reducer
+                transcripts[key] = reducer.session
+                return
+            }
             do {
                 let message = try envelope.decodeServer()
                 print("[un-bien] routed peer=\(envelope.peer.suffix(6)) room=\(envelope.room) msg=\(message.debugTag)")
@@ -261,6 +278,10 @@ public final class AppModel: ObservableObject {
         default:
             break
         }
+        // On the envelope route the reducer owns this session's transcript
+        // (see `handle`); drop stock session-content so the two don't
+        // double-render during the transition.
+        if capabilities[key]?.contains("rpc_envelope") == true { return }
         var state = transcripts[key] ?? SessionState()
         if state.apply(message) { transcripts[key] = state }
     }
