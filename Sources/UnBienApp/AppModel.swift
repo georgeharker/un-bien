@@ -237,6 +237,15 @@ public final class AppModel: ObservableObject {
                     reducer.apply(env)
                     envelopeReducers[key] = reducer
                     transcripts[key] = reducer.session
+                    // Panels are envelope-only: {evt channel:"panel"} carries a
+                    // panel_update; decode it with the stock decoder and route it
+                    // into the panel store (reuses PanelState + the panel UI).
+                    if let evt = env.evt, evt.channel == "panel",
+                       let pdata = try? JSONEncoder().encode(evt.data),
+                       let pline = String(data: pdata, encoding: .utf8),
+                       let pmsg = try? Codec.decodeServer(pline) {
+                        route(pmsg, relayID: relayID, peer: envelope.peer, room: envelope.room)
+                    }
                     // extension_ui is envelope-only: the {rpc} extension_ui_request
                     // frame is the same JSON as the stock ServerMessage, so reuse
                     // the stock decoder to surface it in the existing prompt UI.
@@ -266,13 +275,12 @@ public final class AppModel: ObservableObject {
     private func route(_ message: ServerMessage, relayID: UUID, peer: String, room: String) {
         let key = "\(relayID.uuidString):\(peer):\(room)"
         switch message {
-        case let .sessionHistory(_, startedAt, events, _, _, _, caps):
-            var state = SessionState()
-            state.loadHistory(events, sessionStartedAt: startedAt)
-            transcripts[key] = state
-            // Capability handshake: gate UI on advertised caps (default-off when
-            // absent — an older pi that predates this hides the gated controls).
-            capabilities[key] = Set(caps ?? [])
+        case let .sessionHistory(_, _, _, _, _, _, caps):
+            // Envelope route reconstructs the transcript via {rpc} replay (see the
+            // hello handshake), so the stock history is IGNORED — it must not
+            // clobber the replayed transcript. Caps come from the hello; keep the
+            // stock caps only as a fallback when the hello hasn't landed.
+            if capabilities[key] == nil { capabilities[key] = Set(caps ?? []) }
             return
         case let .extensionUiRequest(request):
             prompts[key] = request
