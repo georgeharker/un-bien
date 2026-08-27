@@ -12,6 +12,8 @@ struct SettingsView: View {
     @State private var showFontImporter = false
     @State private var fontError: String?
     @State private var fontPreview = "AaBbCc 0O1lI {}[]() => Meslo \u{2713}"
+    @AppStorage("renderCacheBlocks") private var cacheBlocks = 400
+    @AppStorage("renderCacheImages") private var cacheImages = 200
 
     var body: some View {
         NavigationStack {
@@ -19,6 +21,7 @@ struct SettingsView: View {
                 appearanceSection
                 typographySection
                 transcriptSection
+                performanceSection
                 syncSection
                 identitySection
             }
@@ -138,6 +141,19 @@ struct SettingsView: View {
     private var transcriptSection: some View {
         Section("Transcript") {
             Toggle("Show thinking", isOn: $model.showThinking)
+        }
+    }
+
+    private var performanceSection: some View {
+        Section {
+            Stepper("Highlight cache: \(cacheBlocks) blocks", value: $cacheBlocks, in: 50...2000, step: 50)
+                .onChange(of: cacheBlocks) { _, new in HighlightEngine.shared.cacheLimit = new }
+            Stepper("Image cache: \(cacheImages) images", value: $cacheImages, in: 20...1000, step: 20)
+                .onChange(of: cacheImages) { _, new in ImageCache.shared.cacheLimit = new }
+        } header: {
+            Text("Performance")
+        } footer: {
+            Text("Larger caches keep more highlighted code and decoded images in memory for smoother scrolling on long sessions.")
         }
     }
 
