@@ -90,33 +90,44 @@ struct TranscriptView: View {
         }
     }
 
+    /// Model + thinking controls, gated on the pi's advertised capabilities
+    /// (hidden entirely when the pi supports neither / sent no handshake).
+    @ViewBuilder
     private var controlMenu: some View {
-        Menu {
-            let models = model.availableModels[session.id] ?? []
-            if !models.isEmpty {
-                let current = model.currentModel[session.id]
-                Picker("Model", selection: Binding(
-                    get: { current?.id },
-                    set: { newID in
-                        guard let pick = models.first(where: { $0.id == newID }) else { return }
-                        Task { await model.setModel(pick, session: session) }
-                    }
-                )) {
-                    ForEach(models, id: \.id) { entry in
-                        Text(entry.name).tag(Optional(entry.id))
+        let showModels = model.supports("models", session: session)
+        let showThinking = model.supports("thinking", session: session)
+        if showModels || showThinking {
+            Menu {
+                if showModels {
+                    let models = model.availableModels[session.id] ?? []
+                    if !models.isEmpty {
+                        let current = model.currentModel[session.id]
+                        Picker("Model", selection: Binding(
+                            get: { current?.id },
+                            set: { newID in
+                                guard let pick = models.first(where: { $0.id == newID }) else { return }
+                                Task { await model.setModel(pick, session: session) }
+                            }
+                        )) {
+                            ForEach(models, id: \.id) { entry in
+                                Text(entry.name).tag(Optional(entry.id))
+                            }
+                        }
                     }
                 }
-            }
-            Picker("Thinking", selection: Binding(
-                get: { model.thinkingLevel[session.id] ?? .off },
-                set: { level in Task { await model.setThinking(level, session: session) } }
-            )) {
-                ForEach(ThinkingLevel.allCases, id: \.self) { level in
-                    Text(level.rawValue.capitalized).tag(level)
+                if showThinking {
+                    Picker("Thinking", selection: Binding(
+                        get: { model.thinkingLevel[session.id] ?? .off },
+                        set: { level in Task { await model.setThinking(level, session: session) } }
+                    )) {
+                        ForEach(ThinkingLevel.allCases, id: \.self) { level in
+                            Text(level.rawValue.capitalized).tag(level)
+                        }
+                    }
                 }
+            } label: {
+                Image(systemName: "slider.horizontal.3")
             }
-        } label: {
-            Image(systemName: "slider.horizontal.3")
         }
     }
 

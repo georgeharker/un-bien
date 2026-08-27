@@ -23,7 +23,8 @@ public enum ServerMessage: Equatable, Sendable {
     case pong(inReplyTo: String)
     case bye(reason: ByeReason)
     case sessionHistory(inReplyTo: String, sessionStartedAt: Int,
-                        events: [SessionHistoryEvent], eos: Bool, truncated: Bool)
+                        events: [SessionHistoryEvent], eos: Bool, truncated: Bool,
+                        protocolVersion: Int?, capabilities: [String]?)
     case actionOk(inReplyTo: String, action: ActionName)
     case actionError(inReplyTo: String, action: ActionName, error: String)
     case modelsList(inReplyTo: String, models: [WireModel], current: WireModel?)

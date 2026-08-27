@@ -52,6 +52,8 @@ public final class AppModel: ObservableObject {
     @Published public var currentModel: [String: WireModel] = [:]
     /// Thinking level the user last selected per session (`thinking_set`).
     @Published public var thinkingLevel: [String: ThinkingLevel] = [:]
+    /// Capabilities advertised by the paired pi per session (handshake).
+    @Published public var capabilities: [String: Set<String>] = [:]
 
     // MARK: - Preferences (persisted)
 
@@ -227,10 +229,13 @@ public final class AppModel: ObservableObject {
     private func route(_ message: ServerMessage, relayID: UUID, peer: String, room: String) {
         let key = "\(relayID.uuidString):\(peer):\(room)"
         switch message {
-        case let .sessionHistory(_, startedAt, events, _, _):
+        case let .sessionHistory(_, startedAt, events, _, _, _, caps):
             var state = SessionState()
             state.loadHistory(events, sessionStartedAt: startedAt)
             transcripts[key] = state
+            // Capability handshake: gate UI on advertised caps (default-off when
+            // absent — an older pi that predates this hides the gated controls).
+            capabilities[key] = Set(caps ?? [])
             return
         case let .extensionUiRequest(request):
             prompts[key] = request
@@ -308,6 +313,12 @@ public final class AppModel: ObservableObject {
     /// `target_id` of the turn currently streaming for a session, if any.
     public func activeTurnID(for session: LiveSession) -> String? {
         transcripts[session.id]?.activeTurnID
+    }
+
+    /// Whether the paired pi advertised a capability for this session. Default
+    /// FALSE when no handshake was received (older pi) — the app gates UI off.
+    public func supports(_ capability: String, session: LiveSession) -> Bool {
+        capabilities[session.id]?.contains(capability) ?? false
     }
 
     /// Interrupt the in-flight turn (`cancel`).

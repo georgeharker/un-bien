@@ -16,6 +16,8 @@ extension ServerMessage: Codable {
         static let roomID = CodingKeys("room_id")
         static let harness = CodingKeys("harness")
         static let hostname = CodingKeys("hostname")
+        static let protocolVersion = CodingKeys("protocol_version")
+        static let capabilities = CodingKeys("capabilities")
         static let code = CodingKeys("code")
         static let message = CodingKeys("message")
         static let text = CodingKeys("text")
@@ -113,7 +115,9 @@ extension ServerMessage: Codable {
                 inReplyTo: try str(.inReplyTo), sessionStartedAt: try int(.sessionStartedAt),
                 events: try container.decode([SessionHistoryEvent].self, forKey: .events),
                 eos: try container.decode(Bool.self, forKey: .eos),
-                truncated: try container.decode(Bool.self, forKey: .truncated))
+                truncated: try container.decode(Bool.self, forKey: .truncated),
+                protocolVersion: try container.decodeIfPresent(Int.self, forKey: .protocolVersion),
+                capabilities: try container.decodeIfPresent([String].self, forKey: .capabilities))
         case "action_ok":
             self = .actionOk(inReplyTo: try str(.inReplyTo),
                              action: try container.decode(ActionName.self, forKey: .action))
@@ -222,13 +226,15 @@ extension ServerMessage: Codable {
         case let .bye(reason):
             try container.encode("bye", forKey: .type)
             try container.encode(reason, forKey: .reason)
-        case let .sessionHistory(inReplyTo, sessionStartedAt, events, eos, truncated):
+        case let .sessionHistory(inReplyTo, sessionStartedAt, events, eos, truncated, protocolVersion, capabilities):
             try container.encode("session_history", forKey: .type)
             try container.encode(inReplyTo, forKey: .inReplyTo)
             try container.encode(sessionStartedAt, forKey: .sessionStartedAt)
             try container.encode(events, forKey: .events)
             try container.encode(eos, forKey: .eos)
             try container.encode(truncated, forKey: .truncated)
+            try container.encodeIfPresent(protocolVersion, forKey: .protocolVersion)
+            try container.encodeIfPresent(capabilities, forKey: .capabilities)
         case let .actionOk(inReplyTo, action):
             try container.encode("action_ok", forKey: .type)
             try container.encode(inReplyTo, forKey: .inReplyTo)

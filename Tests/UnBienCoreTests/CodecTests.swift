@@ -24,6 +24,24 @@ final class CodecTests: XCTestCase {
         }
     }
 
+    func testSessionHistoryDecodesCapabilities() throws {
+        let line = #"{"type":"session_history","in_reply_to":"s1","session_started_at":1,"events":[],"eos":true,"truncated":false,"protocol_version":1,"capabilities":["thinking","models"]}"#
+        guard case let .sessionHistory(_, _, _, _, _, version, caps) = try Codec.decodeServer(line) else {
+            return XCTFail("not a session_history")
+        }
+        XCTAssertEqual(version, 1)
+        XCTAssertEqual(caps, ["thinking", "models"])
+    }
+
+    func testSessionHistoryWithoutCapabilitiesDecodesNil() throws {
+        let line = #"{"type":"session_history","in_reply_to":"s1","session_started_at":1,"events":[],"eos":true,"truncated":false}"#
+        guard case let .sessionHistory(_, _, _, _, _, version, caps) = try Codec.decodeServer(line) else {
+            return XCTFail("not a session_history")
+        }
+        XCTAssertNil(version)
+        XCTAssertNil(caps)
+    }
+
     func testInvalidJSONIsInvalidMessage() {
         XCTAssertThrowsError(try Codec.decodeServer("not json {{{")) { error in
             XCTAssertEqual(error as? DecodeError, .invalidMessage("not JSON: The data couldn’t be read because it isn’t in the correct format."))
