@@ -36,6 +36,9 @@ public struct RootView: View {
         .environment(\.appTheme, model.theme)
         .task { await model.bootstrap() }
         .preferredColorScheme(model.theme.isDark ? .dark : .light)
+        #if os(macOS)
+        .frame(minWidth: 380, minHeight: 520)
+        #endif
     }
 }
 
@@ -53,7 +56,8 @@ public struct UnBienSceneApp: App {
             RootView()
         }
         #if os(macOS)
-        .defaultSize(width: 420, height: 720)
+        .defaultSize(width: 460, height: 760)
+        .windowResizability(.contentMinSize)
         #endif
     }
 }

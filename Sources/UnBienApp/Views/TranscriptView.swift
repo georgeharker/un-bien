@@ -29,6 +29,9 @@ struct TranscriptView: View {
                         }
                     }
                     .padding()
+                    // Cap line length on wide windows; centered. No-op on phones.
+                    .frame(maxWidth: 860, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .center)
                 }
                 .onChange(of: items.count) { _, _ in
                     if let last = items.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
