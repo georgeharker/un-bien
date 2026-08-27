@@ -50,6 +50,9 @@ export interface EnvelopeMessage {
   caps?: string[];
   /** Handshake: envelope/pi-rpc protocol version for client decode-guarding. */
   protocolVersion?: number;
+  /** Handshake: stable pi session id — the app keys sessions by this so reused
+   *  session NAMES don't collide. */
+  sessionId?: string;
   rpc?: unknown;
   evt?: { channel: string; data: unknown };
 }
@@ -64,8 +67,10 @@ export const HELLO_KIND = "hello";
  * replacement for the stock `session_history.capabilities`. The app reads caps
  * from this and gates its decode/UX on them.
  */
-export function helloEnvelope(caps: string[], protocolVersion = 1): EnvelopeMessage {
-  return { type: HELLO_KIND, caps, protocolVersion };
+export function helloEnvelope(caps: string[], sessionId?: string, protocolVersion = 1): EnvelopeMessage {
+  const hello: EnvelopeMessage = { type: HELLO_KIND, caps, protocolVersion };
+  if (sessionId) hello.sessionId = sessionId;
+  return hello;
 }
 
 type Frame = Record<string, unknown>;

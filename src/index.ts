@@ -2033,8 +2033,9 @@ function _attachOwner(
   // Envelope-native capability handshake: advertise caps up front so the app can
   // enable the {rpc|evt} route + suppress stock before any session content
   // arrives. Additive to the stock session_history caps (parity transition).
-  channel.sendEnvelope(helloEnvelope(_capabilities()));
-  envLog(`attach: peer=${appPeerId.slice(0, 8)} hello sent (caps advertised); active=${_activePeers.size}`);
+  const _sid = _sessionManager?.getSessionId();
+  channel.sendEnvelope(helloEnvelope(_capabilities(), _sid));
+  envLog(`attach: peer=${appPeerId.slice(0, 8)} hello sent (caps + sessionId=${_sid ?? "?"}); active=${_activePeers.size}`);
   // Transcript reconstruction is request-driven (app sends session_sync on open)
   // — see _handleSessionSync; nothing to replay proactively here.
   _refreshFooter();
