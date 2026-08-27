@@ -1,5 +1,6 @@
 import type { ClientMessage, ServerMessage } from "../protocol/types.js";
 import { ENVELOPE_KIND, type EnvelopeMessage } from "../session/rpc_envelope.js";
+import { envLog } from "../session/debug_log.js";
 import type { RelayClient } from "./relay_client.js";
 
 /** Sink for ServerMessage outbound to the remote app. */
@@ -140,11 +141,9 @@ export class PlainPeerChannel implements PeerChannel {
     if (!msg || typeof msg !== "object") return;
     const obj = msg as Record<string, unknown>;
 
-    if (process.env.REMOTE_PI_DEBUG_ENVELOPE === "1") {
-      console.error(
-        `[remote-pi] inbound<-${this.remotePeerId.slice(0, 8)}: type=${String(obj.type)} rpc=${obj.rpc !== undefined} evt=${obj.evt !== undefined}`,
-      );
-    }
+    envLog(
+      `inbound<-${this.remotePeerId.slice(0, 8)}: type=${String(obj.type)} rpc=${obj.rpc !== undefined} evt=${obj.evt !== undefined}`,
+    );
 
     // New-protocol mesh-envelope inbound: a `type:"env"` wrapper (or a bare
     // rpc/evt body, for transition robustness) routes to the rpc dispatcher,

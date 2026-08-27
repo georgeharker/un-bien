@@ -78,6 +78,7 @@ import {
 import { createPanelBridge, type PanelBridge } from "./panel_bridge.js";
 import { createRpcEnvelope, helloEnvelope, type EnvelopeMessage } from "./session/rpc_envelope.js";
 import { dispatchRpcCommand, type RpcCommandHandlers } from "./session/rpc_inbound.js";
+import { envLog } from "./session/debug_log.js";
 import { roomIdFor } from "./rooms.js";
 import { registerAgentTools } from "./session/tools.js";
 import { formatPeerInventory } from "./session/peer_inventory.js";
@@ -1259,9 +1260,7 @@ function _anyPeerActive(): boolean {
 function _routeRpcCommandFrom(sender: PlainPeerChannel, env: EnvelopeMessage): void {
   const frame = env.rpc;
   if (!frame || typeof frame !== "object") return; // no {evt} inbound today
-  if (process.env.REMOTE_PI_DEBUG_ENVELOPE === "1") {
-    console.error(`[remote-pi] rpc inbound: ${String((frame as Record<string, unknown>).type)}`);
-  }
+  envLog(`rpc inbound: ${String((frame as Record<string, unknown>).type)}`);
   // extension_ui_response is a reply to a fork-issued dialog, not a command —
   // route it straight to the ui bridge (same target as the stock path).
   if ((frame as Record<string, unknown>).type === "extension_ui_response") {
@@ -1276,9 +1275,7 @@ function _routeRpcCommandFrom(sender: PlainPeerChannel, env: EnvelopeMessage): v
     const events = _mapAgentMessagesToEvents(_messageBuffer);
     const slice = limit > 0 ? events.slice(-limit) : [];
     const replayFrames = _historyReplayEnvelopes(slice);
-    if (process.env.REMOTE_PI_DEBUG_ENVELOPE === "1") {
-      console.error(`[remote-pi] session_sync(env): buffer=${_messageBuffer.length} events=${events.length} replay=${replayFrames.length}`);
-    }
+    envLog(`session_sync(env): buffer=${_messageBuffer.length} events=${events.length} replay=${replayFrames.length}`);
     for (const replay of replayFrames) sender.sendEnvelope(replay);
     return;
   }
@@ -1384,11 +1381,11 @@ function _panelBroadcast(msg: ServerMessage): void {
 /** Fan an rpc-envelope frame out to every attached peer (base64 ct via each
  *  channel), mirroring `_broadcastToActive` for `{ rpc | evt }` messages. */
 function _broadcastEnvelope(env: EnvelopeMessage): void {
-  if (process.env.REMOTE_PI_DEBUG_ENVELOPE === "1") {
+  {
     // Observability only (not a route gate): watch the {rpc|evt} wire during
     // e2e bring-up. Frame type only — payloads can be large / carry images.
     const kind = env.rpc ? `rpc:${(env.rpc as { type?: string }).type ?? "?"}` : `evt:${env.evt?.channel ?? "?"}`;
-    console.error(`[remote-pi] envelope -> ${_activePeers.size} peer(s): ${kind}`);
+    envLog(`envelope -> ${_activePeers.size} peer(s): ${kind}`);
   }
   for (const ch of _activePeers.values()) {
     try { ch.sendEnvelope(env); } catch { /* best-effort per channel */ }
