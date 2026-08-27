@@ -1,6 +1,9 @@
 import MarkdownUI
 import SwiftUI
 import UnBienCore
+#if canImport(WebKit)
+import WebKit
+#endif
 
 /// Session transcript: streamed Markdown (swift-markdown-ui) with Highlightr
 /// code blocks, collapsible tool-call cards, and a text input bar (DESIGN §7).
@@ -355,21 +358,118 @@ private struct WireImageView: View {
 
     var body: some View {
         Group {
-            if let platform = ImageCache.shared.image(for: image) {
-                #if os(macOS)
-                Image(nsImage: platform).resizable().scaledToFit()
-                #else
-                Image(uiImage: platform).resizable().scaledToFit()
-                #endif
+            #if canImport(WebKit)
+            if let svg = svgMarkup {
+                // UIImage/NSImage can't decode SVG — render it in a WKWebView at
+                // full width, height from the viewBox aspect ratio.
+                SVGImageView(svg: svg)
+            } else if let platform = ImageCache.shared.image(for: image) {
+                platformImage(platform)
             } else {
-                Label("Unsupported image", systemImage: "photo")
-                    .font(.caption).foregroundStyle(theme.secondaryText)
+                unsupported
             }
+            #else
+            if let platform = ImageCache.shared.image(for: image) {
+                platformImage(platform)
+            } else {
+                unsupported
+            }
+            #endif
         }
         .frame(maxWidth: 480, maxHeight: 480, alignment: .leading)
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
+
+    @ViewBuilder private func platformImage(_ platform: PlatformImage) -> some View {
+        #if os(macOS)
+        Image(nsImage: platform).resizable().scaledToFit()
+        #else
+        Image(uiImage: platform).resizable().scaledToFit()
+        #endif
+    }
+
+    private var unsupported: some View {
+        Label("Unsupported image", systemImage: "photo")
+            .font(.caption).foregroundStyle(theme.secondaryText)
+    }
+
+    /// Non-nil only for SVG payloads. `data` is normally base64; tolerate raw SVG text.
+    private var svgMarkup: String? {
+        guard image.mime.contains("svg") else { return nil }
+        if let data = ImageCache.decodedData(image),
+           let s = String(data: data, encoding: .utf8), s.contains("<svg") {
+            return s
+        }
+        return image.data.contains("<svg") ? image.data : nil
+    }
 }
+
+#if canImport(WebKit)
+/// Renders an SVG at full container width; height derives from the viewBox
+/// aspect ratio (WKWebView has no intrinsic content size). JS is disabled —
+/// the SVG is agent output.
+private struct SVGImageView: View {
+    let svg: String
+    var body: some View {
+        SVGWebView(svg: svg).aspectRatio(Self.aspect(svg), contentMode: .fit)
+    }
+
+    /// width/height from `viewBox="minX minY W H"` (fallback 4:3).
+    static func aspect(_ svg: String) -> CGFloat {
+        guard let regex = try? NSRegularExpression(
+                pattern: #"viewBox\s*=\s*[\"']?\s*[-\d.]+\s+[-\d.]+\s+([-\d.]+)\s+([-\d.]+)"#),
+              let match = regex.firstMatch(in: svg, range: NSRange(svg.startIndex..., in: svg)),
+              let widthRange = Range(match.range(at: 1), in: svg),
+              let heightRange = Range(match.range(at: 2), in: svg),
+              let width = Double(svg[widthRange]), let height = Double(svg[heightRange]),
+              width > 0, height > 0 else {
+            return 4.0 / 3.0
+        }
+        return CGFloat(width / height)
+    }
+}
+
+private enum SVGHTML {
+    static func wrap(_ svg: String) -> String {
+        """
+        <!DOCTYPE html><html><head>\
+        <meta name="viewport" content="width=device-width,initial-scale=1">\
+        <style>*{margin:0;padding:0;border:0}html,body{background:transparent}\
+        svg{width:100%;height:auto;display:block}</style></head><body>\(svg)</body></html>
+        """
+    }
+
+    static func makeWebView() -> WKWebView {
+        let config = WKWebViewConfiguration()
+        config.defaultWebpagePreferences.allowsContentJavaScript = false
+        return WKWebView(frame: .zero, configuration: config)
+    }
+}
+
+#if os(macOS)
+private struct SVGWebView: NSViewRepresentable {
+    let svg: String
+    func makeNSView(context: Context) -> WKWebView { SVGHTML.makeWebView() }
+    func updateNSView(_ wv: WKWebView, context: Context) {
+        wv.loadHTMLString(SVGHTML.wrap(svg), baseURL: nil)
+    }
+}
+#else
+private struct SVGWebView: UIViewRepresentable {
+    let svg: String
+    func makeUIView(context: Context) -> WKWebView {
+        let wv = SVGHTML.makeWebView()
+        wv.isOpaque = false
+        wv.backgroundColor = .clear
+        wv.scrollView.isScrollEnabled = false
+        return wv
+    }
+    func updateUIView(_ wv: WKWebView, context: Context) {
+        wv.loadHTMLString(SVGHTML.wrap(svg), baseURL: nil)
+    }
+}
+#endif
+#endif
 
 private struct ReasoningBlockView: View {
     let block: ReasoningBlock
