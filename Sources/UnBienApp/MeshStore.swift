@@ -30,6 +30,16 @@ public final class MeshStore: ObservableObject {
         persist()
     }
 
+    #if DEBUG
+    /// Inject a relay in memory only (NOT persisted) — for the UNBIEN_DEMO
+    /// harness, so a demo session appears without polluting the saved config.
+    public func addTransientRelay(_ relay: RelayConfig) {
+        if !config.relays.contains(where: { $0.id == relay.id }) {
+            config.relays.append(relay)
+        }
+    }
+    #endif
+
     public func removeRelay(id: UUID) {
         config.relays.removeAll { $0.id == id }
         config.machines.removeAll { $0.relayID == id }

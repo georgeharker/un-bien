@@ -39,14 +39,16 @@ public struct RootView: View {
         .environment(\.typography, model.typography)
         .task {
             fonts.registerAll()
-            await model.bootstrap()
             #if DEBUG
             // Data-feed for testing before the live protocol exists: launch with
-            // UNBIEN_DEMO=1 to inject a large demo session into the real UI.
+            // UNBIEN_DEMO=1 to show ONLY a large demo session. Skip bootstrap so
+            // real relays don't connect and pull in live sessions alongside it.
             if ProcessInfo.processInfo.environment["UNBIEN_DEMO"] != nil {
                 model.loadDemoSession()
+                return
             }
             #endif
+            await model.bootstrap()
         }
         .preferredColorScheme(model.theme.isDark ? .dark : .light)
         #if os(macOS)

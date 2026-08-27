@@ -463,7 +463,11 @@ public final class AppModel: ObservableObject {
     /// the `UNBIEN_DEMO` env var set to trigger it (see RootView).
     public func loadDemoSession(turns: Int = 140) {
         needsOnboarding = false
-        let session = LiveSession(relayID: UUID(), peerEPK: "demo-peer", roomID: "demo-room",
+        // Canned fake relay so the session appears in HomeView (which groups
+        // sessions under mesh.config.relays); transient, so it isn't persisted.
+        let relayID = UUID(uuidString: "F00DBEEF-0000-4000-8000-000000000001")!
+        mesh.addTransientRelay(RelayConfig(id: relayID, name: "Demo relay", url: "demo://local"))
+        let session = LiveSession(relayID: relayID, peerEPK: "demo-peer", roomID: "demo-room",
                                   name: "Demo (\(turns) turns)", cwd: "/demo", model: "claude-opus-4-8")
         sessions[session.id] = session
         transcripts[session.id] = .demo(turns: turns)
