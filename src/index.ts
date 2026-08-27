@@ -2160,10 +2160,15 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive);
 
   // Mirror the in-process plan (`plan:*`) + subagents (`subagents:*`) buses to
-  // the app as side-panel snapshots. Dispose any prior bridge first so a
-  // factory re-run can't leak subscriptions or double-send.
-  _panelBridge?.dispose();
-  _panelBridge = createPanelBridge(pi, _broadcastToActive);
+  // the app as side-panel snapshots. Bind ONCE to the MAIN session's pi and
+  // NEVER follow a subagent child: a subagent spawns a fresh `pi` that re-runs
+  // this factory, and disposing the module-level singleton tore down the main
+  // session's bridge mid-turn (clearing its pending agents broadcast) and
+  // rebound to the child context. The main session is wired first in the
+  // process, so the first non-null assignment wins; later (child) runs skip it.
+  if (!_panelBridge) {
+    _panelBridge = createPanelBridge(pi, _broadcastToActive);
+  }
 
   // Plano 19: ensure ~/.pi/remote/{sessions,skills}/ exist and deploy the
   // agent-network skill on first load. resources_discover lets Pi find it.
