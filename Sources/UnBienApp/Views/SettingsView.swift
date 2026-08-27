@@ -96,10 +96,19 @@ struct SettingsView: View {
             Text("Import a .ttf/.otf (e.g. MesloLGS NF) to use it for code and the composer.")
         }
         .fileImporter(isPresented: $showFontImporter,
-                      allowedContentTypes: [.font], allowsMultipleSelection: true) { result in
+                      allowedContentTypes: Self.fontContentTypes,
+                      allowsMultipleSelection: true) { result in
             handleFontImport(result)
         }
     }
+
+    /// `.font` covers ttf/otf, but include the concrete types so nothing is
+    /// greyed out in the Files browser regardless of how a file is tagged.
+    private static let fontContentTypes: [UTType] = [
+        .font,
+        UTType(filenameExtension: "ttf") ?? .font,
+        UTType(filenameExtension: "otf") ?? .font,
+    ]
 
     private func handleFontImport(_ result: Result<[URL], Error>) {
         fontError = nil
