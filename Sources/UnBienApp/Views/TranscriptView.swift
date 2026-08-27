@@ -269,14 +269,25 @@ private struct WireImageView: View {
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
+    /// Decode base64 tolerantly: strip a `data:<mime>;base64,` prefix and ignore
+    /// whitespace/newlines (strict `Data(base64Encoded:)` fails on both), which
+    /// is why images could arrive but not render.
+    private static func decodedData(_ image: WireImage) -> Data? {
+        var payload = image.data
+        if let comma = payload.range(of: ","), payload.hasPrefix("data:") {
+            payload = String(payload[comma.upperBound...])
+        }
+        return Data(base64Encoded: payload, options: .ignoreUnknownCharacters)
+    }
+
     #if os(macOS)
     private static func decode(_ image: WireImage) -> NSImage? {
-        guard let data = Data(base64Encoded: image.data) else { return nil }
+        guard let data = decodedData(image) else { return nil }
         return NSImage(data: data)
     }
     #else
     private static func decode(_ image: WireImage) -> UIImage? {
-        guard let data = Data(base64Encoded: image.data) else { return nil }
+        guard let data = decodedData(image) else { return nil }
         return UIImage(data: data)
     }
     #endif
