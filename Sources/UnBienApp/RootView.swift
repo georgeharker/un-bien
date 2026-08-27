@@ -33,8 +33,9 @@ public struct RootView: View {
             }
         }
         .environmentObject(model)
+        .environment(\.appTheme, model.theme)
         .task { await model.bootstrap() }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(model.theme.isDark ? .dark : .light)
     }
 }
 

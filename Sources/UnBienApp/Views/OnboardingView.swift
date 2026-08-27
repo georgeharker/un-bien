@@ -4,7 +4,7 @@ import SwiftUI
 /// toggle (DESIGN §5 — "iCloud sync should be an option").
 struct OnboardingView: View {
     @EnvironmentObject var model: AppModel
-    private let theme = AppTheme.tokyoNight
+    @Environment(\.appTheme) private var theme
 
     var body: some View {
         VStack(spacing: 24) {

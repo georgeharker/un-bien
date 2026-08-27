@@ -53,6 +53,20 @@ public final class AppModel: ObservableObject {
     /// Thinking level the user last selected per session (`thinking_set`).
     @Published public var thinkingLevel: [String: ThinkingLevel] = [:]
 
+    // MARK: - Preferences (persisted)
+
+    /// Selected UI theme (live picker). Persisted; drives `theme`.
+    @Published public var themeID: ThemeID {
+        didSet { UserDefaults.standard.set(themeID.rawValue, forKey: Self.themeKey) }
+    }
+    /// Whether reasoning/thinking blocks are shown in the transcript.
+    @Published public var showThinking: Bool {
+        didSet { UserDefaults.standard.set(showThinking, forKey: Self.showThinkingKey) }
+    }
+
+    /// The active theme palette for the selected `themeID`.
+    public var theme: AppTheme { themeID.theme }
+
     public let mesh: MeshStore
     private var identityStore: OwnerIdentityStore
     private var owner: Ed25519Identity?
@@ -63,6 +77,8 @@ public final class AppModel: ObservableObject {
     private var reconnectTasks: [UUID: Task<Void, Never>] = [:]
 
     private static let iCloudDefaultsKey = "un-bien.owner-key.icloud-sync"
+    private static let themeKey = "un-bien.theme"
+    private static let showThinkingKey = "un-bien.show-thinking"
     private static let reconnectBaseDelay: Double = 1
     private static let reconnectMaxDelay: Double = 30
 
@@ -70,6 +86,9 @@ public final class AppModel: ObservableObject {
         self.mesh = mesh
         let syncOn = UserDefaults.standard.object(forKey: Self.iCloudDefaultsKey) as? Bool ?? true
         self.syncsToICloud = syncOn
+        self.themeID = (UserDefaults.standard.string(forKey: Self.themeKey))
+            .flatMap(ThemeID.init(rawValue:)) ?? .tokyoNight
+        self.showThinking = UserDefaults.standard.object(forKey: Self.showThinkingKey) as? Bool ?? true
         self.identityStore = identityStore
             ?? KeychainOwnerIdentityStore(syncsToICloud: syncOn)
     }

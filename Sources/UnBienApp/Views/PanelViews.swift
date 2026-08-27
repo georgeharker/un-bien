@@ -16,7 +16,7 @@ func panelSymbol(_ panel: PanelState) -> String {
 struct PanelHostView: View {
     let panel: PanelState
     @Environment(\.dismiss) private var dismiss
-    private let theme = AppTheme.tokyoNight
+    @Environment(\.appTheme) private var theme
 
     var body: some View {
         NavigationStack {
@@ -50,7 +50,7 @@ struct PanelHostView: View {
 /// blocked/dep indicators (mirrors pi-plan's render).
 struct PlanPanelView: View {
     let items: [PlanItem]
-    private let theme = AppTheme.tokyoNight
+    @Environment(\.appTheme) private var theme
 
     private var rows: [PlanRow] { PlanModel.waveOrder(items) }
     private var sections: [PlanModel.WaveSection] { PlanModel.waveSections(items) }
@@ -163,7 +163,7 @@ struct PlanPanelView: View {
 /// elapsed/started time. Mirrors pi-plan's Agents group (chronological).
 struct SubagentsPanelView: View {
     let items: [PlanItem]
-    private let theme = AppTheme.tokyoNight
+    @Environment(\.appTheme) private var theme
 
     var body: some View {
         if items.isEmpty {
@@ -280,7 +280,7 @@ struct SubagentsPanelView: View {
 /// Fallback for panels without a bespoke renderer (e.g. unknown keys) — pretty JSON.
 struct GenericPanelView: View {
     let data: JSONValue
-    private let theme = AppTheme.tokyoNight
+    @Environment(\.appTheme) private var theme
 
     var body: some View {
         ScrollView {

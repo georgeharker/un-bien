@@ -9,10 +9,13 @@ struct TranscriptView: View {
     @EnvironmentObject var model: AppModel
     @State private var draft = ""
     @State private var selectedPanelKey: String?
-    private let theme = AppTheme.tokyoNight
+    @Environment(\.appTheme) private var theme
 
     private var items: [TranscriptItem] {
-        model.transcripts[session.id]?.items ?? []
+        let all = model.transcripts[session.id]?.items ?? []
+        guard !model.showThinking else { return all }
+        // Preference: hide reasoning/thinking blocks from the transcript.
+        return all.filter { if case .reasoning = $0 { return false } else { return true } }
     }
 
     var body: some View {

@@ -13,7 +13,7 @@ struct RichAskFlowView: View {
     @State private var selected: [String: Set<String>] = [:]
     @State private var customText: [String: String] = [:]
     @State private var notes: [String: String] = [:]
-    private let theme = AppTheme.tokyoNight
+    @Environment(\.appTheme) private var theme
 
     var body: some View {
         NavigationStack {

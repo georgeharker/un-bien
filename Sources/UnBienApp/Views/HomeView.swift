@@ -7,7 +7,8 @@ struct HomeView: View {
     @EnvironmentObject var model: AppModel
     @State private var showAddRelay = false
     @State private var pairingRelay: RelayConfig?
-    private let theme = AppTheme.tokyoNight
+    @State private var showSettings = false
+    @Environment(\.appTheme) private var theme
 
     var body: some View {
         NavigationStack {
@@ -20,12 +21,16 @@ struct HomeView: View {
             }
             .navigationTitle("Sessions")
             .toolbar {
-                ToolbarItem(placement: .primaryAction) {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button { showSettings = true } label: { Image(systemName: "gearshape") }
                     Button { showAddRelay = true } label: { Image(systemName: "plus") }
                 }
             }
         }
         .tint(theme.accent)
+        .sheet(isPresented: $showSettings) {
+            SettingsView().environmentObject(model)
+        }
         .sheet(isPresented: $showAddRelay) {
             AddRelaySheet().environmentObject(model)
         }
