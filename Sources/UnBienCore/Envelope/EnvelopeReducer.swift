@@ -1,22 +1,6 @@
 import Foundation
 
-/// Canonical interpreted state produced by folding an envelope stream. This is
-/// the conformance target both the Swift (app) and TS (fork) reducers serialize
-/// to. Transcript reduces from the rpc plane (message_end authoritative), panels
-/// from the {evt} plane; UI effects from extension_ui_request.
-public struct EnvelopeState: Equatable, Sendable {
-    public var session: SessionSnapshot?
-    public var transcript: [TranscriptEntry] = []
-    public var subagents: [SubagentEntry] = []
-    public var plan: PlanSnapshot?
-    public var notifications: [UINotification] = []
-    public var status: [String: String] = [:]
-    public var widgets: [String: [String]] = [:]
-    public var title: String?
-
-    public init() {}
-}
-
+/// Session/model snapshot from an rpc `get_state` response.
 public struct SessionSnapshot: Equatable, Sendable {
     public var model: String?
     public var provider: String?
@@ -26,14 +10,7 @@ public struct SessionSnapshot: Equatable, Sendable {
     public var messageCount: Int?
 }
 
-public struct TranscriptEntry: Equatable, Sendable {
-    public enum Kind: String, Sendable, Codable { case user, assistant, custom, tool }
-    public var kind: Kind
-    public var text: String
-    public var toolName: String?
-    public var isError: Bool?
-}
-
+/// One subagent's live panel state, folded from the `subagents:*` {evt} plane.
 public struct SubagentEntry: Equatable, Sendable {
     public var id: String
     public var type: String?
@@ -43,6 +20,7 @@ public struct SubagentEntry: Equatable, Sendable {
     public var error: String?
 }
 
+/// Plan panel state, folded from `plan:snapshot` {evt}.
 public struct PlanSnapshot: Equatable, Sendable {
     public var project: String?
     public var itemCount: Int
@@ -53,10 +31,30 @@ public struct UINotification: Equatable, Sendable {
     public var message: String
 }
 
-/// Folds envelope messages into `EnvelopeState`. Order-independent across the
-/// two planes: transcript from rpc order, panels from evt order.
+/// A blocking extension_ui dialog awaiting the app's `extension_ui_response`.
+public struct PendingAsk: Equatable, Sendable {
+    public var id: String
+    public var method: String       // select | confirm | input | editor
+    public var title: String?
+    public var message: String?
+    public var options: [String]?
+}
+
+/// Folds an rpc-envelope stream (see docs/rpc-envelope.md) into the transcript
+/// plus the {evt} panels and extension_ui side-state. Transcript reduction is
+/// delegated to `SessionState.applyRPC` — the SAME mutators the stock path uses,
+/// so streaming/thinking/tool-card/turn handling isn't reinvented here. Panels
+/// come only from the {evt} plane; session/ui from rpc responses + extension_ui.
 public struct EnvelopeReducer {
-    public private(set) var state = EnvelopeState()
+    public private(set) var session = SessionState()
+    public private(set) var subagents: [SubagentEntry] = []
+    public private(set) var plan: PlanSnapshot?
+    public private(set) var snapshot: SessionSnapshot?
+    public private(set) var notifications: [UINotification] = []
+    public private(set) var status: [String: String] = [:]
+    public private(set) var widgets: [String: [String]] = [:]
+    public private(set) var title: String?
+    public private(set) var pendingAsks: [PendingAsk] = []
 
     public init() {}
 
@@ -69,103 +67,49 @@ public struct EnvelopeReducer {
         for message in messages { apply(message) }
     }
 
-    // MARK: - evt plane (panels)
-
-    private mutating func applyEvt(_ evt: EnvelopeEvt) {
-        switch evt.channel {
-        case "subagents:started", "subagents:steered", "subagents:completed", "subagents:failed":
-            guard let id = evt.data["id"]?.stringValue else { return }
-            let status = String(evt.channel.dropFirst("subagents:".count))
-            upsertSubagent(
-                id: id,
-                type: evt.data["type"]?.stringValue,
-                description: evt.data["description"]?.stringValue,
-                status: status,
-                result: evt.data["result"]?.stringValue,
-                error: evt.data["error"]?.stringValue
-            )
-        case "plan:snapshot", "plan:update":
-            let items = evt.data["items"]?.arrayValue?.count ?? 0
-            state.plan = PlanSnapshot(project: evt.data["project"]?.stringValue, itemCount: items)
-        default:
-            break
-        }
-    }
-
-    private mutating func upsertSubagent(
-        id: String, type: String?, description: String?,
-        status: String, result: String?, error: String?
-    ) {
-        let entry = SubagentEntry(
-            id: id, type: type, description: description,
-            status: status, result: result, error: error
-        )
-        if let idx = state.subagents.firstIndex(where: { $0.id == id }) {
-            // Keep last-known type/description if the update omits them.
-            var merged = entry
-            if merged.type == nil { merged.type = state.subagents[idx].type }
-            if merged.description == nil { merged.description = state.subagents[idx].description }
-            state.subagents[idx] = merged
-        } else {
-            state.subagents.append(entry)
-        }
-    }
-
-    // MARK: - rpc plane (transcript / ui / session)
+    // MARK: - rpc plane
 
     private mutating func applyRpc(_ rpc: JSONValue) {
-        guard let type = rpc["type"]?.stringValue else { return }
-        switch type {
-        case "message_end":
-            applyMessageEnd(rpc["message"])
-        case "tool_execution_end":
-            applyToolEnd(rpc)
+        switch rpc["type"]?.stringValue {
         case "extension_ui_request":
             applyExtensionUI(rpc)
         case "response" where rpc["command"]?.stringValue == "get_state":
             applyState(rpc["data"])
+        case "response":
+            break   // other command responses carry no transcript/side effect here
         default:
-            break
+            session.applyRPC(rpc)   // message / tool / turn / compaction → transcript
         }
-    }
-
-    private mutating func applyMessageEnd(_ message: JSONValue?) {
-        guard let role = message?["role"]?.stringValue,
-              let kind = TranscriptEntry.Kind(rawValue: role) else { return }
-        let text = Self.extractText(message?["content"])
-        state.transcript.append(TranscriptEntry(kind: kind, text: text, toolName: nil, isError: nil))
-    }
-
-    private mutating func applyToolEnd(_ rpc: JSONValue) {
-        let toolName = rpc["toolName"]?.stringValue
-        let text = Self.extractText(rpc["result"]?["content"])
-        let isError = rpc["isError"]?.boolValue
-        state.transcript.append(TranscriptEntry(kind: .tool, text: text, toolName: toolName, isError: isError))
     }
 
     private mutating func applyExtensionUI(_ rpc: JSONValue) {
         switch rpc["method"]?.stringValue {
         case "notify":
-            let level = rpc["notifyType"]?.stringValue ?? "info"
-            let message = rpc["message"]?.stringValue ?? ""
-            state.notifications.append(UINotification(level: level, message: message))
+            notifications.append(UINotification(level: rpc["notifyType"]?.stringValue ?? "info",
+                                                message: rpc["message"]?.stringValue ?? ""))
         case "setStatus":
             guard let key = rpc["statusKey"]?.stringValue else { return }
             if let text = rpc["statusText"]?.stringValue {
-                state.status[key] = Self.stripANSI(text)   // set
+                status[key] = text.strippingANSI()        // set
             } else {
-                state.status.removeValue(forKey: key)       // empty text = clear
+                status.removeValue(forKey: key)            // empty text = clear
             }
         case "setWidget":
             guard let key = rpc["widgetKey"]?.stringValue else { return }
             let lines = rpc["widgetLines"]?.arrayValue?.compactMap { $0.stringValue } ?? []
             if lines.isEmpty {
-                state.widgets.removeValue(forKey: key)      // empty lines = clear
+                widgets.removeValue(forKey: key)           // empty lines = clear
             } else {
-                state.widgets[key] = lines.map(Self.stripANSI)
+                widgets[key] = lines.map { $0.strippingANSI() }
             }
         case "setTitle":
-            state.title = rpc["title"]?.stringValue
+            title = rpc["title"]?.stringValue
+        case "select", "confirm", "input", "editor":
+            pendingAsks.append(PendingAsk(id: rpc["id"]?.stringValue ?? "",
+                                          method: rpc["method"]?.stringValue ?? "",
+                                          title: rpc["title"]?.stringValue,
+                                          message: rpc["message"]?.stringValue,
+                                          options: rpc["options"]?.arrayValue?.compactMap { $0.stringValue }))
         default:
             break
         }
@@ -173,30 +117,45 @@ public struct EnvelopeReducer {
 
     private mutating func applyState(_ data: JSONValue?) {
         let model = data?["model"]
-        state.session = SessionSnapshot(
-            model: model?["id"]?.stringValue,
-            provider: model?["provider"]?.stringValue,
-            thinkingLevel: data?["thinkingLevel"]?.stringValue,
-            isStreaming: data?["isStreaming"]?.boolValue,
-            sessionId: data?["sessionId"]?.stringValue,
-            messageCount: data?["messageCount"]?.intValue
-        )
+        snapshot = SessionSnapshot(model: model?["id"]?.stringValue,
+                                   provider: model?["provider"]?.stringValue,
+                                   thinkingLevel: data?["thinkingLevel"]?.stringValue,
+                                   isStreaming: data?["isStreaming"]?.boolValue,
+                                   sessionId: data?["sessionId"]?.stringValue,
+                                   messageCount: data?["messageCount"]?.intValue)
     }
 
-    // MARK: - helpers
+    // MARK: - evt plane (panels)
 
-    /// Assistant/user content is a `[TextContent | ...]` array or a bare string
-    /// (custom messages); concatenate the text blocks.
-    static func extractText(_ content: JSONValue?) -> String {
-        if let string = content?.stringValue { return string }
-        guard let blocks = content?.arrayValue else { return "" }
-        return blocks.compactMap { block in
-            block["type"]?.stringValue == "text" ? block["text"]?.stringValue : nil
-        }.joined()
+    private mutating func applyEvt(_ evt: EnvelopeEvt) {
+        switch evt.channel {
+        case "subagents:started", "subagents:steered", "subagents:completed", "subagents:failed":
+            guard let id = evt.data["id"]?.stringValue else { return }
+            let status = String(evt.channel.dropFirst("subagents:".count))
+            upsertSubagent(id: id,
+                           type: evt.data["type"]?.stringValue,
+                           description: evt.data["description"]?.stringValue,
+                           status: status,
+                           result: evt.data["result"]?.stringValue,
+                           error: evt.data["error"]?.stringValue)
+        case "plan:snapshot", "plan:update":
+            plan = PlanSnapshot(project: evt.data["project"]?.stringValue,
+                                itemCount: evt.data["items"]?.arrayValue?.count ?? 0)
+        default:
+            break
+        }
     }
 
-    /// Strip CSI SGR color sequences (`ESC[...m`) that extension status/widget text carries.
-    static func stripANSI(_ text: String) -> String {
-        text.replacingOccurrences(of: "\u{1B}\\[[0-9;]*m", with: "", options: .regularExpression)
+    private mutating func upsertSubagent(id: String, type: String?, description: String?,
+                                         status: String, result: String?, error: String?) {
+        var entry = SubagentEntry(id: id, type: type, description: description,
+                                  status: status, result: result, error: error)
+        if let idx = subagents.firstIndex(where: { $0.id == id }) {
+            if entry.type == nil { entry.type = subagents[idx].type }
+            if entry.description == nil { entry.description = subagents[idx].description }
+            subagents[idx] = entry
+        } else {
+            subagents.append(entry)
+        }
     }
 }

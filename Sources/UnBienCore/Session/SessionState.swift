@@ -29,6 +29,10 @@ public struct SessionState: Equatable, Sendable {
     private var reasoningSeq = 0
     private var noticeSeq = 0
     private var assistantSeq = 0
+    // rpc-envelope reduction state
+    private var rpcTurn: String?
+    private var rpcTurnSeq = 0
+    private var rpcUserSeq = 0
 
     public init() {}
 
@@ -219,6 +223,104 @@ public struct SessionState: Equatable, Sendable {
         compactionSeq += 1
         append(.compaction(CompactionMarker(id: "\(compactionSeq)", summary: summary,
                                             tokensBefore: tokensBefore)))
+    }
+
+    // MARK: - RPC (rpc-envelope) reduction
+
+    /// Fold one verbatim pi rpc frame into the transcript — the rpc-envelope
+    /// path, mirroring the stock `apply`. Streaming deltas build in-flight
+    /// bubbles; `message_end` is authoritative; `tool_execution_*` drive cards.
+    /// Panels (`subagents:*`/`plan:*`) are the {evt} plane and are NOT handled
+    /// here — see `EnvelopeReducer`.
+    public mutating func applyRPC(_ frame: JSONValue) {
+        guard let type = frame["type"]?.stringValue else { return }
+        switch type {
+        case "turn_start":
+            rpcTurnSeq += 1
+            rpcTurn = "t\(rpcTurnSeq)"
+            activeTurnID = rpcTurn
+        case "turn_end":
+            closeOpenAssistant()
+        case "message_end":
+            applyRPCMessageEnd(frame["message"])
+        case "message_update":
+            applyRPCDelta(frame["assistantMessageEvent"])
+        case "tool_execution_start":
+            openToolCard(toolCallID: frame["toolCallId"]?.stringValue ?? "",
+                         tool: frame["toolName"]?.stringValue ?? "",
+                         args: frame["args"]?.objectValue ?? [:])
+        case "tool_execution_update":
+            updateToolCard(toolCallID: frame["toolCallId"]?.stringValue ?? "",
+                           partial: frame["partialResult"])
+        case "tool_execution_end":
+            let isError = frame["isError"]?.boolValue ?? false
+            fillToolCard(toolCallID: frame["toolCallId"]?.stringValue ?? "",
+                         result: frame["result"], error: isError ? "error" : nil)
+        case "compaction_end":
+            if let result = frame["result"], result != .null {
+                appendCompaction(summary: result["summary"]?.stringValue ?? "",
+                                 tokensBefore: result["tokensBefore"]?.intValue ?? 0)
+            }
+        case "agent_settled":
+            if let turn = rpcTurn, activeTurnID == turn { activeTurnID = nil }
+            closeOpenAssistant()
+        default:
+            break
+        }
+    }
+
+    private mutating func applyRPCMessageEnd(_ message: JSONValue?) {
+        guard let role = message?["role"]?.stringValue else { return }
+        let turn = rpcTurn ?? "t0"
+        switch role {
+        case "user":
+            rpcUserSeq += 1
+            let id = message?["id"]?.stringValue ?? "u\(rpcUserSeq)"
+            append(.user(UserBubble(id: id, text: message?["content"]?.joinedText() ?? "")))
+        case "assistant":
+            if message?["stopReason"]?.stringValue == "error" {
+                // Forward a failed turn as a notice (mirrors the fork's `error`).
+                noticeSeq += 1
+                append(.notice(NoticeItem(id: "err\(noticeSeq)", code: "provider_error",
+                                          message: message?["errorMessage"]?.stringValue ?? "Provider error")))
+            } else if openAssistantIndex != nil {
+                // Deltas already built the (possibly text→thinking→text interleaved)
+                // bubbles; finalize the open one WITHOUT clobbering the interleaving
+                // with the concatenated authoritative text, and leave activeTurnID
+                // (the turn isn't done until agent_settled — tool calls may follow).
+                closeOpenAssistant()
+            } else {
+                // No delta built a bubble (thinking/tool-only turn, or non-streaming):
+                // fall back to the authoritative text when present.
+                let text = message?["content"]?.joinedText() ?? ""
+                if !text.isEmpty { settleAssistant(inReplyTo: turn, text: text, usage: nil) }
+            }
+        case "custom":
+            noticeSeq += 1
+            append(.notice(NoticeItem(id: "custom\(noticeSeq)", code: "custom",
+                                      message: message?["content"]?.joinedText() ?? "")))
+        default:
+            break  // toolResult is rendered via tool_execution_*, not as a row
+        }
+    }
+
+    private mutating func applyRPCDelta(_ event: JSONValue?) {
+        guard let type = event?["type"]?.stringValue else { return }
+        let turn = rpcTurn ?? "t0"
+        switch type {
+        case "text_delta":
+            appendChunk(inReplyTo: turn, delta: event?["delta"]?.stringValue ?? "")
+        case "thinking_delta":
+            appendReasoning(inReplyTo: turn, delta: event?["delta"]?.stringValue ?? "")
+        default:
+            break  // *_start/_end + toolcall_*: bubbles open lazily; cards via tool_execution_*
+        }
+    }
+
+    private mutating func updateToolCard(toolCallID: String, partial: JSONValue?) {
+        guard let index = toolIndex[toolCallID], case var .tool(card) = items[index] else { return }
+        if let partial { card.result = partial }
+        items[index] = .tool(card)
     }
 
 }

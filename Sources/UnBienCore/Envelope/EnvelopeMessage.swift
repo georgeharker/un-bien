@@ -31,4 +31,22 @@ public extension JSONValue {
 
     /// Object member access; nil when this isn't an object or the key is absent.
     subscript(_ key: String) -> JSONValue? { objectValue?[key] }
+
+    /// Concatenated text of a message `content`: a bare string (custom messages)
+    /// or an array of `{type:"text", text}` blocks (assistant/user/toolResult).
+    func joinedText() -> String {
+        if case .string(let string) = self { return string }
+        guard case .array(let blocks) = self else { return "" }
+        return blocks.compactMap { block in
+            block["type"]?.stringValue == "text" ? block["text"]?.stringValue : nil
+        }.joined()
+    }
+}
+
+public extension String {
+    /// Strip CSI SGR color sequences (`ESC[...m`) that extension status/widget/
+    /// title text carries.
+    func strippingANSI() -> String {
+        replacingOccurrences(of: "\u{1B}\\[[0-9;]*m", with: "", options: .regularExpression)
+    }
 }
