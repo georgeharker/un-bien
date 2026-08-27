@@ -2144,6 +2144,20 @@ function _appliedRegistry(): WeakSet<object> {
   return (g[_APPLIED_REGISTRY_KEY] ??= new WeakSet<object>());
 }
 
+// The panel bridge must bind to the ROOT session and never follow a subagent.
+// Subagent sessions re-activate this extension IN-PROCESS (session.bindExtensions),
+// and there can be MULTIPLE module instances, so a module-level guard isn't
+// enough. Mirror pi-subagents' documented pattern for its manager: a globalThis
+// `Symbol.for()` slot, "claim only if free — the first (root) activation wins,
+// child activations leave it alone" (pi-packages#811 area / pi-subagents index.ts).
+const _PANEL_BRIDGE_OWNER_KEY = Symbol.for("remote-pi.panelBridge.owner");
+function _claimPanelBridgeOwnership(): boolean {
+  const g = globalThis as typeof globalThis & { [_PANEL_BRIDGE_OWNER_KEY]?: boolean };
+  if (g[_PANEL_BRIDGE_OWNER_KEY]) return false; // a root session already owns it
+  g[_PANEL_BRIDGE_OWNER_KEY] = true;
+  return true;
+}
+
 const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   const applied = _appliedRegistry();
   if (applied.has(pi)) return;  // this session's pi was already wired
@@ -2160,13 +2174,13 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive);
 
   // Mirror the in-process plan (`plan:*`) + subagents (`subagents:*`) buses to
-  // the app as side-panel snapshots. Bind ONCE to the MAIN session's pi and
-  // NEVER follow a subagent child: a subagent spawns a fresh `pi` that re-runs
-  // this factory, and disposing the module-level singleton tore down the main
-  // session's bridge mid-turn (clearing its pending agents broadcast) and
-  // rebound to the child context. The main session is wired first in the
-  // process, so the first non-null assignment wins; later (child) runs skip it.
-  if (!_panelBridge) {
+  // the app as side-panel snapshots. Bind ONCE to the ROOT session and NEVER
+  // follow a subagent child: a subagent re-activates this extension in-process
+  // with a fresh `pi`, and disposing/re-binding the bridge tore down the root
+  // session's subscriptions mid-turn (dropping its pending agents broadcast).
+  // The globalThis ownership claim survives multiple module instances; only the
+  // first (root) activation binds — child activations leave it alone.
+  if (_claimPanelBridgeOwnership()) {
     _panelBridge = createPanelBridge(pi, _broadcastToActive);
   }
 
