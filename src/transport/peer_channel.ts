@@ -1,4 +1,5 @@
 import type { ClientMessage, ServerMessage } from "../protocol/types.js";
+import { ENVELOPE_KIND, type EnvelopeMessage } from "../session/rpc_envelope.js";
 import type { RelayClient } from "./relay_client.js";
 
 /** Sink for ServerMessage outbound to the remote app. */
@@ -50,6 +51,9 @@ export class PlainPeerChannel implements PeerChannel {
     private readonly onMessage: (msg: ClientMessage) => void,
     /** Called when this specific peer connection is considered lost. */
     _onDisconnect?: () => void,
+    /** Route an inbound mesh-envelope ({rpc|evt}, docs/rpc-envelope.md) to the
+     *  new-protocol dispatcher. Absent → the channel ignores envelope frames. */
+    private readonly onRpc?: (env: EnvelopeMessage, sender: PlainPeerChannel) => void,
   ) {
     const listener = (line: string) => this._onLine(line);
     relay.on("message", listener);
@@ -75,6 +79,25 @@ export class PlainPeerChannel implements PeerChannel {
     // uncaughtException that kills the whole pi process. The relay auto-reconnects
     // and the app re-syncs via session_sync, so a dropped frame is recoverable — a
     // crash is not. Mirrors RelayClient.sendControl's no-op-when-closed policy.
+    try {
+      this.relay.send(JSON.stringify(outer));
+    } catch {
+      /* relay down — drop this frame; reconnect + session_sync will recover */
+    }
+  }
+
+  /**
+   * Send an rpc-envelope message (`{ rpc | evt }`, docs/rpc-envelope.md) to the
+   * app. Same base64-into-`ct` outer wire as `send` — the relay stays opaque —
+   * but the inner payload is an `EnvelopeMessage`, not a `ServerMessage`.
+   * Best-effort, mirroring `send`: a relay mid-reconnect must not throw an
+   * uncaught exception out of the SDK event callback that drives it.
+   */
+  sendEnvelope(env: EnvelopeMessage): void {
+    // Stamp the wrapper kind + timestamp at the single outbound choke.
+    const wire: EnvelopeMessage = { ...env, type: env.type ?? ENVELOPE_KIND, ts: env.ts ?? Date.now() };
+    const ct = Buffer.from(JSON.stringify(wire)).toString("base64");
+    const outer: OuterEnvelope = { peer: this.remotePeerId, ct };
     try {
       this.relay.send(JSON.stringify(outer));
     } catch {
@@ -114,14 +137,18 @@ export class PlainPeerChannel implements PeerChannel {
       return;
     }
 
-    if (
-      !msg ||
-      typeof msg !== "object" ||
-      typeof (msg as Record<string, unknown>).type !== "string"
-    ) {
+    if (!msg || typeof msg !== "object") return;
+    const obj = msg as Record<string, unknown>;
+
+    // New-protocol mesh-envelope inbound: a `type:"env"` wrapper (or a bare
+    // rpc/evt body, for transition robustness) routes to the rpc dispatcher,
+    // NOT the stock ClientMessage switch.
+    if (obj.type === ENVELOPE_KIND || obj.rpc !== undefined || obj.evt !== undefined) {
+      this.onRpc?.(obj as EnvelopeMessage, this);
       return;
     }
 
+    if (typeof obj.type !== "string") return;
     this.onMessage(msg as ClientMessage);
   }
 }

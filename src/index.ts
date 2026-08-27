@@ -75,6 +75,8 @@ import {
   type ExtensionUiBridge,
 } from "./extension_ui_bridge.js";
 import { createPanelBridge, type PanelBridge } from "./panel_bridge.js";
+import { createRpcEnvelope, type EnvelopeMessage } from "./session/rpc_envelope.js";
+import { dispatchRpcCommand, type RpcCommandHandlers } from "./session/rpc_inbound.js";
 import { roomIdFor } from "./rooms.js";
 import { registerAgentTools } from "./session/tools.js";
 import { formatPeerInventory } from "./session/peer_inventory.js";
@@ -84,7 +86,9 @@ import {
   handleModelSet,
   handleThinkingSet,
   handleListModels,
+  wireFromModel,
   type ActionCtx,
+  type ActionPi,
 } from "./actions/handlers.js";
 import { ensureModelRegistry } from "./actions/registry.js";
 import {
@@ -1001,6 +1005,8 @@ export function _resetBridgeOwnersForTest(): void {
   delete g[_ROOT_SESSION_OWNER_KEY];
   _panelBridge?.dispose();
   _panelBridge = null;
+  _rpcEnvelope?.dispose();
+  _rpcEnvelope = null;
   _extensionUiBridge?.dispose();
   _extensionUiBridge = null;
 }
@@ -1122,6 +1128,11 @@ let _extensionUiBridge: ExtensionUiBridge | null = null;
 // frames. null until the factory wires it (and null if the SDK has no events
 // bus). Inert when no plan/subagents source is emitting.
 let _panelBridge: PanelBridge | null = null;
+// rpc-envelope producer (docs/rpc-on-event-map.md): reconstructs pi's --mode rpc
+// event plane from pi.on() and fans {rpc} frames to attached peers. THE route
+// (always on, advertised as the `rpc_envelope` capability); runs alongside the
+// stock ServerMessage path only until M4 parity retirement.
+let _rpcEnvelope: { dispose(): void } | null = null;
 
 let _stopAutoListener: (() => void) | null = null;
 
@@ -1236,6 +1247,70 @@ function _broadcastToActive(msg: ServerMessage): void {
 /** Returns true when at least one owner is attached. Derived `paired` UX. */
 function _anyPeerActive(): boolean {
   return _activePeers.size > 0;
+}
+
+/**
+ * New-protocol inbound: dispatch an envelope-carried pi `RpcCommand` to the SDK
+ * and answer with a `{ rpc: response }` envelope to the SENDER. Native to the
+ * envelope wire — does NOT use the stock `_routeClientMessageFrom` switch. The
+ * SDK primitives (`_wakeAgent`, `_abortCurrentTurn`) are pi, not old protocol.
+ */
+function _routeRpcCommandFrom(sender: PlainPeerChannel, env: EnvelopeMessage): void {
+  const frame = env.rpc;
+  if (!frame || typeof frame !== "object") return; // no {evt} inbound today
+  const handlers: RpcCommandHandlers = {
+    prompt: async (message, opts) => {
+      const wake = _wakeAgent(message, "app rpc prompt", opts.streamingBehavior === "steer" ? "steer" : undefined);
+      if (!wake.ok) throw new Error(wake.detail);
+    },
+    steer: async (message) => {
+      const wake = _wakeAgent(message, "app rpc steer", "steer");
+      if (!wake.ok) throw new Error(wake.detail);
+    },
+    followUp: async (message) => {
+      const wake = _wakeAgent(message, "app rpc follow_up", "followUp");
+      if (!wake.ok) throw new Error(wake.detail);
+    },
+    abort: async () => {
+      if (!_abortCurrentTurn()) throw new Error("no active turn to abort");
+    },
+    setModel: async (provider, modelId) => {
+      if (!_pi) throw new Error("agent session not bound");
+      const actionCtx = (_lastEventCtx ?? _lastCtx) as ActionCtx | null;
+      const reg = actionCtx?.modelRegistry ?? ensureModelRegistry(actionCtx);
+      reg.refresh();
+      const model = reg.find(provider, modelId);
+      if (!model) throw new Error(`model "${provider}/${modelId}" not in registry`);
+      // Route via the minimal ActionPi view (matches handleModelSet): the
+      // registry's `find` returns the minimal SdkModelLike, structurally fine
+      // for setModel at runtime.
+      const ok = await (_pi as unknown as ActionPi).setModel(model);
+      if (!ok) throw new Error("no auth configured for this model");
+      _persistModelDefault(model.provider, model.id); // survive restart, mirrors stock model_set
+      return wireFromModel(model);
+    },
+    setThinkingLevel: async (level) => {
+      if (!_pi) throw new Error("agent session not bound");
+      _pi.setThinkingLevel(level as ThinkingLevel);
+    },
+  };
+  void dispatchRpcCommand(frame as Record<string, unknown>, handlers)
+    .then((resp) => { if (resp) sender.sendEnvelope(resp); })
+    .catch((err) => { console.error(`[remote-pi] rpc inbound dispatch failed: ${String(err)}`); });
+}
+
+/** Fan an rpc-envelope frame out to every attached peer (base64 ct via each
+ *  channel), mirroring `_broadcastToActive` for `{ rpc | evt }` messages. */
+function _broadcastEnvelope(env: EnvelopeMessage): void {
+  if (process.env.REMOTE_PI_DEBUG_ENVELOPE === "1") {
+    // Observability only (not a route gate): watch the {rpc|evt} wire during
+    // e2e bring-up. Frame type only — payloads can be large / carry images.
+    const kind = env.rpc ? `rpc:${(env.rpc as { type?: string }).type ?? "?"}` : `evt:${env.evt?.channel ?? "?"}`;
+    console.error(`[remote-pi] envelope -> ${_activePeers.size} peer(s): ${kind}`);
+  }
+  for (const ch of _activePeers.values()) {
+    try { ch.sendEnvelope(env); } catch { /* best-effort per channel */ }
+  }
 }
 
 /**
@@ -1822,6 +1897,7 @@ function _attachOwner(
     _myRoomId ?? undefined,
     (msg) => _routeClientMessageFrom(channel, msg, (_liveCtx() as typeof _noopCtx) ?? _noopCtx),
     () => _onPeerDisconnect(appPeerId),
+    (env) => _routeRpcCommandFrom(channel, env),
   );
 
   _attachPeerChannel(appPeerId, channel);
@@ -1964,6 +2040,7 @@ const _BASE_CAPABILITIES = [
   "images",
   "tool_result_images",
   "panels",
+  "rpc_envelope",
 ] as const;
 
 /** The capability set to advertise right now (config-dependent bits included). */
@@ -2205,6 +2282,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive);
     _panelBridge?.dispose();
     _panelBridge = createPanelBridge(pi, _broadcastToActive);
+    _rpcEnvelope?.dispose();
+    _rpcEnvelope = createRpcEnvelope(pi, _broadcastEnvelope);
   }
 
   // Plano 19: ensure ~/.pi/remote/{sessions,skills}/ exist and deploy the
@@ -2494,6 +2573,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     if (_claimRootSession(pi)) {
       if (!_extensionUiBridge) _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive);
       if (!_panelBridge) _panelBridge = createPanelBridge(pi, _broadcastToActive);
+      if (!_rpcEnvelope) _rpcEnvelope = createRpcEnvelope(pi, _broadcastEnvelope);
     }
     // Rearm a reused-but-disposed instance. The session_shutdown teardown (below)
     // sets _disposed=true assuming the host re-evaluates THIS module fresh for the
@@ -2603,6 +2683,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       _extensionUiBridge = null;
       _panelBridge?.dispose();
       _panelBridge = null;
+      _rpcEnvelope?.dispose();
+      _rpcEnvelope = null;
       _releaseRootSession(pi);
     }
     // Drop captured ctxs immediately. On module-reuse hosts the same instance
