@@ -1380,9 +1380,22 @@ function _historyReplayEnvelopes(events: SessionHistoryEvent[]): EnvelopeMessage
       case "tool_request":
         out.push({ rpc: { type: "tool_execution_start", toolCallId: e.tool_call_id, toolName: e.tool, args: e.args } });
         break;
-      case "tool_result":
-        out.push({ rpc: { type: "tool_execution_end", toolCallId: e.tool_call_id, result: e.result, isError: !!e.error } });
+      case "tool_result": {
+        // The app pulls tool images from INSIDE `result` (imagesFromToolResult);
+        // _mapAgentMessagesToEvents split them into a separate `images` array, so
+        // rebuild a `{content:[text?, image...]}` result carrying the blocks.
+        const imgs = e.images ?? [];
+        const result = imgs.length > 0
+          ? {
+              content: [
+                ...(typeof e.result === "string" && e.result ? [{ type: "text", text: e.result }] : []),
+                ...imgs.map((img) => ({ type: "image", data: img.data, mimeType: img.mime })),
+              ],
+            }
+          : e.result;
+        out.push({ rpc: { type: "tool_execution_end", toolCallId: e.tool_call_id, result, isError: !!e.error } });
         break;
+      }
       case "compaction":
         out.push({ rpc: { type: "compaction_end", result: { summary: e.summary, tokensBefore: e.tokens_before } } });
         break;
