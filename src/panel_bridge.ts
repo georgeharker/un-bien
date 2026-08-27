@@ -17,8 +17,8 @@
 // Inert when the SDK exposes no events bus. Faithful to pi-plan so the two
 // stay wire-compatible; kept self-contained (pi-plan is not a dependency).
 
-import { appendFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { ServerMessage } from "./protocol/types.js";
@@ -77,7 +77,16 @@ export function createPanelBridge(
   const debug: (msg: string) => void = (() => {
     const flag = process.env.REMOTE_PI_DEBUG_PANELS;
     if (!flag) return () => {};
-    const logFile = flag.includes("/") ? flag : join(tmpdir(), "remote-pi-panel-bridge.log");
+    // Stable, findable location (tmpdir varies per process and was hard to
+    // locate): ~/.pi/remote/panel-bridge.log. Override with a path in the flag.
+    let logFile: string;
+    if (flag.includes("/")) {
+      logFile = flag;
+    } else {
+      const dir = join(homedir(), ".pi", "remote");
+      try { mkdirSync(dir, { recursive: true }); } catch { /* best-effort */ }
+      logFile = join(dir, "panel-bridge.log");
+    }
     return (msg: string) => {
       const line = `${new Date().toISOString()} [panel-bridge] ${msg}`;
       try {
@@ -176,6 +185,27 @@ export function createPanelBridge(
     );
   };
 
+  // Broadcast NOW (no coalesce). Subagent lifecycle events are infrequent and
+  // discrete — coalescing them risks losing the frame if the bridge is disposed
+  // (session replacement / name collision) within the coalesce window, which is
+  // exactly what dropped the subagents panel. Plan stays coalesced (it bursts).
+  const broadcastNow = (key: string, build: () => ServerMessage): void => {
+    if (disposed) return;
+    let frame: ServerMessage;
+    try {
+      frame = build();
+    } catch (error) {
+      debug(`build ${key} THREW: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    const items =
+      frame.type === "panel_update" && frame.data && typeof frame.data === "object"
+        ? ((frame.data as { items?: unknown[] }).items?.length ?? 0)
+        : 0;
+    debug(`broadcast ${key} now items=${items}`);
+    broadcast(frame);
+  };
+
   // ── Plan subscriptions ───────────────────────────────────────────────────
   const onSnapshot = (raw: unknown): void => {
     const snap = parseSnapshot(raw);
@@ -189,7 +219,7 @@ export function createPanelBridge(
     scheduleBroadcast(PLAN_KEY, planFrame);
     // Refresh the agents panel only when agents exist — never broadcast an empty
     // agents frame off a plain plan update (that would spawn a bogus subagents icon).
-    if (agentItems().length > 0) scheduleBroadcast(AGENTS_KEY, agentsFrame);
+    if (agentItems().length > 0) broadcastNow(AGENTS_KEY, agentsFrame);
   };
   const onUpdate = (raw: unknown): void => {
     const up = parseUpdate(raw);
@@ -207,7 +237,7 @@ export function createPanelBridge(
     if (!changed) return;
     planByNs.set(up.ns, map);
     scheduleBroadcast(PLAN_KEY, planFrame);
-    if (agentItems().length > 0) scheduleBroadcast(AGENTS_KEY, agentsFrame);
+    if (agentItems().length > 0) broadcastNow(AGENTS_KEY, agentsFrame);
   };
 
   const unsubPlan = [
@@ -233,7 +263,7 @@ export function createPanelBridge(
       };
       fleet.set(id, mergeAgentState(prev, incoming));
       debug(`fleet=${fleet.size} after ${status} ${id}`);
-      scheduleBroadcast(AGENTS_KEY, agentsFrame);
+      broadcastNow(AGENTS_KEY, agentsFrame);
     };
 
   const unsubAgents = Object.entries(LIFECYCLE).map(([channel, status]) =>
