@@ -456,4 +456,17 @@ public final class AppModel: ObservableObject {
     public func transcript(for session: LiveSession) -> SessionState {
         transcripts[session.id] ?? SessionState()
     }
+
+    #if DEBUG
+    /// Inject a large demo session so the real app UI (session list → transcript
+    /// + panels) can be exercised WITHOUT a live protocol data feed. Launch with
+    /// the `UNBIEN_DEMO` env var set to trigger it (see RootView).
+    public func loadDemoSession(turns: Int = 140) {
+        needsOnboarding = false
+        let session = LiveSession(relayID: UUID(), peerEPK: "demo-peer", roomID: "demo-room",
+                                  name: "Demo (\(turns) turns)", cwd: "/demo", model: "claude-opus-4-8")
+        sessions[session.id] = session
+        transcripts[session.id] = .demo(turns: turns)
+    }
+    #endif
 }

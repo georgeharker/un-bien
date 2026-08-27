@@ -357,3 +357,28 @@ public struct SessionState: Equatable, Sendable {
     }
 
 }
+
+#if DEBUG
+public extension SessionState {
+    /// A large synthetic transcript for render/scroll profiling WITHOUT a live
+    /// data feed — built via the real mutators (same file, so `append` is in
+    /// scope). Each turn adds a user bubble, an assistant bubble (markdown +
+    /// code), and a tool card.
+    static func demo(turns: Int = 140) -> SessionState {
+        var state = SessionState()
+        for turn in 0..<turns {
+            state.append(.user(UserBubble(id: "u\(turn)",
+                text: "Question \(turn): explain the thing in some detail.")))
+            state.append(.assistant(AssistantBubble(
+                id: "a\(turn)", inReplyTo: "u\(turn)",
+                text: "Answer \(turn): some **markdown** with a list\n\n- one\n- two\n\nand code:\n\n```swift\nlet value = \(turn)\nprint(value)\n```\n",
+                streaming: false)))
+            state.append(.tool(ToolCard(
+                toolCallID: "t\(turn)", tool: "bash",
+                args: ["command": .string("echo \(turn)")],
+                result: .string("output line \(turn)"), state: .ok)))
+        }
+        return state
+    }
+}
+#endif
