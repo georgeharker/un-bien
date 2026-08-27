@@ -1265,6 +1265,16 @@ function _routeRpcCommandFrom(sender: PlainPeerChannel, env: EnvelopeMessage): v
     _extensionUiBridge?.respond(frame as unknown as ExtensionUiResponseWire);
     return;
   }
+  // Envelope-native resume: reply with a {rpc} history replay the app folds via
+  // applyRPC (replaces the stock session_sync -> session_history round-trip).
+  if ((frame as Record<string, unknown>).type === "session_sync") {
+    const f = frame as Record<string, unknown>;
+    const limit = typeof f.limit === "number" ? f.limit : _getSyncLimit();
+    const events = _mapAgentMessagesToEvents(_messageBuffer);
+    const slice = limit > 0 ? events.slice(-limit) : [];
+    for (const replay of _historyReplayEnvelopes(slice)) sender.sendEnvelope(replay);
+    return;
+  }
   const handlers: RpcCommandHandlers = {
     prompt: async (message, opts) => {
       const wake = _wakeAgent(message, "app rpc prompt", opts.streamingBehavior === "steer" ? "steer" : undefined);
@@ -1323,7 +1333,7 @@ function _uiBroadcast(msg: ServerMessage): void {
  *  live stream uses — the envelope-native replacement for stock session_history.
  *  Tool cards survive (mapped to tool_execution_start/end), unlike a bare
  *  message replay. */
-function _historyReplayEnvelopes(): EnvelopeMessage[] {
+function _historyReplayEnvelopes(events: SessionHistoryEvent[]): EnvelopeMessage[] {
   const out: EnvelopeMessage[] = [];
   const content = (text: string, images?: ReadonlyArray<{ data: string; mime: string }>): unknown[] => {
     const c: unknown[] = [];
@@ -1331,7 +1341,7 @@ function _historyReplayEnvelopes(): EnvelopeMessage[] {
     for (const img of images ?? []) c.push({ type: "image", data: img.data, mimeType: img.mime });
     return c;
   };
-  for (const e of _mapAgentMessagesToEvents(_messageBuffer)) {
+  for (const e of events) {
     switch (e.type) {
       case "user_input":
         out.push({ rpc: { type: "message_end", message: { role: "user", id: e.id, content: content(e.text, e.images) } } });
@@ -1970,10 +1980,8 @@ function _attachOwner(
   // enable the {rpc|evt} route + suppress stock before any session content
   // arrives. Additive to the stock session_history caps (parity transition).
   channel.sendEnvelope(helloEnvelope(_capabilities()));
-  // Reconstruct the transcript for this peer over the envelope (envelope-native
-  // replacement for stock session_history): replay history as {rpc} frames the
-  // app folds via the same applyRPC as the live stream.
-  for (const frame of _historyReplayEnvelopes()) channel.sendEnvelope(frame);
+  // Transcript reconstruction is request-driven (app sends session_sync on open)
+  // — see _handleSessionSync; nothing to replay proactively here.
   _refreshFooter();
 
   _safeNotify(
@@ -5002,6 +5010,11 @@ function _handleSessionSync(
     protocol_version: PROTOCOL_VERSION,
     capabilities: _capabilities(),
   });
+
+  // Envelope-native reconstruction: replay the same sliced history as {rpc}
+  // frames the app folds via applyRPC (the app ignores the stock session_history
+  // above). Request-driven, so it lands after the app has opened the session.
+  for (const frame of _historyReplayEnvelopes(slice)) sender.sendEnvelope(frame);
 
   // Plan/57 — replay ask_user flows still awaiting an answer. The bridge
   // broadcasts `started` once; a peer that connects afterwards would otherwise
