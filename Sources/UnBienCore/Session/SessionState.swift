@@ -12,6 +12,10 @@ public struct SessionState: Equatable, Sendable {
     public private(set) var items: [TranscriptItem] = []
     public private(set) var sessionStartedAt: Int?
 
+    /// `in_reply_to` of the turn currently streaming (chunks or reasoning),
+    /// or `nil` when idle. This is the `target_id` a `cancel` should carry.
+    public private(set) var activeTurnID: String?
+
     /// Index of each addressable item so updates are O(1).
     /// Index of the assistant bubble currently accepting streamed chunks. A
     /// tool card (or any inserted row) closes it, so post-tool text starts a
@@ -82,6 +86,10 @@ public struct SessionState: Equatable, Sendable {
         case let .compaction(summary, tokensBefore, _):
             appendCompaction(summary: summary, tokensBefore: tokensBefore)
             return true
+        case .cancelled:
+            activeTurnID = nil
+            closeOpenAssistant()
+            return true
         case let .error(_, code, message):
             noticeSeq += 1
             append(.notice(NoticeItem(id: "n\(noticeSeq)", code: code, message: message)))
@@ -125,6 +133,7 @@ public struct SessionState: Equatable, Sendable {
             append(.reasoning(ReasoningBlock(id: "\(reasoningSeq)", text: delta, streaming: true)))
             openReasoningIndex = items.count - 1
         }
+        activeTurnID = inReplyTo
     }
 
     private mutating func appendChunk(inReplyTo: String, delta: String) {
@@ -137,6 +146,7 @@ public struct SessionState: Equatable, Sendable {
             append(.assistant(AssistantBubble(inReplyTo: inReplyTo, text: delta, streaming: true)))
             openAssistantIndex = items.count - 1
         }
+        activeTurnID = inReplyTo
     }
 
     private mutating func finishStreaming(inReplyTo: String, usage: Usage?) {
@@ -144,6 +154,7 @@ public struct SessionState: Equatable, Sendable {
             bubble.usage = usage ?? bubble.usage
             items[index] = .assistant(bubble)
         }
+        if activeTurnID == inReplyTo { activeTurnID = nil }
         closeOpenAssistant()
     }
 
@@ -158,6 +169,7 @@ public struct SessionState: Equatable, Sendable {
             append(.assistant(AssistantBubble(inReplyTo: inReplyTo, text: text,
                                               streaming: false, usage: usage)))
         }
+        if activeTurnID == inReplyTo { activeTurnID = nil }
     }
 
     private mutating func openToolCard(toolCallID: String, tool: String, args: [String: JSONValue]) {

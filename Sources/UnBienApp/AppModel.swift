@@ -46,6 +46,12 @@ public final class AppModel: ObservableObject {
     @Published public var queued: [String: [QueuedMessageItem]] = [:]
     /// Named side-panels per session (plan/subagents/…), keyed by panel key.
     @Published public var panels: [String: [String: PanelState]] = [:]
+    /// Available models per session (from `models_list`).
+    @Published public var availableModels: [String: [WireModel]] = [:]
+    /// Current model per session (from `models_list` / `model_set`).
+    @Published public var currentModel: [String: WireModel] = [:]
+    /// Thinking level the user last selected per session (`thinking_set`).
+    @Published public var thinkingLevel: [String: ThinkingLevel] = [:]
 
     public let mesh: MeshStore
     private var identityStore: OwnerIdentityStore
@@ -166,6 +172,10 @@ public final class AppModel: ObservableObject {
                 queued[key] = []
             }
             return
+        case let .modelsList(_, models, current):
+            availableModels[key] = models
+            if let current { currentModel[key] = current }
+            return
         case let .panelUpdate(panelKey, title, icon, data):
             let wasOpen = panels[key]?[panelKey]?.changed == false && openPanel == "\(key):\(panelKey)"
             var forSession = panels[key] ?? [:]
@@ -212,6 +222,10 @@ public final class AppModel: ObservableObject {
         print("[un-bien] openSession key=\(session.id) sending session_sync to peer=\(session.peerEPK.suffix(6)) room=\(session.roomID)")
         try? await connection.send(.sessionSync(id: UUID().uuidString, limit: limit),
                                    toPeer: session.peerEPK, room: session.roomID)
+        if availableModels[session.id] == nil {
+            try? await connection.send(.listModels(id: UUID().uuidString),
+                                       toPeer: session.peerEPK, room: session.roomID)
+        }
     }
 
     public func sendMessage(_ text: String, to session: LiveSession) async {
@@ -219,6 +233,43 @@ public final class AppModel: ObservableObject {
         try? await connection.send(
             .userMessage(id: UUID().uuidString, text: text, images: nil, streamingBehavior: nil),
             toPeer: session.peerEPK, room: session.roomID)
+    }
+
+    /// `target_id` of the turn currently streaming for a session, if any.
+    public func activeTurnID(for session: LiveSession) -> String? {
+        transcripts[session.id]?.activeTurnID
+    }
+
+    /// Interrupt the in-flight turn (`cancel`).
+    public func cancel(_ session: LiveSession) async {
+        guard let connection = connections[session.relayID],
+              let target = transcripts[session.id]?.activeTurnID else { return }
+        try? await connection.send(.cancel(id: UUID().uuidString, targetID: target),
+                                   toPeer: session.peerEPK, room: session.roomID)
+    }
+
+    // MARK: - Model / thinking control
+
+    /// Ask the peer for its model roster (`list_models`).
+    public func requestModels(for session: LiveSession) async {
+        guard let connection = connections[session.relayID] else { return }
+        try? await connection.send(.listModels(id: UUID().uuidString),
+                                   toPeer: session.peerEPK, room: session.roomID)
+    }
+
+    public func setModel(_ model: WireModel, session: LiveSession) async {
+        currentModel[session.id] = model
+        guard let connection = connections[session.relayID] else { return }
+        try? await connection.send(
+            .modelSet(id: UUID().uuidString, provider: model.provider, modelID: model.id),
+            toPeer: session.peerEPK, room: session.roomID)
+    }
+
+    public func setThinking(_ level: ThinkingLevel, session: LiveSession) async {
+        thinkingLevel[session.id] = level
+        guard let connection = connections[session.relayID] else { return }
+        try? await connection.send(.thinkingSet(id: UUID().uuidString, level: level),
+                                   toPeer: session.peerEPK, room: session.roomID)
     }
 
     // MARK: - Panels (plan / subagents / …)

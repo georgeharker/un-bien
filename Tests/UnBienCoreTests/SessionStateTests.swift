@@ -19,6 +19,27 @@ final class SessionStateTests: XCTestCase {
         XCTAssertEqual(state.items.count, 2)
     }
 
+    func testActiveTurnIDTracksStreamingLifecycle() {
+        var state = SessionState()
+        XCTAssertNil(state.activeTurnID)
+        state.apply(.agentReasoning(inReplyTo: "u1", delta: "hmm"))
+        XCTAssertEqual(state.activeTurnID, "u1")
+        state.apply(.agentChunk(inReplyTo: "u1", delta: "Hi"))
+        XCTAssertEqual(state.activeTurnID, "u1", "still streaming")
+        state.apply(.agentDone(inReplyTo: "u1", usage: nil))
+        XCTAssertNil(state.activeTurnID, "done clears the active turn")
+    }
+
+    func testCancelledClosesActiveTurn() {
+        var state = SessionState()
+        state.apply(.agentChunk(inReplyTo: "u1", delta: "Work"))
+        XCTAssertEqual(state.activeTurnID, "u1")
+        XCTAssertTrue(state.apply(.cancelled(inReplyTo: "u1", targetID: "u1")))
+        XCTAssertNil(state.activeTurnID)
+        guard case let .assistant(bubble) = state.items[0] else { return XCTFail("no assistant") }
+        XCTAssertFalse(bubble.streaming, "cancel settles the open bubble")
+    }
+
     func testReasoningPrecedesTextAsCollapsibleBlock() {
         var state = SessionState()
         state.apply(.agentReasoning(inReplyTo: "u1", delta: "Let me "))
