@@ -69,6 +69,8 @@ private struct ComposerTextView: UIViewRepresentable {
 
     private func recalcHeight(_ view: UITextView) {
         let size = view.sizeThatFits(CGSize(width: view.bounds.width, height: .greatestFiniteMagnitude))
+        // Only publish a real change — updating @State every render loops/janks.
+        guard abs(height - size.height) > 0.5 else { return }
         DispatchQueue.main.async { height = size.height }
     }
 
@@ -139,6 +141,7 @@ private struct ComposerTextView: NSViewRepresentable {
         guard let container = textView.textContainer, let manager = textView.layoutManager else { return }
         manager.ensureLayout(for: container)
         let used = manager.usedRect(for: container).height + 16
+        guard abs(height - used) > 0.5 else { return }
         DispatchQueue.main.async { height = used }
     }
 

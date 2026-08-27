@@ -250,11 +250,8 @@ struct TranscriptView: View {
                     Image(systemName: "stop.circle.fill").font(.title2)
                 }
             }
-            TextField("Message", text: $draft)
-                .textFieldStyle(.plain)
-                .submitLabel(.send)
-                .onSubmit(sendDraft)
-                .padding(10)
+            MessageComposer(text: $draft, placeholder: "Message", onSend: sendDraft)
+                .padding(.horizontal, 6)
                 .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
             Button {
                 let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
