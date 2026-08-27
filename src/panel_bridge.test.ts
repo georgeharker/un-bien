@@ -129,6 +129,40 @@ describe("panel_bridge", () => {
     bridge?.dispose();
   });
 
+  it("handles out-of-order subagent events (terminal status is never downgraded)", () => {
+    const bus = fakeBus();
+    const out: ServerMessage[] = [];
+    const bridge = createPanelBridge(fakePi(bus), (m) => out.push(m));
+
+    // `completed` arrives BEFORE `started` (pi can emit out of order).
+    bus.emit("subagents:completed", { id: "s1", type: "Explore", description: "scan" });
+    bus.emit("subagents:started", { id: "s1", type: "Explore", description: "scan" });
+    vi.advanceTimersByTime(60);
+
+    const items = itemsOf(panelOf(out, "subagents"));
+    expect(items).toHaveLength(1);
+    expect(items[0]?.status).toBe("done"); // not downgraded to in_progress
+    bridge?.dispose();
+  });
+
+  it("keeps finished agents (no empty clobber) so done agents linger", () => {
+    const bus = fakeBus();
+    const out: ServerMessage[] = [];
+    const bridge = createPanelBridge(fakePi(bus), (m) => out.push(m));
+
+    bus.emit("subagents:started", { id: "s1", type: "Plan" });
+    bus.emit("subagents:completed", { id: "s1", type: "Plan" });
+    vi.advanceTimersByTime(60);
+    // A session_shutdown must NOT wipe the panel — pendingPanels still replays.
+    bus.emit("session_shutdown", {});
+    vi.advanceTimersByTime(60);
+
+    expect(itemsOf(panelOf(out, "subagents")).map((i) => i.id)).toEqual(["agent:s1"]);
+    const pending = bridge?.pendingPanels() ?? [];
+    expect(pending.some((m) => m.type === "panel_update" && m.key === "subagents")).toBe(true);
+    bridge?.dispose();
+  });
+
   it("pendingPanels replays the current plan + subagents snapshots", () => {
     const bus = fakeBus();
     const bridge = createPanelBridge(fakePi(bus), () => {});

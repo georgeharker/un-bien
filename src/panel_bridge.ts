@@ -171,15 +171,13 @@ export function createPanelBridge(
     events.on(channel, recordAgent(status)),
   );
 
-  // pi-plan clears the fleet on session_shutdown; do the same so a new run
-  // starts empty. `pi.on` is always present in remote_pi's SDK.
-  const unsubShutdown =
-    typeof (pi as { on?: unknown }).on === "function"
-      ? pi.on("session_shutdown", () => {
-          fleet.clear();
-          scheduleBroadcast(AGENTS_KEY, agentsFrame);
-        })
-      : undefined;
+  // NB: unlike pi-plan's TUI (which clears its fleet on session_shutdown to reset
+  // the widget), we deliberately KEEP finished agents. Broadcasting an empty
+  // frame on shutdown would clobber the app's panel the instant a fast agent
+  // completes — the user expects done agents to linger for a while. The fleet
+  // resets naturally when the pi process restarts (a new session = a fresh
+  // bridge), and `pendingPanels` still replays the last fleet to a reconnecting
+  // app.
 
   return {
     pendingPanels() {
@@ -192,7 +190,6 @@ export function createPanelBridge(
       disposed = true;
       for (const u of unsubPlan) safeUnsub(u);
       for (const u of unsubAgents) safeUnsub(u);
-      safeUnsub(unsubShutdown);
       for (const t of timers.values()) clearTimeout(t);
       timers.clear();
       planByNs.clear();
