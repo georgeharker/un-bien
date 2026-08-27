@@ -98,7 +98,7 @@ export function createPanelBridge(
   const planByNs = new Map<string, Map<string, PlanItem>>();
   const planLastSeq = new Map<string, number>();
 
-  const planItems = (): PlanItem[] => {
+  const allPlanItems = (): PlanItem[] => {
     const out: PlanItem[] = [];
     for (const map of planByNs.values()) for (const it of map.values()) out.push(it);
     return out;
@@ -107,7 +107,21 @@ export function createPanelBridge(
   // ── Subagents fleet (port of pi-plan agents.ts) ──────────────────────────
   const fleet = new Map<string, AgentState>();
 
-  const agentItems = (): PlanItem[] => [...fleet.values()].map(toAgentItem);
+  // pi-plan's buildView SEPARATES agents from plans. A plan source can fold the
+  // fleet into its snapshot as `kind:"agent"` nodes (pi-acp does), so route those
+  // to the AGENTS panel and keep them out of the plan rows. Direct `subagents:*`
+  // fleet + any agent-kind plan items are merged by id (live fleet wins status).
+  const isAgent = (it: PlanItem): boolean => it.kind === "agent";
+  const planPanelItems = (): PlanItem[] => allPlanItems().filter((it) => !isAgent(it));
+  const agentItems = (): PlanItem[] => {
+    const byId = new Map<string, PlanItem>();
+    for (const it of allPlanItems()) if (isAgent(it)) byId.set(it.id, it);
+    for (const a of fleet.values()) {
+      const item = toAgentItem(a);
+      byId.set(item.id, item); // live fleet status wins
+    }
+    return [...byId.values()];
+  };
 
   // ── Coalesced broadcast ──────────────────────────────────────────────────
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -118,7 +132,7 @@ export function createPanelBridge(
     key: PLAN_KEY,
     title: "Plan",
     icon: "checklist",
-    data: { items: planItems() },
+    data: { items: planPanelItems() },
   });
   const agentsFrame = (): ServerMessage => ({
     type: "panel_update",
@@ -136,11 +150,16 @@ export function createPanelBridge(
         timers.delete(key);
         if (disposed) return;
         const frame = build();
-        const count =
+        const fitems =
           frame.type === "panel_update" && frame.data && typeof frame.data === "object"
-            ? ((frame.data as { items?: unknown[] }).items?.length ?? 0)
-            : 0;
-        debug(`broadcast ${key} items=${count}`);
+            ? ((frame.data as { items?: Array<{ kind?: string }> }).items ?? [])
+            : [];
+        const kinds = fitems.reduce<Record<string, number>>((acc, it) => {
+          const k = typeof it?.kind === "string" ? it.kind : "?";
+          acc[k] = (acc[k] ?? 0) + 1;
+          return acc;
+        }, {});
+        debug(`broadcast ${key} items=${fitems.length} kinds=${JSON.stringify(kinds)}`);
         broadcast(frame);
       }, COALESCE_MS),
     );
@@ -157,6 +176,9 @@ export function createPanelBridge(
     for (const it of snap.items) next.set(it.id, it);
     planByNs.set(snap.ns, next);
     scheduleBroadcast(PLAN_KEY, planFrame);
+    // Refresh the agents panel only when agents exist — never broadcast an empty
+    // agents frame off a plain plan update (that would spawn a bogus subagents icon).
+    if (agentItems().length > 0) scheduleBroadcast(AGENTS_KEY, agentsFrame);
   };
   const onUpdate = (raw: unknown): void => {
     const up = parseUpdate(raw);
@@ -174,6 +196,7 @@ export function createPanelBridge(
     if (!changed) return;
     planByNs.set(up.ns, map);
     scheduleBroadcast(PLAN_KEY, planFrame);
+    if (agentItems().length > 0) scheduleBroadcast(AGENTS_KEY, agentsFrame);
   };
 
   const unsubPlan = [
@@ -216,8 +239,8 @@ export function createPanelBridge(
   return {
     pendingPanels() {
       const out: ServerMessage[] = [];
-      if (planItems().length > 0) out.push(planFrame());
-      if (fleet.size > 0) out.push(agentsFrame());
+      if (planPanelItems().length > 0) out.push(planFrame());
+      if (agentItems().length > 0) out.push(agentsFrame());
       return out;
     },
     dispose() {

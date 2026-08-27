@@ -129,6 +129,27 @@ describe("panel_bridge", () => {
     bridge?.dispose();
   });
 
+  it("routes kind:agent items from a plan snapshot to the subagents panel, not plan", () => {
+    const bus = fakeBus();
+    const out: ServerMessage[] = [];
+    const bridge = createPanelBridge(fakePi(bus), (m) => out.push(m));
+
+    bus.emit("plan:snapshot", {
+      ns: "acp",
+      seq: 1,
+      items: [
+        { id: "plan:a", kind: "plan", title: "Do A", status: "todo" },
+        { id: "agent:x", kind: "agent", title: "Explore repo", status: "in_progress" },
+      ],
+    });
+    vi.advanceTimersByTime(60);
+
+    // Plan panel excludes the agent; subagents panel contains only it.
+    expect(itemsOf(panelOf(out, "plan")).map((i) => i.id)).toEqual(["plan:a"]);
+    expect(itemsOf(panelOf(out, "subagents")).map((i) => i.id)).toEqual(["agent:x"]);
+    bridge?.dispose();
+  });
+
   it("handles out-of-order subagent events (terminal status is never downgraded)", () => {
     const bus = fakeBus();
     const out: ServerMessage[] = [];
