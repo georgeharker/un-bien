@@ -28,6 +28,10 @@ public enum ServerMessage: Equatable, Sendable {
     case actionError(inReplyTo: String, action: ActionName, error: String)
     case modelsList(inReplyTo: String, models: [WireModel], current: WireModel?)
     case extensionUiRequest(ExtensionUiRequest)
+    /// un-bien fork extension: a named side-panel's state snapshot (plan,
+    /// subagents, …), forwarded from a cooperating event source. Rendered as
+    /// a top-bar item that badges on change. `icon` is an optional SF Symbol.
+    case panelUpdate(key: String, title: String, icon: String?, data: JSONValue)
 
     /// Short `type`-tag for logging/diagnostics.
     public var debugTag: String {
@@ -54,6 +58,7 @@ public enum ServerMessage: Equatable, Sendable {
         case .actionError: return "action_error"
         case .modelsList: return "models_list"
         case .extensionUiRequest: return "extension_ui_request"
+        case .panelUpdate: return "panel_update"
         }
     }
 }

@@ -40,6 +40,10 @@ extension ServerMessage: Codable {
         static let action = CodingKeys("action")
         static let models = CodingKeys("models")
         static let current = CodingKeys("current")
+        static let key = CodingKeys("key")
+        static let title = CodingKeys("title")
+        static let icon = CodingKeys("icon")
+        static let data = CodingKeys("data")
     }
 
     // swiftlint:disable:next cyclomatic_complexity function_body_length
@@ -121,6 +125,11 @@ extension ServerMessage: Codable {
                                current: try container.decodeIfPresent(WireModel.self, forKey: .current))
         case "extension_ui_request":
             self = .extensionUiRequest(try ExtensionUiRequest(from: decoder))
+        case "panel_update":
+            self = .panelUpdate(
+                key: try str(.key), title: try str(.title),
+                icon: try container.decodeIfPresent(String.self, forKey: .icon),
+                data: try container.decode(JSONValue.self, forKey: .data))
         default:
             throw DecodeError.unsupportedType(type)
         }
@@ -232,6 +241,12 @@ extension ServerMessage: Codable {
             try container.encodeIfPresent(current, forKey: .current)
         case let .extensionUiRequest(request):
             try request.encode(to: encoder)
+        case let .panelUpdate(key, title, icon, data):
+            try container.encode("panel_update", forKey: .type)
+            try container.encode(key, forKey: .key)
+            try container.encode(title, forKey: .title)
+            try container.encodeIfPresent(icon, forKey: .icon)
+            try container.encode(data, forKey: .data)
         }
     }
 }

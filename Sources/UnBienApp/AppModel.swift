@@ -19,6 +19,18 @@ public struct LiveSession: Identifiable, Equatable, Hashable, Sendable {
     public var id: String { "\(relayID.uuidString):\(peerEPK):\(roomID)" }
 }
 
+/// A named side-panel (plan, subagents, …) mirrored from a cooperating event
+/// source, surfaced as a top-bar item that badges when it changes.
+public struct PanelState: Identifiable, Equatable, Sendable {
+    public let key: String
+    public var title: String
+    public var icon: String?
+    public var data: JSONValue
+    /// True since the last update; cleared when the user opens the panel.
+    public var changed: Bool
+    public var id: String { key }
+}
+
 /// Top-level app orchestrator: Owner-key custody, per-relay connections,
 /// pairing, live session discovery, and per-session transcript reducers.
 @MainActor
@@ -32,6 +44,8 @@ public final class AppModel: ObservableObject {
     @Published public var prompts: [String: ExtensionUiRequest] = [:]
     /// Pending queued follow-up messages per session (queued_message_state).
     @Published public var queued: [String: [QueuedMessageItem]] = [:]
+    /// Named side-panels per session (plan/subagents/…), keyed by panel key.
+    @Published public var panels: [String: [String: PanelState]] = [:]
 
     public let mesh: MeshStore
     private var identityStore: OwnerIdentityStore
@@ -152,6 +166,13 @@ public final class AppModel: ObservableObject {
                 queued[key] = []
             }
             return
+        case let .panelUpdate(panelKey, title, icon, data):
+            let wasOpen = panels[key]?[panelKey]?.changed == false && openPanel == "\(key):\(panelKey)"
+            var forSession = panels[key] ?? [:]
+            forSession[panelKey] = PanelState(key: panelKey, title: title, icon: icon,
+                                              data: data, changed: !wasOpen)
+            panels[key] = forSession
+            return
         default:
             break
         }
@@ -198,6 +219,23 @@ public final class AppModel: ObservableObject {
         try? await connection.send(
             .userMessage(id: UUID().uuidString, text: text, images: nil, streamingBehavior: nil),
             toPeer: session.peerEPK, room: session.roomID)
+    }
+
+    // MARK: - Panels (plan / subagents / …)
+
+    /// The `sessionID:panelKey` currently on screen, so live updates to it stay
+    /// marked-read instead of re-badging under the user.
+    @Published public var openPanel: String?
+
+    public func markPanelViewed(_ panelKey: String, session: LiveSession) {
+        panels[session.id]?[panelKey]?.changed = false
+        openPanel = "\(session.id):\(panelKey)"
+    }
+
+    public func closePanel() { openPanel = nil }
+
+    public func panels(for session: LiveSession) -> [PanelState] {
+        (panels[session.id] ?? [:]).values.sorted { $0.key < $1.key }
     }
 
     // MARK: - Interactive prompts (extension_ui)

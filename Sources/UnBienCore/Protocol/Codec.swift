@@ -18,7 +18,7 @@ private let serverTypes: Set<String> = [
     "agent_message", "compaction",
     "tool_request", "tool_result", "error", "cancelled", "pong", "bye",
     "session_history", "action_ok", "action_error", "models_list",
-    "extension_ui_request",
+    "extension_ui_request", "panel_update",
 ]
 
 public enum Codec {

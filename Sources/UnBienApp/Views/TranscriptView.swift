@@ -8,6 +8,7 @@ struct TranscriptView: View {
     let session: LiveSession
     @EnvironmentObject var model: AppModel
     @State private var draft = ""
+    @State private var selectedPanelKey: String?
     private let theme = AppTheme.tokyoNight
 
     private var items: [TranscriptItem] {
@@ -38,6 +39,28 @@ struct TranscriptView: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .task { await model.openSession(session) }
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                ForEach(model.panels(for: session)) { panel in
+                    Button {
+                        model.markPanelViewed(panel.key, session: session)
+                        selectedPanelKey = panel.key
+                    } label: {
+                        Image(systemName: panelSymbol(panel))
+                            .overlay(alignment: .topTrailing) {
+                                if panel.changed {
+                                    Circle().fill(theme.error).frame(width: 7, height: 7).offset(x: 3, y: -3)
+                                }
+                            }
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: panelPresented, onDismiss: { model.closePanel() }) {
+            if let key = selectedPanelKey, let panel = model.panels[session.id]?[key] {
+                PanelHostView(panel: panel)
+            }
+        }
         .sheet(isPresented: promptPresented) {
             if let request = model.prompts[session.id] {
                 let respond: (ExtensionUiResponse) -> Void = { response in
@@ -56,6 +79,10 @@ struct TranscriptView: View {
                 }
             }
         }
+    }
+
+    private var panelPresented: Binding<Bool> {
+        Binding(get: { selectedPanelKey != nil }, set: { if !$0 { selectedPanelKey = nil } })
     }
 
     private var promptPresented: Binding<Bool> {
