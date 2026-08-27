@@ -2224,9 +2224,11 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // a content-array/object into "[object Object]" and the success branch sent
     // the object unstringified — both diverging from re-sync.
     const text = _stringifyToolResult(event.result);
+    const images = _imagesFromToolResult(event.result);
     const msg: ServerMessage = event.isError
       ? { type: "tool_result", tool_call_id: event.toolCallId, error: text }
       : { type: "tool_result", tool_call_id: event.toolCallId, result: text };
+    if (images.length > 0) msg.images = images;
     _broadcastToActive(msg);
   });
 
@@ -4952,6 +4954,18 @@ function _imagesFromContent(content: unknown): WireImage[] {
   return out;
 }
 
+/** Image blocks from a tool result. The LIVE `tool_execution_end` result is a
+ *  wrapper `{ content: [...], details }`; the history path carries the bare
+ *  content array. Unwrap `content` before scanning (mirrors _stringifyToolResult). */
+function _imagesFromToolResult(value: unknown): WireImage[] {
+  if (Array.isArray(value)) return _imagesFromContent(value);
+  if (value && typeof value === "object") {
+    const obj = value as { content?: unknown };
+    if (Array.isArray(obj.content)) return _imagesFromContent(obj.content);
+  }
+  return [];
+}
+
 /**
  * Maps SDK AgentMessage[] (UserMessage / AssistantMessage / ToolResultMessage)
  * into the flat SessionHistoryEvent[] shape consumed by the app.
@@ -5044,11 +5058,12 @@ export function _mapAgentMessagesToEvents(
       // Same helper as the live `tool_execution_end` broadcast → live == re-sync.
       const text = _stringifyToolResult(m.content);
       const tcid = String(m.toolCallId ?? "");
-      events.push(
-        m.isError
-          ? { ts, type: "tool_result", tool_call_id: tcid, error: text }
-          : { ts, type: "tool_result", tool_call_id: tcid, result: text },
-      );
+      const images = _imagesFromContent(m.content);
+      const ev: SessionHistoryEvent = m.isError
+        ? { ts, type: "tool_result", tool_call_id: tcid, error: text }
+        : { ts, type: "tool_result", tool_call_id: tcid, result: text };
+      if (images.length > 0) ev.images = images;
+      events.push(ev);
     }
   }
 

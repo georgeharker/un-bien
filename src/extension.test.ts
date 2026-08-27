@@ -3637,6 +3637,33 @@ describe("session sync", () => {
     expect(agent.images).toEqual([{ data: "R0lG", mime: "image/gif" }]);
   });
 
+  test("mapping (un-bien): toolResult with an image block → tool_result keeps images", () => {
+    const ts = 1_700_000_000_300;
+    const events = _mapAgentMessagesToEvents([
+      {
+        role: "toolResult",
+        toolCallId: "tc1",
+        content: [
+          { type: "text", text: "captured" },
+          { type: "image", data: "UE5H", mimeType: "image/png" },
+        ],
+        timestamp: ts,
+      },
+    ]);
+    const tr = events.find((e) => e.type === "tool_result") as {
+      images?: Array<{ data: string; mime: string }>;
+    };
+    expect(tr.images).toEqual([{ data: "UE5H", mime: "image/png" }]);
+  });
+
+  test("mapping (un-bien): text-only toolResult → no images key (path unchanged)", () => {
+    const events = _mapAgentMessagesToEvents([
+      { role: "toolResult", toolCallId: "tc1", content: "just text", timestamp: 1 },
+    ]);
+    const tr = events.find((e) => e.type === "tool_result");
+    expect(tr).not.toHaveProperty("images");
+  });
+
   test("mapping (un-bien): text-only assistant → no images key (path unchanged)", () => {
     const events = _mapAgentMessagesToEvents([
       { role: "user", content: "hi", timestamp: 1 },
