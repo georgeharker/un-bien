@@ -15,6 +15,7 @@ func panelSymbol(_ panel: PanelState) -> String {
 /// a generic list/JSON view.
 struct PanelHostView: View {
     let panel: PanelState
+    @Environment(\.dismiss) private var dismiss
     private let theme = AppTheme.tokyoNight
 
     var body: some View {
@@ -31,7 +32,17 @@ struct PanelHostView: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
         }
+        // Without an explicit size a macOS sheet opens small — the summary fills
+        // it and the wave-ordered rows fall below the fold. Give it room.
+        #if os(macOS)
+        .frame(minWidth: 460, idealWidth: 520, minHeight: 520, idealHeight: 640)
+        #endif
     }
 }
 
