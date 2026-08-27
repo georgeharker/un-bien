@@ -66,9 +66,15 @@ struct SettingsView: View {
         Section {
             HStack {
                 Text("Text size")
-                Slider(value: $model.textScale, in: 0.8...1.8, step: 0.05)
-                Text(String(format: "%.0f%%", model.textScale * 100))
-                    .font(.caption).monospacedDigit().foregroundStyle(theme.secondaryText)
+                Slider(value: bodyPointBinding, in: 9...27, step: 1)
+                TextField("pt", value: bodyPointBinding, format: .number.precision(.fractionLength(0)))
+                    .frame(width: 40)
+                    .multilineTextAlignment(.trailing)
+                    .monospacedDigit()
+                    #if os(iOS)
+                    .keyboardType(.numberPad)
+                    #endif
+                Text("pt").font(.caption).foregroundStyle(theme.secondaryText)
             }
             Picker("Mono font", selection: $model.monoFontName) {
                 Text("System Mono").tag(String?.none)
@@ -92,7 +98,7 @@ struct SettingsView: View {
                 Text(fontError).font(.caption).foregroundStyle(theme.error)
             }
             Link(destination: URL(string: "https://www.nerdfonts.com/font-downloads")!) {
-                Label("Get Meslo Nerd Font", systemImage: "arrow.up.right.square")
+                Label("Get Nerd Fonts", systemImage: "arrow.up.right.square")
             }
         } header: {
             Text("Typography")
@@ -133,6 +139,15 @@ struct SettingsView: View {
         Section("Transcript") {
             Toggle("Show thinking", isOn: $model.showThinking)
         }
+    }
+
+    /// Base body point size (15pt × scale) as an editable value; the range
+    /// 9–27pt maps to textScale 0.6–1.8.
+    private var bodyPointBinding: Binding<Double> {
+        Binding(
+            get: { (15 * model.textScale).rounded() },
+            set: { model.textScale = min(max($0 / 15, 0.6), 1.8) }
+        )
     }
 
     /// The mono font at the current scale, for the live preview box.
