@@ -17,6 +17,9 @@
 // Inert when the SDK exposes no events bus. Faithful to pi-plan so the two
 // stay wire-compatible; kept self-contained (pi-plan is not a dependency).
 
+import { appendFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { ServerMessage } from "./protocol/types.js";
 
@@ -67,11 +70,28 @@ export function createPanelBridge(
   }
   const events: EventBus = eventsRaw;
 
-  // Opt-in tracing (`REMOTE_PI_DEBUG_PANELS=1`): shows whether bus events land
-  // and whether a panel frame is broadcast, to isolate capture vs render.
-  const debug: (msg: string) => void = process.env.REMOTE_PI_DEBUG_PANELS
-    ? (msg) => console.error(`[panel-bridge] ${msg}`)
-    : () => {};
+  // Opt-in tracing: shows whether bus events land and whether a panel frame is
+  // broadcast, to isolate capture vs render. `REMOTE_PI_DEBUG_PANELS=1` logs to
+  // stderr AND appends to `$TMPDIR/remote-pi-panel-bridge.log`; set it to a path
+  // (contains `/`) to choose the file. stderr scrolls too fast — tail the file.
+  const debug: (msg: string) => void = (() => {
+    const flag = process.env.REMOTE_PI_DEBUG_PANELS;
+    if (!flag) return () => {};
+    const logFile = flag.includes("/") ? flag : join(tmpdir(), "remote-pi-panel-bridge.log");
+    return (msg: string) => {
+      const line = `${new Date().toISOString()} [panel-bridge] ${msg}`;
+      try {
+        console.error(line);
+      } catch {
+        /* stderr closed */
+      }
+      try {
+        appendFileSync(logFile, `${line}\n`);
+      } catch {
+        /* best-effort file log */
+      }
+    };
+  })();
 
   // ── Plan accumulation (port of pi-plan wire.ts) ──────────────────────────
   // Per-source (`ns`) item maps + last-seen seq to drop out-of-order frames.
