@@ -76,6 +76,17 @@ public actor RelayConnection {
         try await channel.send(encode(envelope))
     }
 
+    /// Route an rpc-envelope (`{rpc|evt}`) to a Pi peer/room. Stamps the wrapper
+    /// kind (`type:"env"`) + timestamp, mirroring the fork's outbound choke.
+    public func sendEnvelope(_ message: EnvelopeMessage, toPeer peer: String, room: String) async throws {
+        let stamped = EnvelopeMessage(
+            type: message.type ?? "env",
+            ts: message.ts ?? Date().timeIntervalSince1970 * 1000,
+            caps: message.caps, rpc: message.rpc, evt: message.evt)
+        let routed = try RoutedEnvelope(peer: peer, room: room, envelope: stamped)
+        try await channel.send(encode(routed))
+    }
+
     /// Send a bare relay-control frame.
     public func sendControl(_ control: RelayControlOut) async throws {
         try await channel.send(encode(control))

@@ -223,12 +223,32 @@ public final class AppModel: ObservableObject {
             // by SHAPE — a stock ServerMessage decodes to an EnvelopeMessage with
             // both fields nil. The reducer owns the transcript for this key;
             // stock session-content is suppressed in `route`.
-            if let env = try? envelope.decodeEnvelope(), env.rpc != nil || env.evt != nil {
-                var reducer = envelopeReducers[key] ?? EnvelopeReducer()
-                reducer.apply(env)
-                envelopeReducers[key] = reducer
-                transcripts[key] = reducer.session
-                return
+            if let env = try? envelope.decodeEnvelope() {
+                // Envelope-native capability handshake: learn caps here (not just
+                // from stock session_history) so the {rpc|evt} route + stock
+                // suppression turn on before any session content arrives.
+                if env.type == "hello" {
+                    capabilities[key] = Set(env.caps ?? [])
+                    if envelopeReducers[key] == nil { envelopeReducers[key] = EnvelopeReducer() }
+                    return
+                }
+                if env.rpc != nil || env.evt != nil {
+                    var reducer = envelopeReducers[key] ?? EnvelopeReducer()
+                    reducer.apply(env)
+                    envelopeReducers[key] = reducer
+                    transcripts[key] = reducer.session
+                    // extension_ui is envelope-only: the {rpc} extension_ui_request
+                    // frame is the same JSON as the stock ServerMessage, so reuse
+                    // the stock decoder to surface it in the existing prompt UI.
+                    if let rpc = env.rpc, rpc["type"]?.stringValue == "extension_ui_request",
+                       let data = try? JSONEncoder().encode(rpc),
+                       let line = String(data: data, encoding: .utf8),
+                       let decoded = try? Codec.decodeServer(line),
+                       case let .extensionUiRequest(request) = decoded {
+                        prompts[key] = request
+                    }
+                    return
+                }
             }
             do {
                 let message = try envelope.decodeServer()
@@ -411,8 +431,13 @@ public final class AppModel: ObservableObject {
     public func respondToPrompt(_ response: ExtensionUiResponse, session: LiveSession) async {
         prompts[session.id] = nil
         guard let connection = connections[session.relayID] else { return }
-        try? await connection.send(.extensionUiResponse(response),
-                                   toPeer: session.peerEPK, room: session.roomID)
+        // Envelope-only: reuse the stock encoder to build the extension_ui_response
+        // frame, then send it inside an {rpc} envelope (the fork routes it to the
+        // ui bridge from the rpc path).
+        guard let data = try? Codec.encodeClientBody(.extensionUiResponse(response)),
+              let frame = try? JSONDecoder().decode(JSONValue.self, from: data) else { return }
+        try? await connection.sendEnvelope(EnvelopeMessage(rpc: frame),
+                                           toPeer: session.peerEPK, room: session.roomID)
     }
 
     // MARK: - Queued messages

@@ -3,11 +3,22 @@ import Foundation
 /// One inner-channel message on the rpc-envelope (see docs/rpc-envelope.md):
 /// a verbatim pi rpc frame and/or an ephemeral forwarded bus event. At least
 /// one of `rpc` / `evt` is present.
-public struct EnvelopeMessage: Decodable, Sendable {
+public struct EnvelopeMessage: Codable, Sendable {
+    /// Wrapper-kind discriminator: `"env"` = session {rpc|evt} plane, `"hello"`
+    /// = capability handshake. Absent on a stock ServerMessage body.
+    public let type: String?
+    /// Epoch ms stamped at send (ordering/debug).
+    public let ts: Double?
+    /// Handshake (`type == "hello"`): the fork's advertised capabilities.
+    public let caps: [String]?
     public let rpc: JSONValue?
     public let evt: EnvelopeEvt?
 
-    public init(rpc: JSONValue? = nil, evt: EnvelopeEvt? = nil) {
+    public init(type: String? = nil, ts: Double? = nil, caps: [String]? = nil,
+                rpc: JSONValue? = nil, evt: EnvelopeEvt? = nil) {
+        self.type = type
+        self.ts = ts
+        self.caps = caps
         self.rpc = rpc
         self.evt = evt
     }
@@ -15,7 +26,7 @@ public struct EnvelopeMessage: Decodable, Sendable {
 
 /// The `{evt}` plane: an ephemeral, non-persisted in-process bus event
 /// (`plan:*` / `subagents:*`) the fork forwards. Never on `pi --mode rpc` stdout.
-public struct EnvelopeEvt: Decodable, Sendable {
+public struct EnvelopeEvt: Codable, Sendable {
     public let channel: String
     public let data: JSONValue
 }

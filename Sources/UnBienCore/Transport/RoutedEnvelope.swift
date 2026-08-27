@@ -24,6 +24,13 @@ public struct RoutedEnvelope: Codable, Equatable, Sendable {
         self.init(peer: peer, room: room, ct: body.base64EncodedString())
     }
 
+    /// Wrap an rpc-envelope ``EnvelopeMessage`` (`{rpc|evt}`) for a peer/room:
+    /// `ct = base64(JSON(envelope))`, same opaque wire as the ClientMessage form.
+    public init(peer: String, room: String, envelope: EnvelopeMessage) throws {
+        let data = try JSONEncoder().encode(envelope)
+        self.init(peer: peer, room: room, ct: data.base64EncodedString())
+    }
+
     /// Decode the carried ``ServerMessage`` from `ct`.
     public func decodeServer() throws -> ServerMessage {
         guard let data = Data(base64Encoded: ct),
