@@ -8,6 +8,8 @@ struct MessageComposer: View {
     @Binding var text: String
     var placeholder: String = "Message"
     var maxHeight: CGFloat = 120
+    /// Optional composer font (e.g. the chosen mono font). nil = system body.
+    var font: PlatformFont?
     var onSend: () -> Void
 
     @State private var height: CGFloat = 36
@@ -21,7 +23,8 @@ struct MessageComposer: View {
                     .padding(.vertical, 8)
                     .allowsHitTesting(false)
             }
-            ComposerTextView(text: $text, height: $height, maxHeight: maxHeight, onSend: onSend)
+            ComposerTextView(text: $text, height: $height, maxHeight: maxHeight,
+                             font: font, onSend: onSend)
                 .frame(height: min(max(height, 36), maxHeight))
         }
     }
@@ -48,13 +51,14 @@ private struct ComposerTextView: UIViewRepresentable {
     @Binding var text: String
     @Binding var height: CGFloat
     let maxHeight: CGFloat
+    let font: UIFont?
     let onSend: () -> Void
 
     func makeUIView(context: Context) -> UITextView {
         let view = KeyingTextView()
         view.onSend = onSend
         view.delegate = context.coordinator
-        view.font = .preferredFont(forTextStyle: .body)
+        view.font = font ?? .preferredFont(forTextStyle: .body)
         view.backgroundColor = .clear
         view.textContainerInset = UIEdgeInsets(top: 8, left: 2, bottom: 8, right: 2)
         view.isScrollEnabled = true
@@ -64,6 +68,8 @@ private struct ComposerTextView: UIViewRepresentable {
     func updateUIView(_ view: UITextView, context: Context) {
         if view.text != text { view.text = text }
         (view as? KeyingTextView)?.onSend = onSend
+        let wanted = font ?? .preferredFont(forTextStyle: .body)
+        if view.font != wanted { view.font = wanted }
         recalcHeight(view)
     }
 
@@ -111,13 +117,14 @@ private struct ComposerTextView: NSViewRepresentable {
     @Binding var text: String
     @Binding var height: CGFloat
     let maxHeight: CGFloat
+    let font: NSFont?
     let onSend: () -> Void
 
     func makeNSView(context: Context) -> NSScrollView {
         let textView = KeyingTextView()
         textView.onSend = onSend
         textView.delegate = context.coordinator
-        textView.font = .preferredFont(forTextStyle: .body)
+        textView.font = font ?? .preferredFont(forTextStyle: .body)
         textView.drawsBackground = false
         textView.isRichText = false
         textView.textContainerInset = NSSize(width: 2, height: 8)
@@ -134,6 +141,8 @@ private struct ComposerTextView: NSViewRepresentable {
         guard let textView = scroll.documentView as? KeyingTextView else { return }
         if textView.string != text { textView.string = text }
         textView.onSend = onSend
+        let wanted = font ?? .preferredFont(forTextStyle: .body)
+        if textView.font != wanted { textView.font = wanted }
         recalcHeight(textView)
     }
 

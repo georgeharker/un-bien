@@ -21,6 +21,7 @@ final class MacActivationDelegate: NSObject, NSApplicationDelegate {
 /// relay/session home. Bootstraps identity + relay connections on appear.
 public struct RootView: View {
     @StateObject private var model = AppModel()
+    @StateObject private var fonts = FontLibrary()
 
     public init() {}
 
@@ -33,8 +34,13 @@ public struct RootView: View {
             }
         }
         .environmentObject(model)
+        .environmentObject(fonts)
         .environment(\.appTheme, model.theme)
-        .task { await model.bootstrap() }
+        .environment(\.typography, model.typography)
+        .task {
+            fonts.registerAll()
+            await model.bootstrap()
+        }
         .preferredColorScheme(model.theme.isDark ? .dark : .light)
         #if os(macOS)
         .frame(minWidth: 380, minHeight: 520)

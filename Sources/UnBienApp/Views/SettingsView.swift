@@ -1,18 +1,23 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import UnBienCore
 
 /// Preferences: live theme picker, transcript options, connection/relay
 /// management, and Owner-key sync (DESIGN §11, §12).
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var fonts: FontLibrary
     @Environment(\.appTheme) private var theme
     @Environment(\.dismiss) private var dismiss
     @State private var showAddRelay = false
+    @State private var showFontImporter = false
+    @State private var fontError: String?
 
     var body: some View {
         NavigationStack {
             Form {
                 appearanceSection
+                typographySection
                 transcriptSection
                 relaysSection
                 syncSection
@@ -58,6 +63,57 @@ struct SettingsView: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 3))
         .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(theme.secondaryText.opacity(0.4)))
+    }
+
+    private var typographySection: some View {
+        Section {
+            HStack {
+                Text("Text size")
+                Slider(value: $model.textScale, in: 0.8...1.8, step: 0.05)
+                Text(String(format: "%.0f%%", model.textScale * 100))
+                    .font(.caption).monospacedDigit().foregroundStyle(theme.secondaryText)
+            }
+            Picker("Mono font", selection: $model.monoFontName) {
+                Text("System Mono").tag(String?.none)
+                ForEach(fonts.installedFamilies, id: \.self) { family in
+                    Text(family).tag(String?.some(family))
+                }
+            }
+            Button {
+                showFontImporter = true
+            } label: {
+                Label("Import font…", systemImage: "square.and.arrow.down")
+            }
+            if let fontError {
+                Text(fontError).font(.caption).foregroundStyle(theme.error)
+            }
+            Link(destination: URL(string: "https://www.nerdfonts.com/font-downloads")!) {
+                Label("Get Meslo Nerd Font", systemImage: "arrow.up.right.square")
+            }
+        } header: {
+            Text("Typography")
+        } footer: {
+            Text("Import a .ttf/.otf (e.g. MesloLGS NF) to use it for code and the composer.")
+        }
+        .fileImporter(isPresented: $showFontImporter,
+                      allowedContentTypes: [.font], allowsMultipleSelection: true) { result in
+            handleFontImport(result)
+        }
+    }
+
+    private func handleFontImport(_ result: Result<[URL], Error>) {
+        fontError = nil
+        do {
+            let urls = try result.get()
+            var firstAdded: String?
+            for url in urls {
+                let added = try fonts.importFont(from: url)
+                if firstAdded == nil { firstAdded = added.first }
+            }
+            if let firstAdded { model.monoFontName = firstAdded }
+        } catch {
+            fontError = "Import failed: \(error.localizedDescription)"
+        }
     }
 
     private var transcriptSection: some View {

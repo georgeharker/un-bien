@@ -63,9 +63,21 @@ public final class AppModel: ObservableObject {
     @Published public var showThinking: Bool {
         didSet { UserDefaults.standard.set(showThinking, forKey: Self.showThinkingKey) }
     }
+    /// Transcript/UI text scale (1.0 = default).
+    @Published public var textScale: Double {
+        didSet { UserDefaults.standard.set(textScale, forKey: Self.textScaleKey) }
+    }
+    /// Chosen monospaced font family (code + composer); nil = system mono.
+    @Published public var monoFontName: String? {
+        didSet { UserDefaults.standard.set(monoFontName, forKey: Self.monoFontKey) }
+    }
 
     /// The active theme palette for the selected `themeID`.
     public var theme: AppTheme { themeID.theme }
+    /// Current typography (text scale + mono font) for environment injection.
+    public var typography: Typography {
+        Typography(textScale: textScale, monoFontName: monoFontName)
+    }
 
     public let mesh: MeshStore
     private var identityStore: OwnerIdentityStore
@@ -79,6 +91,8 @@ public final class AppModel: ObservableObject {
     private static let iCloudDefaultsKey = "un-bien.owner-key.icloud-sync"
     private static let themeKey = "un-bien.theme"
     private static let showThinkingKey = "un-bien.show-thinking"
+    private static let textScaleKey = "un-bien.text-scale"
+    private static let monoFontKey = "un-bien.mono-font"
     private static let reconnectBaseDelay: Double = 1
     private static let reconnectMaxDelay: Double = 30
 
@@ -89,6 +103,9 @@ public final class AppModel: ObservableObject {
         self.themeID = (UserDefaults.standard.string(forKey: Self.themeKey))
             .flatMap(ThemeID.init(rawValue:)) ?? .tokyoNight
         self.showThinking = UserDefaults.standard.object(forKey: Self.showThinkingKey) as? Bool ?? true
+        let scale = UserDefaults.standard.object(forKey: Self.textScaleKey) as? Double ?? 1.0
+        self.textScale = min(max(scale, 0.8), 1.8)
+        self.monoFontName = UserDefaults.standard.string(forKey: Self.monoFontKey)
         self.identityStore = identityStore
             ?? KeychainOwnerIdentityStore(syncsToICloud: syncOn)
     }

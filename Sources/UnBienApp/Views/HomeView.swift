@@ -5,6 +5,7 @@ import UnBienCore
 /// and pair actions (DESIGN §6, §12).
 struct HomeView: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var fonts: FontLibrary
     @State private var showAddRelay = false
     @State private var pairingRelay: RelayConfig?
     @State private var showSettings = false
@@ -29,7 +30,7 @@ struct HomeView: View {
         }
         .tint(theme.accent)
         .sheet(isPresented: $showSettings) {
-            SettingsView().environmentObject(model)
+            SettingsView().environmentObject(model).environmentObject(fonts)
         }
         .sheet(isPresented: $showAddRelay) {
             AddRelaySheet().environmentObject(model)

@@ -26,7 +26,8 @@ let package = Package(
                 "UnBienCore",
                 .product(name: "MarkdownUI", package: "swift-markdown-ui"),
                 .product(name: "Highlightr", package: "Highlightr"),
-            ]
+            ],
+            resources: [.copy("Resources/Fonts")]
         ),
         .executableTarget(
             name: "UnBienMac",

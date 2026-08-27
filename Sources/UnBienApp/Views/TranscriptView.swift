@@ -10,6 +10,7 @@ struct TranscriptView: View {
     @State private var draft = ""
     @State private var selectedPanelKey: String?
     @Environment(\.appTheme) private var theme
+    @Environment(\.typography) private var typography
 
     private var items: [TranscriptItem] {
         let all = model.transcripts[session.id]?.items ?? []
@@ -30,7 +31,7 @@ struct TranscriptView: View {
                     }
                     .padding()
                     // Cap line length on wide windows; centered. No-op on phones.
-                    .frame(maxWidth: 860, alignment: .leading)
+                    .frame(maxWidth: 1100, alignment: .leading)
                     .frame(maxWidth: .infinity, alignment: .center)
                 }
                 .onChange(of: items.count) { _, _ in
@@ -197,11 +198,11 @@ struct TranscriptView: View {
         case let .user(bubble):
             bubbleView(text: bubble.text, role: "You", tint: theme.accent, align: .trailing)
         case let .reasoning(block):
-            ReasoningBlockView(block: block, theme: theme)
+            ReasoningBlockView(block: block, theme: theme, typography: typography)
         case let .assistant(bubble):
             assistantView(bubble)
         case let .tool(card):
-            ToolCardView(card: card, theme: theme)
+            ToolCardView(card: card, theme: theme, typography: typography)
         case let .compaction(marker):
             Label("Context compacted (\(marker.tokensBefore) tokens)", systemImage: "arrow.triangle.merge")
                 .font(.caption).foregroundStyle(theme.secondaryText)
@@ -222,9 +223,11 @@ struct TranscriptView: View {
                 }
             }
             if !bubble.text.isEmpty {
-                Markdown(bubble.text)
-                    .markdownCodeSyntaxHighlighter(.highlightr(style: theme.codeHighlightStyle))
-                    .markdownTextStyle { ForegroundColor(theme.text) }
+            Markdown(bubble.text)
+                .markdownCodeSyntaxHighlighter(.highlightr(
+                    style: theme.codeHighlightStyle,
+                    font: typography.monoPlatformFont()))
+                .markdownTextStyle { ForegroundColor(theme.text); FontSize(typography.bodySize) }
             }
             ForEach(Array(bubble.images.enumerated()), id: \.offset) { _, image in
                 WireImageView(image: image, theme: theme)
@@ -238,6 +241,7 @@ struct TranscriptView: View {
         VStack(alignment: align, spacing: 4) {
             Text(role).font(.caption.weight(.semibold)).foregroundStyle(tint)
             Text(text).foregroundStyle(theme.text)
+                .font(.system(size: typography.bodySize))
                 .padding(10)
                 .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
         }
@@ -253,7 +257,9 @@ struct TranscriptView: View {
                     Image(systemName: "stop.circle.fill").font(.title2)
                 }
             }
-            MessageComposer(text: $draft, placeholder: "Message", onSend: sendDraft)
+            MessageComposer(text: $draft, placeholder: "Message",
+                            font: typography.monoPlatformFont(size: typography.bodySize),
+                            onSend: sendDraft)
                 .padding(.horizontal, 6)
                 .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
             Button {
@@ -326,12 +332,13 @@ private struct WireImageView: View {
 private struct ReasoningBlockView: View {
     let block: ReasoningBlock
     let theme: AppTheme
+    let typography: Typography
     @State private var expanded = false
 
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
             Text(block.text)
-                .font(.system(.caption, design: .monospaced))
+                .font(typography.monoFont(size: typography.codeSize))
                 .foregroundStyle(theme.secondaryText)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -353,6 +360,7 @@ private struct ReasoningBlockView: View {
 private struct ToolCardView: View {
     let card: ToolCard
     let theme: AppTheme
+    let typography: Typography
     @State private var expanded = false
 
     var body: some View {
@@ -369,7 +377,7 @@ private struct ToolCardView: View {
                         labeled("error", error).foregroundStyle(theme.error)
                     }
                 }
-                .font(.system(.caption, design: .monospaced))
+                .font(typography.monoFont(size: typography.codeSize))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 4)
             } label: {

@@ -1,6 +1,13 @@
 import Highlightr
 import MarkdownUI
 import SwiftUI
+#if os(macOS)
+import AppKit
+public typealias PlatformFont = NSFont
+#else
+import UIKit
+public typealias PlatformFont = UIFont
+#endif
 
 /// Minimal design-token palette (Tokyo Night). The full curated multi-theme
 /// system (DESIGN §11) is a later phase; this is the default so the transcript
@@ -129,9 +136,10 @@ public extension Color {
 public struct HighlightrCodeSyntaxHighlighter: CodeSyntaxHighlighter {
     private let highlightr: Highlightr?
 
-    public init(style: String) {
+    public init(style: String, font: PlatformFont? = nil) {
         let instance = Highlightr()
         instance?.setTheme(to: style)
+        if let font { instance?.theme.setCodeFont(font) }
         self.highlightr = instance
     }
 
@@ -145,7 +153,7 @@ public struct HighlightrCodeSyntaxHighlighter: CodeSyntaxHighlighter {
 }
 
 public extension CodeSyntaxHighlighter where Self == HighlightrCodeSyntaxHighlighter {
-    static func highlightr(style: String) -> HighlightrCodeSyntaxHighlighter {
-        HighlightrCodeSyntaxHighlighter(style: style)
+    static func highlightr(style: String, font: PlatformFont? = nil) -> HighlightrCodeSyntaxHighlighter {
+        HighlightrCodeSyntaxHighlighter(style: style, font: font)
     }
 }
