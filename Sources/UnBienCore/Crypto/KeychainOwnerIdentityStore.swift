@@ -15,7 +15,7 @@ public final class KeychainOwnerIdentityStore: OwnerIdentityStore, @unchecked Se
     private let account: String
     private let syncsToICloud: Bool
 
-    public init(service: String = "work.un-bien.owner-key",
+    public init(service: String = "com.georgeharker.un-bien.owner-key",
                 account: String = "owner",
                 syncsToICloud: Bool) {
         self.service = service

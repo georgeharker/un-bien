@@ -94,11 +94,11 @@ public final class AppModel: ObservableObject {
     /// In-flight reconnect timers per relay, cancelled on remove/success.
     private var reconnectTasks: [UUID: Task<Void, Never>] = [:]
 
-    private static let iCloudDefaultsKey = "un-bien.owner-key.icloud-sync"
-    private static let themeKey = "un-bien.theme"
-    private static let showThinkingKey = "un-bien.show-thinking"
-    private static let textScaleKey = "un-bien.text-scale"
-    private static let monoFontKey = "un-bien.mono-font"
+    private static let iCloudDefaultsKey = "com.georgeharker.un-bien.owner-key.icloud-sync"
+    private static let themeKey = "com.georgeharker.un-bien.theme"
+    private static let showThinkingKey = "com.georgeharker.un-bien.show-thinking"
+    private static let textScaleKey = "com.georgeharker.un-bien.text-scale"
+    private static let monoFontKey = "com.georgeharker.un-bien.mono-font"
     private static let reconnectBaseDelay: Double = 1
     private static let reconnectMaxDelay: Double = 30
 
