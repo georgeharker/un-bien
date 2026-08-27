@@ -74,6 +74,7 @@ import {
   createExtensionUiBridge,
   type ExtensionUiBridge,
 } from "./extension_ui_bridge.js";
+import { createPanelBridge, type PanelBridge } from "./panel_bridge.js";
 import { roomIdFor } from "./rooms.js";
 import { registerAgentTools } from "./session/tools.js";
 import { formatPeerInventory } from "./session/peer_inventory.js";
@@ -1105,6 +1106,10 @@ let _pi: ExtensionAPI | null = null;
 // Plan/57 — Bridge to pi-ask's clarification-flow events. null until the
 // extension factory wires it (and null if the SDK exposes no events bus).
 let _extensionUiBridge: ExtensionUiBridge | null = null;
+// Mirror the in-process plan + subagents buses to the app as `panel_update`
+// frames. null until the factory wires it (and null if the SDK has no events
+// bus). Inert when no plan/subagents source is emitting.
+let _panelBridge: PanelBridge | null = null;
 
 let _stopAutoListener: (() => void) | null = null;
 
@@ -2082,6 +2087,12 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // factory re-run (new pi session) can't leak subscriptions or double-send.
   _extensionUiBridge?.dispose();
   _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive);
+
+  // Mirror the in-process plan (`plan:*`) + subagents (`subagents:*`) buses to
+  // the app as side-panel snapshots. Dispose any prior bridge first so a
+  // factory re-run can't leak subscriptions or double-send.
+  _panelBridge?.dispose();
+  _panelBridge = createPanelBridge(pi, _broadcastToActive);
 
   // Plano 19: ensure ~/.pi/remote/{sessions,skills}/ exist and deploy the
   // agent-network skill on first load. resources_discover lets Pi find it.
@@ -4682,6 +4693,13 @@ function _handleSessionSync(
   // bridge, so an abandoned flow is never resurrected.
   for (const req of _extensionUiBridge?.pendingRequests() ?? []) {
     sender.send(req);
+  }
+
+  // Replay current side-panels (plan / subagents) so a late-joining peer sees
+  // them without waiting for the next bus event. Per-sender, like the rest of
+  // this handler.
+  for (const panel of _panelBridge?.pendingPanels() ?? []) {
+    sender.send(panel);
   }
 }
 

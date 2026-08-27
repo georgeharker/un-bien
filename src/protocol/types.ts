@@ -337,6 +337,13 @@ export type ServerMessage =
   | { type: "action_ok"; in_reply_to: string; action: ActionName }
   | { type: "action_error"; in_reply_to: string; action: ActionName; error: string }
   | { type: "models_list"; in_reply_to: string; models: WireModel[]; current?: WireModel }
+  // un-bien extension: a named side-panel's state snapshot (plan, subagents, …),
+  // forwarded from a cooperating in-process event source (pi-plan's `plan:*`
+  // bus + the `subagents:*` lifecycle). The app renders `key` as a top-bar
+  // panel: "plan" gets the wave/dep view, others a generic list. `data` is an
+  // opaque per-panel payload (e.g. `{ items: [...] }`). Additive + optional —
+  // stock clients ignore it.
+  | { type: "panel_update"; key: string; title: string; icon?: string; data: unknown }
   // Plan/57 — interactive extension prompt (ask_user via pi-ask). Mirrors
   // RpcExtensionUIRequest (select/confirm/input/editor/notify); the optional
   // `ask` envelope carries pi-ask's full question so the app renders richly.
