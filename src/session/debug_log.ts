@@ -8,10 +8,10 @@ import { dirname, join } from "node:path";
 
 const LOG_PATH = join(homedir(), ".pi", "remote", "envelope-debug.log");
 
-/** Append a timestamped line to ~/.pi/remote/envelope-debug.log when
- *  REMOTE_PI_DEBUG_ENVELOPE=1. No-op otherwise. Safe inside SDK callbacks. */
+/** Append a timestamped line to ~/.pi/remote/envelope-debug.log. TEMPORARILY
+ *  UNCONDITIONAL (the detached fork doesn't inherit REMOTE_PI_DEBUG_ENVELOPE);
+ *  re-gate once resume is diagnosed. Safe inside SDK callbacks. */
 export function envLog(msg: string): void {
-  if (process.env.REMOTE_PI_DEBUG_ENVELOPE !== "1") return;
   try {
     mkdirSync(dirname(LOG_PATH), { recursive: true });
     appendFileSync(LOG_PATH, `${new Date().toISOString()} ${msg}\n`);

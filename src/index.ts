@@ -1984,6 +1984,7 @@ function _attachOwner(
   // enable the {rpc|evt} route + suppress stock before any session content
   // arrives. Additive to the stock session_history caps (parity transition).
   channel.sendEnvelope(helloEnvelope(_capabilities()));
+  envLog(`attach: peer=${appPeerId.slice(0, 8)} hello sent (caps advertised); active=${_activePeers.size}`);
   // Transcript reconstruction is request-driven (app sends session_sync on open)
   // — see _handleSessionSync; nothing to replay proactively here.
   _refreshFooter();
