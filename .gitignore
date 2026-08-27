@@ -1,6 +1,10 @@
 .build/
 .swiftpm/
-*.xcodeproj/
 DerivedData/
 .DS_Store
 .pi-lens/
+# The XcodeGen-generated app/UnBien.xcodeproj IS tracked so Xcode opens without
+# needing xcodegen installed (project.yml stays the source of truth — regenerate
+# + commit after editing it). Only the per-user bits inside it are ignored.
+**/xcuserdata/
+**/*.xcuserdatad/
