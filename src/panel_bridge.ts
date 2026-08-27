@@ -143,13 +143,24 @@ export function createPanelBridge(
   });
 
   const scheduleBroadcast = (key: string, build: () => ServerMessage): void => {
-    if (disposed || timers.has(key)) return;
+    if (disposed) return;
+    if (timers.has(key)) {
+      debug(`schedule ${key} coalesced (timer pending)`);
+      return;
+    }
+    debug(`schedule ${key}`);
     timers.set(
       key,
       setTimeout(() => {
         timers.delete(key);
         if (disposed) return;
-        const frame = build();
+        let frame: ServerMessage;
+        try {
+          frame = build();
+        } catch (error) {
+          debug(`build ${key} THREW: ${error instanceof Error ? error.message : String(error)}`);
+          return;
+        }
         const fitems =
           frame.type === "panel_update" && frame.data && typeof frame.data === "object"
             ? ((frame.data as { items?: Array<{ kind?: string }> }).items ?? [])
@@ -221,6 +232,7 @@ export function createPanelBridge(
         startedAt: prev?.startedAt ?? (IN_PROGRESS.has(status) ? Date.now() : undefined),
       };
       fleet.set(id, mergeAgentState(prev, incoming));
+      debug(`fleet=${fleet.size} after ${status} ${id}`);
       scheduleBroadcast(AGENTS_KEY, agentsFrame);
     };
 
