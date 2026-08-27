@@ -57,8 +57,14 @@ public final class AppModel: ObservableObject {
     private var identityStore: OwnerIdentityStore
     private var owner: Ed25519Identity?
     private var connections: [UUID: RelayConnection] = [:]
+    /// Consecutive failed connect attempts per relay, for exponential backoff.
+    private var reconnectAttempts: [UUID: Int] = [:]
+    /// In-flight reconnect timers per relay, cancelled on remove/success.
+    private var reconnectTasks: [UUID: Task<Void, Never>] = [:]
 
     private static let iCloudDefaultsKey = "un-bien.owner-key.icloud-sync"
+    private static let reconnectBaseDelay: Double = 1
+    private static let reconnectMaxDelay: Double = 30
 
     public init(mesh: MeshStore = MeshStore(), identityStore: OwnerIdentityStore? = nil) {
         self.mesh = mesh
@@ -99,6 +105,9 @@ public final class AppModel: ObservableObject {
     }
 
     public func removeRelay(id: UUID) {
+        reconnectTasks[id]?.cancel()
+        reconnectTasks[id] = nil
+        reconnectAttempts[id] = nil
         connections[id] = nil
         relayHealth[id] = nil
         sessions = sessions.filter { $0.value.relayID != id }
@@ -111,6 +120,8 @@ public final class AppModel: ObservableObject {
 
     private func connect(_ relay: RelayConfig) async {
         guard let owner, let url = relay.webSocketURL else { return }
+        reconnectTasks[relay.id]?.cancel()
+        reconnectTasks[relay.id] = nil
         relayHealth[relay.id] = .connecting
         let channel = URLSessionWebSocketChannel(url: url)
         let connection = RelayConnection(channel: channel, identity: owner)
@@ -120,9 +131,11 @@ public final class AppModel: ObservableObject {
             try await connection.subscribe(peers: peers)
             connections[relay.id] = connection
             relayHealth[relay.id] = .online
+            reconnectAttempts[relay.id] = 0
             startEventLoop(relayID: relay.id, connection: connection)
         } catch {
             relayHealth[relay.id] = .failed(String(describing: error))
+            scheduleReconnect(relay)
         }
     }
 
@@ -132,7 +145,28 @@ public final class AppModel: ObservableObject {
             for await frame in stream {
                 handle(frame: frame, relayID: relayID)
             }
-            if case .online = relayHealth[relayID] { relayHealth[relayID] = .offline }
+            // Stream ended = socket dropped. Only retry if the relay is still
+            // known and we didn't tear it down deliberately (health cleared).
+            guard relayHealth[relayID] != nil,
+                  let relay = mesh.config.relays.first(where: { $0.id == relayID }) else { return }
+            relayHealth[relayID] = .offline
+            connections[relayID] = nil
+            scheduleReconnect(relay)
+        }
+    }
+
+    /// Retry a relay with exponential backoff (1s→…→30s), replacing any
+    /// pending timer for it. `bootstrap`/`connect` reset the attempt counter.
+    private func scheduleReconnect(_ relay: RelayConfig) {
+        let attempt = reconnectAttempts[relay.id] ?? 0
+        reconnectAttempts[relay.id] = attempt + 1
+        let delay = min(Self.reconnectBaseDelay * pow(2, Double(attempt)), Self.reconnectMaxDelay)
+        reconnectTasks[relay.id]?.cancel()
+        reconnectTasks[relay.id] = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled, let self,
+                  self.mesh.config.relays.contains(where: { $0.id == relay.id }) else { return }
+            await self.connect(relay)
         }
     }
 
