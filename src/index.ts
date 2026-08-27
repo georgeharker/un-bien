@@ -866,13 +866,26 @@ function _sessionHistoryMessages(): BufferMsg[] {
   const sm = _sessionManager;
   if (sm) {
     try {
+      const entries = sm.getEntries() as Array<{ type?: string; customType?: string; message?: unknown }>;
+      // DIAGNOSTIC: entry-type breakdown + which entry types carry image content,
+      // to confirm whether tool-result images live in `message` entries or in
+      // appendEntry'd custom blocks (which this reconstruction currently skips).
+      const typeCounts: Record<string, number> = {};
+      let imageEntries = "";
+      for (const e of entries) {
+        const key = e.type === "custom" && e.customType ? `custom:${e.customType}` : (e.type ?? "?");
+        typeCounts[key] = (typeCounts[key] ?? 0) + 1;
+        const s = JSON.stringify(e);
+        if (s.includes("mimeType") || s.includes('"image"')) imageEntries += `[${key}]`;
+      }
+      envLog(`getEntries types=${JSON.stringify(typeCounts)} imageEntries=${imageEntries || "none"}`);
       const msgs: BufferMsg[] = [];
-      for (const e of sm.getEntries() as Array<{ type?: string; message?: unknown }>) {
+      for (const e of entries) {
         if (e.type === "message" && e.message) msgs.push(e.message as BufferMsg);
       }
       if (msgs.length > 0) return msgs;
-    } catch {
-      /* fall back to the in-memory buffer */
+    } catch (err) {
+      envLog(`getEntries failed: ${String(err)}`);
     }
   }
   return _messageBuffer;
