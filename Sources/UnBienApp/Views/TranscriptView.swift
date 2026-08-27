@@ -110,18 +110,29 @@ struct TranscriptView: View {
         if showModels || showThinking {
             Menu {
                 if showModels {
-                    let models = model.availableModels[session.id] ?? []
+                    // Identify models by provider+id, not id alone: two providers
+                    // can offer the SAME model id, so keying by id both collides in
+                    // ForEach ("occurs multiple times") and would drop a legitimate
+                    // entry on dedupe. Composite also removes exact list_models dupes.
+                    let models: [WireModel] = {
+                        var seen = Set<String>()
+                        return (model.availableModels[session.id] ?? [])
+                            .filter { seen.insert("\($0.provider)/\($0.id)").inserted }
+                    }()
                     if !models.isEmpty {
                         let current = model.currentModel[session.id]
                         Picker("Model", selection: Binding(
-                            get: { current?.id },
-                            set: { newID in
-                                guard let pick = models.first(where: { $0.id == newID }) else { return }
+                            get: { current.map { "\($0.provider)/\($0.id)" } },
+                            set: { newKey in
+                                guard let pick = models.first(where: { "\($0.provider)/\($0.id)" == newKey }) else { return }
                                 Task { await model.setModel(pick, session: session) }
                             }
                         )) {
-                            ForEach(models, id: \.id) { entry in
-                                Text(entry.name).tag(Optional(entry.id))
+                            ForEach(Array(models.enumerated()), id: \.offset) { _, entry in
+                                // Include provider so same-named models from different
+                                // providers are distinguishable in the picker.
+                                Text("\(entry.name) — \(entry.provider)")
+                                    .tag(Optional("\(entry.provider)/\(entry.id)"))
                             }
                         }
                     }
