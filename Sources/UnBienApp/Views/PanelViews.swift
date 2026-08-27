@@ -22,6 +22,8 @@ struct PanelHostView: View {
             Group {
                 switch panel.key {
                 case "plan": PlanPanelView(items: PlanModel.items(from: panel.data))
+                case "subagents", "agents":
+                    SubagentsPanelView(items: PlanModel.agentItems(from: panel.data))
                 default: GenericPanelView(data: panel.data)
                 }
             }
@@ -51,18 +53,24 @@ struct PlanPanelView: View {
                 Section(section.title) {
                     ForEach(section.rows) { row in
                         planRow(row)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+                            .listRowBackground(Color.clear)
                     }
                 }
             }
         }
+        #if os(iOS)
+        .listStyle(.insetGrouped)
+        #endif
     }
 
     @ViewBuilder
     private func planRow(_ row: PlanRow) -> some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: 10) {
             Image(systemName: statusIcon(row))
                 .foregroundStyle(statusColor(row))
-            VStack(alignment: .leading, spacing: 2) {
+                .font(.body)
+            VStack(alignment: .leading, spacing: 4) {
                 Text(row.item.name)
                     .foregroundStyle(row.actionable ? theme.text : theme.secondaryText)
                     .fontWeight(row.actionable ? .semibold : .regular)
@@ -87,6 +95,23 @@ struct PlanPanelView: View {
                     }
                 }
             }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(cardTint(row), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(row.actionable ? theme.accent.opacity(0.5) : Color.clear, lineWidth: 1)
+        )
+    }
+
+    /// A subtle status tint so cards read at a glance without shouting.
+    private func cardTint(_ row: PlanRow) -> Color {
+        if row.circular { return theme.error.opacity(0.12) }
+        switch row.item.status {
+        case "done": return theme.surface.opacity(0.5)
+        case "in_progress", "in-progress": return theme.accent.opacity(0.12)
+        default: return theme.surface
         }
     }
 
@@ -123,7 +148,125 @@ struct PlanPanelView: View {
     }
 }
 
-/// Fallback for panels without a bespoke renderer (e.g. subagents) — pretty JSON.
+/// Subagents panel: one card per agent — status glyph, name, type badge, and
+/// elapsed/started time. Mirrors pi-plan's Agents group (chronological).
+struct SubagentsPanelView: View {
+    let items: [PlanItem]
+    private let theme = AppTheme.tokyoNight
+
+    var body: some View {
+        if items.isEmpty {
+            ContentUnavailableView("No subagents", systemImage: "person.2")
+        } else {
+            List {
+                if !summary.isEmpty {
+                    Section { Text(summary).font(.caption).foregroundStyle(theme.secondaryText) }
+                }
+                Section {
+                    ForEach(items) { item in
+                        card(item)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+                            .listRowBackground(Color.clear)
+                    }
+                }
+            }
+            #if os(iOS)
+            .listStyle(.insetGrouped)
+            #endif
+        }
+    }
+
+    private var summary: String {
+        var running = 0, done = 0, failed = 0
+        for item in items {
+            switch item.status {
+            case "in_progress", "in-progress": running += 1
+            case "done": done += 1
+            case "failed": failed += 1
+            default: break
+            }
+        }
+        var parts: [String] = []
+        if running > 0 { parts.append("\(running) running") }
+        if done > 0 { parts.append("\(done) done") }
+        if failed > 0 { parts.append("\(failed) failed") }
+        return parts.joined(separator: " · ")
+    }
+
+    @ViewBuilder
+    private func card(_ item: PlanItem) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon(item.status))
+                .foregroundStyle(color(item.status))
+                .font(.body)
+                .symbolEffect(.pulse, isActive: item.status == "in_progress" || item.status == "in-progress")
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.name).foregroundStyle(theme.text).fontWeight(.medium)
+                HStack(spacing: 6) {
+                    if let type = item.agentType {
+                        Text(type).font(.caption2)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(theme.surface, in: Capsule())
+                            .foregroundStyle(theme.toolAccent)
+                    }
+                    if let started = startedText(item) {
+                        Label(started, systemImage: "clock")
+                            .font(.caption2).foregroundStyle(theme.secondaryText)
+                    }
+                    Text(statusLabel(item.status)).font(.caption2)
+                        .foregroundStyle(color(item.status))
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(tint(item.status), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func startedText(_ item: PlanItem) -> String? {
+        guard let ms = item.startedAt, ms > 0 else { return nil }
+        let date = Date(timeIntervalSince1970: ms / 1000)
+        return date.formatted(date: .omitted, time: .shortened)
+    }
+
+    private func statusLabel(_ status: String?) -> String {
+        switch status {
+        case "in_progress", "in-progress": return "running"
+        case "done": return "done"
+        case "failed": return "failed"
+        default: return status ?? "pending"
+        }
+    }
+
+    private func icon(_ status: String?) -> String {
+        switch status {
+        case "done": return "checkmark.circle.fill"
+        case "failed": return "xmark.octagon.fill"
+        case "in_progress", "in-progress": return "gearshape.2.fill"
+        default: return "clock"
+        }
+    }
+
+    private func color(_ status: String?) -> Color {
+        switch status {
+        case "done": return theme.success
+        case "failed": return theme.error
+        case "in_progress", "in-progress": return theme.accent
+        default: return theme.secondaryText
+        }
+    }
+
+    private func tint(_ status: String?) -> Color {
+        switch status {
+        case "failed": return theme.error.opacity(0.12)
+        case "in_progress", "in-progress": return theme.accent.opacity(0.12)
+        case "done": return theme.surface.opacity(0.5)
+        default: return theme.surface
+        }
+    }
+}
+
+/// Fallback for panels without a bespoke renderer (e.g. unknown keys) — pretty JSON.
 struct GenericPanelView: View {
     let data: JSONValue
     private let theme = AppTheme.tokyoNight

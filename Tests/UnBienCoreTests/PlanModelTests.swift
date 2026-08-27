@@ -73,6 +73,25 @@ final class PlanModelTests: XCTestCase {
         XCTAssertNil(rows.first?.wave)
     }
 
+    func testAgentItemsDecodeMetaAndSortByStartedAt() {
+        let data = JSONValue.object(["items": .array([
+            .object([
+                "id": .string("agent:2"), "kind": .string("agent"),
+                "title": .string("second"), "status": .string("in_progress"),
+                "meta": .object(["agentType": .string("Plan"), "startedAt": .number(200)]),
+            ]),
+            .object([
+                "id": .string("agent:1"), "kind": .string("agent"),
+                "title": .string("first"), "status": .string("done"),
+                "meta": .object(["agentType": .string("Explore"), "startedAt": .number(100)]),
+            ]),
+        ])])
+        let agents = PlanModel.agentItems(from: data)
+        XCTAssertEqual(agents.map(\.id), ["agent:1", "agent:2"], "chronological by startedAt")
+        XCTAssertEqual(agents.first?.agentType, "Explore")
+        XCTAssertEqual(agents.first?.startedAt, 100)
+    }
+
     func testPanelUpdateDecodesAndYieldsItems() throws {
         let line = #"{"type":"panel_update","key":"plan","title":"Plan","icon":"checklist","# +
             #""data":{"items":[{"id":"plan:x","kind":"plan","title":"Do X","status":"ready","deps":[]}]}}"#

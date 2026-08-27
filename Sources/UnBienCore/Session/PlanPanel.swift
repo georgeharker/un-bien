@@ -9,15 +9,19 @@ public struct PlanItem: Decodable, Equatable, Sendable, Identifiable {
     public let status: String?
     public let deps: [String]
     public let tainted: Bool?
+    /// Free-form source metadata. For `kind == "agent"` items this carries
+    /// `agentType` + `startedAt` (from the subagents lifecycle bridge).
+    public let meta: [String: JSONValue]?
 
     public init(id: String, kind: String, name: String, status: String?,
-                deps: [String], tainted: Bool?) {
+                deps: [String], tainted: Bool?, meta: [String: JSONValue]? = nil) {
         self.id = id
         self.kind = kind
         self.name = name
         self.status = status
         self.deps = deps
         self.tainted = tainted
+        self.meta = meta
     }
 
     public init(from decoder: Decoder) throws {
@@ -29,10 +33,23 @@ public struct PlanItem: Decodable, Equatable, Sendable, Identifiable {
         self.status = try? container.decode(String.self, forKey: .status)
         self.deps = (try? container.decode([String].self, forKey: .deps)) ?? []
         self.tainted = try? container.decode(Bool.self, forKey: .tainted)
+        self.meta = try? container.decode([String: JSONValue].self, forKey: .meta)
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, kind, name, title, status, deps, tainted
+        case id, kind, name, title, status, deps, tainted, meta
+    }
+
+    /// Subagent type (e.g. "Explore") from `meta.agentType`, when present.
+    public var agentType: String? {
+        if case let .string(value)? = meta?["agentType"] { return value }
+        return nil
+    }
+
+    /// Subagent start time (epoch ms) from `meta.startedAt`, when present.
+    public var startedAt: Double? {
+        if case let .number(value)? = meta?["startedAt"] { return value }
+        return nil
     }
 }
 
@@ -153,6 +170,20 @@ public enum PlanModel {
         guard let encoded = try? JSONEncoder().encode(data),
               let object = try? JSONDecoder().decode(PlanPayload.self, from: encoded) else { return [] }
         return object.items
+    }
+
+    /// Subagent items from a `subagents` panel payload, chronological by
+    /// `startedAt` (mirrors pi-plan's `sortAgents`). Items without a start time
+    /// keep insertion order behind those that have one.
+    public static func agentItems(from data: JSONValue) -> [PlanItem] {
+        items(from: data)
+            .enumerated()
+            .sorted { lhs, rhs in
+                let lStart = lhs.element.startedAt ?? Double(lhs.offset)
+                let rStart = rhs.element.startedAt ?? Double(rhs.offset)
+                return lStart < rStart
+            }
+            .map(\.element)
     }
 
     private struct PlanPayload: Decodable { let items: [PlanItem] }
