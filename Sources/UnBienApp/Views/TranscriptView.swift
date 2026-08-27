@@ -26,7 +26,10 @@ struct TranscriptView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         ForEach(items) { item in
-                            row(for: item).id(item.id)
+                            TranscriptRow(item: item, themeID: model.themeID,
+                                          theme: theme, typography: typography)
+                                .equatable()
+                                .id(item.id)
                         }
                     }
                     .padding()
@@ -204,62 +207,6 @@ struct TranscriptView: View {
         }
     }
 
-    @ViewBuilder
-    private func row(for item: TranscriptItem) -> some View {
-        switch item {
-        case let .user(bubble):
-            bubbleView(text: bubble.text, role: "You", tint: theme.accent, align: .trailing)
-        case let .reasoning(block):
-            ReasoningBlockView(block: block, theme: theme, typography: typography)
-        case let .assistant(bubble):
-            assistantView(bubble)
-        case let .tool(card):
-            ToolCardView(card: card, theme: theme, typography: typography)
-        case let .compaction(marker):
-            Label("Context compacted (\(marker.tokensBefore) tokens)", systemImage: "arrow.triangle.merge")
-                .font(.caption).foregroundStyle(theme.secondaryText)
-                .frame(maxWidth: .infinity)
-        case let .notice(notice):
-            Label(notice.message, systemImage: "exclamationmark.triangle.fill")
-                .font(.caption).foregroundStyle(theme.error)
-                .frame(maxWidth: .infinity, alignment: .center)
-        }
-    }
-
-    private func assistantView(_ bubble: AssistantBubble) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Text("Pi").font(.caption.weight(.semibold)).foregroundStyle(theme.toolAccent)
-                if bubble.streaming {
-                    ProgressView().controlSize(.mini)
-                }
-            }
-            if !bubble.text.isEmpty {
-            Markdown(bubble.text)
-                .markdownCodeSyntaxHighlighter(.highlightr(
-                    style: theme.codeHighlightStyle,
-                    font: typography.monoPlatformFont()))
-                .markdownTextStyle { ForegroundColor(theme.text); FontSize(typography.bodySize) }
-            }
-            ForEach(Array(bubble.images.enumerated()), id: \.offset) { _, image in
-                WireImageView(image: image, theme: theme)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func bubbleView(text: String, role: String, tint: Color,
-                            align: HorizontalAlignment) -> some View {
-        VStack(alignment: align, spacing: 4) {
-            Text(role).font(.caption.weight(.semibold)).foregroundStyle(tint)
-            Text(text).foregroundStyle(theme.text)
-                .font(.system(size: typography.bodySize))
-                .padding(10)
-                .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
-        }
-        .frame(maxWidth: .infinity, alignment: align == .trailing ? .trailing : .leading)
-    }
-
     private var inputBar: some View {
         ComposerBar(session: session)
     }
@@ -314,6 +261,77 @@ private struct ComposerBar: View {
         guard !text.isEmpty else { return }
         draft = ""
         Task { await model.sendMessage(text, to: session) }
+    }
+}
+
+/// One transcript row, extracted as an `Equatable` view so `.equatable()` lets
+/// SwiftUI SKIP re-rendering settled rows while only the streaming row updates
+/// (render-on-need). Equality is (item, themeID, typography): a theme/font
+/// change still re-renders (themeID/typography differ); a sibling row changing
+/// does not. NOTE: scroll/visual correctness needs on-device verification.
+private struct TranscriptRow: View, Equatable {
+    let item: TranscriptItem
+    let themeID: ThemeID
+    let theme: AppTheme
+    let typography: Typography
+
+    nonisolated static func == (lhs: TranscriptRow, rhs: TranscriptRow) -> Bool {
+        lhs.item == rhs.item && lhs.themeID == rhs.themeID && lhs.typography == rhs.typography
+    }
+
+    var body: some View {
+        switch item {
+        case let .user(bubble):
+            bubbleView(text: bubble.text, role: "You", tint: theme.accent, align: .trailing)
+        case let .reasoning(block):
+            ReasoningBlockView(block: block, theme: theme, typography: typography)
+        case let .assistant(bubble):
+            assistantView(bubble)
+        case let .tool(card):
+            ToolCardView(card: card, theme: theme, typography: typography)
+        case let .compaction(marker):
+            Label("Context compacted (\(marker.tokensBefore) tokens)", systemImage: "arrow.triangle.merge")
+                .font(.caption).foregroundStyle(theme.secondaryText)
+                .frame(maxWidth: .infinity)
+        case let .notice(notice):
+            Label(notice.message, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption).foregroundStyle(theme.error)
+                .frame(maxWidth: .infinity, alignment: .center)
+        }
+    }
+
+    private func assistantView(_ bubble: AssistantBubble) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text("Pi").font(.caption.weight(.semibold)).foregroundStyle(theme.toolAccent)
+                if bubble.streaming {
+                    ProgressView().controlSize(.mini)
+                }
+            }
+            if !bubble.text.isEmpty {
+                Markdown(bubble.text)
+                    .markdownCodeSyntaxHighlighter(.highlightr(
+                        style: theme.codeHighlightStyle,
+                        font: typography.monoPlatformFont()))
+                    .markdownTextStyle { ForegroundColor(theme.text); FontSize(typography.bodySize) }
+            }
+            ForEach(Array(bubble.images.enumerated()), id: \.offset) { _, image in
+                WireImageView(image: image, theme: theme)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func bubbleView(text: String, role: String, tint: Color,
+                            align: HorizontalAlignment) -> some View {
+        VStack(alignment: align, spacing: 4) {
+            Text(role).font(.caption.weight(.semibold)).foregroundStyle(tint)
+            Text(text).foregroundStyle(theme.text)
+                .font(.system(size: typography.bodySize))
+                .padding(10)
+                .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
+        }
+        .frame(maxWidth: .infinity, alignment: align == .trailing ? .trailing : .leading)
     }
 }
 
