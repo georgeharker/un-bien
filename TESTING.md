@@ -73,8 +73,19 @@ Trigger each from an agent (pi-ask-user / ctx.ui). Expect a sheet; reply routes 
 
 ## 8. Side panels (plan / subagents / generic)
 
-- ☐ **Plan panel**: run a task that emits a plan → panel item in top bar; opens to wave/dep renderer.
-- ☐ **Subagents panel**: spawn subagents → subagents panel lists them / their activity.
+Now end-to-end: the fork bridges `plan:*` + `subagents:*` in-process buses → `panel_update`
+over the relay (remote_pi `panel_bridge.ts`). Needs a plan source (e.g. cribsheet) and/or
+subagents running on the paired machine.
+
+- ☐ **Plan panel**: run a task that emits a plan (cribsheet plan bus) → panel item in top
+  bar; opens to the wave/dep renderer grouped into **Available now / Wave N / Cycle / Done**.
+- ☐ **Subagents panel**: spawn subagents → a `subagents` panel appears. NOTE: currently
+  renders as generic JSON (bespoke activity cards still pending), so verify the items/status
+  are present, not their styling.
+- ☐ **Late join replay**: open the session AFTER a plan/subagents already exist → panels
+  populate immediately (session_sync replays current panels), not only on the next change.
+- ☐ **Coalescing**: a burst of plan updates → panel updates smoothly (bridge coalesces ~60ms),
+  no flicker/storm.
 - ☐ **Change badge**: when a panel updates while closed → red dot badge on its top-bar item.
 - ☐ **Open clears badge**: open the panel → badge clears; live updates while open stay read.
 - ☐ **Generic panel_update**: any other panel source renders via the generic panel host.
