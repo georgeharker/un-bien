@@ -9,9 +9,9 @@ struct SettingsView: View {
     @EnvironmentObject var fonts: FontLibrary
     @Environment(\.appTheme) private var theme
     @Environment(\.dismiss) private var dismiss
-    @State private var showAddRelay = false
     @State private var showFontImporter = false
     @State private var fontError: String?
+    @State private var fontPreview = "AaBbCc 0O1lI {}[]() => Meslo \u{2713}"
 
     var body: some View {
         NavigationStack {
@@ -19,10 +19,10 @@ struct SettingsView: View {
                 appearanceSection
                 typographySection
                 transcriptSection
-                relaysSection
                 syncSection
                 identitySection
             }
+            .formStyle(.grouped)
             .navigationTitle("Settings")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -32,12 +32,9 @@ struct SettingsView: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .sheet(isPresented: $showAddRelay) {
-                AddRelaySheet().environmentObject(model)
-            }
         }
         #if os(macOS)
-        .frame(minWidth: 460, idealWidth: 520, minHeight: 520, idealHeight: 640)
+        .frame(minWidth: 540, idealWidth: 580, minHeight: 540, idealHeight: 680)
         #endif
     }
 
@@ -78,6 +75,13 @@ struct SettingsView: View {
                 ForEach(fonts.installedFamilies, id: \.self) { family in
                     Text(family).tag(String?.some(family))
                 }
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Preview").font(.caption).foregroundStyle(theme.secondaryText)
+                TextField("Type to preview the font", text: $fontPreview, axis: .vertical)
+                    .font(previewFont)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...3)
             }
             Button {
                 showFontImporter = true
@@ -131,34 +135,11 @@ struct SettingsView: View {
         }
     }
 
-    private var relaysSection: some View {
-        Section("Relays") {
-            if model.mesh.config.relays.isEmpty {
-                Text("No relays added.").foregroundStyle(theme.secondaryText)
-            }
-            ForEach(model.mesh.config.relays) { relay in
-                HStack {
-                    Circle().fill(healthColor(model.relayHealth[relay.id] ?? .offline))
-                        .frame(width: 8, height: 8)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(relay.name)
-                        Text(relay.url).font(.caption2).foregroundStyle(theme.secondaryText).lineLimit(1)
-                    }
-                    Spacer()
-                    Button(role: .destructive) {
-                        model.removeRelay(id: relay.id)
-                    } label: {
-                        Image(systemName: "trash")
-                    }
-                    .buttonStyle(.borderless)
-                }
-            }
-            Button {
-                showAddRelay = true
-            } label: {
-                Label("Add relay", systemImage: "plus")
-            }
-        }
+    /// The mono font at the current scale, for the live preview box.
+    private var previewFont: Font {
+        let size = 14 * model.textScale
+        if let name = model.monoFontName, !name.isEmpty { return .custom(name, fixedSize: size) }
+        return .system(size: size, design: .monospaced)
     }
 
     private var syncSection: some View {
@@ -174,15 +155,6 @@ struct SettingsView: View {
     private var identitySection: some View {
         Section("Identity") {
             LabeledContent("Owner key", value: model.needsOnboarding ? "Not set" : "Active")
-        }
-    }
-
-    private func healthColor(_ health: RelayHealth) -> Color {
-        switch health {
-        case .online: return .green
-        case .connecting: return .yellow
-        case .offline: return .gray
-        case .failed: return .red
         }
     }
 }
