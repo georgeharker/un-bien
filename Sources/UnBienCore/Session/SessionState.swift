@@ -255,7 +255,8 @@ public struct SessionState: Equatable, Sendable {
         case "tool_execution_end":
             let isError = frame["isError"]?.boolValue ?? false
             fillToolCard(toolCallID: frame["toolCallId"]?.stringValue ?? "",
-                         result: frame["result"], error: isError ? "error" : nil)
+                         result: frame["result"], error: isError ? "error" : nil,
+                         images: Self.imagesFromToolResult(frame["result"]))
         case "compaction_end":
             if let result = frame["result"], result != .null {
                 appendCompaction(summary: result["summary"]?.stringValue ?? "",
@@ -283,17 +284,22 @@ public struct SessionState: Equatable, Sendable {
                 noticeSeq += 1
                 append(.notice(NoticeItem(id: "err\(noticeSeq)", code: "provider_error",
                                           message: message?["errorMessage"]?.stringValue ?? "Provider error")))
-            } else if openAssistantIndex != nil {
-                // Deltas already built the (possibly text→thinking→text interleaved)
-                // bubbles; finalize the open one WITHOUT clobbering the interleaving
-                // with the concatenated authoritative text, and leave activeTurnID
-                // (the turn isn't done until agent_settled — tool calls may follow).
-                closeOpenAssistant()
             } else {
-                // No delta built a bubble (thinking/tool-only turn, or non-streaming):
-                // fall back to the authoritative text when present.
-                let text = message?["content"]?.joinedText() ?? ""
-                if !text.isEmpty { settleAssistant(inReplyTo: turn, text: text, usage: nil) }
+                // Inline graphics settle here on the assistant message (the live
+                // stream is text deltas only). Attach to the delta-built bubble,
+                // or fall back to authoritative text when no delta opened one.
+                let images = Self.imagesFromContent(message?["content"])
+                if openAssistantIndex != nil {
+                    // Finalize WITHOUT clobbering delta-built interleaving; keep
+                    // activeTurnID (turn isn't done until agent_settled).
+                    if !images.isEmpty { attachImages(images) }
+                    closeOpenAssistant()
+                } else {
+                    let text = message?["content"]?.joinedText() ?? ""
+                    if !text.isEmpty || !images.isEmpty {
+                        settleAssistant(inReplyTo: turn, text: text, usage: nil, images: images)
+                    }
+                }
             }
         case "custom":
             noticeSeq += 1
@@ -321,6 +327,33 @@ public struct SessionState: Equatable, Sendable {
         guard let index = toolIndex[toolCallID], case var .tool(card) = items[index] else { return }
         if let partial { card.result = partial }
         items[index] = .tool(card)
+    }
+
+    /// Attach settled inline images to the open assistant bubble (message_end).
+    private mutating func attachImages(_ images: [WireImage]) {
+        guard let index = openAssistantIndex, case var .assistant(bubble) = items[index] else { return }
+        bubble.images = images
+        items[index] = .assistant(bubble)
+    }
+
+    /// Image blocks (`{type:"image", data, mimeType}`) from a message `content`
+    /// array — mirrors the fork's `_imagesFromContent`.
+    static func imagesFromContent(_ content: JSONValue?) -> [WireImage] {
+        guard let blocks = content?.arrayValue else { return [] }
+        return blocks.compactMap { block in
+            guard block["type"]?.stringValue == "image",
+                  let data = block["data"]?.stringValue,
+                  let mime = block["mimeType"]?.stringValue else { return nil }
+            return WireImage(data: data, mime: mime)
+        }
+    }
+
+    /// Images from a `tool_execution_end` result — the live result is a wrapper
+    /// `{content:[...], details}`; unwrap `content` (mirrors `_imagesFromToolResult`).
+    static func imagesFromToolResult(_ value: JSONValue?) -> [WireImage] {
+        if value?.arrayValue != nil { return imagesFromContent(value) }
+        if let content = value?["content"] { return imagesFromContent(content) }
+        return []
     }
 
 }

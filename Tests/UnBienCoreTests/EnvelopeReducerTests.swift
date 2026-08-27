@@ -83,4 +83,33 @@ final class EnvelopeReducerTests: XCTestCase {
             if case let .assistant(bubble) = item { XCTAssertFalse(bubble.streaming) }
         }
     }
+
+    /// Images ride the rpc plane: assistant `message_end` content image blocks
+    /// attach to the bubble; `tool_execution_end` result images attach to the card.
+    func testImagesFromRPC() throws {
+        let lines = [
+            #"{"rpc":{"type":"turn_start"}}"#,
+            #"{"rpc":{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"here"}}}"#,
+            #"{"rpc":{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"here"},{"type":"image","data":"AAAA","mimeType":"image/png"}]}}}"#,
+            #"{"rpc":{"type":"tool_execution_start","toolCallId":"tc1","toolName":"screenshot","args":{}}}"#,
+            #"{"rpc":{"type":"tool_execution_end","toolCallId":"tc1","isError":false,"result":{"content":[{"type":"image","data":"BBBB","mimeType":"image/jpeg"}]}}}"#,
+            #"{"rpc":{"type":"agent_settled"}}"#,
+        ]
+        let decoder = JSONDecoder()
+        let messages = try lines.map { try decoder.decode(EnvelopeMessage.self, from: Data($0.utf8)) }
+        var reducer = EnvelopeReducer()
+        reducer.apply(messages)
+
+        // assistant bubble carries the inline image (attached on message_end).
+        let assistantImages = reducer.session.items.compactMap { item -> [WireImage]? in
+            if case let .assistant(bubble) = item { return bubble.images } else { return nil }
+        }.flatMap { $0 }
+        XCTAssertEqual(assistantImages, [WireImage(data: "AAAA", mime: "image/png")])
+
+        // tool card carries the result image.
+        let card = try XCTUnwrap(toolCards(reducer.session).first)
+        XCTAssertEqual(card.tool, "screenshot")
+        XCTAssertEqual(card.state, .ok)
+        XCTAssertEqual(card.images, [WireImage(data: "BBBB", mime: "image/jpeg")])
+    }
 }
