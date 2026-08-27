@@ -45,6 +45,11 @@ Legend: ☐ untested · ✅ pass · ❌ fail (note what happened) · ⬚ not bui
 - ☐ **Mid-turn interleave**: text → tool card → more text stack in order.
 - ☐ **Compaction**: trigger a compact → "Context compacted (N tokens)" marker.
 - ☐ **Cross-device echo**: send from another device → your `user_message` bubble appears here too.
+- ☐ **Agent graphics**: have the agent emit an image (plot/diagram) → it renders **inline in the
+  assistant bubble**, in conversation order (not a separate row). Re-open the session → the image
+  survives history replay.
+- ☐ **Scroll stability**: in a long transcript with mid-turn tool cards (text → tool → text),
+  scroll up/down fast → no rows vanish/flicker (was: duplicate row ids dropped bubbles).
 
 ## 6. Interactivity (Phase 5)
 
