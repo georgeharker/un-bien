@@ -135,7 +135,7 @@ Each carries an optional `id`; the fork replies `{rpc:{type:"response",command,
 success,data?,error?,id}}` to the **sender**, correlated by `id`.
 
 | command | fields | effect |
-|---|---|---|
+| --- | --- | --- |
 | `prompt` | `message`, `images?`, `streamingBehavior?` | new user turn |
 | `steer` / `follow_up` | `message`, `images?` | queue mid-run / after-run |
 | `abort` | — | abort current turn |
