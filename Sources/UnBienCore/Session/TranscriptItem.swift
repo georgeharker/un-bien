@@ -14,7 +14,7 @@ public enum TranscriptItem: Equatable, Sendable, Identifiable {
         switch self {
         case let .user(bubble): return "user:\(bubble.id)"
         case let .reasoning(block): return "reasoning:\(block.id)"
-        case let .assistant(bubble): return "assistant:\(bubble.inReplyTo)"
+        case let .assistant(bubble): return "assistant:\(bubble.id)"
         case let .tool(card): return "tool:\(card.toolCallID)"
         case let .compaction(marker): return "compaction:\(marker.id)"
         case let .notice(notice): return "notice:\(notice.id)"
@@ -61,6 +61,11 @@ public struct ReasoningBlock: Equatable, Sendable {
 }
 
 public struct AssistantBubble: Equatable, Sendable {
+    /// Stable per-segment identity. A single turn can open SEVERAL assistant
+    /// bubbles (text → tool card → more text), so keying a row on `inReplyTo`
+    /// alone collides and makes `LazyVStack` drop rows on scroll. This id is
+    /// unique per bubble; `inReplyTo` stays the turn key the reducer matches on.
+    public let id: String
     public let inReplyTo: String
     public var text: String
     /// True while `agent_chunk`s are still arriving (before `agent_done`).
@@ -70,8 +75,9 @@ public struct AssistantBubble: Equatable, Sendable {
     /// Arrive on the settling `agent_message` (live + history), keeping images
     /// in the conversation flow rather than a separate row.
     public var images: [WireImage]
-    public init(inReplyTo: String, text: String, streaming: Bool,
+    public init(id: String, inReplyTo: String, text: String, streaming: Bool,
                 usage: Usage? = nil, images: [WireImage] = []) {
+        self.id = id
         self.inReplyTo = inReplyTo
         self.text = text
         self.streaming = streaming

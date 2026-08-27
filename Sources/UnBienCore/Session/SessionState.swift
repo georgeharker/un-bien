@@ -28,6 +28,7 @@ public struct SessionState: Equatable, Sendable {
     private var compactionSeq = 0
     private var reasoningSeq = 0
     private var noticeSeq = 0
+    private var assistantSeq = 0
 
     public init() {}
 
@@ -143,7 +144,9 @@ public struct SessionState: Equatable, Sendable {
             bubble.streaming = true
             items[index] = .assistant(bubble)
         } else {
-            append(.assistant(AssistantBubble(inReplyTo: inReplyTo, text: delta, streaming: true)))
+            assistantSeq += 1
+            append(.assistant(AssistantBubble(id: "a\(assistantSeq)", inReplyTo: inReplyTo,
+                                              text: delta, streaming: true)))
             openAssistantIndex = items.count - 1
         }
         activeTurnID = inReplyTo
@@ -168,8 +171,10 @@ public struct SessionState: Equatable, Sendable {
             items[index] = .assistant(bubble)
             closeOpenAssistant()
         } else {
-            append(.assistant(AssistantBubble(inReplyTo: inReplyTo, text: text,
-                                              streaming: false, usage: usage, images: images)))
+            assistantSeq += 1
+            append(.assistant(AssistantBubble(id: "a\(assistantSeq)", inReplyTo: inReplyTo,
+                                              text: text, streaming: false,
+                                              usage: usage, images: images)))
         }
         if activeTurnID == inReplyTo { activeTurnID = nil }
     }

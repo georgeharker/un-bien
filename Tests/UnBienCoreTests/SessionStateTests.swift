@@ -83,6 +83,13 @@ final class SessionStateTests: XCTestCase {
         guard case let .assistant(second) = state.items[3] else { return XCTFail("no second bubble") }
         XCTAssertEqual(second.text, "Found it.")
         XCTAssertFalse(second.streaming)
+
+        // Both segments share a turn (inReplyTo) but MUST have distinct row ids,
+        // or LazyVStack drops rows on scroll (duplicate SwiftUI identity).
+        XCTAssertEqual(first.inReplyTo, second.inReplyTo)
+        XCTAssertNotEqual(state.items[1].id, state.items[3].id)
+        let ids = state.items.map(\.id)
+        XCTAssertEqual(Set(ids).count, ids.count, "all transcript row ids are unique")
     }
 
     func testToolRequestThenResultFillsSameCard() {
