@@ -67,6 +67,12 @@ export function createPanelBridge(
   }
   const events: EventBus = eventsRaw;
 
+  // Opt-in tracing (`REMOTE_PI_DEBUG_PANELS=1`): shows whether bus events land
+  // and whether a panel frame is broadcast, to isolate capture vs render.
+  const debug: (msg: string) => void = process.env.REMOTE_PI_DEBUG_PANELS
+    ? (msg) => console.error(`[panel-bridge] ${msg}`)
+    : () => {};
+
   // ── Plan accumulation (port of pi-plan wire.ts) ──────────────────────────
   // Per-source (`ns`) item maps + last-seen seq to drop out-of-order frames.
   const planByNs = new Map<string, Map<string, PlanItem>>();
@@ -108,7 +114,14 @@ export function createPanelBridge(
       key,
       setTimeout(() => {
         timers.delete(key);
-        if (!disposed) broadcast(build());
+        if (disposed) return;
+        const frame = build();
+        const count =
+          frame.type === "panel_update" && frame.data && typeof frame.data === "object"
+            ? ((frame.data as { items?: unknown[] }).items?.length ?? 0)
+            : 0;
+        debug(`broadcast ${key} items=${count}`);
+        broadcast(frame);
       }, COALESCE_MS),
     );
   };
@@ -154,6 +167,7 @@ export function createPanelBridge(
     (data: unknown): void => {
       const p = (data ?? {}) as { id?: unknown; type?: unknown; description?: unknown };
       const id = str(p.id);
+      debug(`event ${status} id=${id ?? "<none>"}`);
       if (!id) return;
       const prev = fleet.get(id);
       const incoming: AgentState = {
