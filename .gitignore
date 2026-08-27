@@ -3,6 +3,11 @@
 DerivedData/
 .DS_Store
 .pi-lens/
+# extension/ (TS) build + deps
+node_modules/
+dist/
+# relay/ (Rust) build output
+target/
 # The XcodeGen-generated app/UnBien.xcodeproj IS tracked so Xcode opens without
 # needing xcodegen installed (project.yml stays the source of truth — regenerate
 # + commit after editing it). Only the per-user bits inside it are ignored.
