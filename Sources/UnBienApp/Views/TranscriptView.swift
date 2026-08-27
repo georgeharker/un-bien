@@ -7,7 +7,6 @@ import UnBienCore
 struct TranscriptView: View {
     let session: LiveSession
     @EnvironmentObject var model: AppModel
-    @State private var draft = ""
     @State private var selectedPanelKey: String?
     @State private var showLaunch = false
     @Environment(\.appTheme) private var theme
@@ -205,13 +204,6 @@ struct TranscriptView: View {
         }
     }
 
-    private func sendDraft() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        draft = ""
-        Task { await model.sendMessage(text, to: session) }
-    }
-
     @ViewBuilder
     private func row(for item: TranscriptItem) -> some View {
         switch item {
@@ -269,6 +261,23 @@ struct TranscriptView: View {
     }
 
     private var inputBar: some View {
+        ComposerBar(session: session)
+    }
+}
+
+/// The message input bar. Owns its own `draft` so keystrokes re-render only
+/// this small bar — not the whole transcript, whose `body` recomputes `items`
+/// and diffs the entire message list on every evaluation.
+private struct ComposerBar: View {
+    let session: LiveSession
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.appTheme) private var theme
+    @Environment(\.typography) private var typography
+    @State private var draft = ""
+
+    private var trimmed: String { draft.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    var body: some View {
         HStack(spacing: 8) {
             if model.activeTurnID(for: session) != nil {
                 Button(role: .destructive) {
@@ -279,25 +288,32 @@ struct TranscriptView: View {
             }
             MessageComposer(text: $draft, placeholder: "Message",
                             font: typography.monoPlatformFont(size: typography.bodySize),
-                            onSend: sendDraft)
+                            onSend: send)
                 .padding(.horizontal, 6)
                 .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
             Button {
-                let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !text.isEmpty else { return }
+                guard !trimmed.isEmpty else { return }
+                let text = trimmed
                 draft = ""
                 Task { await model.queueMessage(text, to: session) }
             } label: {
                 Image(systemName: "tray.and.arrow.down").font(.title3)
             }
-            .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            Button(action: sendDraft) {
+            .disabled(trimmed.isEmpty)
+            Button(action: send) {
                 Image(systemName: "arrow.up.circle.fill").font(.title2)
             }
-            .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(trimmed.isEmpty)
         }
         .padding(10)
         .background(theme.background)
+    }
+
+    private func send() {
+        let text = trimmed
+        guard !text.isEmpty else { return }
+        draft = ""
+        Task { await model.sendMessage(text, to: session) }
     }
 }
 
