@@ -994,6 +994,21 @@ export function _setDisposedForTest(v: boolean): void { _disposed = v; }
 /** Test-only: reset the once-per-session auto-init gate so session_start re-runs it. */
 export function _resetAutoInitedForTest(): void { _autoInited = false; }
 
+/** Test-only: clear the globalThis panel/ui bridge ownership so each fresh
+ *  `extension(pi)` in a shared test process can (re)claim and rebuild bridges. */
+export function _resetBridgeOwnersForTest(): void {
+  const g = globalThis as typeof globalThis & {
+    [_PANEL_BRIDGE_OWNER_KEY]?: boolean;
+    [_UI_BRIDGE_OWNER_KEY]?: object;
+  };
+  delete g[_PANEL_BRIDGE_OWNER_KEY];
+  delete g[_UI_BRIDGE_OWNER_KEY];
+  _panelBridge?.dispose();
+  _panelBridge = null;
+  _extensionUiBridge?.dispose();
+  _extensionUiBridge = null;
+}
+
 /** Test-only: set the auto-init gate for lifecycle replacement tests. */
 export function _setAutoInitedForTest(value: boolean): void { _autoInited = value; }
 
@@ -2158,6 +2173,28 @@ function _claimPanelBridgeOwnership(): boolean {
   return true;
 }
 
+// The pi-ask UI bridge has the same "don't follow a subagent child" need, but
+// unlike the panel bridge it has a real session lifecycle (disposed on
+// session_shutdown, rebound on session_start for module-reuse hosts). So track
+// the OWNER pi: the root claims it, children see it owned and skip, and the
+// root RELEASES it on its own shutdown so a replacement root can re-claim.
+const _UI_BRIDGE_OWNER_KEY = Symbol.for("remote-pi.uiBridge.ownerPi");
+/** True if `pi` owns (or newly claims a free) ui-bridge slot; false if another pi owns it. */
+function _claimUiBridgeOwner(pi: object): boolean {
+  const g = globalThis as typeof globalThis & { [_UI_BRIDGE_OWNER_KEY]?: object };
+  if (g[_UI_BRIDGE_OWNER_KEY]) return g[_UI_BRIDGE_OWNER_KEY] === pi;
+  g[_UI_BRIDGE_OWNER_KEY] = pi;
+  return true;
+}
+function _isUiBridgeOwner(pi: object): boolean {
+  const g = globalThis as typeof globalThis & { [_UI_BRIDGE_OWNER_KEY]?: object };
+  return g[_UI_BRIDGE_OWNER_KEY] === pi;
+}
+function _releaseUiBridgeOwner(pi: object): void {
+  const g = globalThis as typeof globalThis & { [_UI_BRIDGE_OWNER_KEY]?: object };
+  if (g[_UI_BRIDGE_OWNER_KEY] === pi) delete g[_UI_BRIDGE_OWNER_KEY];
+}
+
 const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   const applied = _appliedRegistry();
   if (applied.has(pi)) return;  // this session's pi was already wired
@@ -2168,10 +2205,13 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // Plan/57 — bridge @eko24ive/pi-ask clarification flows to the paired app.
   // Inert when pi-ask isn't installed (no events fire) or the SDK exposes no
   // events bus. ask_user without pi-ask doesn't exist, so this never breaks a
-  // Pi that doesn't use the extension. Dispose any prior bridge first so a
-  // factory re-run (new pi session) can't leak subscriptions or double-send.
-  _extensionUiBridge?.dispose();
-  _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive);
+  // Pi that doesn't use the extension. Bind ONCE to the root session: a
+  // subagent child re-runs this factory but must not tear down the root's
+  // pending pi-ask flows. Root claims ownership; children see it owned and skip.
+  if (_claimUiBridgeOwner(pi)) {
+    _extensionUiBridge?.dispose();
+    _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive);
+  }
 
   // Mirror the in-process plan (`plan:*`) + subagents (`subagents:*`) buses to
   // the app as side-panel snapshots. Bind ONCE to the ROOT session and NEVER
@@ -2466,7 +2506,9 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // session_shutdown disposes per-session pi-ask subscriptions. A host that
     // reuses this module instance does NOT re-run the factory, so rebind the
     // bridge here; fresh-module hosts already created theirs in the factory.
-    if (!_extensionUiBridge) {
+    // Only the ROOT owner rebinds (re-claims a slot freed by its own shutdown);
+    // a subagent child's session_start must not seize it.
+    if (_claimUiBridgeOwner(pi) && !_extensionUiBridge) {
       _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive);
     }
     // Rearm a reused-but-disposed instance. The session_shutdown teardown (below)
@@ -2569,8 +2611,14 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // the outgoing session is replaced so stale listeners cannot leak or
     // double-broadcast. session_start rebinds it on module-reuse hosts; fresh
     // module instances create their bridge in the factory.
-    _extensionUiBridge?.dispose();
-    _extensionUiBridge = null;
+    // Guard on ownership: a subagent child's session_shutdown (when the subagent
+    // ends) must NOT dispose the root's bridge mid-turn. The root releases
+    // ownership so a replacement root session can re-claim it.
+    if (_isUiBridgeOwner(pi)) {
+      _extensionUiBridge?.dispose();
+      _extensionUiBridge = null;
+      _releaseUiBridgeOwner(pi);
+    }
     // Drop captured ctxs immediately. On module-reuse hosts the same instance
     // survives session replacement; leaving `_lastCtx` pointing at the now-
     // stale command ctx is what crashed pi in _refreshFooter on peer reconnect

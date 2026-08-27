@@ -214,6 +214,7 @@ const {
   routeClientMessage,
   _mapAgentMessagesToEvents,
   _buildTmuxLaunchArgs,
+  _resetBridgeOwnersForTest,
   _setMessageBufferForTest,
   _setSessionStartedAtForTest,
   _hasPendingReconnect,
@@ -1106,6 +1107,10 @@ function captureEventHarness(): {
     registerMessageRenderer: () => undefined,
     sendMessage: () => undefined, sendUserMessage: () => undefined,
   } as unknown as ExtensionAPI;
+  // Shared test process: clear globalThis bridge ownership so THIS harness's pi
+  // claims it (root) and its bridges are built, rather than skipping because an
+  // earlier test's pi still owns the slot.
+  _resetBridgeOwnersForTest();
   (extension as ExtensionFactory)(pi);
   return {
     handler(eventName: string) {
