@@ -344,8 +344,14 @@ public final class AppModel: ObservableObject {
             return
         }
         print("[un-bien] openSession key=\(session.id) sending session_sync to peer=\(session.peerEPK.suffix(6)) room=\(session.roomID)")
-        try? await connection.send(.sessionSync(id: UUID().uuidString, limit: limit),
-                                   toPeer: session.peerEPK, room: session.roomID)
+        // Envelope-native resume request (was stock session_sync): the fork
+        // replies with a {rpc} history replay folded via applyRPC. Reuse the
+        // stock encoder to build the frame, then send it inside an envelope.
+        if let data = try? Codec.encodeClientBody(.sessionSync(id: UUID().uuidString, limit: limit)),
+           let frame = try? JSONDecoder().decode(JSONValue.self, from: data) {
+            try? await connection.sendEnvelope(EnvelopeMessage(rpc: frame),
+                                               toPeer: session.peerEPK, room: session.roomID)
+        }
         if availableModels[session.id] == nil {
             try? await connection.send(.listModels(id: UUID().uuidString),
                                        toPeer: session.peerEPK, room: session.roomID)
