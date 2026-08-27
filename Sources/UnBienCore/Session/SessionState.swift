@@ -46,8 +46,8 @@ public struct SessionState: Equatable, Sendable {
             openToolCard(toolCallID: toolCallID, tool: tool, args: args)
         case let .toolResult(_, toolCallID, result, error):
             fillToolCard(toolCallID: toolCallID, result: result, error: error)
-        case let .agentMessage(_, inReplyTo, text, usage):
-            settleAssistant(inReplyTo: inReplyTo, text: text, usage: usage)
+        case let .agentMessage(_, inReplyTo, text, usage, images):
+            settleAssistant(inReplyTo: inReplyTo, text: text, usage: usage, images: images ?? [])
         case let .compaction(_, summary, tokensBefore):
             appendCompaction(summary: summary, tokensBefore: tokensBefore)
         }
@@ -74,8 +74,8 @@ public struct SessionState: Equatable, Sendable {
         case let .agentDone(inReplyTo, usage):
             finishStreaming(inReplyTo: inReplyTo, usage: usage)
             return true
-        case let .agentMessage(inReplyTo, text, usage):
-            settleAssistant(inReplyTo: inReplyTo, text: text, usage: usage)
+        case let .agentMessage(inReplyTo, text, usage, images):
+            settleAssistant(inReplyTo: inReplyTo, text: text, usage: usage, images: images ?? [])
             return true
         case let .toolRequest(toolCallID, tool, args):
             openToolCard(toolCallID: toolCallID, tool: tool, args: args)
@@ -158,16 +158,18 @@ public struct SessionState: Equatable, Sendable {
         closeOpenAssistant()
     }
 
-    private mutating func settleAssistant(inReplyTo: String, text: String, usage: Usage?) {
+    private mutating func settleAssistant(inReplyTo: String, text: String, usage: Usage?,
+                                          images: [WireImage] = []) {
         if let index = openAssistantIndex, case var .assistant(bubble) = items[index],
            bubble.inReplyTo == inReplyTo {
             bubble.text = text
             bubble.usage = usage ?? bubble.usage
+            if !images.isEmpty { bubble.images = images }
             items[index] = .assistant(bubble)
             closeOpenAssistant()
         } else {
             append(.assistant(AssistantBubble(inReplyTo: inReplyTo, text: text,
-                                              streaming: false, usage: usage)))
+                                              streaming: false, usage: usage, images: images)))
         }
         if activeTurnID == inReplyTo { activeTurnID = nil }
     }

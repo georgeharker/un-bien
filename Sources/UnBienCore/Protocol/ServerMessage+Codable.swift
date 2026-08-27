@@ -86,7 +86,8 @@ extension ServerMessage: Codable {
                               usage: try container.decodeIfPresent(Usage.self, forKey: .usage))
         case "agent_message":
             self = .agentMessage(inReplyTo: try str(.inReplyTo), text: try str(.text),
-                                 usage: try container.decodeIfPresent(Usage.self, forKey: .usage))
+                                 usage: try container.decodeIfPresent(Usage.self, forKey: .usage),
+                                 images: try container.decodeIfPresent([WireImage].self, forKey: .images))
         case "compaction":
             self = .compaction(summary: try str(.summary), tokensBefore: try int(.tokensBefore),
                                timestamp: try container.decodeIfPresent(Int.self, forKey: .ts))
@@ -183,11 +184,12 @@ extension ServerMessage: Codable {
             try container.encode("agent_done", forKey: .type)
             try container.encode(inReplyTo, forKey: .inReplyTo)
             try container.encodeIfPresent(usage, forKey: .usage)
-        case let .agentMessage(inReplyTo, text, usage):
+        case let .agentMessage(inReplyTo, text, usage, images):
             try container.encode("agent_message", forKey: .type)
             try container.encode(inReplyTo, forKey: .inReplyTo)
             try container.encode(text, forKey: .text)
             try container.encodeIfPresent(usage, forKey: .usage)
+            try container.encodeIfPresent(images, forKey: .images)
         case let .compaction(summary, tokensBefore, timestamp):
             try container.encode("compaction", forKey: .type)
             try container.encode(summary, forKey: .summary)

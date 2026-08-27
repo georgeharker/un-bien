@@ -19,6 +19,16 @@ final class SessionStateTests: XCTestCase {
         XCTAssertEqual(state.items.count, 2)
     }
 
+    func testAgentMessageImagesAttachToBubble() {
+        var state = SessionState()
+        state.apply(.agentChunk(inReplyTo: "u1", delta: "Here is a plot:"))
+        let img = WireImage(data: "AAAA", mime: "image/png")
+        state.apply(.agentMessage(inReplyTo: "u1", text: "Here is a plot:", usage: nil, images: [img]))
+        guard case let .assistant(bubble) = state.items[0] else { return XCTFail("no assistant") }
+        XCTAssertEqual(bubble.images, [img])
+        XCTAssertFalse(bubble.streaming)
+    }
+
     func testActiveTurnIDTracksStreamingLifecycle() {
         var state = SessionState()
         XCTAssertNil(state.activeTurnID)
@@ -100,7 +110,7 @@ final class SessionStateTests: XCTestCase {
 
     func testAgentMessageWithoutPriorChunksSettlesDirectly() {
         var state = SessionState()
-        state.apply(.agentMessage(inReplyTo: "u1", text: "answer", usage: nil))
+        state.apply(.agentMessage(inReplyTo: "u1", text: "answer", usage: nil, images: nil))
         guard case let .assistant(bubble) = state.items[0] else { return XCTFail("no assistant") }
         XCTAssertFalse(bubble.streaming)
         XCTAssertEqual(bubble.text, "answer")
@@ -112,7 +122,7 @@ final class SessionStateTests: XCTestCase {
             .userInput(timestamp: 1, id: "u1", text: "list files", images: nil),
             .toolRequest(timestamp: 2, toolCallID: "tc1", tool: "bash", args: ["command": .string("ls")]),
             .toolResult(timestamp: 3, toolCallID: "tc1", result: .string("a\nb"), error: nil),
-            .agentMessage(timestamp: 4, inReplyTo: "u1", text: "two files", usage: nil),
+            .agentMessage(timestamp: 4, inReplyTo: "u1", text: "two files", usage: nil, images: nil),
         ]
         state.loadHistory(events, sessionStartedAt: 1_716_234_500_000)
         XCTAssertEqual(state.sessionStartedAt, 1_716_234_500_000)

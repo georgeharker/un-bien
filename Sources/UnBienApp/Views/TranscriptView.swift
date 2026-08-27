@@ -188,9 +188,14 @@ struct TranscriptView: View {
                     ProgressView().controlSize(.mini)
                 }
             }
-            Markdown(bubble.text)
-                .markdownCodeSyntaxHighlighter(.highlightr(style: theme.codeHighlightStyle))
-                .markdownTextStyle { ForegroundColor(theme.text) }
+            if !bubble.text.isEmpty {
+                Markdown(bubble.text)
+                    .markdownCodeSyntaxHighlighter(.highlightr(style: theme.codeHighlightStyle))
+                    .markdownTextStyle { ForegroundColor(theme.text) }
+            }
+            ForEach(Array(bubble.images.enumerated()), id: \.offset) { _, image in
+                WireImageView(image: image, theme: theme)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -238,6 +243,43 @@ struct TranscriptView: View {
         .padding(10)
         .background(theme.background)
     }
+}
+
+/// Renders a base64 `WireImage` (agent-emitted graphic) inline in the
+/// transcript. Decodes to the platform image type; shows a placeholder if the
+/// bytes don't decode.
+private struct WireImageView: View {
+    let image: WireImage
+    let theme: AppTheme
+
+    var body: some View {
+        Group {
+            if let platform = Self.decode(image) {
+                #if os(macOS)
+                Image(nsImage: platform).resizable().scaledToFit()
+                #else
+                Image(uiImage: platform).resizable().scaledToFit()
+                #endif
+            } else {
+                Label("Unsupported image", systemImage: "photo")
+                    .font(.caption).foregroundStyle(theme.secondaryText)
+            }
+        }
+        .frame(maxWidth: 480, maxHeight: 480, alignment: .leading)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    #if os(macOS)
+    private static func decode(_ image: WireImage) -> NSImage? {
+        guard let data = Data(base64Encoded: image.data) else { return nil }
+        return NSImage(data: data)
+    }
+    #else
+    private static func decode(_ image: WireImage) -> UIImage? {
+        guard let data = Data(base64Encoded: image.data) else { return nil }
+        return UIImage(data: data)
+    }
+    #endif
 }
 
 private struct ReasoningBlockView: View {

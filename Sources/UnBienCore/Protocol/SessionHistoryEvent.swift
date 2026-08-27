@@ -5,7 +5,7 @@ public enum SessionHistoryEvent: Equatable, Sendable, Codable {
     case userInput(timestamp: Int, id: String, text: String, images: [WireImage]?)
     case toolRequest(timestamp: Int, toolCallID: String, tool: String, args: [String: JSONValue])
     case toolResult(timestamp: Int, toolCallID: String, result: JSONValue?, error: String?)
-    case agentMessage(timestamp: Int, inReplyTo: String, text: String, usage: Usage?)
+    case agentMessage(timestamp: Int, inReplyTo: String, text: String, usage: Usage?, images: [WireImage]?)
     case compaction(timestamp: Int, summary: String, tokensBefore: Int)
 
     enum CodingKeys: String, CodingKey {
@@ -48,7 +48,8 @@ public enum SessionHistoryEvent: Equatable, Sendable, Codable {
                 timestamp: timestamp,
                 inReplyTo: try container.decode(String.self, forKey: .inReplyTo),
                 text: try container.decode(String.self, forKey: .text),
-                usage: try container.decodeIfPresent(Usage.self, forKey: .usage)
+                usage: try container.decodeIfPresent(Usage.self, forKey: .usage),
+                images: try container.decodeIfPresent([WireImage].self, forKey: .images)
             )
         case "compaction":
             self = .compaction(
@@ -82,12 +83,13 @@ public enum SessionHistoryEvent: Equatable, Sendable, Codable {
             try container.encode(toolCallID, forKey: .toolCallID)
             try container.encodeIfPresent(result, forKey: .result)
             try container.encodeIfPresent(error, forKey: .error)
-        case let .agentMessage(timestamp, inReplyTo, text, usage):
+        case let .agentMessage(timestamp, inReplyTo, text, usage, images):
             try container.encode(timestamp, forKey: .ts)
             try container.encode("agent_message", forKey: .type)
             try container.encode(inReplyTo, forKey: .inReplyTo)
             try container.encode(text, forKey: .text)
             try container.encodeIfPresent(usage, forKey: .usage)
+            try container.encodeIfPresent(images, forKey: .images)
         case let .compaction(timestamp, summary, tokensBefore):
             try container.encode(timestamp, forKey: .ts)
             try container.encode("compaction", forKey: .type)

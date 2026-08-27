@@ -66,11 +66,17 @@ public struct AssistantBubble: Equatable, Sendable {
     /// True while `agent_chunk`s are still arriving (before `agent_done`).
     public var streaming: Bool
     public var usage: Usage?
-    public init(inReplyTo: String, text: String, streaming: Bool, usage: Usage? = nil) {
+    /// Agent-emitted inline graphics (plots/diagrams), rendered in the bubble.
+    /// Arrive on the settling `agent_message` (live + history), keeping images
+    /// in the conversation flow rather than a separate row.
+    public var images: [WireImage]
+    public init(inReplyTo: String, text: String, streaming: Bool,
+                usage: Usage? = nil, images: [WireImage] = []) {
         self.inReplyTo = inReplyTo
         self.text = text
         self.streaming = streaming
         self.usage = usage
+        self.images = images
     }
 }
 

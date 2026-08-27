@@ -14,7 +14,7 @@ public enum ServerMessage: Equatable, Sendable {
     /// un-bien fork extension: streamed model reasoning (thinking) delta.
     case agentReasoning(inReplyTo: String, delta: String)
     case agentDone(inReplyTo: String, usage: Usage?)
-    case agentMessage(inReplyTo: String, text: String, usage: Usage?)
+    case agentMessage(inReplyTo: String, text: String, usage: Usage?, images: [WireImage]?)
     case compaction(summary: String, tokensBefore: Int, timestamp: Int?)
     case toolRequest(toolCallID: String, tool: String, args: [String: JSONValue])
     case toolResult(toolCallID: String, result: JSONValue?, error: String?)
