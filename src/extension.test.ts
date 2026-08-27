@@ -213,6 +213,7 @@ const {
   _onPeerDisconnect,
   routeClientMessage,
   _mapAgentMessagesToEvents,
+  _buildTmuxLaunchArgs,
   _setMessageBufferForTest,
   _setSessionStartedAtForTest,
   _hasPendingReconnect,
@@ -3641,6 +3642,12 @@ describe("session sync", () => {
     };
     expect(agent.text).toBe("");
     expect(agent.images).toEqual([{ data: "R0lG", mime: "image/gif" }]);
+  });
+
+  test("remote launch: tmux argv is a safe array (no shell), pi in the given cwd", () => {
+    expect(_buildTmuxLaunchArgs("pi-foo", "/tmp/work")).toEqual([
+      "new-session", "-d", "-s", "pi-foo", "-c", "/tmp/work", "pi",
+    ]);
   });
 
   test("mapping (un-bien): toolResult with an image block → tool_result keeps images", () => {

@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadLocalConfig, localConfigExists, saveLocalConfig } from "./local_config.js";
+import {
+  loadLocalConfig,
+  localConfigExists,
+  saveLocalConfig,
+  effectiveAllowRemoteLaunch,
+} from "./local_config.js";
 
 const ENV = "REMOTE_PI_DIRECT_CONFIG";
 
@@ -147,5 +152,17 @@ describe("saveLocalConfig — unaffected by env (still writes the file)", () => 
     saveLocalConfig(cwd, { agent_name: "saved" });
     delete process.env[ENV]; // ensure we read the file back, not any env
     expect(loadLocalConfig(cwd)).toEqual({ agent_name: "saved", auto_start_relay: true });
+  });
+});
+
+describe("effectiveAllowRemoteLaunch — default OFF (authority-sensitive)", () => {
+  test("undefined -> false", () => {
+    expect(effectiveAllowRemoteLaunch({})).toBe(false);
+  });
+  test("explicit true -> true", () => {
+    expect(effectiveAllowRemoteLaunch({ allow_remote_launch: true })).toBe(true);
+  });
+  test("explicit false -> false", () => {
+    expect(effectiveAllowRemoteLaunch({ allow_remote_launch: false })).toBe(false);
   });
 });

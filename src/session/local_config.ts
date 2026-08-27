@@ -24,6 +24,13 @@ export interface LocalConfig {
    * configs without this field are treated as `true` for backward compat.
    */
   auto_start_relay?: boolean;
+  /**
+   * un-bien remote launch: when true, this machine HONORS `session_launch`
+   * requests from a paired owner (spawn a new pi session). Default FALSE —
+   * remote process spawn is authority-sensitive, so it's strictly opt-in.
+   * Advertised as the `remote_launch` capability only when enabled.
+   */
+  allow_remote_launch?: boolean;
   // `workspace?`/`worktree?` were removed (plan/38, reescrito 2026-06-08): the
   // mesh identity is `(cwd, nome)`, with `cwd` subsuming folder + worktree
   // disambiguation. Neither axis is derived anymore, so the config fields are
@@ -98,6 +105,7 @@ function parseLocalConfig(raw: string): LocalConfig | null {
     if (migrated) cfg.agent_name = migrated;
   }
   if (typeof src["auto_start_relay"] === "boolean") cfg.auto_start_relay = src["auto_start_relay"];
+  if (typeof src["allow_remote_launch"] === "boolean") cfg.allow_remote_launch = src["allow_remote_launch"];
   return cfg;
 }
 
@@ -195,4 +203,9 @@ export function defaultAgentName(cwd: string): string {
 /** Resolves auto_start_relay with backward-compat (undefined → true). */
 export function effectiveAutoStartRelay(cfg: LocalConfig): boolean {
   return cfg.auto_start_relay !== false;
+}
+
+/** Remote launch is OFF unless explicitly enabled (authority-sensitive). */
+export function effectiveAllowRemoteLaunch(cfg: LocalConfig): boolean {
+  return cfg.allow_remote_launch === true;
 }

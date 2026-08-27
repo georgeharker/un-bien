@@ -198,6 +198,11 @@ export type ClientMessage =
   | { type: "model_set"; id: string; provider: string; model_id: string }
   | { type: "thinking_set"; id: string; level: ThinkingLevel }
   | { type: "list_models"; id: string }
+  // un-bien remote launch: spawn a NEW pi session on this machine (distinct from
+  // session_new, which resets the current room). Owner-key-gated (sender is an
+  // authenticated owner) + config opt-in (allow_remote_launch). `mode` picks the
+  // launch strategy; `cwd`/`name` are optional (default: session cwd / derived).
+  | { type: "session_launch"; id: string; mode: "tmux" | "rpc"; cwd?: string; name?: string }
   // Plan/57 — interactive extension prompt response (ask_user via pi-ask).
   // Mirrors RpcExtensionUIResponse; the optional `ask` envelope carries
   // pi-ask's structured answer so multi/preview/notes survive the round-trip.
@@ -379,7 +384,8 @@ export type ActionName =
   | "session_new"
   | "session_compact"
   | "model_set"
-  | "thinking_set";
+  | "thinking_set"
+  | "session_launch";
 
 /**
  * Plan/28 — Mirror of the SDK's `ThinkingLevel` (defined in

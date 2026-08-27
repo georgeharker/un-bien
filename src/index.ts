@@ -103,17 +103,18 @@ import { installService, uninstallService, linkCliBinaries, unlinkCliBinaries, L
 import {
   defaultAgentName,
   effectiveAutoStartRelay,
+  effectiveAllowRemoteLaunch,
   loadLocalConfig,
   localConfigExists,
   saveLocalConfig,
 } from "./session/local_config.js";
 import { runSetupWizard, type WizardUI } from "./session/setup_wizard.js";
 import { updateFooter, type FooterState } from "./ui/footer.js";
-import { join, dirname, resolve } from "node:path";
+import { join, dirname, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chmodSync, mkdtempSync, mkdirSync, copyFileSync, existsSync, unlinkSync, readFileSync, writeFileSync, realpathSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, copyFileSync, existsSync, statSync, unlinkSync, readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { hostname, tmpdir } from "node:os";
 import {
   kDefaultRelayUrl,
@@ -1957,10 +1958,52 @@ const _BASE_CAPABILITIES = [
 /** The capability set to advertise right now (config-dependent bits included). */
 function _capabilities(): string[] {
   const caps: string[] = [..._BASE_CAPABILITIES];
-  // `remote_launch` is added here once the local-config opt-in lands (default
-  // off). Kept as a single choke point so the advertised set and the honored
-  // behavior can never drift.
+  // `remote_launch` is advertised ONLY when the machine opts in via local
+  // config — single choke point so the advertised set and honored behavior
+  // can't drift. Read the session cwd's config (pi runs in the session cwd).
+  if (effectiveAllowRemoteLaunch(loadLocalConfig(process.cwd()))) {
+    caps.push("remote_launch");
+  }
   return caps;
+}
+
+/** Sanitize a tmux session name: keep it shell-safe and tmux-legal. */
+function _safeTmuxName(name: string | undefined, fallback: string): string {
+  const base = (name ?? "").trim() || fallback;
+  // tmux disallows `.` and `:` in session names; strip anything risky.
+  const clean = base.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "");
+  return clean.slice(0, 40) || "pi";
+}
+
+/** Build the argv for a detached tmux launch of `pi` in `cwd`. Args are an
+ *  ARRAY (never a shell string) so cwd/name can't inject. Exported for tests. */
+export function _buildTmuxLaunchArgs(name: string, cwd: string): string[] {
+  return ["new-session", "-d", "-s", name, "-c", cwd, "pi"];
+}
+
+/**
+ * Honor a `session_launch` request. Gated by the caller: config opt-in already
+ * checked. `tmux` mode spawns a detached tmux running `pi` in `cwd` (which
+ * joins the relay if that cwd has remote-pi auto-start); `rpc` is not wired yet.
+ * Returns null on success or an error string.
+ */
+function _launchSession(mode: "tmux" | "rpc", cwd: string, name: string | undefined): string | null {
+  if (mode === "rpc") return "launch mode 'rpc' is not supported yet";
+  if (mode !== "tmux") return `unknown launch mode '${mode}'`;
+  if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
+    return `cwd does not exist or is not a directory: ${cwd}`;
+  }
+  const sessionName = _safeTmuxName(name, `pi-${basename(cwd) || "session"}`);
+  try {
+    const child = spawn("tmux", _buildTmuxLaunchArgs(sessionName, cwd), {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+    return null;
+  } catch (error) {
+    return `tmux launch failed: ${error instanceof Error ? error.message : String(error)}`;
+  }
 }
 
 async function _handlePairRequest(
@@ -4576,6 +4619,28 @@ export function _routeClientMessageFrom(
       // session_start has landed yet (keeps the pre-replacement happy path).
       handleSessionCompact((_lastEventCtx ?? _lastCtx) as ActionCtx | null, sender, msg);
       break;
+    case "session_launch": {
+      // Remote launch: owner-key gate (sender is an authenticated owner) +
+      // config opt-in. Advertised via the `remote_launch` capability only when
+      // enabled, so a compliant app won't even show the affordance otherwise.
+      const cwd = typeof msg.cwd === "string" && msg.cwd.length > 0 ? msg.cwd : process.cwd();
+      if (!effectiveAllowRemoteLaunch(loadLocalConfig(cwd))) {
+        sender.send({
+          type: "action_error",
+          in_reply_to: msg.id,
+          action: "session_launch",
+          error: "remote launch is disabled on this machine (set allow_remote_launch)",
+        });
+        break;
+      }
+      const launchError = _launchSession(msg.mode, cwd, msg.name);
+      sender.send(
+        launchError
+          ? { type: "action_error", in_reply_to: msg.id, action: "session_launch", error: launchError }
+          : { type: "action_ok", in_reply_to: msg.id, action: "session_launch" },
+      );
+      break;
+    }
     case "session_new": {
       const actionCtx = _lastCtx as ActionCtx | null;
       const daemonMode = process.env["REMOTE_PI_DAEMON"] === "1";
