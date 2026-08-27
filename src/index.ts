@@ -2246,6 +2246,22 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     if (m.role === "user" || m.role === "assistant" || m.role === "toolResult") {
       _messageBuffer.push(m as unknown as BufferMsg);
     }
+    // un-bien: agent-emitted inline graphics. The live stream is text deltas
+    // only; image blocks settle here on the assistant message. Broadcast an
+    // agent_message carrying the (already base64-encoded) images so the app
+    // renders them in the conversation flow. Text-only messages are unchanged
+    // (still the chunk+agent_done path) — we only send this when images exist.
+    if (m.role === "assistant" && _anyPeerActive() && _currentTurnId) {
+      const images = _imagesFromContent(m.content);
+      if (images.length > 0) {
+        _broadcastToActive({
+          type: "agent_message",
+          in_reply_to: _currentTurnId,
+          text: _stringifyContent(m.content),
+          images,
+        });
+      }
+    }
     // Forward a failed turn to connected owners. Without this the app just
     // hangs with no response when the provider errors (e.g. the TUI's
     // "Provider finish_reason: error"): the SDK surfaces the failure as an
@@ -4982,6 +4998,11 @@ export function _mapAgentMessagesToEvents(
       const usage = m.usage
         ? { input_tokens: m.usage.input ?? 0, output_tokens: m.usage.output ?? 0 }
         : undefined;
+      // Agent-emitted inline graphics (base64 already encoded in the content).
+      // Attach to the first text agent_message so a re-sync rebuilds the bubble
+      // with its images; if the message is image-only, emit a text-less one.
+      const images = _imagesFromContent(m.content);
+      let imagesAttached = false;
       for (const raw of content) {
         if (!raw || typeof raw !== "object") continue;
         const block = raw as { type?: string; text?: unknown; id?: unknown; name?: unknown; arguments?: unknown };
@@ -4994,7 +5015,9 @@ export function _mapAgentMessagesToEvents(
             in_reply_to: lastUserId ?? `sync_${ts}`,
             text,
             ...(usage ? { usage } : {}),
+            ...(images.length > 0 && !imagesAttached ? { images } : {}),
           };
+          if (images.length > 0 && !imagesAttached) imagesAttached = true;
           events.push(ev);
         } else if (block.type === "toolCall") {
           events.push({
@@ -5005,6 +5028,17 @@ export function _mapAgentMessagesToEvents(
             args: (block.arguments as Record<string, unknown>) ?? {},
           });
         }
+      }
+      // Image-only assistant message (no text block): still surface the graphic.
+      if (images.length > 0 && !imagesAttached) {
+        events.push({
+          ts,
+          type: "agent_message",
+          in_reply_to: lastUserId ?? `sync_${ts}`,
+          text: "",
+          ...(usage ? { usage } : {}),
+          images,
+        });
       }
     } else if (m.role === "toolResult") {
       // Same helper as the live `tool_execution_end` broadcast → live == re-sync.

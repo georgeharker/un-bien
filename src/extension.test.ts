@@ -3598,6 +3598,55 @@ describe("session sync", () => {
     expect((events[1] as { in_reply_to: string }).in_reply_to).toBe(`sync_${ts}`);
   });
 
+  test("mapping (un-bien): assistant [text, image] → agent_message keeps images", () => {
+    const ts = 1_700_000_000_100;
+    const events = _mapAgentMessagesToEvents([
+      { role: "user", content: "plot it", timestamp: ts },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "here is the plot" },
+          { type: "image", data: "UE5H", mimeType: "image/png" },
+        ],
+        timestamp: ts,
+      },
+    ]);
+    const agent = events.find((e) => e.type === "agent_message") as {
+      text: string;
+      images?: Array<{ data: string; mime: string }>;
+    };
+    expect(agent.text).toBe("here is the plot");
+    expect(agent.images).toEqual([{ data: "UE5H", mime: "image/png" }]);
+  });
+
+  test("mapping (un-bien): image-only assistant → text-less agent_message with images", () => {
+    const ts = 1_700_000_000_200;
+    const events = _mapAgentMessagesToEvents([
+      { role: "user", content: "draw", timestamp: ts },
+      {
+        role: "assistant",
+        content: [{ type: "image", data: "R0lG", mimeType: "image/gif" }],
+        timestamp: ts,
+      },
+    ]);
+    const agent = events.find((e) => e.type === "agent_message") as {
+      text: string;
+      images?: Array<{ data: string; mime: string }>;
+    };
+    expect(agent.text).toBe("");
+    expect(agent.images).toEqual([{ data: "R0lG", mime: "image/gif" }]);
+  });
+
+  test("mapping (un-bien): text-only assistant → no images key (path unchanged)", () => {
+    const events = _mapAgentMessagesToEvents([
+      { role: "user", content: "hi", timestamp: 1 },
+      { role: "assistant", content: [{ type: "text", text: "hello" }], timestamp: 2 },
+    ]);
+    const agent = events.find((e) => e.type === "agent_message");
+    expect(agent).toMatchObject({ type: "agent_message", text: "hello" });
+    expect(agent).not.toHaveProperty("images");
+  });
+
   test("mapping (plan/30 re-sync): user [image, text] → user_input keeps images", () => {
     const ts = 1_700_000_000_000;
     const events = _mapAgentMessagesToEvents([

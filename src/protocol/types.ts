@@ -255,6 +255,9 @@ export type SessionHistoryEvent =
       in_reply_to: string;
       text: string;
       usage?: Usage;
+      // un-bien: agent-emitted inline images, replayed so a re-sync rebuilds the
+      // bubble with its graphics (same channel as the live agent_message).
+      images?: WireImage[];
     }
   // Plan/32: a context-compaction marker, replayed in history (survives
   // re-sync like images) so the app re-renders the "context compacted" notice.
@@ -309,7 +312,10 @@ export type ServerMessage =
   // assistantMessageEvent. Additive + optional — stock clients ignore it.
   | { type: "agent_reasoning"; in_reply_to: string; delta: string }
   | { type: "agent_done"; in_reply_to: string; usage?: Usage }
-  | { type: "agent_message"; in_reply_to: string; text: string; usage?: Usage }
+  // un-bien: `images` carry agent-emitted inline graphics (base64 already in the
+  // assistant message content) so they render in the conversation flow. Present
+  // only when the assistant message included image blocks.
+  | { type: "agent_message"; in_reply_to: string; text: string; usage?: Usage; images?: WireImage[] }
   // Plan/32: pushed after a context compaction (live, and replayed on history
   // re-sync). `tokens_before` is the pre-compaction token count.
   | { type: "compaction"; summary: string; tokens_before: number; ts?: number }
