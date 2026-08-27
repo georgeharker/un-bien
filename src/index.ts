@@ -1937,6 +1937,32 @@ const _HARNESS = {
 } as const;
 const _HOSTNAME = hostname();
 
+// un-bien capability handshake. PROTOCOL_VERSION bumps on a HARD (breaking)
+// wire change; the app gates UI on capability PRESENCE, not this number.
+const PROTOCOL_VERSION = 1;
+// Features this fork supports, advertised on attach (session_history) + pair_ok.
+// `remote_launch` is conditional (added only when local config opts in) — see
+// `_capabilities()`. Passive server->app extras (images/panels) are listed so
+// the app can also gate any future *controls* it grows for them.
+const _BASE_CAPABILITIES = [
+  "thinking",
+  "models",
+  "cancel",
+  "queued_messages",
+  "images",
+  "tool_result_images",
+  "panels",
+] as const;
+
+/** The capability set to advertise right now (config-dependent bits included). */
+function _capabilities(): string[] {
+  const caps: string[] = [..._BASE_CAPABILITIES];
+  // `remote_launch` is added here once the local-config opt-in lands (default
+  // off). Kept as a single choke point so the advertised set and the honored
+  // behavior can never drift.
+  return caps;
+}
+
 async function _handlePairRequest(
   relay: RelayClient,
   appPeerId: string,
@@ -2017,6 +2043,8 @@ async function _handlePairRequest(
     // two PCs apart even when nicknames collide).
     harness: _HARNESS,
     hostname: _HOSTNAME,
+    protocol_version: PROTOCOL_VERSION,
+    capabilities: _capabilities(),
   });
 
   // Notify local RPC clients (e.g. Cockpit) that pairing completed, so they can
@@ -4678,6 +4706,8 @@ function _handleSessionSync(
       events: [],
       eos: true,
       truncated: false,
+      protocol_version: PROTOCOL_VERSION,
+      capabilities: _capabilities(),
     });
     return;
   }
@@ -4699,6 +4729,8 @@ function _handleSessionSync(
     events: slice,
     eos: true,
     truncated,
+    protocol_version: PROTOCOL_VERSION,
+    capabilities: _capabilities(),
   });
 
   // Plan/57 — replay ask_user flows still awaiting an answer. The bridge
@@ -4749,6 +4781,8 @@ function _resetSessionForNew(inReplyTo: string): void {
     events: [],
     eos: true,
     truncated: false,
+    protocol_version: PROTOCOL_VERSION,
+    capabilities: _capabilities(),
   });
 }
 

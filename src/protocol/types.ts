@@ -288,6 +288,10 @@ export type ServerMessage =
        * same project folder.
        */
       hostname?: string;
+      // un-bien capability handshake, mirrored from session_history so the app
+      // learns caps at first contact too.
+      protocol_version?: number;
+      capabilities?: string[];
     }
   | { type: "pair_error"; in_reply_to: string; code: PairErrorCode; message: string }
   | { type: "user_input"; id: string; text: string; streaming_behavior?: StreamingBehavior }
@@ -337,6 +341,12 @@ export type ServerMessage =
       events: SessionHistoryEvent[];
       eos: boolean;
       truncated: boolean;
+      // un-bien capability handshake (on attach): the fork's protocol version +
+      // the feature capabilities this pi supports, so the app gates UI on
+      // capability PRESENCE (default-off when absent). Additive; older apps
+      // ignore them.
+      protocol_version?: number;
+      capabilities?: string[];
     }
   // Plan/28 — Replies for typed app actions.
   // `action_ok` / `action_error` carry the original `ActionName` so the

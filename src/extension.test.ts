@@ -1300,6 +1300,12 @@ describe("multi-channel broadcast (W2D)", () => {
     const histories = sent.filter((d) => d.inner.type === "session_history");
     expect(histories).toHaveLength(1);
     expect(histories[0]!.peer).toBe("ownerA__1234567890");
+    // un-bien capability handshake rides on the session_history reply.
+    const hist = histories[0]!.inner as { protocol_version?: number; capabilities?: string[] };
+    expect(hist.protocol_version).toBe(1);
+    expect(hist.capabilities).toEqual(
+      expect.arrayContaining(["thinking", "models", "cancel", "panels"]),
+    );
   });
 
   test("revoke of owner A → A's channel closed, B keeps running", async () => {
