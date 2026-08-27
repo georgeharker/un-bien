@@ -1259,6 +1259,9 @@ function _anyPeerActive(): boolean {
 function _routeRpcCommandFrom(sender: PlainPeerChannel, env: EnvelopeMessage): void {
   const frame = env.rpc;
   if (!frame || typeof frame !== "object") return; // no {evt} inbound today
+  if (process.env.REMOTE_PI_DEBUG_ENVELOPE === "1") {
+    console.error(`[remote-pi] rpc inbound: ${String((frame as Record<string, unknown>).type)}`);
+  }
   // extension_ui_response is a reply to a fork-issued dialog, not a command —
   // route it straight to the ui bridge (same target as the stock path).
   if ((frame as Record<string, unknown>).type === "extension_ui_response") {
@@ -1272,7 +1275,11 @@ function _routeRpcCommandFrom(sender: PlainPeerChannel, env: EnvelopeMessage): v
     const limit = typeof f.limit === "number" ? f.limit : _getSyncLimit();
     const events = _mapAgentMessagesToEvents(_messageBuffer);
     const slice = limit > 0 ? events.slice(-limit) : [];
-    for (const replay of _historyReplayEnvelopes(slice)) sender.sendEnvelope(replay);
+    const replayFrames = _historyReplayEnvelopes(slice);
+    if (process.env.REMOTE_PI_DEBUG_ENVELOPE === "1") {
+      console.error(`[remote-pi] session_sync(env): buffer=${_messageBuffer.length} events=${events.length} replay=${replayFrames.length}`);
+    }
+    for (const replay of replayFrames) sender.sendEnvelope(replay);
     return;
   }
   const handlers: RpcCommandHandlers = {
