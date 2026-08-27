@@ -1,0 +1,22 @@
+{
+  "name": "un-bien",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "un-bien monorepo: native iOS/macOS client (app/), pi extension (extension/), and relay (relay/). Derived from remote-pi (Jacob Moura) — see extension/relay for origin history + license.",
+  "main": "extension/dist/index.js",
+  "pi": {
+    "extensions": [
+      "./extension/dist"
+    ]
+  },
+  "scripts": {
+    "build": "pnpm -C extension build",
+    "typecheck": "pnpm -C extension typecheck",
+    "test": "pnpm -C extension test",
+    "install:ext": "pnpm -C extension install"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
