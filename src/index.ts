@@ -1318,6 +1318,52 @@ function _uiBroadcast(msg: ServerMessage): void {
   _broadcastToActive(msg);
 }
 
+/** Map the buffered session history to {rpc} live-frame envelopes so a
+ *  newly-attached peer reconstructs the transcript via the SAME `applyRPC` the
+ *  live stream uses — the envelope-native replacement for stock session_history.
+ *  Tool cards survive (mapped to tool_execution_start/end), unlike a bare
+ *  message replay. */
+function _historyReplayEnvelopes(): EnvelopeMessage[] {
+  const out: EnvelopeMessage[] = [];
+  const content = (text: string, images?: ReadonlyArray<{ data: string; mime: string }>): unknown[] => {
+    const c: unknown[] = [];
+    if (text) c.push({ type: "text", text });
+    for (const img of images ?? []) c.push({ type: "image", data: img.data, mimeType: img.mime });
+    return c;
+  };
+  for (const e of _mapAgentMessagesToEvents(_messageBuffer)) {
+    switch (e.type) {
+      case "user_input":
+        out.push({ rpc: { type: "message_end", message: { role: "user", id: e.id, content: content(e.text, e.images) } } });
+        break;
+      case "agent_message":
+        out.push({ rpc: { type: "message_end", message: { role: "assistant", content: content(e.text, e.images) } } });
+        break;
+      case "tool_request":
+        out.push({ rpc: { type: "tool_execution_start", toolCallId: e.tool_call_id, toolName: e.tool, args: e.args } });
+        break;
+      case "tool_result":
+        out.push({ rpc: { type: "tool_execution_end", toolCallId: e.tool_call_id, result: e.result, isError: !!e.error } });
+        break;
+      case "compaction":
+        out.push({ rpc: { type: "compaction_end", result: { summary: e.summary, tokensBefore: e.tokens_before } } });
+        break;
+    }
+  }
+  return out;
+}
+
+/** Broadcast for the panel bridge. Panels are ENVELOPE-ONLY (the {evt} plane):
+ *  forward each aggregated `panel_update` as `{evt:{channel:"panel", data}}`.
+ *  The app folds it back into its panel store (reusing the stock decoder). */
+function _panelBroadcast(msg: ServerMessage): void {
+  if (msg.type === "panel_update") {
+    _broadcastEnvelope({ evt: { channel: "panel", data: msg } });
+    return;
+  }
+  _broadcastToActive(msg);
+}
+
 /** Fan an rpc-envelope frame out to every attached peer (base64 ct via each
  *  channel), mirroring `_broadcastToActive` for `{ rpc | evt }` messages. */
 function _broadcastEnvelope(env: EnvelopeMessage): void {
@@ -1924,6 +1970,10 @@ function _attachOwner(
   // enable the {rpc|evt} route + suppress stock before any session content
   // arrives. Additive to the stock session_history caps (parity transition).
   channel.sendEnvelope(helloEnvelope(_capabilities()));
+  // Reconstruct the transcript for this peer over the envelope (envelope-native
+  // replacement for stock session_history): replay history as {rpc} frames the
+  // app folds via the same applyRPC as the live stream.
+  for (const frame of _historyReplayEnvelopes()) channel.sendEnvelope(frame);
   _refreshFooter();
 
   _safeNotify(
@@ -2304,7 +2354,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     _extensionUiBridge?.dispose();
     _extensionUiBridge = createExtensionUiBridge(pi, _uiBroadcast);
     _panelBridge?.dispose();
-    _panelBridge = createPanelBridge(pi, _broadcastToActive);
+    _panelBridge = createPanelBridge(pi, _panelBroadcast);
     _rpcEnvelope?.dispose();
     _rpcEnvelope = createRpcEnvelope(pi, _broadcastEnvelope);
   }
@@ -2595,7 +2645,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // a subagent child's session_start must not seize it. Covers both bridges.
     if (_claimRootSession(pi)) {
       if (!_extensionUiBridge) _extensionUiBridge = createExtensionUiBridge(pi, _uiBroadcast);
-      if (!_panelBridge) _panelBridge = createPanelBridge(pi, _broadcastToActive);
+      if (!_panelBridge) _panelBridge = createPanelBridge(pi, _panelBroadcast);
       if (!_rpcEnvelope) _rpcEnvelope = createRpcEnvelope(pi, _broadcastEnvelope);
     }
     // Rearm a reused-but-disposed instance. The session_shutdown teardown (below)
