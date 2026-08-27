@@ -854,6 +854,29 @@ type BufferMsg = {
   tokensBefore?: number;
 };
 let _messageBuffer: BufferMsg[] = [];
+// Read-only handle to the persisted session log (ExtensionContext.sessionManager).
+// Captured from event ctx so reconstruction can read history that predates this
+// fork process (survives restarts) — the in-memory _messageBuffer cannot.
+let _sessionManager: ExtensionContext["sessionManager"] | null = null;
+
+/** Messages for reconstruction: prefer the PERSISTED session log (survives fork
+ *  restarts) via sessionManager.getEntries(); fall back to the in-memory buffer
+ *  when no ctx has bound yet. Each `message`-type entry carries an AgentMessage. */
+function _sessionHistoryMessages(): BufferMsg[] {
+  const sm = _sessionManager;
+  if (sm) {
+    try {
+      const msgs: BufferMsg[] = [];
+      for (const e of sm.getEntries() as Array<{ type?: string; message?: unknown }>) {
+        if (e.type === "message" && e.message) msgs.push(e.message as BufferMsg);
+      }
+      if (msgs.length > 0) return msgs;
+    } catch {
+      /* fall back to the in-memory buffer */
+    }
+  }
+  return _messageBuffer;
+}
 type PendingSteer = { id: string; text: string };
 let _pendingSteers: PendingSteer[] = [];
 let _lastConsumedSteerText: string | null = null;
@@ -1272,10 +1295,11 @@ function _routeRpcCommandFrom(sender: PlainPeerChannel, env: EnvelopeMessage): v
   if ((frame as Record<string, unknown>).type === "session_sync") {
     const f = frame as Record<string, unknown>;
     const limit = typeof f.limit === "number" ? f.limit : _getSyncLimit();
-    const events = _mapAgentMessagesToEvents(_messageBuffer);
+    const msgs = _sessionHistoryMessages();
+    const events = _mapAgentMessagesToEvents(msgs);
     const slice = limit > 0 ? events.slice(-limit) : [];
     const replayFrames = _historyReplayEnvelopes(slice);
-    envLog(`session_sync(env): buffer=${_messageBuffer.length} events=${events.length} replay=${replayFrames.length}`);
+    envLog(`session_sync(env): msgs=${msgs.length} (buffer=${_messageBuffer.length}, sm=${_sessionManager ? "y" : "n"}) events=${events.length} replay=${replayFrames.length}`);
     for (const replay of replayFrames) sender.sendEnvelope(replay);
     return;
   }
@@ -2588,6 +2612,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // room_meta over the relay (plan/32) below — that's independent of the
   // broker and drives the app's working indicator.
   pi.on("turn_start", (_event, ctx) => {
+    _sessionManager = ctx.sessionManager;
     // Late model hydration: if the model was still unknown at connect (resolved
     // lazily by the SDK), grab it on the first turn and fan it out — so a daemon
     // whose model only materialises at turn 1 still reports it to the app.
@@ -2651,6 +2676,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // bound to the current session.
   pi.on("session_start", (_event, ctx) => {
     _lastEventCtx = ctx;
+    _sessionManager = ctx.sessionManager;
     // session_shutdown disposes per-session pi-ask subscriptions. A host that
     // reuses this module instance does NOT re-run the factory, so rebind the
     // bridge here; fresh-module hosts already created theirs in the factory.
