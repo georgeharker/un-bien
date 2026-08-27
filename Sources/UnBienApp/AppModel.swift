@@ -44,6 +44,10 @@ public final class AppModel: ObservableObject {
     /// when a fork speaks the `{rpc|evt}` route; each fold updates the matching
     /// `transcripts[key]` from `reducer.session`.
     private var envelopeReducers: [String: EnvelopeReducer] = [:]
+    /// Last hello `sessionId` seen per key (relayID:peer:room). A change means the
+    /// pi session was replaced (new/fork/reload) within the same room/cwd — used
+    /// to reset stale state so a reused session name doesn't bleed old content.
+    private var sessionIds: [String: String] = [:]
     /// Pending interactive prompt per session (extension_ui_request).
     @Published public var prompts: [String: ExtensionUiRequest] = [:]
     /// Pending queued follow-up messages per session (queued_message_state).
@@ -229,6 +233,17 @@ public final class AppModel: ObservableObject {
                 // suppression turn on before any session content arrives.
                 if env.type == "hello" {
                     capabilities[key] = Set(env.caps ?? [])
+                    // Session replacement detection: the room (cwd) is stable, but a
+                    // new pi sessionId here means a different session reused it. Reset
+                    // so the prior transcript/panels/prompt don't leak in; a fresh
+                    // session_sync + live frames rebuild the new one.
+                    if let sid = env.sessionId, let prev = sessionIds[key], prev != sid {
+                        transcripts[key] = nil
+                        envelopeReducers[key] = nil
+                        panels[key] = nil
+                        prompts[key] = nil
+                    }
+                    if let sid = env.sessionId { sessionIds[key] = sid }
                     if envelopeReducers[key] == nil { envelopeReducers[key] = EnvelopeReducer() }
                     return
                 }
