@@ -73,9 +73,10 @@ import { PlainPeerChannel } from "./transport/peer_channel.js";
 import {
   createExtensionUiBridge,
   type ExtensionUiBridge,
+  type ExtensionUiResponseWire,
 } from "./extension_ui_bridge.js";
 import { createPanelBridge, type PanelBridge } from "./panel_bridge.js";
-import { createRpcEnvelope, type EnvelopeMessage } from "./session/rpc_envelope.js";
+import { createRpcEnvelope, helloEnvelope, type EnvelopeMessage } from "./session/rpc_envelope.js";
 import { dispatchRpcCommand, type RpcCommandHandlers } from "./session/rpc_inbound.js";
 import { roomIdFor } from "./rooms.js";
 import { registerAgentTools } from "./session/tools.js";
@@ -1258,6 +1259,12 @@ function _anyPeerActive(): boolean {
 function _routeRpcCommandFrom(sender: PlainPeerChannel, env: EnvelopeMessage): void {
   const frame = env.rpc;
   if (!frame || typeof frame !== "object") return; // no {evt} inbound today
+  // extension_ui_response is a reply to a fork-issued dialog, not a command —
+  // route it straight to the ui bridge (same target as the stock path).
+  if ((frame as Record<string, unknown>).type === "extension_ui_response") {
+    _extensionUiBridge?.respond(frame as unknown as ExtensionUiResponseWire);
+    return;
+  }
   const handlers: RpcCommandHandlers = {
     prompt: async (message, opts) => {
       const wake = _wakeAgent(message, "app rpc prompt", opts.streamingBehavior === "steer" ? "steer" : undefined);
@@ -1297,6 +1304,18 @@ function _routeRpcCommandFrom(sender: PlainPeerChannel, env: EnvelopeMessage): v
   void dispatchRpcCommand(frame as Record<string, unknown>, handlers)
     .then((resp) => { if (resp) sender.sendEnvelope(resp); })
     .catch((err) => { console.error(`[remote-pi] rpc inbound dispatch failed: ${String(err)}`); });
+}
+
+/** Broadcast for the extension_ui bridge. extension_ui is ENVELOPE-ONLY
+ *  (pi-unbien is not a compatible project): emit the `extension_ui_request` as
+ *  an envelope `{rpc}` frame (the wire shape mirrors the SDK rpc contract 1:1).
+ *  Any non-extension_ui message (none today) would still go stock. */
+function _uiBroadcast(msg: ServerMessage): void {
+  if (msg.type === "extension_ui_request") {
+    _broadcastEnvelope({ rpc: msg });
+    return;
+  }
+  _broadcastToActive(msg);
 }
 
 /** Fan an rpc-envelope frame out to every attached peer (base64 ct via each
@@ -1901,6 +1920,10 @@ function _attachOwner(
   );
 
   _attachPeerChannel(appPeerId, channel);
+  // Envelope-native capability handshake: advertise caps up front so the app can
+  // enable the {rpc|evt} route + suppress stock before any session content
+  // arrives. Additive to the stock session_history caps (parity transition).
+  channel.sendEnvelope(helloEnvelope(_capabilities()));
   _refreshFooter();
 
   _safeNotify(
@@ -2279,7 +2302,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // only the root's ownership claim creates them, children skip.
   if (_claimRootSession(pi)) {
     _extensionUiBridge?.dispose();
-    _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive);
+    _extensionUiBridge = createExtensionUiBridge(pi, _uiBroadcast);
     _panelBridge?.dispose();
     _panelBridge = createPanelBridge(pi, _broadcastToActive);
     _rpcEnvelope?.dispose();
@@ -2571,7 +2594,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // Only the ROOT owner rebinds (re-claims a slot freed by its own shutdown);
     // a subagent child's session_start must not seize it. Covers both bridges.
     if (_claimRootSession(pi)) {
-      if (!_extensionUiBridge) _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive);
+      if (!_extensionUiBridge) _extensionUiBridge = createExtensionUiBridge(pi, _uiBroadcast);
       if (!_panelBridge) _panelBridge = createPanelBridge(pi, _broadcastToActive);
       if (!_rpcEnvelope) _rpcEnvelope = createRpcEnvelope(pi, _broadcastEnvelope);
     }
@@ -4649,10 +4672,7 @@ export function _routeClientMessageFrom(
     }
     return;
   }
-  if (msg.type === "extension_ui_response") {
-    _extensionUiBridge?.respond(msg);
-    return;
-  }
+  // extension_ui_response is envelope-only now — handled in _routeRpcCommandFrom.
   if (!_pi) return;
   switch (msg.type) {
     case "queued_message_set": {

@@ -46,12 +46,27 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 export interface EnvelopeMessage {
   type?: string;
   ts?: number;
+  /** Handshake (`type:"hello"`): advertised capability list. */
+  caps?: string[];
+  /** Handshake: envelope/pi-rpc protocol version for client decode-guarding. */
+  protocolVersion?: number;
   rpc?: unknown;
   evt?: { channel: string; data: unknown };
 }
 
 /** Wrapper-kind marker for the session {rpc|evt} plane. */
 export const ENVELOPE_KIND = "env";
+/** Wrapper-kind marker for the capability/bootstrap handshake. */
+export const HELLO_KIND = "hello";
+
+/**
+ * Build the capability handshake sent to a peer on attach — the envelope-native
+ * replacement for the stock `session_history.capabilities`. The app reads caps
+ * from this and gates its decode/UX on them.
+ */
+export function helloEnvelope(caps: string[], protocolVersion = 1): EnvelopeMessage {
+  return { type: HELLO_KIND, caps, protocolVersion };
+}
 
 type Frame = Record<string, unknown>;
 type Payload = Record<string, unknown>;
