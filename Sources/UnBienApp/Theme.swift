@@ -134,21 +134,23 @@ public extension Color {
 /// `CodeSyntaxHighlighter` (DESIGN §7). Agents emit arbitrary languages, so a
 /// general highlighter is the right fit.
 public struct HighlightrCodeSyntaxHighlighter: CodeSyntaxHighlighter {
-    private let highlightr: Highlightr?
+    private let style: String
+    private let font: PlatformFont?
 
+    // Cheap to construct (swift-markdown-ui rebuilds this per render): the JS
+    // runtime + highlight results live in the shared bounded `HighlightEngine`,
+    // so no Highlightr is spun up here and repeated blocks hit the cache.
     public init(style: String, font: PlatformFont? = nil) {
-        let instance = Highlightr()
-        instance?.setTheme(to: style)
-        if let font { instance?.theme.setCodeFont(font) }
-        self.highlightr = instance
+        self.style = style
+        self.font = font
     }
 
     public func highlightCode(_ code: String, language: String?) -> Text {
-        guard let highlightr,
-              let highlighted = highlightr.highlight(code, as: language, fastRender: true) else {
-            return Text(code)
+        if let attributed = HighlightEngine.shared.highlighted(code, language: language,
+                                                               style: style, font: font) {
+            return Text(attributed)
         }
-        return Text(AttributedString(highlighted))
+        return Text(code)
     }
 }
 
