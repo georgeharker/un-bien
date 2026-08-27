@@ -20,6 +20,7 @@ struct TranscriptView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            statusStrip
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
@@ -126,6 +127,32 @@ struct TranscriptView: View {
         )
     }
 
+
+    @ViewBuilder
+    private var statusStrip: some View {
+        let state = model.transcripts[session.id]
+        let modelName = model.currentModel[session.id]?.name ?? session.model
+        let usage = state?.latestUsage
+        let compacted = state?.lastCompaction != nil
+        if modelName != nil || usage != nil || compacted {
+            HStack(spacing: 12) {
+                if let modelName {
+                    Label(modelName, systemImage: "cpu").lineLimit(1)
+                }
+                if let usage {
+                    Label("\(usage.inputTokens)↑ \(usage.outputTokens)↓", systemImage: "number")
+                }
+                if compacted {
+                    Label("compacted", systemImage: "arrow.triangle.merge")
+                }
+                Spacer(minLength: 0)
+            }
+            .font(.caption2)
+            .foregroundStyle(theme.secondaryText)
+            .padding(.horizontal, 12).padding(.vertical, 5)
+            .background(theme.surface.opacity(0.5))
+        }
+    }
 
     @ViewBuilder
     private var queuedChips: some View {

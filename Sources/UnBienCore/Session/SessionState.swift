@@ -32,6 +32,23 @@ public struct SessionState: Equatable, Sendable {
 
     public init() {}
 
+    /// Usage from the most recent assistant turn that reported it (for a status
+    /// line). `agent_done`/`agent_message` carry per-turn token counts.
+    public var latestUsage: Usage? {
+        for item in items.reversed() {
+            if case let .assistant(bubble) = item, let usage = bubble.usage { return usage }
+        }
+        return nil
+    }
+
+    /// The last context-compaction marker, if the session has compacted.
+    public var lastCompaction: CompactionMarker? {
+        for item in items.reversed() {
+            if case let .compaction(marker) = item { return marker }
+        }
+        return nil
+    }
+
     /// Rebuild from a history replay (replaces current state).
     public mutating func loadHistory(_ events: [SessionHistoryEvent], sessionStartedAt: Int) {
         self = SessionState()
