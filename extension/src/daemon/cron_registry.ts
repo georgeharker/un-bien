@@ -2,11 +2,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { Cron } from "croner";
-import { remotePiHome } from "../paths.js";
+import { unbienStateHome } from "../paths.js";
 
 /**
  * Cron registry: scheduled prompts for daemons, persisted at
- * `~/.pi/remote/cron.json`. Mirrors `registry.ts` (`daemons.json`) — tolerant
+ * `~/.pi/un-bien/cron.json`. Mirrors `registry.ts` (`daemons.json`) — tolerant
  * load (missing/corrupt → empty), atomic-ish full-file save.
  *
  * Each job targets a daemon by its `daemon_id` (the 8-hex id from
@@ -51,7 +51,7 @@ export interface CronRegistry {
 }
 
 function cronPath(): string {
-  return join(remotePiHome(), "cron.json");
+  return join(unbienStateHome(), "cron.json");
 }
 
 /** Test/diag-only: the on-disk path. */
@@ -165,17 +165,24 @@ export interface ScheduleValidation {
  * (decision C — guards against pileup + token burn). Returns `ok:false` with a
  * user-facing message on a bad expression or a too-frequent schedule.
  */
-export function validateSchedule(schedule: string, tz?: string): ScheduleValidation {
+export function validateSchedule(
+  schedule: string,
+  tz?: string,
+): ScheduleValidation {
   let cron: Cron;
   try {
     cron = new Cron(schedule, tz ? { timezone: tz } : {});
   } catch (e) {
-    return { ok: false, error: `invalid cron expression: ${(e as Error).message}` };
+    return {
+      ok: false,
+      error: `invalid cron expression: ${(e as Error).message}`,
+    };
   }
   try {
     const n1 = cron.nextRun();
     const n2 = n1 ? cron.nextRun(n1) : null;
-    if (!n1 || !n2) return { ok: false, error: "schedule has no upcoming runs" };
+    if (!n1 || !n2)
+      return { ok: false, error: "schedule has no upcoming runs" };
     const intervalMs = n2.getTime() - n1.getTime();
     if (intervalMs < MIN_INTERVAL_MS) {
       return {
@@ -228,7 +235,10 @@ function _coerceJob(item: unknown): CronJob | null {
     skip_if_busy: o["skip_if_busy"] !== false,
     wake: o["wake"] === true,
     catchup: o["catchup"] === true,
-    created_at: typeof o["created_at"] === "string" ? o["created_at"] : new Date(0).toISOString(),
+    created_at:
+      typeof o["created_at"] === "string"
+        ? o["created_at"]
+        : new Date(0).toISOString(),
   };
   if (typeof o["tz"] === "string") job.tz = o["tz"];
   if (typeof o["last_run"] === "string") job.last_run = o["last_run"];

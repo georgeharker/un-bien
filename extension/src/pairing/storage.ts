@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile, chmod, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { generateEd25519Keypair, type Ed25519Keypair } from "./crypto.js";
 import { canonicalizeEd25519PublicKey } from "../mesh/encoding.js";
-import { remotePiHome } from "../paths.js";
+import { unbienStateHome } from "../paths.js";
 
 /**
  * Pi-secret storage (plan/27 Wave E1).
@@ -13,19 +13,19 @@ import { remotePiHome } from "../paths.js";
  * Credential Manager on Windows — DPAPI-backed). When the keyring is
  * unavailable (headless Linux without a D-Bus session, Docker containers,
  * VPS without GNOME Keyring/KWallet running) we fall back to a
- * file-backed store at `~/.pi/remote/identity.json` with `0o600`
+ * file-backed store at `~/.pi/un-bien/identity.json` with `0o600`
  * permissions and the parent dir at `0o700`.
  *
  * **Migration**: previous builds used `keytar` against service
- * `dev.remotepi.mac`. This module reads from the old service if the new
- * service is empty, copies the entry to the new service `dev.remotepi.pi`,
+ * `dev.unbien.mac`. This module reads from the old service if the new
+ * service is empty, copies the entry to the new service `dev.unbien.pi`,
  * and deletes the old one. Both keytar and `@napi-rs/keyring` address the
  * same OS-level credential store on every supported platform, so the read
  * succeeds without keeping the deprecated `keytar` dependency.
  */
 
-const NEW_SERVICE = "dev.remotepi.pi";  // platform-neutral
-const OLD_SERVICE = "dev.remotepi.mac"; // legacy keytar service (pre-2026-05-25)
+const NEW_SERVICE = "dev.unbien.pi"; // platform-neutral
+const OLD_SERVICE = "dev.unbien.mac"; // legacy keytar service (pre-2026-05-25)
 const ACCOUNT = "longterm-ed25519";
 
 /**
@@ -48,10 +48,10 @@ export class KeyringUnavailableError extends Error {
   constructor(cause: unknown) {
     super(
       "Platform keyring is unreadable and no file-backed identity exists. " +
-      "Refusing to generate a NEW identity (that would break existing " +
-      "pairing). Unlock your keychain / start your secret service and retry. " +
-      "Set REMOTE_PI_ALLOW_FILE_IDENTITY=1 to force a file-backed identity. " +
-      `Cause: ${String(cause)}`,
+        "Refusing to generate a NEW identity (that would break existing " +
+        "pairing). Unlock your keychain / start your secret service and retry. " +
+        "Set UNBIEN_ALLOW_FILE_IDENTITY=1 to force a file-backed identity. " +
+        `Cause: ${String(cause)}`,
     );
     this.name = "KeyringUnavailableError";
   }
@@ -64,19 +64,19 @@ export class PairedIdentityMissingError extends Error {
   constructor(pairedCount: number, cause: unknown) {
     super(
       `No identity could be read, but ${pairedCount} device(s) are already ` +
-      "paired. Refusing to generate a NEW identity — that would revoke every " +
-      "paired device. This usually means this process cannot reach the same " +
-      "keyring as the session that paired (e.g. a systemd --user daemon vs. " +
-      "your desktop session). Fix the service's keyring access, or pin the " +
-      "identity by copying the paired keypair to ~/.pi/remote/identity.json " +
-      "(0600), which both contexts read first. " +
-      `Cause: ${String(cause)}`,
+        "paired. Refusing to generate a NEW identity — that would revoke every " +
+        "paired device. This usually means this process cannot reach the same " +
+        "keyring as the session that paired (e.g. a systemd --user daemon vs. " +
+        "your desktop session). Fix the service's keyring access, or pin the " +
+        "identity by copying the paired keypair to ~/.pi/un-bien/identity.json " +
+        "(0600), which both contexts read first. " +
+        `Cause: ${String(cause)}`,
     );
     this.name = "PairedIdentityMissingError";
   }
 }
 
-const PI_DIR = remotePiHome();
+const PI_DIR = unbienStateHome();
 const IDENTITY_FILE = join(PI_DIR, "identity.json");
 const PEERS_PATH = join(PI_DIR, "peers.json");
 
@@ -107,7 +107,7 @@ export interface KeyStoreBackend {
  * a headless / tmux / non-interactive context. A hang never settles, so
  * without this guard the promise never rejects and the retry + file-fallback
  * logic in getOrCreateEd25519Keypair() is unreachable — freezing the entire
- * /remote-pi pair bootstrap. Raising a real error here lets that fallback
+ * /unbien pair bootstrap. Raising a real error here lets that fallback
  * chain run as designed.
  */
 const KEYRING_OP_TIMEOUT_MS = 3_000;
@@ -120,7 +120,10 @@ function _withTimeout<T>(
   return Promise.race([
     p,
     new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error(`keyring ${op} timed out after ${ms}ms`)), ms),
+      setTimeout(
+        () => reject(new Error(`keyring ${op} timed out after ${ms}ms`)),
+        ms,
+      ),
     ),
   ]);
 }
@@ -144,7 +147,9 @@ function _withTimeout<T>(
 let _asyncEntryCtor: typeof import("@napi-rs/keyring").AsyncEntry | null = null;
 let _nativeBindingError: unknown = null;
 
-async function _loadAsyncEntry(): Promise<typeof import("@napi-rs/keyring").AsyncEntry> {
+async function _loadAsyncEntry(): Promise<
+  typeof import("@napi-rs/keyring").AsyncEntry
+> {
   if (_asyncEntryCtor) return _asyncEntryCtor;
   if (_nativeBindingError) throw _nativeBindingError;
   try {
@@ -182,7 +187,7 @@ class NapiKeyringBackend implements KeyStoreBackend {
   async read(service: string, account: string): Promise<string | undefined> {
     const AsyncEntry = await _loadAsyncEntry();
     const entry = new AsyncEntry(service, account);
-    return _withTimeout(entry.getPassword(), `read(${service})`);  // undefined on no-entry
+    return _withTimeout(entry.getPassword(), `read(${service})`); // undefined on no-entry
   }
   async write(service: string, account: string, value: string): Promise<void> {
     const AsyncEntry = await _loadAsyncEntry();
@@ -213,7 +218,9 @@ function _getBackend(): KeyStoreBackend {
 }
 
 /** Test-only: swap (or clear with `null`) the keyring backend. */
-export function _setKeyStoreBackendForTest(backend: KeyStoreBackend | null): void {
+export function _setKeyStoreBackendForTest(
+  backend: KeyStoreBackend | null,
+): void {
   _backend = backend;
 }
 
@@ -242,7 +249,10 @@ export function _setKeyringExpectedForTest(value: boolean | null): void {
 
 /** Test-only: shrink retry attempts/delay so the persistent-failure path is
  *  fast. `null`/omitted restores defaults. */
-export function _setKeyringRetryForTest(attempts: number | null, delayMs?: number): void {
+export function _setKeyringRetryForTest(
+  attempts: number | null,
+  delayMs?: number,
+): void {
   _keyringReadAttempts = attempts ?? 3;
   _keyringRetryDelayMs = delayMs ?? 300;
 }
@@ -289,9 +299,17 @@ async function _writeKeypairToFile(kp: Ed25519Keypair): Promise<void> {
   await mkdir(PI_DIR, { recursive: true, mode: 0o700 });
   // Best-effort tighten of the dir in case it pre-existed with looser
   // permissions (mkdir's mode is only applied to NEW dirs).
-  try { await chmod(PI_DIR, 0o700); } catch { /* not fatal */ }
+  try {
+    await chmod(PI_DIR, 0o700);
+  } catch {
+    /* not fatal */
+  }
   await writeFile(IDENTITY_FILE, _serialize(kp), { mode: 0o600 });
-  try { await chmod(IDENTITY_FILE, 0o600); } catch { /* not fatal */ }
+  try {
+    await chmod(IDENTITY_FILE, 0o600);
+  } catch {
+    /* not fatal */
+  }
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────
@@ -299,9 +317,9 @@ async function _writeKeypairToFile(kp: Ed25519Keypair): Promise<void> {
 /**
  * Returns the Pi-secret Ed25519 keypair, generating + persisting one on
  * first call. Resolution order:
- *   1. Existing file `~/.pi/remote/identity.json`, if present — it WINS over
+ *   1. Existing file `~/.pi/un-bien/identity.json`, if present — it WINS over
  *      the keyring. A file identity is only ever written by the headless/
- *      degraded fallback (step 4) or an explicit `REMOTE_PI_ALLOW_FILE_IDENTITY`
+ *      degraded fallback (step 4) or an explicit `UNBIEN_ALLOW_FILE_IDENTITY`
  *      opt-in, so its mere presence means this machine established its identity
  *      as a file and the mobile device paired against THAT pubkey. If the
  *      platform keyring later becomes readable (D-Bus/libsecret installed, a
@@ -309,9 +327,9 @@ async function _writeKeypairToFile(kp: Ed25519Keypair): Promise<void> {
  *      it first would mask the file identity — returning a DIFFERENT key, or
  *      (when the keyring is empty) minting a fresh one and persisting it —
  *      silently breaking the existing pairing. So when both exist, file wins.
- *   2. New keyring service `dev.remotepi.pi` (read retried — a transiently
+ *   2. New keyring service `dev.unbien.pi` (read retried — a transiently
  *      locked Keychain throws; we don't treat that as "no key")
- *   3. Old keyring service `dev.remotepi.mac` (migrate → step 2, delete old)
+ *   3. Old keyring service `dev.unbien.mac` (migrate → step 2, delete old)
  *   4. Generate a fresh keypair, BUT only when it's safe to: either both
  *      keyring reads succeeded and returned nothing (genuine first run), or
  *      the keyring is genuinely unavailable on a platform without a core one
@@ -319,7 +337,7 @@ async function _writeKeypairToFile(kp: Ed25519Keypair): Promise<void> {
  *      persistent read failure with no file identity throws
  *      `KeyringUnavailableError` instead of minting a new key — generating
  *      there silently breaks existing pairing (the "lost pairing after idle"
- *      bug). `REMOTE_PI_ALLOW_FILE_IDENTITY=1` opts back into a file identity
+ *      bug). `UNBIEN_ALLOW_FILE_IDENTITY=1` opts back into a file identity
  *      for headless macOS/Windows hosts.
  *
  * Idempotent: subsequent calls return the same identity. The migration
@@ -329,8 +347,8 @@ export async function getOrCreateEd25519Keypair(): Promise<Ed25519Keypair> {
   const backend = _getBackend();
 
   // ── Path 0: an existing file-backed identity wins ──────────────────────
-  // `~/.pi/remote/identity.json` is only ever written by the headless/degraded
-  // fallback below (or an operator who set REMOTE_PI_ALLOW_FILE_IDENTITY=1) —
+  // `~/.pi/un-bien/identity.json` is only ever written by the headless/degraded
+  // fallback below (or an operator who set UNBIEN_ALLOW_FILE_IDENTITY=1) —
   // never on a keyring-backed install. So its presence means THIS machine
   // paired against the file key, and the keyring (readable or not, matching or
   // not) must not be allowed to mask it. Short-circuit before touching the
@@ -397,7 +415,7 @@ export async function getOrCreateEd25519Keypair(): Promise<Ed25519Keypair> {
   //    a week idle, and the new key then masks the real Keychain identity via
   //    the file. So we FAIL LOUD instead, unless the operator explicitly
   //    opts into a file identity.
-  const forceFile = process.env.REMOTE_PI_ALLOW_FILE_IDENTITY === "1";
+  const forceFile = process.env.UNBIEN_ALLOW_FILE_IDENTITY === "1";
   if (_keyringExpectedAvailable() && !forceFile) {
     throw new KeyringUnavailableError(keyringError);
   }
@@ -424,16 +442,16 @@ export async function getOrCreateEd25519Keypair(): Promise<Ed25519Keypair> {
 
   console.warn(
     _nativeBindingUnavailable()
-      // Issue #113: the @napi-rs/keyring native binding could not be loaded at
-      // all (typically a Bun-compiled pi). Name it explicitly — the error the
-      // loader prints blames npm's optional-dependency bug and sends people off
-      // to delete node_modules, which takes their other pi packages with it.
-      ? "[remote-pi] @napi-rs/keyring native binding could not be loaded in this " +
-        `runtime; using file-backed identity at ${IDENTITY_FILE} (0600) instead. ` +
-        "This is expected on a Bun-built pi. Paired devices keyed to a previous " +
-        `keyring identity must be re-paired. ${String(keyringError)}`
-      : "[remote-pi] keyring unavailable; using file-backed identity at " +
-        `${IDENTITY_FILE}. ${String(keyringError)}`,
+      ? // Issue #113: the @napi-rs/keyring native binding could not be loaded at
+        // all (typically a Bun-compiled pi). Name it explicitly — the error the
+        // loader prints blames npm's optional-dependency bug and sends people off
+        // to delete node_modules, which takes their other pi packages with it.
+        "[un-bien] @napi-rs/keyring native binding could not be loaded in this " +
+          `runtime; using file-backed identity at ${IDENTITY_FILE} (0600) instead. ` +
+          "This is expected on a Bun-built pi. Paired devices keyed to a previous " +
+          `keyring identity must be re-paired. ${String(keyringError)}`
+      : "[un-bien] keyring unavailable; using file-backed identity at " +
+          `${IDENTITY_FILE}. ${String(keyringError)}`,
   );
   const fresh = generateEd25519Keypair();
   await _writeKeypairToFile(fresh);
@@ -445,14 +463,14 @@ export async function getOrCreateEd25519Keypair(): Promise<Ed25519Keypair> {
 export interface PeerRecord {
   name: string;
   remote_epk: string; // raw standard/base64url 32B Ed25519 Owner handle; preserved exactly
-  paired_at: string;  // ISO-8601
+  paired_at: string; // ISO-8601
 }
 
 export async function listPeers(): Promise<PeerRecord[]> {
   try {
     const raw = await readFile(PEERS_PATH, "utf8");
     const parsed = JSON.parse(raw) as { peers?: unknown };
-    return Array.isArray(parsed.peers) ? parsed.peers as PeerRecord[] : [];
+    return Array.isArray(parsed.peers) ? (parsed.peers as PeerRecord[]) : [];
   } catch {
     return [];
   }
@@ -520,31 +538,39 @@ function _ownerSlotKey(rawOwnerPubkey: unknown): string {
 function _tokenForSlot(slot: string): OwnerStorageToken {
   const existing = _ownerSlotTokens.get(slot);
   if (existing) return existing;
-  const token = Object.freeze({ [_ownerStorageTokenBrand]: true }) as OwnerStorageToken;
+  const token = Object.freeze({
+    [_ownerStorageTokenBrand]: true,
+  }) as OwnerStorageToken;
   _ownerSlotTokens.set(slot, token);
   return token;
 }
 
 function _invalidateOwnerSlot(rawOwnerPubkey: unknown): OwnerStorageToken {
   const slot = _ownerSlotKey(rawOwnerPubkey);
-  const token = Object.freeze({ [_ownerStorageTokenBrand]: true }) as OwnerStorageToken;
+  const token = Object.freeze({
+    [_ownerStorageTokenBrand]: true,
+  }) as OwnerStorageToken;
   _ownerSlotTokens.set(slot, token);
   return token;
 }
 
 function _serializePeerMutation<T>(mutation: () => Promise<T>): Promise<T> {
   const result = _peerMutationQueue.then(mutation, mutation);
-  _peerMutationQueue = result.then(() => undefined, () => undefined);
+  _peerMutationQueue = result.then(
+    () => undefined,
+    () => undefined,
+  );
   return result;
 }
 
 export function addPeer(record: PeerRecord): Promise<void> {
   return _serializePeerMutation(async () => {
-    const peers = await listPeers() as unknown[];
-    const idx = peers.findIndex((peer) =>
-      !!peer &&
-      typeof peer === "object" &&
-      (peer as { remote_epk?: unknown }).remote_epk === record.remote_epk,
+    const peers = (await listPeers()) as unknown[];
+    const idx = peers.findIndex(
+      (peer) =>
+        !!peer &&
+        typeof peer === "object" &&
+        (peer as { remote_epk?: unknown }).remote_epk === record.remote_epk,
     );
     if (idx >= 0) {
       peers[idx] = record; // idempotent re-pair
@@ -568,7 +594,7 @@ export function addPeer(record: PeerRecord): Promise<void> {
  * know which Owners' mesh blobs to fetch.
  */
 export async function listOwnerPubkeys(): Promise<unknown[]> {
-  const peers = await listPeers() as unknown[];
+  const peers = (await listPeers()) as unknown[];
   const seen = new Set<unknown>();
   for (const peer of peers) {
     if (!peer || typeof peer !== "object") {
@@ -584,7 +610,9 @@ export async function listOwnerPubkeys(): Promise<unknown[]> {
  * Atomically snapshots raw Owner handles and their canonical-slot provenance.
  * The token is deliberately process-local and opaque to callers.
  */
-export function snapshotOwnerPubkeys(): Promise<readonly OwnerStorageSnapshotRecord[]> {
+export function snapshotOwnerPubkeys(): Promise<
+  readonly OwnerStorageSnapshotRecord[]
+> {
   return _serializePeerMutation(async () => {
     const peers = await _readPeerContainerStrict();
     const rawOwners = new Set<unknown>();
@@ -618,10 +646,11 @@ export function conditionalRemovePeer(
     // spelling. A stale slot must therefore win over an absent old spelling.
     if (_tokenForSlot(slot) !== expectedToken) return { outcome: "stale" };
     const peers = await _readPeerContainerStrict();
-    const filtered = peers.filter((peer) =>
-      !peer ||
-      typeof peer !== "object" ||
-      (peer as { remote_epk?: unknown }).remote_epk !== remoteEpk,
+    const filtered = peers.filter(
+      (peer) =>
+        !peer ||
+        typeof peer !== "object" ||
+        (peer as { remote_epk?: unknown }).remote_epk !== remoteEpk,
     );
     if (filtered.length === peers.length) return { outcome: "not_found" };
     await mkdir(dirname(PEERS_PATH), { recursive: true });
@@ -630,7 +659,11 @@ export function conditionalRemovePeer(
     if (_tokenForSlot(slot) !== expectedToken) return { outcome: "stale" };
     if (canCommit) {
       let authorized = false;
-      try { authorized = canCommit(); } catch { return { outcome: "no_authority" }; }
+      try {
+        authorized = canCommit();
+      } catch {
+        return { outcome: "no_authority" };
+      }
       if (!authorized) return { outcome: "no_authority" };
     }
     writeFileSync(PEERS_PATH, JSON.stringify({ peers: filtered }, null, 2));
@@ -643,11 +676,12 @@ export function removePeer(
   canCommit?: () => boolean,
 ): Promise<boolean> {
   return _serializePeerMutation(async () => {
-    const peers = await listPeers() as unknown[];
-    const filtered = peers.filter((peer) =>
-      !peer ||
-      typeof peer !== "object" ||
-      (peer as { remote_epk?: unknown }).remote_epk !== remoteEpk,
+    const peers = (await listPeers()) as unknown[];
+    const filtered = peers.filter(
+      (peer) =>
+        !peer ||
+        typeof peer !== "object" ||
+        (peer as { remote_epk?: unknown }).remote_epk !== remoteEpk,
     );
     if (filtered.length === peers.length) return false;
     await mkdir(dirname(PEERS_PATH), { recursive: true });
@@ -658,7 +692,11 @@ export function removePeer(
       // check at the JavaScript level: fail closed on false/throw, then perform
       // the tiny JSON rewrite synchronously with no interruptible await between.
       let authorized = false;
-      try { authorized = canCommit(); } catch { return false; }
+      try {
+        authorized = canCommit();
+      } catch {
+        return false;
+      }
       if (!authorized) return false;
       writeFileSync(PEERS_PATH, serialized);
     } else {
@@ -677,5 +715,9 @@ export function removePeer(
 export const _IDENTITY_FILE_FOR_TEST = IDENTITY_FILE;
 /** Test-only: expose unlink for cleanup. */
 export const _unlinkIdentityFileForTest = async (): Promise<void> => {
-  try { await unlink(IDENTITY_FILE); } catch { /* fine if missing */ }
+  try {
+    await unlink(IDENTITY_FILE);
+  } catch {
+    /* fine if missing */
+  }
 };

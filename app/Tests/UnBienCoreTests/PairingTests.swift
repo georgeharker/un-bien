@@ -19,7 +19,7 @@ private actor ScriptedChannel: WebSocketChannel {
 final class PairingTests: XCTestCase {
     func testParseFullQRURI() throws {
         let invite = try PairingURI.parse(
-            "remotepi://pair?t=TOKEN123"
+            "unbien://pair?t=TOKEN123"
             + "&epk=0Umma2Xg5AyTvU4DMFXcPoA7xMbLnfGVeImWp2QVFvY"
             + "&n=remote_pi%20%C2%B7%20main&rm=aB12CD34eF56")
         XCTAssertEqual(invite.token, "TOKEN123")
@@ -31,7 +31,7 @@ final class PairingTests: XCTestCase {
     }
 
     func testRoomDefaultsToMainWhenAbsent() throws {
-        let invite = try PairingURI.parse("remotepi://pair?t=T&epk=E&n=x")
+        let invite = try PairingURI.parse("unbien://pair?t=T&epk=E&n=x")
         XCTAssertEqual(invite.roomID, "main")
     }
 
@@ -42,10 +42,10 @@ final class PairingTests: XCTestCase {
     }
 
     func testMissingTokenAndEPK() {
-        XCTAssertThrowsError(try PairingURI.parse("remotepi://pair?epk=E")) { error in
+        XCTAssertThrowsError(try PairingURI.parse("unbien://pair?epk=E")) { error in
             XCTAssertEqual(error as? PairingURIError, .missingToken)
         }
-        XCTAssertThrowsError(try PairingURI.parse("remotepi://pair?t=T")) { error in
+        XCTAssertThrowsError(try PairingURI.parse("unbien://pair?t=T")) { error in
             XCTAssertEqual(error as? PairingURIError, .missingEPK)
         }
     }

@@ -2,44 +2,44 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { loadConfig } from "../config.js";
 
-const LOCAL_DIR = ".pi/remote-pi";
+const LOCAL_DIR = ".pi/un-bien";
 const LOCAL_FILE = "config.json";
 
 /**
  * Escape hatch: when set, carries the WHOLE local config as inline JSON,
  * bypassing the on-disk `config.json`. For CI/ops/daemons that inject config
- * via env instead of writing a file — mirrors `REMOTE_PI_RELAY` for the relay
+ * via env instead of writing a file — mirrors `UNBIEN_RELAY` for the relay
  * URL. Takes precedence over the file; an unset/empty/unparseable value falls
  * back to the file (never fatal).
  */
-const DIRECT_CONFIG_ENV = "REMOTE_PI_DIRECT_CONFIG";
+const DIRECT_CONFIG_ENV = "UNBIEN_DIRECT_CONFIG";
 
 export interface LocalConfig {
-  agent_name?: string;
-  /**
-   * If true (default), `/remote-pi` with no args auto-joins the local UDS
-   * mesh and starts the relay on a fresh terminal. The field name is
-   * historical (plano 21); the UX wording was reworked to "use the relay
-   * on this terminal to connect to the remote mesh (mobile + PCs)". Legacy
-   * configs without this field are treated as `true` for backward compat.
-   */
-  auto_start_relay?: boolean;
-  /**
-   * un-bien remote launch: when true, this machine HONORS `session_launch`
-   * requests from a paired owner (spawn a new pi session). Default FALSE —
-   * remote process spawn is authority-sensitive, so it's strictly opt-in.
-   * Advertised as the `remote_launch` capability only when enabled.
-   */
-  allow_remote_launch?: boolean;
-  // `workspace?`/`worktree?` were removed (plan/38, reescrito 2026-06-08): the
-  // mesh identity is `(cwd, nome)`, with `cwd` subsuming folder + worktree
-  // disambiguation. Neither axis is derived anymore, so the config fields are
-  // gone. Any stale `workspace`/`worktree` key in an on-disk/inline config is
-  // simply ignored on read (parseLocalConfig surfaces only known fields).
+ agent_name?: string;
+ /**
+  * If true (default), `/unbien` with no args auto-joins the local UDS
+  * mesh and starts the relay on a fresh terminal. The field name is
+  * historical (plano 21); the UX wording was reworked to "use the relay
+  * on this terminal to connect to the remote mesh (mobile + PCs)". Legacy
+  * configs without this field are treated as `true` for backward compat.
+  */
+ auto_start_relay?: boolean;
+ /**
+  * un-bien remote launch: when true, this machine HONORS `session_launch`
+  * requests from a paired owner (spawn a new pi session). Default FALSE —
+  * remote process spawn is authority-sensitive, so it's strictly opt-in.
+  * Advertised as the `remote_launch` capability only when enabled.
+  */
+ allow_remote_launch?: boolean;
+ // `workspace?`/`worktree?` were removed (plan/38, reescrito 2026-06-08): the
+ // mesh identity is `(cwd, nome)`, with `cwd` subsuming folder + worktree
+ // disambiguation. Neither axis is derived anymore, so the config fields are
+ // gone. Any stale `workspace`/`worktree` key in an on-disk/inline config is
+ // simply ignored on read (parseLocalConfig surfaces only known fields).
 }
 
 function pathFor(cwd: string): string {
-  return join(cwd, LOCAL_DIR, LOCAL_FILE);
+ return join(cwd, LOCAL_DIR, LOCAL_FILE);
 }
 
 /**
@@ -53,11 +53,16 @@ function pathFor(cwd: string): string {
  * compose (plan/38).
  */
 export function sanitizeSegment(v: unknown): string | undefined {
-  if (typeof v !== "string") return undefined;
-  const token = v.trim().replace(/[/:@#\s]+/g, "-").replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "");
-  if (!token) return undefined;
-  if (token.toLowerCase() === "broadcast" || token.toLowerCase() === "broker") return undefined;
-  return token;
+ if (typeof v !== "string") return undefined;
+ const token = v
+  .trim()
+  .replace(/[/:@#\s]+/g, "-")
+  .replace(/-{2,}/g, "-")
+  .replace(/^-+|-+$/g, "");
+ if (!token) return undefined;
+ if (token.toLowerCase() === "broadcast" || token.toLowerCase() === "broker")
+  return undefined;
+ return token;
 }
 
 /**
@@ -75,11 +80,11 @@ export function sanitizeSegment(v: unknown): string | undefined {
  * caller falls back to `defaultAgentName(cwd)`).
  */
 export function migrateAgentName(raw: string): string | undefined {
-  // Legacy `parent/folder` (or any path-ish value) → keep the trailing segment.
-  const leaf = raw.includes("/") ? raw.slice(raw.lastIndexOf("/") + 1) : raw;
-  // Drop a runtime collision suffix a pre-fix build may have frozen into config.
-  const clean = leaf.replace(/#\d+$/, "").trim();
-  return clean.length > 0 ? clean : undefined;
+ // Legacy `parent/folder` (or any path-ish value) → keep the trailing segment.
+ const leaf = raw.includes("/") ? raw.slice(raw.lastIndexOf("/") + 1) : raw;
+ // Drop a runtime collision suffix a pre-fix build may have frozen into config.
+ const clean = leaf.replace(/#\d+$/, "").trim();
+ return clean.length > 0 ? clean : undefined;
 }
 
 /**
@@ -89,103 +94,110 @@ export function migrateAgentName(raw: string): string | undefined {
  * always a single fixed session, so the field has no meaning.
  */
 function parseLocalConfig(raw: string): LocalConfig | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw) as unknown;
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-  const src = parsed as Record<string, unknown>;
-  const cfg: LocalConfig = {};
-  if (typeof src["agent_name"] === "string") {
-    // Migrate on read (plan/38 decision E): strip a frozen `#N` and the legacy
-    // `parent/folder` shape so neither fossilizes as an explicit name.
-    const migrated = migrateAgentName(src["agent_name"]);
-    if (migrated) cfg.agent_name = migrated;
-  }
-  if (typeof src["auto_start_relay"] === "boolean") cfg.auto_start_relay = src["auto_start_relay"];
-  if (typeof src["allow_remote_launch"] === "boolean") cfg.allow_remote_launch = src["allow_remote_launch"];
-  return cfg;
+ let parsed: unknown;
+ try {
+  parsed = JSON.parse(raw) as unknown;
+ } catch {
+  return null;
+ }
+ if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+  return null;
+ const src = parsed as Record<string, unknown>;
+ const cfg: LocalConfig = {};
+ if (typeof src["agent_name"] === "string") {
+  // Migrate on read (plan/38 decision E): strip a frozen `#N` and the legacy
+  // `parent/folder` shape so neither fossilizes as an explicit name.
+  const migrated = migrateAgentName(src["agent_name"]);
+  if (migrated) cfg.agent_name = migrated;
+ }
+ if (typeof src["auto_start_relay"] === "boolean")
+  cfg.auto_start_relay = src["auto_start_relay"];
+ if (typeof src["allow_remote_launch"] === "boolean")
+  cfg.allow_remote_launch = src["allow_remote_launch"];
+ return cfg;
 }
 
-/** Inline config from `REMOTE_PI_DIRECT_CONFIG`, when set + parseable; else null. */
+/** Inline config from `UNBIEN_DIRECT_CONFIG`, when set + parseable; else null. */
 function directConfig(): LocalConfig | null {
-  const raw = process.env[DIRECT_CONFIG_ENV];
-  if (!raw || raw.trim().length === 0) return null;
-  return parseLocalConfig(raw);
+ const raw = process.env[DIRECT_CONFIG_ENV];
+ if (!raw || raw.trim().length === 0) return null;
+ return parseLocalConfig(raw);
 }
 
 /**
  * Machine-wide fallback for local-config fields, from the `defaults` block of
- * the global `~/.pi/remote/config.json` (see `RemotePiConfig.defaults`). Lets
+ * the global `~/.pi/un-bien/config.json` (see `UnBienConfig.defaults`). Lets
  * you pin a default once instead of dropping a `config.json` into every repo.
  * Returns an empty object when no `defaults` block is present, so the whole
  * feature is inert (and every path below identical to before) unless opted in.
  */
 function globalLocalDefaults(): LocalConfig {
-  const d = loadConfig().defaults;
-  const cfg: LocalConfig = {};
-  if (d && typeof d.auto_start_relay === "boolean") cfg.auto_start_relay = d.auto_start_relay;
-  return cfg;
+ const d = loadConfig().defaults;
+ const cfg: LocalConfig = {};
+ if (d && typeof d.auto_start_relay === "boolean")
+  cfg.auto_start_relay = d.auto_start_relay;
+ return cfg;
 }
 
 /**
  * True when a local config is available for this cwd — inline via
- * `REMOTE_PI_DIRECT_CONFIG`, as `<cwd>/.pi/remote-pi/config.json` on disk, or a
+ * `UNBIEN_DIRECT_CONFIG`, as `<cwd>/.pi/un-bien/config.json` on disk, or a
  * machine-wide `defaults` block in the global config. A global default counts
  * as "configured" so setting it suppresses the first-run wizard and lets
  * session_start auto-init everywhere (the intent of "I've set the default").
  */
 export function localConfigExists(cwd: string): boolean {
-  return (
-    directConfig() !== null ||
-    existsSync(pathFor(cwd)) ||
-    Object.keys(globalLocalDefaults()).length > 0
-  );
+ return (
+  directConfig() !== null ||
+  existsSync(pathFor(cwd)) ||
+  Object.keys(globalLocalDefaults()).length > 0
+ );
 }
 
 export function loadLocalConfig(cwd: string): LocalConfig {
-  // Layering (later wins): global `defaults` < per-cwd file / inline env. The
-  // inline `REMOTE_PI_DIRECT_CONFIG` still takes precedence over the on-disk
-  // file; an unset/empty/malformed env falls through to it. Any field left
-  // unset by the winning source inherits the global default.
-  const defaults = globalLocalDefaults();
-  const direct = directConfig();
-  if (direct) return { ...defaults, ...direct };
+ // Layering (later wins): global `defaults` < per-cwd file / inline env. The
+ // inline `UNBIEN_DIRECT_CONFIG` still takes precedence over the on-disk
+ // file; an unset/empty/malformed env falls through to it. Any field left
+ // unset by the winning source inherits the global default.
+ const defaults = globalLocalDefaults();
+ const direct = directConfig();
+ if (direct) return { ...defaults, ...direct };
 
-  const p = pathFor(cwd);
-  if (!existsSync(p)) return { ...defaults };
-  try {
-    return { ...defaults, ...(parseLocalConfig(readFileSync(p, "utf8")) ?? {}) };
-  } catch {
-    return { ...defaults };
-  }
+ const p = pathFor(cwd);
+ if (!existsSync(p)) return { ...defaults };
+ try {
+  return { ...defaults, ...(parseLocalConfig(readFileSync(p, "utf8")) ?? {}) };
+ } catch {
+  return { ...defaults };
+ }
 }
 
-export function saveLocalConfig(cwd: string, patch: Partial<LocalConfig>): void {
-  const p = pathFor(cwd);
-  const current = loadLocalConfig(cwd);
-  const next: LocalConfig = { ...current, ...patch };
-  // Always persist auto_start_relay explicitly (default true) so future reads
-  // never need to guess. Backward-compat: legacy files without the field
-  // are treated as true on read; we lock that intent in on first save.
-  if (typeof next.auto_start_relay !== "boolean") next.auto_start_relay = true;
-  // Best-effort persistence: a read-only config.json is a legitimate deployment
-  // (NixOS/Home Manager symlink into the immutable Nix store, read-only root,
-  // EPERM). The name/config sync is cosmetic — it must NEVER crash the pi
-  // process with an uncaughtException. `saveLocalConfig` is reached via
-  // fire-and-forget async paths (`void _syncNameFromPi()` from `turn_start` /
-  // `session_start`), so a sync throw from `mkdirSync`/`writeFileSync` sails
-  // past the runner's per-handler try/catch and takes down pi. Guard both fs
-  // calls together so a partial attempt can't throw past the caller.
-  try {
-    mkdirSync(dirname(p), { recursive: true });
-    writeFileSync(p, JSON.stringify(next, null, 2));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`[remote-pi] could not persist local config ${p}: ${message}`);
-  }
+export function saveLocalConfig(
+ cwd: string,
+ patch: Partial<LocalConfig>,
+): void {
+ const p = pathFor(cwd);
+ const current = loadLocalConfig(cwd);
+ const next: LocalConfig = { ...current, ...patch };
+ // Always persist auto_start_relay explicitly (default true) so future reads
+ // never need to guess. Backward-compat: legacy files without the field
+ // are treated as true on read; we lock that intent in on first save.
+ if (typeof next.auto_start_relay !== "boolean") next.auto_start_relay = true;
+ // Best-effort persistence: a read-only config.json is a legitimate deployment
+ // (NixOS/Home Manager symlink into the immutable Nix store, read-only root,
+ // EPERM). The name/config sync is cosmetic — it must NEVER crash the pi
+ // process with an uncaughtException. `saveLocalConfig` is reached via
+ // fire-and-forget async paths (`void _syncNameFromPi()` from `turn_start` /
+ // `session_start`), so a sync throw from `mkdirSync`/`writeFileSync` sails
+ // past the runner's per-handler try/catch and takes down pi. Guard both fs
+ // calls together so a partial attempt can't throw past the caller.
+ try {
+  mkdirSync(dirname(p), { recursive: true });
+  writeFileSync(p, JSON.stringify(next, null, 2));
+ } catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.warn(`[un-bien] could not persist local config ${p}: ${message}`);
+ }
 }
 
 /**
@@ -197,15 +209,15 @@ export function saveLocalConfig(cwd: string, patch: Partial<LocalConfig>): void 
  * path with no usable basename (root / empty).
  */
 export function defaultAgentName(cwd: string): string {
-  return basename(cwd) || "agent";
+ return basename(cwd) || "agent";
 }
 
 /** Resolves auto_start_relay with backward-compat (undefined → true). */
 export function effectiveAutoStartRelay(cfg: LocalConfig): boolean {
-  return cfg.auto_start_relay !== false;
+ return cfg.auto_start_relay !== false;
 }
 
 /** Remote launch is OFF unless explicitly enabled (authority-sensitive). */
 export function effectiveAllowRemoteLaunch(cfg: LocalConfig): boolean {
-  return cfg.allow_remote_launch === true;
+ return cfg.allow_remote_launch === true;
 }

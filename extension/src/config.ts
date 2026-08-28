@@ -1,14 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { remotePiConfigHome } from "./paths.js";
+import { unbienConfigHome } from "./paths.js";
 
-// Resolved at call time via `remotePiConfigHome()` — config.json follows the
-// coding-agent dir (`PI_CODING_AGENT_DIR`), falling back to the state root
-// (`remotePiHome()`, still settable via REMOTE_PI_DIR / REMOTE_PI_HOME). See
-// paths.ts. Previously hardcoded to `os.homedir()`, which ignored every
-// relocation knob and split config.json off from the rest of the install.
-const configDir = (): string => remotePiConfigHome();
-const configFile = (): string => path.join(remotePiConfigHome(), "config.json");
+// Resolved at call time via `unbienConfigHome()` — the global config is a pi
+// extension config at `<PI_CODING_AGENT_DIR|~/.pi>/extensions/un-bien.json`.
+// See paths.ts.
+const configDir = (): string => unbienConfigHome();
+const configFile = (): string => path.join(unbienConfigHome(), "un-bien.json");
 
 /**
  * Default community relay. Stored in canonical http(s):// form — conversion
@@ -19,45 +17,56 @@ const configFile = (): string => path.join(remotePiConfigHome(), "config.json");
  */
 export const kDefaultRelayUrl = "https://relay-rp1.jacobmoura.work";
 
-export type RemotePiConfig = {
-  relay?: string;
-  /**
-   * Machine-wide fallback defaults for a session's LOCAL config (the per-cwd
-   * `.pi/remote-pi/config.json`). A field here applies to every cwd that does
-   * not set it via the inline `REMOTE_PI_DIRECT_CONFIG` env or its own file, so
-   * you can pin `auto_start_relay` once — beside `relay` — instead of dropping a
-   * file into every repo. See `session/local_config.ts`. Absent by default, so
-   * omitting it preserves the historical per-cwd-only behaviour exactly.
-   */
-  defaults?: { auto_start_relay?: boolean };
+export type UnBienConfig = {
+ relay?: string;
+ /**
+  * Debug prefs. Fields here gate the file-based diagnostic logs (see
+  * `session/debug_log.ts` and `panel_bridge.ts`). Read from config — NOT env —
+  * because the fork usually runs detached and doesn't inherit a shell's env, so
+  * a persisted config field is the only reliable enable switch. Absent/false by
+  * default: no logging.
+  */
+ debug?: { envelope?: boolean; panels?: boolean };
+ /**
+  * Machine-wide fallback defaults for a session's LOCAL config (the per-cwd
+  * `.pi/un-bien/config.json`). A field here applies to every cwd that does
+  * not set it via the inline `UNBIEN_DIRECT_CONFIG` env or its own file, so
+  * you can pin `auto_start_relay` once — beside `relay` — instead of dropping a
+  * file into every repo. See `session/local_config.ts`. Absent by default, so
+  * omitting it preserves the historical per-cwd-only behaviour exactly.
+  */
+ defaults?: { auto_start_relay?: boolean };
 };
 
-export function loadConfig(): RemotePiConfig {
-  try {
-    const raw = fs.readFileSync(configFile(), "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object") return {};
-    return parsed as RemotePiConfig;
-  } catch {
-    return {};
-  }
+export function loadConfig(): UnBienConfig {
+ try {
+  const raw = fs.readFileSync(configFile(), "utf8");
+  const parsed = JSON.parse(raw) as unknown;
+  if (!parsed || typeof parsed !== "object") return {};
+  return parsed as UnBienConfig;
+ } catch {
+  return {};
+ }
 }
 
-export function saveConfig(patch: Partial<RemotePiConfig>): void {
-  fs.mkdirSync(configDir(), { recursive: true });
-  const current = loadConfig();
-  const next = { ...current, ...patch };
-  fs.writeFileSync(configFile(), JSON.stringify(next, null, 2));
+export function saveConfig(patch: Partial<UnBienConfig>): void {
+ fs.mkdirSync(configDir(), { recursive: true });
+ const current = loadConfig();
+ const next = { ...current, ...patch };
+ fs.writeFileSync(configFile(), JSON.stringify(next, null, 2));
 }
 
-export type RelayResolution = { url: string; source: "env" | "config" | "default" };
+export type RelayResolution = {
+ url: string;
+ source: "env" | "config" | "default";
+};
 
 /**
  * Resolves the effective relay URL in **canonical http(s):// form**.
  *
  * Precedence:
- *   1. `REMOTE_PI_RELAY` env var (ops/CI escape hatch)
- *   2. `~/.pi/remote/config.json` `relay` field (set via /remote-pi set-relay)
+ *   1. `UNBIEN_RELAY` env var (ops/CI escape hatch)
+ *   2. `~/.pi/un-bien/config.json` `relay` field (set via /unbien set-relay)
  *   3. `kDefaultRelayUrl` (community default)
  *
  * Any ws(s):// values found (legacy configs or env overrides) are coerced
@@ -65,16 +74,17 @@ export type RelayResolution = { url: string; source: "env" | "config" | "default
  * http(s)://, and the transport layer converts to ws(s):// at WS-open time.
  */
 export function resolveRelayUrl(): RelayResolution {
-  const env = process.env["REMOTE_PI_RELAY"];
-  if (env && env.length > 0) return { url: toHttpUrl(env), source: "env" };
-  const cfg = loadConfig();
-  if (cfg.relay && cfg.relay.length > 0) return { url: toHttpUrl(cfg.relay), source: "config" };
-  return { url: toHttpUrl(kDefaultRelayUrl), source: "default" };
+ const env = process.env["UNBIEN_RELAY"];
+ if (env && env.length > 0) return { url: toHttpUrl(env), source: "env" };
+ const cfg = loadConfig();
+ if (cfg.relay && cfg.relay.length > 0)
+  return { url: toHttpUrl(cfg.relay), source: "config" };
+ return { url: toHttpUrl(kDefaultRelayUrl), source: "default" };
 }
 
 /**
- * Strict validator for **user-provided** relay URLs (via `/remote-pi
- * set-relay` or `/remote-pi relay url`).
+ * Strict validator for **user-provided** relay URLs (via `/unbien
+ * set-relay` or `/unbien relay url`).
  *
  * Only accepts `http://` and `https://`. `ws://`/`wss://` are deliberately
  * **rejected** — the canonical form stored in config is http(s):// and the
@@ -82,10 +92,16 @@ export function resolveRelayUrl(): RelayResolution {
  * Forcing a single scheme at the user boundary avoids two-form drift.
  */
 export function isValidRelayUrl(url: string): boolean {
-  if (!url) return false;
-  const lower = url.toLowerCase();
-  if (!lower.startsWith("http://") && !lower.startsWith("https://")) return false;
-  try { new URL(url); return true; } catch { return false; }
+ if (!url) return false;
+ const lower = url.toLowerCase();
+ if (!lower.startsWith("http://") && !lower.startsWith("https://"))
+  return false;
+ try {
+  new URL(url);
+  return true;
+ } catch {
+  return false;
+ }
 }
 
 /**
@@ -93,8 +109,8 @@ export function isValidRelayUrl(url: string): boolean {
  * targeted error message when the user pastes a WebSocket URL by mistake.
  */
 export function isWebSocketScheme(url: string): boolean {
-  const lower = url.toLowerCase();
-  return lower.startsWith("ws://") || lower.startsWith("wss://");
+ const lower = url.toLowerCase();
+ return lower.startsWith("ws://") || lower.startsWith("wss://");
 }
 
 /**
@@ -108,10 +124,11 @@ export function isWebSocketScheme(url: string): boolean {
  *                   configs may still carry ws(s)://)
  */
 export function toWebSocketUrl(url: string): string {
-  const lower = url.toLowerCase();
-  if (lower.startsWith("https://")) return "wss://" + url.slice("https://".length);
-  if (lower.startsWith("http://"))  return "ws://"  + url.slice("http://".length);
-  return url;
+ const lower = url.toLowerCase();
+ if (lower.startsWith("https://"))
+  return "wss://" + url.slice("https://".length);
+ if (lower.startsWith("http://")) return "ws://" + url.slice("http://".length);
+ return url;
 }
 
 /**
@@ -120,8 +137,8 @@ export function toWebSocketUrl(url: string): string {
  * the rest of the codebase.
  */
 export function toHttpUrl(url: string): string {
-  const lower = url.toLowerCase();
-  if (lower.startsWith("wss://")) return "https://" + url.slice("wss://".length);
-  if (lower.startsWith("ws://"))  return "http://"  + url.slice("ws://".length);
-  return url;
+ const lower = url.toLowerCase();
+ if (lower.startsWith("wss://")) return "https://" + url.slice("wss://".length);
+ if (lower.startsWith("ws://")) return "http://" + url.slice("ws://".length);
+ return url;
 }

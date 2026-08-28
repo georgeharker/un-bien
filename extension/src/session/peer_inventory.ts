@@ -1,5 +1,5 @@
 /**
- * Plan/25 Wave D — pure formatter for the `/remote-pi peers` output.
+ * Plan/25 Wave D — pure formatter for the `/unbien peers` output.
  *
  * Lives in its own module so it can be unit-tested without booting the full
  * extension (no keychain access, no relay client, no mocks needed). The
@@ -11,7 +11,10 @@
  * cross-PC peers with a `<pc_label>:<peer>` prefix (`casa:sess-3`).
  */
 
-export function formatPeerInventory(peers: string[], selfName?: string): string {
+export function formatPeerInventory(
+  peers: string[],
+  selfName?: string,
+): string {
   const locals: string[] = [];
   const remotes = new Map<string, string[]>();
   for (const p of peers) {

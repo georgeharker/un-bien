@@ -1,7 +1,7 @@
 import Foundation
 
 /// A parsed pairing invite from a QR scan or a pasted string
-/// (`remotepi://pair?t=<token>&epk=<pubkey>&n=<name>&rm=<room>`, DESIGN §5).
+/// (`unbien://pair?t=<token>&epk=<pubkey>&n=<name>&rm=<room>`, DESIGN §5).
 ///
 /// The `token` and `epk` are treated as **opaque strings** — the app never
 /// decodes the token, and echoes it verbatim in `pair_request` (§10.4). `epk`
@@ -37,12 +37,12 @@ public enum PairingURIError: Error, Equatable {
 }
 
 public enum PairingURI {
-    /// Parse a `remotepi://pair?...` string (from QR or paste). Tolerates
+    /// Parse a `unbien://pair?...` string (from QR or paste). Tolerates
     /// surrounding whitespace. `rm` defaults to `"main"` when omitted.
     public static func parse(_ raw: String) throws -> PairingInvite {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let components = URLComponents(string: trimmed),
-              components.scheme == "remotepi",
+              components.scheme == "unbien",
               components.host == "pair" else {
             throw PairingURIError.notAPairingURI
         }

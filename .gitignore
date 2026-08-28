@@ -1,5 +1,7 @@
 .build/
 .swiftpm/
+# pi runtime state (cwd-relative .pi/ written by the extension + tests)
+.pi/
 DerivedData/
 .DS_Store
 .pi-lens/

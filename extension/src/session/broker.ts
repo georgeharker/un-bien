@@ -1,7 +1,13 @@
 import type { Server, Socket } from "node:net";
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname, posix, win32 } from "node:path";
-import { type Envelope, parse, serialize, uuidv7, EnvelopeError } from "./envelope.js";
+import {
+  type Envelope,
+  parse,
+  serialize,
+  uuidv7,
+  EnvelopeError,
+} from "./envelope.js";
 import { sanitizeSegment } from "./local_config.js";
 import {
   isBoundedPeerInfo,
@@ -39,7 +45,11 @@ export interface PeerInfo {
  * before composing, so an already-appended `#N` collision suffix survives.
  * Everyone else ECHOES `peer.address` verbatim; only the broker composes.
  */
-export function composeAddress(parts: { pc?: string; cwd: string; name: string }): string {
+export function composeAddress(parts: {
+  pc?: string;
+  cwd: string;
+  name: string;
+}): string {
   const base = parts.cwd ? `${parts.cwd}@${parts.name}` : parts.name;
   return parts.pc ? `${parts.pc}:${base}` : base;
 }
@@ -151,15 +161,14 @@ function isWindowsDriveAbsolutePath(value: string): boolean {
 /** Accept legacy empty cwd plus bounded syntactically absolute paths only. */
 function isValidRegisteredCwd(value: string): boolean {
   if (value === "") return true;
-  if (
-    value.length > MAX_CWD_LENGTH ||
-    /[\0\r\n]/.test(value)
-  ) {
+  if (value.length > MAX_CWD_LENGTH || /[\0\r\n]/.test(value)) {
     return false;
   }
-  return posix.isAbsolute(value) ||
+  return (
+    posix.isAbsolute(value) ||
     isWindowsDriveAbsolutePath(value) ||
-    (win32.isAbsolute(value) && /^[/\\]{2}/.test(value));
+    (win32.isAbsolute(value) && /^[/\\]{2}/.test(value))
+  );
 }
 
 type AckStatus = "received" | "denied";
@@ -293,7 +302,9 @@ export class Broker {
     socket.setEncoding("utf8");
     socket.on("data", (chunk: string) => this._onData(conn, chunk));
     socket.on("close", () => this._onClose(conn));
-    socket.on("error", () => { /* ignored — close will follow */ });
+    socket.on("error", () => {
+      /* ignored — close will follow */
+    });
   }
 
   private _onData(conn: PeerConn, chunk: string): void {
@@ -308,7 +319,7 @@ export class Broker {
   }
 
   private async _handleLine(conn: PeerConn, line: string): Promise<void> {
-    // Unregistered conn: a read-only `list_peers` probe (the `remote-pi peers`
+    // Unregistered conn: a read-only `list_peers` probe (the `un-bien peers`
     // CLI — answered without registering, so it leaves no trace on the mesh) or
     // the mandatory `register` handshake. Anything else `_handleRegister` drops.
     if (!conn.name) {
@@ -321,7 +332,7 @@ export class Broker {
     try {
       env = parse(line);
     } catch (e) {
-      if (e instanceof EnvelopeError) return;  // malformed; drop silently
+      if (e instanceof EnvelopeError) return; // malformed; drop silently
       throw e;
     }
     // Force `from` to the registered ADDRESS (security: peer can't spoof; and
@@ -355,7 +366,10 @@ export class Broker {
     // global-name behavior. New peers can opt into exact-address takeover for
     // same-folder reincarnations such as daemon restarts.
     const requestedCwd = req.cwd === undefined ? "" : req.cwd;
-    if (typeof requestedCwd !== "string" || !isValidRegisteredCwd(requestedCwd)) {
+    if (
+      typeof requestedCwd !== "string" ||
+      !isValidRegisteredCwd(requestedCwd)
+    ) {
       conn.socket.destroy();
       return;
     }
@@ -387,7 +401,9 @@ export class Broker {
     };
     try {
       conn.socket.write(JSON.stringify(ack) + "\n");
-    } catch { /* peer hung up */ }
+    } catch {
+      /* peer hung up */
+    }
 
     // Notify others (peer_joined broadcast). The field carries the ADDRESS.
     this._broadcastSystem(
@@ -398,7 +414,7 @@ export class Broker {
 
   /**
    * Answer a read-only `list_peers` request from an UNREGISTERED connection
-   * (the `remote-pi peers` CLI probe). Returns true when the line was such a
+   * (the `un-bien peers` CLI probe). Returns true when the line was such a
    * probe — the reply is written and the connection stays unregistered: no
    * name assigned, no `peer_joined`/`peer_left` broadcast, no sibling push, so
    * querying the roster from the shell never perturbs the mesh. Returns false
@@ -409,14 +425,14 @@ export class Broker {
     try {
       parsed = JSON.parse(line) as { type?: unknown };
     } catch {
-      return false;  // not JSON → let _handleRegister destroy it
+      return false; // not JSON → let _handleRegister destroy it
     }
     if (!parsed || typeof parsed !== "object" || parsed.type !== "list_peers") {
       return false;
     }
     const reply: Envelope = {
       from: BROKER_NAME,
-      to: "observer",  // synthetic: the conn has no registered name
+      to: "observer", // synthetic: the conn has no registered name
       id: uuidv7(),
       re: null,
       body: {
@@ -425,7 +441,11 @@ export class Broker {
         peers_detailed: this._allPeerInfos(),
       } as SystemBody,
     };
-    try { conn.socket.write(serialize(reply)); } catch { /* probe hung up */ }
+    try {
+      conn.socket.write(serialize(reply));
+    } catch {
+      /* probe hung up */
+    }
     return true;
   }
 
@@ -469,9 +489,13 @@ export class Broker {
     takeover: boolean,
   ): { name: string; address: string; replaceAddress?: string } | null {
     const sanitized = sanitizeMeshName(requested);
-    const candidateFor = (name: string): { name: string; address: string } | null => {
+    const candidateFor = (
+      name: string,
+    ): { name: string; address: string } | null => {
       const address = composeAddress({ cwd, name });
-      return isBoundedPeerInfo({ cwd, name, address }) ? { name, address } : null;
+      return isBoundedPeerInfo({ cwd, name, address })
+        ? { name, address }
+        : null;
     };
     const direct = candidateFor(sanitized);
     if (!direct) return null;
@@ -498,14 +522,21 @@ export class Broker {
     // The old socket's close event may arrive after the replacement has been
     // inserted. Clear its address so it cannot delete the replacement.
     existing.address = "";
-    try { existing.socket.destroy(); } catch { /* ignored */ }
+    try {
+      existing.socket.destroy();
+    } catch {
+      /* ignored */
+    }
   }
 
   private _onClose(conn: PeerConn): void {
     if (!conn.address) return;
     if (this.peers.get(conn.address) !== conn) return;
     this.peers.delete(conn.address);
-    this._broadcastSystem({ type: "peer_left", name: conn.address, address: conn.address }, conn.address);
+    this._broadcastSystem(
+      { type: "peer_left", name: conn.address, address: conn.address },
+      conn.address,
+    );
   }
 
   // ── routing ───────────────────────────────────────────────────────────────
@@ -520,9 +551,15 @@ export class Broker {
     // Give known cross-PC aliases first chance to route. A syntactically
     // absolute Windows drive address contains a colon but is always exact
     // local; all other local registrations may not shadow a known alias.
-    const exactLocal = typeof env.to === "string" ? this.peers.get(env.to) : undefined;
-    const exactWindowsDriveLocal = !!exactLocal && isWindowsDriveAbsolutePath(exactLocal.cwd);
-    if (!exactWindowsDriveLocal && this.remoteRouter && typeof env.to === "string") {
+    const exactLocal =
+      typeof env.to === "string" ? this.peers.get(env.to) : undefined;
+    const exactWindowsDriveLocal =
+      !!exactLocal && isWindowsDriveAbsolutePath(exactLocal.cwd);
+    if (
+      !exactWindowsDriveLocal &&
+      this.remoteRouter &&
+      typeof env.to === "string"
+    ) {
       if (this.remoteRouter.tryRouteOutbound(env)) return;
     }
 
@@ -538,7 +575,7 @@ export class Broker {
     let ackStatus: AckStatus | "none" = "none";
     for (const targetName of targets) {
       const peer = this.peers.get(targetName);
-      if (!peer) continue;  // unknown peer: silent drop (sender times out)
+      if (!peer) continue; // unknown peer: silent drop (sender times out)
 
       try {
         peer.socket.write(line);
@@ -585,9 +622,13 @@ export class Broker {
    * Broker → sender: `from="broker"`, `to=env.from`, `re=env.id`,
    * `body={type:"ack", status, target}`.
    */
-  private _sendAckToSender(env: Envelope, status: AckStatus, target: string): void {
+  private _sendAckToSender(
+    env: Envelope,
+    status: AckStatus,
+    target: string,
+  ): void {
     const sender = this.peers.get(env.from);
-    if (!sender) return;  // sender vanished mid-write
+    if (!sender) return; // sender vanished mid-write
     const body: AckBody = { type: "ack", status, target };
     const ackEnv: Envelope = {
       from: BROKER_NAME,
@@ -598,7 +639,9 @@ export class Broker {
     };
     try {
       sender.socket.write(serialize(ackEnv));
-    } catch { /* sender dropped; close handler will fire */ }
+    } catch {
+      /* sender dropped; close handler will fire */
+    }
   }
 
   private _handleBrokerMessage(env: Envelope): void {
@@ -612,13 +655,17 @@ export class Broker {
         re: env.id,
         body: {
           type: "list_peers_reply",
-          peers: this._allPeerNames(),       // addresses — legacy clients route by these
-          peers_detailed: this._allPeerInfos(),  // plan/38 — clients group without parsing
+          peers: this._allPeerNames(), // addresses — legacy clients route by these
+          peers_detailed: this._allPeerInfos(), // plan/38 — clients group without parsing
         } as SystemBody,
       };
       const peer = this.peers.get(env.from);
       if (peer) {
-        try { peer.socket.write(serialize(reply)); } catch { /* ignored */ }
+        try {
+          peer.socket.write(serialize(reply));
+        } catch {
+          /* ignored */
+        }
       }
       return;
     }
@@ -639,7 +686,9 @@ export class Broker {
       };
       try {
         peer.socket.write(serialize(env));
-      } catch { /* ignored */ }
+      } catch {
+        /* ignored */
+      }
     }
   }
 
@@ -656,19 +705,22 @@ export class Broker {
     via: "uds" | "relay" = "uds",
   ): Promise<void> {
     if (!this.auditPath) return;
-    const line = JSON.stringify({
-      ts: Date.now(),
-      from: env.from,
-      to: env.to,
-      id: env.id,
-      re: env.re,
-      delivered,
-      ack_status: ackStatus,
-      via,
-    }) + "\n";
+    const line =
+      JSON.stringify({
+        ts: Date.now(),
+        from: env.from,
+        to: env.to,
+        id: env.id,
+        re: env.re,
+        delivered,
+        ack_status: ackStatus,
+        via,
+      }) + "\n";
     try {
       await mkdir(dirname(this.auditPath), { recursive: true });
       await appendFile(this.auditPath, line, "utf8");
-    } catch { /* audit best-effort */ }
+    } catch {
+      /* audit best-effort */
+    }
   }
 }

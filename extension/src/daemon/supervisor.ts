@@ -1,12 +1,27 @@
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
-import { createConnection, createServer, type Server, type Socket } from "node:net";
+import {
+  createConnection,
+  createServer,
+  type Server,
+  type Socket,
+} from "node:net";
 import { dirname, join } from "node:path";
-import { remotePiHome } from "../paths.js";
-import { addDaemon, listDaemons, migrateRegistryNames, removeDaemon } from "./registry.js";
+import { unbienStateHome } from "../paths.js";
+import {
+  addDaemon,
+  listDaemons,
+  migrateRegistryNames,
+  removeDaemon,
+} from "./registry.js";
 import { daemonIdForCwd } from "./id.js";
 import { defaultAgentName, type LocalConfig } from "../session/local_config.js";
 import { ipcAddress, usesNamedPipe } from "../session/ipc.js";
-import { EXIT_DAEMON_FRESH_SESSION, RpcChild, type RpcChildExitEvent, type RpcChildOptions } from "./rpc_child.js";
+import {
+  EXIT_DAEMON_FRESH_SESSION,
+  RpcChild,
+  type RpcChildExitEvent,
+  type RpcChildOptions,
+} from "./rpc_child.js";
 import {
   type ControlReply,
   type ControlRequest,
@@ -39,8 +54,8 @@ import { appendCronLog, readCronLog, type CronResult } from "./cron_log.js";
  *   - Auto-restart crashed children with exponential backoff
  *     (1s, 5s, 30s, 5min). Give up after 4 attempts to avoid log spam
  *     when the agent is misconfigured.
- *   - Listen on `~/.pi/remote/supervisor.sock` for `ControlRequest`s from
- *     the `remote-pi` CLI. Each connection: 1 request → 1 reply → close.
+ *   - Listen on `~/.pi/un-bien/supervisor.sock` for `ControlRequest`s from
+ *     the `un-bien` CLI. Each connection: 1 request → 1 reply → close.
  *   - Graceful shutdown on SIGTERM/SIGINT: stop all children + unlink
  *     the UDS file so a next supervisor can bind cleanly.
  *
@@ -58,8 +73,11 @@ const SUPERVISOR_SOCK_NAME = "supervisor.sock";
 const RESTART_BACKOFFS_MS = [1_000, 5_000, 30_000, 5 * 60_000];
 
 function supervisorSockPath(): string {
-  // POSIX → ~/.pi/remote/supervisor.sock; Windows → per-user named pipe (plan/40).
-  return ipcAddress("supervisor", join(remotePiHome(), SUPERVISOR_SOCK_NAME));
+  // POSIX → ~/.pi/un-bien/supervisor.sock; Windows → per-user named pipe (plan/40).
+  return ipcAddress(
+    "supervisor",
+    join(unbienStateHome(), SUPERVISOR_SOCK_NAME),
+  );
 }
 
 /** Thrown by `start()` when another live supervisor already holds the UDS.
@@ -68,8 +86,8 @@ export class SupervisorAlreadyRunningError extends Error {
   constructor(public readonly sockPath: string) {
     super(
       `Another pi-supervisord is already running (UDS held at ${sockPath}). ` +
-      "Refusing to start a second instance. Use `remote-pi daemon …` to control it, " +
-      "or stop the running one first.",
+        "Refusing to start a second instance. Use `un-bien daemon …` to control it, " +
+        "or stop the running one first.",
     );
     this.name = "SupervisorAlreadyRunningError";
   }
@@ -87,13 +105,19 @@ function _probeSupervisor(path: string): Promise<boolean> {
       resolve(alive);
     };
     const timer = setTimeout(() => done(false), 1_000);
-    sock.once("connect", () => { clearTimeout(timer); done(true); });
-    sock.once("error", () => { clearTimeout(timer); done(false); });
+    sock.once("connect", () => {
+      clearTimeout(timer);
+      done(true);
+    });
+    sock.once("error", () => {
+      clearTimeout(timer);
+      done(false);
+    });
   });
 }
 
 export interface SupervisorOptions {
-  /** Absolute path to remote-pi's dist/index.js — passed as -e to each
+  /** Absolute path to un-bien's dist/index.js — passed as -e to each
    *  spawned `pi`. Defaults to the location relative to where this file
    *  is bundled (so the supervisor finds itself). */
   extensionPath: string;
@@ -168,7 +192,11 @@ export class Supervisor {
     // Best-effort: clear the socket file so a next supervisor bind succeeds.
     // Windows named pipes have no file (auto-removed on exit) → nothing to do.
     if (!usesNamedPipe()) {
-      try { unlinkSync(supervisorSockPath()); } catch { /* ignored */ }
+      try {
+        unlinkSync(supervisorSockPath());
+      } catch {
+        /* ignored */
+      }
     }
   }
 
@@ -195,7 +223,11 @@ export class Supervisor {
         throw new SupervisorAlreadyRunningError(path);
       }
       if (!pipe) {
-        try { unlinkSync(path); } catch { /* will throw on bind if still held */ }
+        try {
+          unlinkSync(path);
+        } catch {
+          /* will throw on bind if still held */
+        }
       }
     }
     const server = createServer((socket) => this._onConnection(socket));
@@ -217,36 +249,60 @@ export class Supervisor {
       // Single request per connection; ignore anything past the newline.
       void this._handleRequest(line)
         .then((reply) => socket.end(encodeReply(reply)))
-        .catch((err) => socket.end(encodeReply<unknown>({ ok: false, error: String(err) })));
+        .catch((err) =>
+          socket.end(encodeReply<unknown>({ ok: false, error: String(err) })),
+        );
     });
-    socket.on("error", () => { /* client hung up; nothing to do */ });
+    socket.on("error", () => {
+      /* client hung up; nothing to do */
+    });
   }
 
   // ── Request dispatch ─────────────────────────────────────────────────────
 
   private async _handleRequest(line: string): Promise<ControlReply<unknown>> {
     let req: ControlRequest;
-    try { req = parseRequest(line); }
-    catch (e) { return { ok: false, error: (e as Error).message }; }
+    try {
+      req = parseRequest(line);
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
+    }
 
     switch (req.op) {
-      case "list":         return { ok: true, data: { daemons: this._listInfo() } };
-      case "status":       return { ok: true, data: { daemons: this._listInfo() } };
-      case "start_all":    return this._opStartAll();
-      case "start":        return this._opStart(req.id);
-      case "stop_all":     return this._opStopAll();
-      case "stop":         return this._opStop(req.id);
-      case "restart_all":  return this._opRestartAll();
-      case "restart":      return this._opRestart(req.id);
-      case "send":         return this._opSend(req.id, req.text);
-      case "register":     return this._opRegister(req.cwd);
-      case "unregister":   return this._opUnregister(req.id);
-      case "cron_add":     return this._opCronAdd(req);
-      case "cron_list":    return this._opCronList();
-      case "cron_remove":  return this._opCronRemove(req.job_id);
-      case "cron_enable":  return this._opCronEnable(req.job_id, req.enabled);
-      case "cron_run":     return this._opCronRun(req.job_id);
-      case "cron_log":     return this._opCronLog(req.job_id, req.tail);
+      case "list":
+        return { ok: true, data: { daemons: this._listInfo() } };
+      case "status":
+        return { ok: true, data: { daemons: this._listInfo() } };
+      case "start_all":
+        return this._opStartAll();
+      case "start":
+        return this._opStart(req.id);
+      case "stop_all":
+        return this._opStopAll();
+      case "stop":
+        return this._opStop(req.id);
+      case "restart_all":
+        return this._opRestartAll();
+      case "restart":
+        return this._opRestart(req.id);
+      case "send":
+        return this._opSend(req.id, req.text);
+      case "register":
+        return this._opRegister(req.cwd);
+      case "unregister":
+        return this._opUnregister(req.id);
+      case "cron_add":
+        return this._opCronAdd(req);
+      case "cron_list":
+        return this._opCronList();
+      case "cron_remove":
+        return this._opCronRemove(req.job_id);
+      case "cron_enable":
+        return this._opCronEnable(req.job_id, req.enabled);
+      case "cron_run":
+        return this._opCronRun(req.job_id);
+      case "cron_log":
+        return this._opCronLog(req.job_id, req.tail);
       default: {
         const unknown = (req as { op: string }).op;
         return { ok: false, error: `unknown op: ${unknown}` };
@@ -269,7 +325,8 @@ export class Supervisor {
       };
       if (slot) {
         if (slot.child.pid !== undefined) info.pid = slot.child.pid;
-        if (slot.child.uptimeMs !== undefined) info.uptime_s = Math.floor(slot.child.uptimeMs / 1000);
+        if (slot.child.uptimeMs !== undefined)
+          info.uptime_s = Math.floor(slot.child.uptimeMs / 1000);
         info.restart_count = slot.child.restartCount;
       }
       return info;
@@ -293,14 +350,17 @@ export class Supervisor {
 
   /** Spawn a single registered daemon by id. Idempotent: a daemon already
    *  running returns `started: false`. Unknown id → ok:false. This is what
-   *  `/remote-pi create` calls so a freshly-registered folder boots its Pi
+   *  `/unbien create` calls so a freshly-registered folder boots its Pi
    *  immediately instead of waiting for the next supervisor restart. */
   private _opStart(id: string): ControlReply<unknown> {
     const entry = listDaemons().find((d) => d.id === id);
     if (!entry) return { ok: false, error: `no daemon with id ${id}` };
     const slot = this.children.get(id);
     if (slot && slot.child.state === "running") {
-      return { ok: true, data: { id, state: slot.child.state, started: false } };
+      return {
+        ok: true,
+        data: { id, state: slot.child.state, started: false },
+      };
     }
     this._spawnEntry(entry.id, entry.cwd, entry.name);
     const state = this.children.get(id)?.child.state ?? "starting";
@@ -334,7 +394,10 @@ export class Supervisor {
     if (!entry) return { ok: false, error: `no daemon with id ${id}` };
     const slot = this.children.get(id);
     if (!slot || slot.child.state !== "running") {
-      return { ok: true, data: { id, state: slot?.child.state ?? "stopped", stopped: false } };
+      return {
+        ok: true,
+        data: { id, state: slot?.child.state ?? "stopped", stopped: false },
+      };
     }
     if (slot.restartTimer !== null) {
       clearTimeout(slot.restartTimer);
@@ -412,10 +475,16 @@ export class Supervisor {
 
   // ── Cron ops + engine (plan/39) ────────────────────────────────────────────
 
-  private _opCronAdd(req: Extract<ControlRequest, { op: "cron_add" }>): ControlReply<unknown> {
+  private _opCronAdd(
+    req: Extract<ControlRequest, { op: "cron_add" }>,
+  ): ControlReply<unknown> {
     const v = validateSchedule(req.schedule, req.tz);
     if (!v.ok) return { ok: false, error: v.error ?? "invalid schedule" };
-    const input: NewJobInput = { daemon_id: req.daemon_id, schedule: req.schedule, prompt: req.prompt };
+    const input: NewJobInput = {
+      daemon_id: req.daemon_id,
+      schedule: req.schedule,
+      prompt: req.prompt,
+    };
     if (req.tz !== undefined) input.tz = req.tz;
     if (req.skip_if_busy !== undefined) input.skip_if_busy = req.skip_if_busy;
     if (req.wake !== undefined) input.wake = req.wake;
@@ -436,7 +505,10 @@ export class Supervisor {
     return { ok: true, data: { removed } };
   }
 
-  private _opCronEnable(jobId: string, enabled: boolean): ControlReply<unknown> {
+  private _opCronEnable(
+    jobId: string,
+    enabled: boolean,
+  ): ControlReply<unknown> {
     const updated = setJobEnabled(jobId, enabled);
     if (updated) {
       this._stopCron(jobId);
@@ -447,12 +519,16 @@ export class Supervisor {
   }
 
   private async _opCronRun(jobId: string): Promise<ControlReply<unknown>> {
-    if (!getCronJob(jobId)) return { ok: false, error: `no cron job with id ${jobId}` };
+    if (!getCronJob(jobId))
+      return { ok: false, error: `no cron job with id ${jobId}` };
     const result = await this.fireJob(jobId, { manual: true });
     return { ok: true, data: { job_id: jobId, result } };
   }
 
-  private _opCronLog(jobId: string | undefined, tail: number | undefined): ControlReply<unknown> {
+  private _opCronLog(
+    jobId: string | undefined,
+    tail: number | undefined,
+  ): ControlReply<unknown> {
     const opts: { jobId?: string; tail?: number } = {};
     if (jobId !== undefined) opts.jobId = jobId;
     if (tail !== undefined) opts.tail = tail;
@@ -477,17 +553,26 @@ export class Supervisor {
   private _scheduleCron(job: CronJob): void {
     this._stopCron(job.id);
     try {
-      const opts = job.tz ? { timezone: job.tz, name: job.id } : { name: job.id };
-      const cron = new Cron(job.schedule, opts, () => { void this.fireJob(job.id); });
+      const opts = job.tz
+        ? { timezone: job.tz, name: job.id }
+        : { name: job.id };
+      const cron = new Cron(job.schedule, opts, () => {
+        void this.fireJob(job.id);
+      });
       this.cronJobs.set(job.id, cron);
     } catch (e) {
-      process.stderr.write(`[remote-pi-supervisord] cron schedule failed for ${job.id}: ${String(e)}\n`);
+      process.stderr.write(
+        `[unbien-supervisord] cron schedule failed for ${job.id}: ${String(e)}\n`,
+      );
     }
   }
 
   private _stopCron(jobId: string): void {
     const c = this.cronJobs.get(jobId);
-    if (c) { c.stop(); this.cronJobs.delete(jobId); }
+    if (c) {
+      c.stop();
+      this.cronJobs.delete(jobId);
+    }
   }
 
   /** Detail 2: on start, run a catchup job once if its previous scheduled run
@@ -501,8 +586,11 @@ export class Supervisor {
         cron.stop();
         if (!prev) continue;
         const lastRunMs = job.last_run ? Date.parse(job.last_run) : 0;
-        if (prev.getTime() > lastRunMs) void this.fireJob(job.id, { manual: true });
-      } catch { /* skip a malformed schedule */ }
+        if (prev.getTime() > lastRunMs)
+          void this.fireJob(job.id, { manual: true });
+      } catch {
+        /* skip a malformed schedule */
+      }
     }
   }
 
@@ -512,7 +600,10 @@ export class Supervisor {
    * line, for both fires and skips. Returns the result. `manual` bypasses the
    * disabled-skip (used by `cron run` + catchup).
    */
-  async fireJob(jobId: string, opts: { manual?: boolean } = {}): Promise<CronResult | "missing"> {
+  async fireJob(
+    jobId: string,
+    opts: { manual?: boolean } = {},
+  ): Promise<CronResult | "missing"> {
     const job = getCronJob(jobId);
     if (!job) return "missing";
 
@@ -524,28 +615,44 @@ export class Supervisor {
       const running = !!slot && slot.child.state === "running";
       let busy = false;
       if (running && job.skip_if_busy) busy = await slot!.child.refreshBusy();
-      const action = decideFireAction({ running, busy, wake: job.wake, skipIfBusy: job.skip_if_busy });
+      const action = decideFireAction({
+        running,
+        busy,
+        wake: job.wake,
+        skipIfBusy: job.skip_if_busy,
+      });
       if (action === "skip_down") {
         result = "skipped_down";
       } else if (action === "skip_busy") {
         result = "skipped_busy";
       } else if (action === "wake_and_send") {
         const entry = listDaemons().find((d) => d.id === job.daemon_id);
-        if (!entry) {
-          result = "skipped_down";
-        } else {
+        if (entry) {
           this._spawnEntry(entry.id, entry.cwd, entry.name);
           const woke = this.children.get(job.daemon_id);
-          result = woke && woke.child.sendPrompt(job.prompt) ? "woke_and_delivered" : "deliver_failed";
+          result =
+            woke && woke.child.sendPrompt(job.prompt)
+              ? "woke_and_delivered"
+              : "deliver_failed";
+        } else {
+          result = "skipped_down";
         }
       } else {
-        result = slot!.child.sendPrompt(job.prompt) ? "delivered" : "deliver_failed";
+        result = slot!.child.sendPrompt(job.prompt)
+          ? "delivered"
+          : "deliver_failed";
       }
     }
 
     const at = new Date().toISOString();
     recordRun(job.id, at, result);
-    appendCronLog({ job_id: job.id, daemon_id: job.daemon_id, schedule: job.schedule, result, prompt: job.prompt });
+    appendCronLog({
+      job_id: job.id,
+      daemon_id: job.daemon_id,
+      schedule: job.schedule,
+      result,
+      prompt: job.prompt,
+    });
     return result;
   }
 
@@ -567,7 +674,7 @@ export class Supervisor {
       if (existing.child.state === "running") void existing.child.stop();
     }
 
-    // Build the daemon's config and inject it via REMOTE_PI_DIRECT_CONFIG —
+    // Build the daemon's config and inject it via UNBIEN_DIRECT_CONFIG —
     // no per-cwd config file needed. The daemon scopes by (cwd, name) like any
     // agent (plan/38); relay on.
     const config: LocalConfig = {
@@ -581,7 +688,13 @@ export class Supervisor {
     };
     if (this.opts.piBin !== undefined) childOpts.piBin = this.opts.piBin;
     const child = new RpcChild(childOpts);
-    const slot: ChildSlot = { id, cwd, child, restartTimer: null, restartAttempt: 0 };
+    const slot: ChildSlot = {
+      id,
+      cwd,
+      child,
+      restartTimer: null,
+      restartAttempt: 0,
+    };
     this.children.set(id, slot);
 
     child.on("exit", (evt: RpcChildExitEvent) => this._onChildExit(id, evt));
@@ -611,13 +724,13 @@ export class Supervisor {
     // we give up and stay in `crashed`.
     if (slot.restartAttempt >= RESTART_BACKOFFS_MS.length) {
       process.stderr.write(
-        `[remote-pi-supervisord] giving up restart for ${id} after ${slot.restartAttempt} attempts\n`,
+        `[unbien-supervisord] giving up restart for ${id} after ${slot.restartAttempt} attempts\n`,
       );
       return;
     }
     const delay = RESTART_BACKOFFS_MS[slot.restartAttempt]!;
     process.stderr.write(
-      `[remote-pi-supervisord] scheduling restart of ${id} in ${delay}ms (attempt ${slot.restartAttempt + 1})\n`,
+      `[unbien-supervisord] scheduling restart of ${id} in ${delay}ms (attempt ${slot.restartAttempt + 1})\n`,
     );
     slot.restartTimer = setTimeout(() => {
       slot.restartTimer = null;
@@ -629,8 +742,12 @@ export class Supervisor {
 }
 
 /** Test helper: derive id from cwd without going through the registry. */
-export function _idForCwdForTest(cwd: string): string { return daemonIdForCwd(cwd); }
+export function _idForCwdForTest(cwd: string): string {
+  return daemonIdForCwd(cwd);
+}
 
 /** Exported for the bin/supervisord entry + tests to know where the
  *  supervisor will bind. */
-export function getSupervisorSockPath(): string { return supervisorSockPath(); }
+export function getSupervisorSockPath(): string {
+  return supervisorSockPath();
+}

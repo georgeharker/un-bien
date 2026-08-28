@@ -3,7 +3,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createConnection } from "node:net";
 import { join } from "node:path";
-import { Supervisor, decideFireAction, getSupervisorSockPath } from "./supervisor.js";
+import {
+  Supervisor,
+  decideFireAction,
+  getSupervisorSockPath,
+} from "./supervisor.js";
 import { addDaemon } from "./registry.js";
 import { readCronLog } from "./cron_log.js";
 import {
@@ -15,7 +19,7 @@ import {
 
 /**
  * Supervisor integration tests. We spin up a real `Supervisor` against a
- * scratch `REMOTE_PI_HOME`, connect to its UDS, send requests, and
+ * scratch `UNBIEN_HOME`, connect to its UDS, send requests, and
  * inspect replies.
  *
  * `extensionPath` points at a non-existent path so the children's spawn
@@ -37,8 +41,11 @@ async function ask<R = ControlReply<unknown>>(req: ControlRequest): Promise<R> {
       const nl = buf.indexOf("\n");
       if (nl >= 0) {
         sock.destroy();
-        try { resolve(parseReply(buf.slice(0, nl)) as R); }
-        catch (e) { reject(e); }
+        try {
+          resolve(parseReply(buf.slice(0, nl)) as R);
+        } catch (e) {
+          reject(e);
+        }
       }
     });
     sock.on("error", reject);
@@ -48,7 +55,7 @@ async function ask<R = ControlReply<unknown>>(req: ControlRequest): Promise<R> {
 
 beforeEach(async () => {
   testHome = mkdtempSync(join(tmpdir(), "pi-sv-"));
-  process.env["REMOTE_PI_HOME"] = testHome;
+  process.env["UNBIEN_HOME"] = testHome;
   supervisor = new Supervisor({
     // Point at a non-existent extension. The supervisor will try to
     // spawn `<piBin> --mode rpc -e <path>` and the child exits immediately —
@@ -70,8 +77,12 @@ afterEach(async () => {
     await supervisor.stop();
     supervisor = null;
   }
-  delete process.env["REMOTE_PI_HOME"];
-  try { rmSync(testHome, { recursive: true, force: true }); } catch { /* best-effort */ }
+  delete process.env["UNBIEN_HOME"];
+  try {
+    rmSync(testHome, { recursive: true, force: true });
+  } catch {
+    /* best-effort */
+  }
 });
 
 describe("Supervisor — control UDS surface", () => {
@@ -82,7 +93,10 @@ describe("Supervisor — control UDS surface", () => {
 
   test("register adds an entry and returns the derived id", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "pi-sv-cwd-"));
-    const r = await ask({ op: "register", cwd: tmp }) as ControlReply<{ id: string; cwd: string }>;
+    const r = (await ask({ op: "register", cwd: tmp })) as ControlReply<{
+      id: string;
+      cwd: string;
+    }>;
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.data!.id).toMatch(/^[0-9a-f]{8}$/);
@@ -100,10 +114,15 @@ describe("Supervisor — control UDS surface", () => {
 
   test("start spawns a single registered daemon by id", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "pi-sv-start-"));
-    const reg = await ask({ op: "register", cwd: tmp }) as ControlReply<{ id: string }>;
+    const reg = (await ask({ op: "register", cwd: tmp })) as ControlReply<{
+      id: string;
+    }>;
     expect(reg.ok).toBe(true);
     const id = reg.ok ? reg.data!.id : "";
-    const r = await ask({ op: "start", id }) as ControlReply<{ id: string; started: boolean }>;
+    const r = (await ask({ op: "start", id })) as ControlReply<{
+      id: string;
+      started: boolean;
+    }>;
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.data!.id).toBe(id);
@@ -131,9 +150,14 @@ describe("Supervisor — control UDS surface", () => {
 
   test("stop of a registered-but-not-running daemon → ok:true, stopped:false", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "pi-sv-stop-"));
-    const reg = await ask({ op: "register", cwd: tmp }) as ControlReply<{ id: string }>;
+    const reg = (await ask({ op: "register", cwd: tmp })) as ControlReply<{
+      id: string;
+    }>;
     const id = reg.ok ? reg.data!.id : "";
-    const r = await ask({ op: "stop", id }) as ControlReply<{ id: string; stopped: boolean }>;
+    const r = (await ask({ op: "stop", id })) as ControlReply<{
+      id: string;
+      stopped: boolean;
+    }>;
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.data!.id).toBe(id);
@@ -143,9 +167,14 @@ describe("Supervisor — control UDS surface", () => {
 
   test("restart spawns a single registered daemon by id", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "pi-sv-restart-"));
-    const reg = await ask({ op: "register", cwd: tmp }) as ControlReply<{ id: string }>;
+    const reg = (await ask({ op: "register", cwd: tmp })) as ControlReply<{
+      id: string;
+    }>;
     const id = reg.ok ? reg.data!.id : "";
-    const r = await ask({ op: "restart", id }) as ControlReply<{ id: string; restarted: boolean }>;
+    const r = (await ask({ op: "restart", id })) as ControlReply<{
+      id: string;
+      restarted: boolean;
+    }>;
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.data!.id).toBe(id);
@@ -168,18 +197,27 @@ describe("Supervisor — control UDS surface", () => {
   });
 
   test("malformed request returns ok:false with parser error", async () => {
-    const reply = await new Promise<ControlReply<unknown>>((resolve, reject) => {
-      const sock = createConnection({ path: getSupervisorSockPath() });
-      let buf = "";
-      sock.setEncoding("utf8");
-      sock.on("data", (c: string) => {
-        buf += c;
-        const nl = buf.indexOf("\n");
-        if (nl >= 0) { sock.destroy(); try { resolve(parseReply(buf.slice(0, nl))); } catch (e) { reject(e); } }
-      });
-      sock.on("error", reject);
-      sock.write("{not-json}\n");
-    });
+    const reply = await new Promise<ControlReply<unknown>>(
+      (resolve, reject) => {
+        const sock = createConnection({ path: getSupervisorSockPath() });
+        let buf = "";
+        sock.setEncoding("utf8");
+        sock.on("data", (c: string) => {
+          buf += c;
+          const nl = buf.indexOf("\n");
+          if (nl >= 0) {
+            sock.destroy();
+            try {
+              resolve(parseReply(buf.slice(0, nl)));
+            } catch (e) {
+              reject(e);
+            }
+          }
+        });
+        sock.on("error", reject);
+        sock.write("{not-json}\n");
+      },
+    );
     expect(reply).toMatchObject({ ok: false });
     if (!reply.ok) expect(reply.error).toMatch(/malformed/i);
   });
@@ -187,18 +225,27 @@ describe("Supervisor — control UDS surface", () => {
   test("unknown op returns ok:false", async () => {
     // Bypass the typed encoder so we can send an op the type system
     // doesn't know about.
-    const reply = await new Promise<ControlReply<unknown>>((resolve, reject) => {
-      const sock = createConnection({ path: getSupervisorSockPath() });
-      let buf = "";
-      sock.setEncoding("utf8");
-      sock.on("data", (c: string) => {
-        buf += c;
-        const nl = buf.indexOf("\n");
-        if (nl >= 0) { sock.destroy(); try { resolve(parseReply(buf.slice(0, nl))); } catch (e) { reject(e); } }
-      });
-      sock.on("error", reject);
-      sock.write('{"op":"frobnicate"}\n');
-    });
+    const reply = await new Promise<ControlReply<unknown>>(
+      (resolve, reject) => {
+        const sock = createConnection({ path: getSupervisorSockPath() });
+        let buf = "";
+        sock.setEncoding("utf8");
+        sock.on("data", (c: string) => {
+          buf += c;
+          const nl = buf.indexOf("\n");
+          if (nl >= 0) {
+            sock.destroy();
+            try {
+              resolve(parseReply(buf.slice(0, nl)));
+            } catch (e) {
+              reject(e);
+            }
+          }
+        });
+        sock.on("error", reject);
+        sock.write('{"op":"frobnicate"}\n');
+      },
+    );
     expect(reply).toMatchObject({ ok: false });
     if (!reply.ok) expect(reply.error).toMatch(/unknown op/i);
   });
@@ -206,10 +253,14 @@ describe("Supervisor — control UDS surface", () => {
   test("list reflects a daemon added directly via registry (not just register op)", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "pi-sv-direct-"));
     addDaemon(tmp);
-    const r = await ask({ op: "list" }) as ControlReply<{ daemons: Array<{ cwd: string; state: string }> }>;
+    const r = (await ask({ op: "list" })) as ControlReply<{
+      daemons: Array<{ cwd: string; state: string }>;
+    }>;
     expect(r.ok).toBe(true);
     if (r.ok) {
-      const found = r.data!.daemons.find((d) => d.cwd.endsWith(tmp.split("/").pop()!));
+      const found = r.data!.daemons.find((d) =>
+        d.cwd.endsWith(tmp.split("/").pop()!),
+      );
       expect(found).toBeDefined();
       // State is "stopped" — the children were spawned at supervisor.start()
       // before our addDaemon call, so this entry isn't in the children map.
@@ -220,64 +271,141 @@ describe("Supervisor — control UDS surface", () => {
 
 describe("decideFireAction (cron — 4 ramos)", () => {
   test("running + idle → send", () => {
-    expect(decideFireAction({ running: true, busy: false, wake: false, skipIfBusy: true })).toBe("send");
+    expect(
+      decideFireAction({
+        running: true,
+        busy: false,
+        wake: false,
+        skipIfBusy: true,
+      }),
+    ).toBe("send");
   });
   test("running + busy + skip_if_busy → skip_busy", () => {
-    expect(decideFireAction({ running: true, busy: true, wake: false, skipIfBusy: true })).toBe("skip_busy");
+    expect(
+      decideFireAction({
+        running: true,
+        busy: true,
+        wake: false,
+        skipIfBusy: true,
+      }),
+    ).toBe("skip_busy");
   });
   test("running + busy + no skip_if_busy → send", () => {
-    expect(decideFireAction({ running: true, busy: true, wake: false, skipIfBusy: false })).toBe("send");
+    expect(
+      decideFireAction({
+        running: true,
+        busy: true,
+        wake: false,
+        skipIfBusy: false,
+      }),
+    ).toBe("send");
   });
   test("down + no wake → skip_down", () => {
-    expect(decideFireAction({ running: false, busy: false, wake: false, skipIfBusy: true })).toBe("skip_down");
+    expect(
+      decideFireAction({
+        running: false,
+        busy: false,
+        wake: false,
+        skipIfBusy: true,
+      }),
+    ).toBe("skip_down");
   });
   test("down + wake → wake_and_send", () => {
-    expect(decideFireAction({ running: false, busy: false, wake: true, skipIfBusy: true })).toBe("wake_and_send");
+    expect(
+      decideFireAction({
+        running: false,
+        busy: false,
+        wake: true,
+        skipIfBusy: true,
+      }),
+    ).toBe("wake_and_send");
   });
 });
 
 describe("Supervisor — cron ops", () => {
   async function registerDaemon(): Promise<string> {
     const tmp = mkdtempSync(join(tmpdir(), "pi-cron-d-"));
-    const r = await ask({ op: "register", cwd: tmp }) as ControlReply<{ id: string }>;
+    const r = (await ask({ op: "register", cwd: tmp })) as ControlReply<{
+      id: string;
+    }>;
     return r.ok ? r.data!.id : "";
   }
 
   test("cron_add validates: invalid expr + <60s rejected, valid accepted", async () => {
     const daemon_id = await registerDaemon();
-    const bad = await ask({ op: "cron_add", daemon_id, schedule: "nope", prompt: "p" });
+    const bad = await ask({
+      op: "cron_add",
+      daemon_id,
+      schedule: "nope",
+      prompt: "p",
+    });
     expect(bad.ok).toBe(false);
-    const tooFreq = await ask({ op: "cron_add", daemon_id, schedule: "* * * * * *", prompt: "p" });
+    const tooFreq = await ask({
+      op: "cron_add",
+      daemon_id,
+      schedule: "* * * * * *",
+      prompt: "p",
+    });
     expect(tooFreq).toMatchObject({ ok: false });
     if (!tooFreq.ok) expect(tooFreq.error).toMatch(/60s|too frequent/i);
-    const good = await ask({ op: "cron_add", daemon_id, schedule: "0 9 * * *", prompt: "p" }) as ControlReply<{ job: { id: string } }>;
+    const good = (await ask({
+      op: "cron_add",
+      daemon_id,
+      schedule: "0 9 * * *",
+      prompt: "p",
+    })) as ControlReply<{ job: { id: string } }>;
     expect(good.ok).toBe(true);
     expect(good.ok && good.data!.job.id).toMatch(/^j_/);
   });
 
   test("cron list/enable/remove round-trip", async () => {
     const daemon_id = await registerDaemon();
-    const add = await ask({ op: "cron_add", daemon_id, schedule: "0 9 * * *", prompt: "p" }) as ControlReply<{ job: { id: string } }>;
+    const add = (await ask({
+      op: "cron_add",
+      daemon_id,
+      schedule: "0 9 * * *",
+      prompt: "p",
+    })) as ControlReply<{ job: { id: string } }>;
     const jobId = add.ok ? add.data!.job.id : "";
 
-    const list = await ask({ op: "cron_list" }) as ControlReply<{ jobs: Array<{ id: string; next_run?: string | null }> }>;
-    expect(list.ok && list.data!.jobs.some((j) => j.id === jobId && !!j.next_run)).toBe(true);
+    const list = (await ask({ op: "cron_list" })) as ControlReply<{
+      jobs: Array<{ id: string; next_run?: string | null }>;
+    }>;
+    expect(
+      list.ok && list.data!.jobs.some((j) => j.id === jobId && !!j.next_run),
+    ).toBe(true);
 
-    const dis = await ask({ op: "cron_enable", job_id: jobId, enabled: false }) as ControlReply<{ updated: boolean }>;
+    const dis = (await ask({
+      op: "cron_enable",
+      job_id: jobId,
+      enabled: false,
+    })) as ControlReply<{ updated: boolean }>;
     expect(dis.ok && dis.data!.updated).toBe(true);
 
-    const rm = await ask({ op: "cron_remove", job_id: jobId }) as ControlReply<{ removed: boolean }>;
+    const rm = (await ask({
+      op: "cron_remove",
+      job_id: jobId,
+    })) as ControlReply<{ removed: boolean }>;
     expect(rm.ok && rm.data!.removed).toBe(true);
-    const list2 = await ask({ op: "cron_list" }) as ControlReply<{ jobs: unknown[] }>;
+    const list2 = (await ask({ op: "cron_list" })) as ControlReply<{
+      jobs: unknown[];
+    }>;
     expect(list2.ok && list2.data!.jobs.length).toBe(0);
   });
 
   test("cron_run on a down daemon → skipped_down, recorded + logged", async () => {
     const daemon_id = await registerDaemon(); // registered, not started → not running
-    const add = await ask({ op: "cron_add", daemon_id, schedule: "0 9 * * *", prompt: "ping" }) as ControlReply<{ job: { id: string } }>;
+    const add = (await ask({
+      op: "cron_add",
+      daemon_id,
+      schedule: "0 9 * * *",
+      prompt: "ping",
+    })) as ControlReply<{ job: { id: string } }>;
     const jobId = add.ok ? add.data!.job.id : "";
 
-    const run = await ask({ op: "cron_run", job_id: jobId }) as ControlReply<{ result: string }>;
+    const run = (await ask({ op: "cron_run", job_id: jobId })) as ControlReply<{
+      result: string;
+    }>;
     expect(run.ok && run.data!.result).toBe("skipped_down");
 
     // logged to cron.jsonl
@@ -285,8 +413,12 @@ describe("Supervisor — cron ops", () => {
     expect(log.at(-1)).toMatchObject({ result: "skipped_down", fired: false });
 
     // last_status reflected in cron list
-    const list = await ask({ op: "cron_list" }) as ControlReply<{ jobs: Array<{ id: string; last_status?: string }> }>;
-    const job = list.ok ? list.data!.jobs.find((j) => j.id === jobId) : undefined;
+    const list = (await ask({ op: "cron_list" })) as ControlReply<{
+      jobs: Array<{ id: string; last_status?: string }>;
+    }>;
+    const job = list.ok
+      ? list.data!.jobs.find((j) => j.id === jobId)
+      : undefined;
     expect(job?.last_status).toBe("skipped_down");
   });
 

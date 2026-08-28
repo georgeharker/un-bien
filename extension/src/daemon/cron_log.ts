@@ -1,9 +1,9 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { remotePiHome } from "../paths.js";
+import { unbienStateHome } from "../paths.js";
 
 /**
- * Append-only audit trail for cron fires at `~/.pi/remote/cron.jsonl`.
+ * Append-only audit trail for cron fires at `~/.pi/un-bien/cron.jsonl`.
  *
  * One JSON line per scheduler decision — **every fire AND every skip** — so an
  * operator can see exactly what ran and what didn't (the agent's output goes
@@ -36,7 +36,7 @@ export interface CronLogEntry {
 const PREVIEW_LEN = 80;
 
 function logPath(): string {
-  return join(remotePiHome(), "cron.jsonl");
+  return join(unbienStateHome(), "cron.jsonl");
 }
 
 /** Test/diag-only: the on-disk path. */
@@ -53,18 +53,23 @@ export function firedFor(result: CronResult): boolean {
  * Appends one entry. Best-effort: creates the parent dir + file when absent;
  * never throws into the scheduler (a logging failure must not abort a fire).
  */
-export function appendCronLog(
-  entry: { job_id: string; daemon_id: string; schedule: string; result: CronResult; prompt: string },
-): void {
-  const line = JSON.stringify({
-    ts: Date.now(),
-    job_id: entry.job_id,
-    daemon_id: entry.daemon_id,
-    schedule: entry.schedule,
-    fired: firedFor(entry.result),
-    result: entry.result,
-    prompt_preview: entry.prompt.slice(0, PREVIEW_LEN),
-  } satisfies CronLogEntry) + "\n";
+export function appendCronLog(entry: {
+  job_id: string;
+  daemon_id: string;
+  schedule: string;
+  result: CronResult;
+  prompt: string;
+}): void {
+  const line =
+    JSON.stringify({
+      ts: Date.now(),
+      job_id: entry.job_id,
+      daemon_id: entry.daemon_id,
+      schedule: entry.schedule,
+      fired: firedFor(entry.result),
+      result: entry.result,
+      prompt_preview: entry.prompt.slice(0, PREVIEW_LEN),
+    } satisfies CronLogEntry) + "\n";
   try {
     mkdirSync(dirname(logPath()), { recursive: true });
     appendFileSync(logPath(), line, "utf8");
@@ -77,7 +82,9 @@ export function appendCronLog(
  * Reads the log, newest-last. Optional `jobId` filter and `tail` (last N).
  * Missing file → []. Malformed lines are skipped.
  */
-export function readCronLog(opts: { jobId?: string; tail?: number } = {}): CronLogEntry[] {
+export function readCronLog(
+  opts: { jobId?: string; tail?: number } = {},
+): CronLogEntry[] {
   if (!existsSync(logPath())) return [];
   let raw: string;
   try {

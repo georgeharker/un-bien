@@ -1,3 +1,8 @@
+> **Derived from [remote-pi](https://github.com/jacobaraujo7/remote_pi)** by Jacob
+> Moura, used under the MIT License (preserved in [`LICENSE`](LICENSE)). This tree
+> is part of the [un-bien](../README.md) monorepo and is mid-rework — the content
+> below still carries upstream branding and is being rebranded to un-bien.
+
 <p align="center">
   <img src="https://raw.githubusercontent.com/jacobaraujo7/remote_pi/main/branding/logo-full.svg" width="160" alt="Remote Pi logo" />
 </p>
@@ -130,7 +135,7 @@ on the paired Pi session. Tap the ⚙ button next to the message input (visible
 when the input is empty) to open the Quick Actions sheet:
 
 | Action | What it does |
-|---|---|
+| --- | --- |
 | **Compact context** | Runs `ctx.compact()` — same as `/compact` in the TUI. |
 | **New session** | Runs `ctx.newSession()` — equivalent to `/new`, asks for confirmation first. |
 | **Model** | Opens a model picker fed by your authenticated providers (same source the TUI uses) and switches via `pi.setModel(model)`. |
@@ -203,7 +208,7 @@ The bare command is the everyday entry point:
 Behavior depends on whether there's a local config for this directory:
 
 | State | What happens |
-|---|---|
+| --- | --- |
 | First run (no `.pi/remote-pi/config.json`) | Interactive wizard → saves config → joins agent session → starts relay (if you opted in) |
 | Returning user, auto-start enabled | Joins agent session + starts relay automatically, then prints status |
 | Returning user, auto-start disabled | Prints status only; join/relay must be run manually |
@@ -394,7 +399,7 @@ log at `~/.pi/remote/sessions/<name>/audit.jsonl` for postmortem inspection.
 Useful commands:
 
 | Command | What it does |
-|---|---|
+| --- | --- |
 | `/remote-pi` | Join the local mesh (and start the relay, if enabled) |
 | `/remote-pi peers` | List local + cross-PC mesh peers, grouped by PC |
 | `/remote-pi rename <new>` | Rename this agent in the current session |
@@ -411,7 +416,7 @@ real name to the peer.
 ### Local session (one Pi, one terminal)
 
 | Command | Description |
-|---|---|
+| --- | --- |
 | `/remote-pi` | Connect (join local mesh + start relay), or run setup on first use |
 | `/remote-pi setup` | Run the setup wizard and update local config |
 | `/remote-pi status` | Show local mesh + relay status |
@@ -427,7 +432,7 @@ real name to the peer.
 ### Daemon fleet (one supervisor, N background Pis — see [Daemon mode](#daemon-mode))
 
 | Command | Description |
-|---|---|
+| --- | --- |
 | `/remote-pi create <cwd> [--name X]` | Register a folder as a daemon |
 | `/remote-pi remove <id>` | Unregister a daemon (local config preserved) |
 | `/remote-pi daemons` | List registered daemons + state |
@@ -514,6 +519,7 @@ remote-pi install
 ```
 
 The `install` command:
+
 - Writes `~/.config/systemd/user/remote-pi-supervisord.service` (Linux)
   or `~/Library/LaunchAgents/dev.remotepi.supervisord.plist` (macOS)
 - Activates it via `systemctl --user enable --now` or `launchctl bootstrap`
@@ -566,7 +572,7 @@ registered daemon back. To wipe the registry entirely, `rm
 ### Where to find logs
 
 | Platform | Command |
-|---|---|
+| --- | --- |
 | Linux | `journalctl --user -u remote-pi-supervisord -f` |
 | macOS | `tail -f ~/.pi/remote/supervisord.log` |
 
@@ -593,7 +599,7 @@ with a `[<cwd>]` prefix, so a single log stream shows every agent.
 ## Configuration files
 
 | Path | Scope | What's in it |
-|---|---|---|
+| --- | --- | --- |
 | `<cwd>/.pi/remote-pi/config.json` | Per-directory | `agent_name`, `session_name`, `auto_start_relay` |
 | `~/.pi/remote/config.json` | Per-user | `relay` URL; optional `defaults.auto_start_relay` (machine-wide fallback for per-directory configs) |
 | `~/.pi/remote/peers.json` | Per-machine | Paired mobile devices |
@@ -605,7 +611,7 @@ Every path above **except the global `config.json`** derives from a single
 that state root:
 
 | Variable | Behaviour |
-|---|---|
+| --- | --- |
 | `REMOTE_PI_DIR` | Absolute path to the state root. No suffix appended — set this to an XDG-style location like `~/.config/pi/remote-pi`. Takes priority over every other variable. |
 | `REMOTE_PI_HOME` | Stand-in for `$HOME`; state lives at `<REMOTE_PI_HOME>/.pi/remote`. Kept for backward compatibility. |
 

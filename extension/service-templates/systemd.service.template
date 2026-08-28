@@ -1,6 +1,6 @@
 [Unit]
 Description=Remote Pi daemon supervisor (plan/26)
-Documentation=https://remote-pi.jacobmoura.work
+Documentation=https://docs.georgeharker.com/un-bien
 After=default.target
 
 [Service]

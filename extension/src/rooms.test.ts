@@ -25,7 +25,7 @@ describe("roomIdForCwd", () => {
 
   test("realpath: symlinks resolve to the same id", () => {
     // Real fs setup: dir + symlink → dir. Both must produce identical ids.
-    const tmp = mkdtempSync(join(tmpdir(), "remote-pi-rooms-"));
+    const tmp = mkdtempSync(join(tmpdir(), "un-bien-rooms-"));
     const real = join(tmp, "real");
     mkdirSync(real);
     writeFileSync(join(real, "marker"), "x");
@@ -42,12 +42,12 @@ describe("roomIdForCwd", () => {
 });
 
 describe("roomIdFor (plan/41 — App↔Pi room per (cwd, name))", () => {
-  const cwd = "/tmp/proj/backend";              // basename → default name "backend"
-  const dflt = defaultAgentName(cwd);           // "backend"
+  const cwd = "/tmp/proj/backend"; // basename → default name "backend"
+  const dflt = defaultAgentName(cwd); // "backend"
 
   test("INVARIANT: default/absent name preserves the LEGACY cwd-only id (no re-keying)", () => {
-    expect(roomIdFor(cwd)).toBe(roomIdForCwd(cwd));         // absent name
-    expect(roomIdFor(cwd, dflt)).toBe(roomIdForCwd(cwd));   // name == defaultAgentName(cwd)
+    expect(roomIdFor(cwd)).toBe(roomIdForCwd(cwd)); // absent name
+    expect(roomIdFor(cwd, dflt)).toBe(roomIdForCwd(cwd)); // name == defaultAgentName(cwd)
   });
 
   test("a custom agent_name produces a DISTINCT id (name-scoped)", () => {
@@ -62,13 +62,13 @@ describe("roomIdFor (plan/41 — App↔Pi room per (cwd, name))", () => {
   test("`folder` (default → legacy) vs `folder#2` (scoped) → distinct", () => {
     // The disambiguation for two UNNAMED agents: 1st keeps the legacy room,
     // 2nd gets a name-scoped room under the broker's #2 suffix.
-    expect(roomIdFor(cwd, dflt)).toBe(roomIdForCwd(cwd));          // 1st = legacy
+    expect(roomIdFor(cwd, dflt)).toBe(roomIdForCwd(cwd)); // 1st = legacy
     expect(roomIdFor(cwd, `${dflt}#2`)).not.toBe(roomIdForCwd(cwd)); // 2nd = scoped
     expect(roomIdFor(cwd, dflt)).not.toBe(roomIdFor(cwd, `${dflt}#2`));
   });
 
   test("realpath: a symlinked cwd yields the SAME name-scoped id as the real dir", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "remote-pi-rooms41-"));
+    const tmp = mkdtempSync(join(tmpdir(), "un-bien-rooms41-"));
     const real = join(tmp, "real");
     mkdirSync(real);
     writeFileSync(join(real, "marker"), "x");

@@ -20,11 +20,15 @@ let home: string;
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "pi-cron-"));
-  process.env["REMOTE_PI_HOME"] = home;
+  process.env["UNBIEN_HOME"] = home;
 });
 afterEach(() => {
-  delete process.env["REMOTE_PI_HOME"];
-  try { rmSync(home, { recursive: true, force: true }); } catch { /* best-effort */ }
+  delete process.env["UNBIEN_HOME"];
+  try {
+    rmSync(home, { recursive: true, force: true });
+  } catch {
+    /* best-effort */
+  }
 });
 
 describe("cron_registry — CRUD", () => {
@@ -34,7 +38,11 @@ describe("cron_registry — CRUD", () => {
   });
 
   test("addJob persists with a j_ id + sensible defaults", () => {
-    const job = addJob({ daemon_id: "abcd1234", schedule: "0 9 * * *", prompt: "hi" });
+    const job = addJob({
+      daemon_id: "abcd1234",
+      schedule: "0 9 * * *",
+      prompt: "hi",
+    });
     expect(job.id).toMatch(/^j_[0-9a-f]{8}$/);
     expect(job).toMatchObject({
       daemon_id: "abcd1234",
@@ -47,17 +55,29 @@ describe("cron_registry — CRUD", () => {
     });
     expect(typeof job.created_at).toBe("string");
     // round-trips to disk
-    const onDisk = JSON.parse(readFileSync(cronRegistryPath(), "utf8")) as { jobs: unknown[] };
+    const onDisk = JSON.parse(readFileSync(cronRegistryPath(), "utf8")) as {
+      jobs: unknown[];
+    };
     expect(onDisk.jobs).toHaveLength(1);
     expect(getJob(job.id)?.prompt).toBe("hi");
   });
 
   test("flags + tz are honored", () => {
     const job = addJob({
-      daemon_id: "d", schedule: "0 * * * *", prompt: "p",
-      tz: "America/Sao_Paulo", skip_if_busy: false, wake: true, catchup: true,
+      daemon_id: "d",
+      schedule: "0 * * * *",
+      prompt: "p",
+      tz: "America/Sao_Paulo",
+      skip_if_busy: false,
+      wake: true,
+      catchup: true,
     });
-    expect(job).toMatchObject({ tz: "America/Sao_Paulo", skip_if_busy: false, wake: true, catchup: true });
+    expect(job).toMatchObject({
+      tz: "America/Sao_Paulo",
+      skip_if_busy: false,
+      wake: true,
+      catchup: true,
+    });
   });
 
   test("removeJob removes; unknown id → false", () => {
@@ -77,15 +97,30 @@ describe("cron_registry — CRUD", () => {
   test("recordRun stores last_run/last_status", () => {
     const job = addJob({ daemon_id: "d", schedule: "0 9 * * *", prompt: "p" });
     recordRun(job.id, "2026-06-07T12:00:00.000Z", "delivered");
-    expect(getJob(job.id)).toMatchObject({ last_run: "2026-06-07T12:00:00.000Z", last_status: "delivered" });
+    expect(getJob(job.id)).toMatchObject({
+      last_run: "2026-06-07T12:00:00.000Z",
+      last_status: "delivered",
+    });
   });
 
   test("corrupt entries are dropped on load", () => {
-    saveCronRegistry({ jobs: [
-      { id: "j_ok", daemon_id: "d", schedule: "0 9 * * *", prompt: "p", enabled: true, skip_if_busy: true, wake: false, catchup: false, created_at: "x" },
-      // @ts-expect-error intentionally malformed
-      { id: "j_bad" },
-    ] });
+    saveCronRegistry({
+      jobs: [
+        {
+          id: "j_ok",
+          daemon_id: "d",
+          schedule: "0 9 * * *",
+          prompt: "p",
+          enabled: true,
+          skip_if_busy: true,
+          wake: false,
+          catchup: false,
+          created_at: "x",
+        },
+        // @ts-expect-error intentionally malformed
+        { id: "j_bad" },
+      ],
+    });
     expect(listJobs().map((j) => j.id)).toEqual(["j_ok"]);
   });
 });

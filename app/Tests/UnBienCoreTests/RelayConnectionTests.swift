@@ -64,12 +64,12 @@ final class RelayConnectionTests: XCTestCase {
         }
     }
 
-    /// Live smoke test — runs only when REMOTE_PI_RELAY is set. Proves the app
+    /// Live smoke test — runs only when UNBIEN_RELAY is set. Proves the app
     /// identity can complete the real handshake against a running relay.
     func testLiveRelayHandshake() async throws {
-        guard let raw = ProcessInfo.processInfo.environment["REMOTE_PI_RELAY"],
+        guard let raw = ProcessInfo.processInfo.environment["UNBIEN_RELAY"],
               let url = Self.wsURL(raw) else {
-            throw XCTSkip("REMOTE_PI_RELAY not set")
+            throw XCTSkip("UNBIEN_RELAY not set")
         }
         let channel = URLSessionWebSocketChannel(url: url)
         let connection = RelayConnection(channel: channel, identity: Ed25519Identity())

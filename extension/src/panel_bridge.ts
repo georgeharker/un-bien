@@ -18,9 +18,10 @@
 // stay wire-compatible; kept self-contained (pi-plan is not a dependency).
 
 import { appendFileSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { loadConfig } from "./config.js";
+import { unbienStateHome } from "./paths.js";
 import type { ServerMessage } from "./protocol/types.js";
 
 /** Coalesce window: bus events often arrive in bursts (a plan snapshot + N
@@ -62,31 +63,25 @@ export function createPanelBridge(
   broadcast: (msg: ServerMessage) => void,
 ): PanelBridge | null {
   const eventsRaw = (pi as { events?: EventBus }).events;
-  if (
-    !eventsRaw ||
-    typeof eventsRaw.on !== "function"
-  ) {
+  if (!eventsRaw || typeof eventsRaw.on !== "function") {
     return null;
   }
   const events: EventBus = eventsRaw;
 
   // Opt-in tracing: shows whether bus events land and whether a panel frame is
-  // broadcast, to isolate capture vs render. `REMOTE_PI_DEBUG_PANELS=1` logs to
-  // stderr AND appends to `$TMPDIR/remote-pi-panel-bridge.log`; set it to a path
-  // (contains `/`) to choose the file. stderr scrolls too fast — tail the file.
+  // broadcast, to isolate capture vs render. Enabled by the `debug.panels` pref
+  // in the global config (`extensions/un-bien.json`) — logs to stderr AND appends
+  // to `<state>/panel-bridge.log`. stderr scrolls too fast — tail the file.
   const debug: (msg: string) => void = (() => {
-    const flag = process.env.REMOTE_PI_DEBUG_PANELS;
-    if (!flag) return () => {};
-    // Stable, findable location (tmpdir varies per process and was hard to
-    // locate): ~/.pi/remote/panel-bridge.log. Override with a path in the flag.
-    let logFile: string;
-    if (flag.includes("/")) {
-      logFile = flag;
-    } else {
-      const dir = join(homedir(), ".pi", "remote");
-      try { mkdirSync(dir, { recursive: true }); } catch { /* best-effort */ }
-      logFile = join(dir, "panel-bridge.log");
+    if (loadConfig().debug?.panels !== true) return () => {};
+    // Stable, findable location: `<state>/panel-bridge.log`.
+    const dir = unbienStateHome();
+    try {
+      mkdirSync(dir, { recursive: true });
+    } catch {
+      /* best-effort */
     }
+    const logFile = join(dir, "panel-bridge.log");
     return (msg: string) => {
       const line = `${new Date().toISOString()} [panel-bridge] ${msg}`;
       try {
@@ -109,7 +104,8 @@ export function createPanelBridge(
 
   const allPlanItems = (): PlanItem[] => {
     const out: PlanItem[] = [];
-    for (const map of planByNs.values()) for (const it of map.values()) out.push(it);
+    for (const map of planByNs.values())
+      for (const it of map.values()) out.push(it);
     return out;
   };
 
@@ -121,7 +117,8 @@ export function createPanelBridge(
   // to the AGENTS panel and keep them out of the plan rows. Direct `subagents:*`
   // fleet + any agent-kind plan items are merged by id (live fleet wins status).
   const isAgent = (it: PlanItem): boolean => it.kind === "agent";
-  const planPanelItems = (): PlanItem[] => allPlanItems().filter((it) => !isAgent(it));
+  const planPanelItems = (): PlanItem[] =>
+    allPlanItems().filter((it) => !isAgent(it));
   const agentItems = (): PlanItem[] => {
     const byId = new Map<string, PlanItem>();
     for (const it of allPlanItems()) if (isAgent(it)) byId.set(it.id, it);
@@ -167,11 +164,15 @@ export function createPanelBridge(
         try {
           frame = build();
         } catch (error) {
-          debug(`build ${key} THREW: ${error instanceof Error ? error.message : String(error)}`);
+          debug(
+            `build ${key} THREW: ${error instanceof Error ? error.message : String(error)}`,
+          );
           return;
         }
         const fitems =
-          frame.type === "panel_update" && frame.data && typeof frame.data === "object"
+          frame.type === "panel_update" &&
+          frame.data &&
+          typeof frame.data === "object"
             ? ((frame.data as { items?: Array<{ kind?: string }> }).items ?? [])
             : [];
         const kinds = fitems.reduce<Record<string, number>>((acc, it) => {
@@ -179,7 +180,9 @@ export function createPanelBridge(
           acc[k] = (acc[k] ?? 0) + 1;
           return acc;
         }, {});
-        debug(`broadcast ${key} items=${fitems.length} kinds=${JSON.stringify(kinds)}`);
+        debug(
+          `broadcast ${key} items=${fitems.length} kinds=${JSON.stringify(kinds)}`,
+        );
         broadcast(frame);
       }, COALESCE_MS),
     );
@@ -195,11 +198,15 @@ export function createPanelBridge(
     try {
       frame = build();
     } catch (error) {
-      debug(`build ${key} THREW: ${error instanceof Error ? error.message : String(error)}`);
+      debug(
+        `build ${key} THREW: ${error instanceof Error ? error.message : String(error)}`,
+      );
       return;
     }
     const items =
-      frame.type === "panel_update" && frame.data && typeof frame.data === "object"
+      frame.type === "panel_update" &&
+      frame.data &&
+      typeof frame.data === "object"
         ? ((frame.data as { items?: unknown[] }).items?.length ?? 0)
         : 0;
     debug(`broadcast ${key} now items=${items}`);
@@ -249,7 +256,11 @@ export function createPanelBridge(
   const recordAgent =
     (status: string) =>
     (data: unknown): void => {
-      const p = (data ?? {}) as { id?: unknown; type?: unknown; description?: unknown };
+      const p = (data ?? {}) as {
+        id?: unknown;
+        type?: unknown;
+        description?: unknown;
+      };
       const id = str(p.id);
       debug(`event ${status} id=${id ?? "<none>"}`);
       if (!id) return;
@@ -259,7 +270,8 @@ export function createPanelBridge(
         type: str(p.type),
         description: str(p.description),
         status,
-        startedAt: prev?.startedAt ?? (IN_PROGRESS.has(status) ? Date.now() : undefined),
+        startedAt:
+          prev?.startedAt ?? (IN_PROGRESS.has(status) ? Date.now() : undefined),
       };
       fleet.set(id, mergeAgentState(prev, incoming));
       debug(`fleet=${fleet.size} after ${status} ${id}`);
@@ -317,15 +329,24 @@ function parseItem(raw: unknown): PlanItem | null {
   const r = raw as Record<string, unknown>;
   if (typeof r.id !== "string") return null;
   const display =
-    typeof r.title === "string" ? r.title : typeof r.name === "string" ? r.name : r.id;
+    typeof r.title === "string"
+      ? r.title
+      : typeof r.name === "string"
+        ? r.name
+        : r.id;
   return {
     id: r.id,
     kind: typeof r.kind === "string" ? r.kind : "plan",
     title: display,
     status: typeof r.status === "string" ? r.status : null,
-    deps: Array.isArray(r.deps) ? r.deps.filter((x): x is string => typeof x === "string") : [],
+    deps: Array.isArray(r.deps)
+      ? r.deps.filter((x): x is string => typeof x === "string")
+      : [],
     tainted: typeof r.tainted === "boolean" ? r.tainted : undefined,
-    meta: r.meta && typeof r.meta === "object" ? (r.meta as Record<string, unknown>) : undefined,
+    meta:
+      r.meta && typeof r.meta === "object"
+        ? (r.meta as Record<string, unknown>)
+        : undefined,
   };
 }
 
@@ -333,7 +354,12 @@ function parseItem(raw: unknown): PlanItem | null {
 function parseSnapshot(data: unknown): PlanSnapshot | null {
   if (!data || typeof data !== "object") return null;
   const d = data as Record<string, unknown>;
-  const ns = typeof d.ns === "string" ? d.ns : typeof d.source === "string" ? d.source : null;
+  const ns =
+    typeof d.ns === "string"
+      ? d.ns
+      : typeof d.source === "string"
+        ? d.source
+        : null;
   if (!ns || !Array.isArray(d.items)) return null;
   const items = d.items.map(parseItem).filter((x): x is PlanItem => x !== null);
   return { ns, seq: typeof d.seq === "number" ? d.seq : 0, items };
@@ -387,17 +413,26 @@ function statusRank(status: string | undefined): number {
 
 /** Merge a lifecycle event into kept state: never downgrade status, keep a
  *  specific terminal reason over a generic `failed`. */
-function mergeAgentState(prev: AgentState | undefined, incoming: AgentState): AgentState {
+function mergeAgentState(
+  prev: AgentState | undefined,
+  incoming: AgentState,
+): AgentState {
   const merged: AgentState = { ...prev, ...incoming };
   if (prev?.type && !incoming.type) merged.type = prev.type;
-  if (prev?.description && !incoming.description) merged.description = prev.description;
+  if (prev?.description && !incoming.description)
+    merged.description = prev.description;
   if (prev) {
     const prevStatus = String(prev.status ?? "").toLowerCase();
     const inStatus = String(incoming.status ?? "").toLowerCase();
     const prevRank = statusRank(prevStatus);
     const inRank = statusRank(inStatus);
     if (prevRank > inRank) merged.status = prev.status;
-    else if (prevRank === 2 && inRank === 2 && inStatus === "failed" && prevStatus !== "failed")
+    else if (
+      prevRank === 2 &&
+      inRank === 2 &&
+      inStatus === "failed" &&
+      prevStatus !== "failed"
+    )
       merged.status = prev.status;
   }
   return merged;

@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { existsSync, lstatSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  writeFileSync,
+  mkdirSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 
@@ -49,7 +58,9 @@ describe("findNodeBinary", () => {
 describe("findSupervisorScript", () => {
   test("ends with bin/supervisord.js (whatever distRoot is)", () => {
     // `join` yields the platform separator (`/` POSIX, `\` win32).
-    expect(findSupervisorScript().endsWith(join("bin", "supervisord.js"))).toBe(true);
+    expect(findSupervisorScript().endsWith(join("bin", "supervisord.js"))).toBe(
+      true,
+    );
   });
 });
 
@@ -70,7 +81,7 @@ describe("findTemplate", () => {
     expect(p.endsWith("launchd.plist.template")).toBe(true);
     const content = readFileSync(p, "utf8");
     expect(content).toContain("<key>Label</key>");
-    expect(content).toContain("dev.remotepi.supervisord");
+    expect(content).toContain("dev.unbien.supervisord");
     expect(content).toContain("{NODE}");
     expect(content).toContain("{SUPERVISOR}");
   });
@@ -115,8 +126,8 @@ describe("renderTemplate", () => {
     home: "/Users/x",
     user: "jacob",
     path: "/usr/local/bin:/usr/bin:/bin",
-    vbs: "/Users/x/.pi/remote/RemotePiSupervisorLauncher.vbs",
-    logPath: "/Users/x/.pi/remote/supervisord.log",
+    vbs: "/Users/x/.pi/un-bien/RemotePiSupervisorLauncher.vbs",
+    logPath: "/Users/x/.pi/un-bien/supervisord.log",
   };
 
   test("substitutes every placeholder in systemd template", () => {
@@ -142,7 +153,9 @@ describe("renderTemplate", () => {
     expect(out).not.toContain("{PATH}");
     expect(out).toContain(`<string>${vars.node}</string>`);
     expect(out).toContain(`<string>${vars.supervisor}</string>`);
-    expect(out).toContain(`<string>${vars.home}/.pi/remote/supervisord.log</string>`);
+    expect(out).toContain(
+      `<string>${vars.home}/.pi/un-bien/supervisord.log</string>`,
+    );
   });
 
   test("global replacement (multiple occurrences of same placeholder)", () => {
@@ -152,7 +165,9 @@ describe("renderTemplate", () => {
     // No unsubstituted {HOME} anywhere.
     expect(out.match(/\{HOME\}/g)).toBeNull();
     // And the value appears more than once (logs + EnvironmentVariables).
-    const matches = out.match(new RegExp(vars.home.replace(/[/.]/g, "\\$&"), "g"));
+    const matches = out.match(
+      new RegExp(vars.home.replace(/[/.]/g, "\\$&"), "g"),
+    );
     expect(matches && matches.length > 1).toBe(true);
   });
 
@@ -179,18 +194,20 @@ describe("renderTemplate", () => {
 });
 
 describe("vbsLauncherPath", () => {
-  test("is absolute and ends with the launcher .vbs under ~/.pi/remote", () => {
+  test("is absolute and ends with the launcher .vbs under ~/.pi/un-bien", () => {
     const p = vbsLauncherPath();
     expect(isAbsolute(p)).toBe(true);
     expect(p.endsWith("RemotePiSupervisorLauncher.vbs")).toBe(true);
-    expect(p.endsWith(join(".pi", "remote", "RemotePiSupervisorLauncher.vbs"))).toBe(true);
+    expect(
+      p.endsWith(join(".pi", "un-bien", "RemotePiSupervisorLauncher.vbs")),
+    ).toBe(true);
   });
 });
 
 describe("buildCmdShim", () => {
   test("forwards all args to node with quoted node + target", () => {
     const shim = buildCmdShim("C:\\node\\node.exe", "C:\\ext\\dist\\index.js");
-    expect(shim).toContain('@echo off');
+    expect(shim).toContain("@echo off");
     expect(shim).toContain('"C:\\node\\node.exe" "C:\\ext\\dist\\index.js" %*');
     expect(shim.endsWith("\r\n")).toBe(true);
   });
@@ -201,7 +218,7 @@ describe("buildElevatedCmd", () => {
     const out = buildElevatedCmd(
       [
         "schtasks /End /TN RemotePiSupervisor",
-        "schtasks /Create /XML \"x.xml\" /TN RemotePiSupervisor /F",
+        'schtasks /Create /XML "x.xml" /TN RemotePiSupervisor /F',
         "if errorlevel 1 exit /b 1",
         "schtasks /Run /TN RemotePiSupervisor",
       ],
@@ -209,22 +226,30 @@ describe("buildElevatedCmd", () => {
     );
     expect(out.startsWith("@echo off\r\n")).toBe(true);
     // schtasks lines get the redirect…
-    expect(out).toContain('schtasks /End /TN RemotePiSupervisor >> "C:\\Temp\\out.log" 2>&1');
-    expect(out).toContain('schtasks /Run /TN RemotePiSupervisor >> "C:\\Temp\\out.log" 2>&1');
+    expect(out).toContain(
+      'schtasks /End /TN RemotePiSupervisor >> "C:\\Temp\\out.log" 2>&1',
+    );
+    expect(out).toContain(
+      'schtasks /Run /TN RemotePiSupervisor >> "C:\\Temp\\out.log" 2>&1',
+    );
     // …control flow does NOT (redirecting it would swallow the exit code).
     expect(out).toContain("if errorlevel 1 exit /b 1\r\n");
-    expect(out).not.toContain('exit /b 1 >> ');
+    expect(out).not.toContain("exit /b 1 >> ");
   });
 });
 
 // systemd/launchd paths are POSIX-only (Windows uses Task Scheduler — plan/40).
 describe.skipIf(posixOnly)("paths", () => {
   test("systemdUnitPath lives under ~/.config/systemd/user/", () => {
-    expect(systemdUnitPath()).toMatch(/\.config\/systemd\/user\/remote-pi-supervisord\.service$/);
+    expect(systemdUnitPath()).toMatch(
+      /\.config\/systemd\/user\/unbien-supervisord\.service$/,
+    );
   });
 
   test("launchdPlistPath lives under ~/Library/LaunchAgents/", () => {
-    expect(launchdPlistPath()).toMatch(/Library\/LaunchAgents\/dev\.remotepi\.supervisord\.plist$/);
+    expect(launchdPlistPath()).toMatch(
+      /Library\/LaunchAgents\/dev\.unbien\.supervisord\.plist$/,
+    );
   });
 });
 
@@ -257,8 +282,12 @@ describe.skipIf(posixOnly)("userLocalBinDir + isOnPath", () => {
   });
 
   test("isOnPath matches dirs with and without trailing slash", () => {
-    expect(isOnPath("/x/.local/bin", "/usr/bin:/x/.local/bin:/opt/bin")).toBe(true);
-    expect(isOnPath("/x/.local/bin", "/usr/bin:/x/.local/bin/:/opt/bin")).toBe(true);
+    expect(isOnPath("/x/.local/bin", "/usr/bin:/x/.local/bin:/opt/bin")).toBe(
+      true,
+    );
+    expect(isOnPath("/x/.local/bin", "/usr/bin:/x/.local/bin/:/opt/bin")).toBe(
+      true,
+    );
     expect(isOnPath("/x/.local/bin/", "/usr/bin:/x/.local/bin")).toBe(true);
     expect(isOnPath("/x/.local/bin", "/usr/bin:/opt/bin")).toBe(false);
     expect(isOnPath("/x/.local/bin", "")).toBe(false);
@@ -295,7 +324,7 @@ describe.skipIf(posixOnly)("linkCliBinaries / unlinkCliBinaries", () => {
     expect(result.links).toHaveLength(2);
 
     const names = result.links.map((l) => l.name).sort();
-    expect(names).toEqual(["pi-supervisord", "remote-pi"]);
+    expect(names).toEqual(["pi-supervisord", "unbien"]);
 
     for (const link of result.links) {
       expect(lstatSync(link.path).isSymbolicLink()).toBe(true);
@@ -317,13 +346,13 @@ describe.skipIf(posixOnly)("linkCliBinaries / unlinkCliBinaries", () => {
     const binDir = join(tmpHome, ".local", "bin");
     mkdirSync(binDir, { recursive: true });
     // Write a fake stale symlink first
-    const stale = join(binDir, "remote-pi");
+    const stale = join(binDir, "unbien");
     writeFileSync(join(tmpHome, "fake-old.js"), "// old\n");
     require("node:fs").symlinkSync(join(tmpHome, "fake-old.js"), stale);
     expect(readlinkSync(stale)).toBe(join(tmpHome, "fake-old.js"));
 
     const result = linkCliBinaries(tmpHome, fakePaths);
-    const pi = result.links.find((l) => l.name === "remote-pi")!;
+    const pi = result.links.find((l) => l.name === "unbien")!;
     expect(readlinkSync(pi.path)).toBe(pi.target);
     expect(readlinkSync(pi.path)).not.toBe(join(tmpHome, "fake-old.js"));
   });
@@ -365,55 +394,66 @@ describe.skipIf(posixOnly)("linkCliBinaries / unlinkCliBinaries", () => {
 // Windows variant (plan/40): real `.cmd` shims, not symlinks. `mutatePath:false`
 // keeps the test from touching the real user PATH; `node` is injected so the
 // shim contents are deterministic.
-describe.skipIf(!posixOnly)("linkCliBinaries / unlinkCliBinaries (Windows .cmd shims)", () => {
-  let tmpHome: string;
-  let fakePaths: { remotePi: string; supervisord: string };
-  const node = "C:\\Program Files\\nodejs\\node.exe";
+describe.skipIf(!posixOnly)(
+  "linkCliBinaries / unlinkCliBinaries (Windows .cmd shims)",
+  () => {
+    let tmpHome: string;
+    let fakePaths: { remotePi: string; supervisord: string };
+    const node = "C:\\Program Files\\nodejs\\node.exe";
 
-  beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), "pi-link-win-"));
-    const stub = join(tmpHome, "fake-ext");
-    mkdirSync(join(stub, "bin"), { recursive: true });
-    fakePaths = {
-      remotePi: join(stub, "index.js"),
-      supervisord: join(stub, "bin", "supervisord.js"),
-    };
-    writeFileSync(fakePaths.remotePi, "// stub\n");
-    writeFileSync(fakePaths.supervisord, "// stub\n");
-  });
+    beforeEach(() => {
+      tmpHome = mkdtempSync(join(tmpdir(), "pi-link-win-"));
+      const stub = join(tmpHome, "fake-ext");
+      mkdirSync(join(stub, "bin"), { recursive: true });
+      fakePaths = {
+        remotePi: join(stub, "index.js"),
+        supervisord: join(stub, "bin", "supervisord.js"),
+      };
+      writeFileSync(fakePaths.remotePi, "// stub\n");
+      writeFileSync(fakePaths.supervisord, "// stub\n");
+    });
 
-  afterEach(() => {
-    rmSync(tmpHome, { recursive: true, force: true });
-  });
+    afterEach(() => {
+      rmSync(tmpHome, { recursive: true, force: true });
+    });
 
-  test("link writes remote-pi.cmd + pi-supervisord.cmd pointing at node + targets", () => {
-    const result = linkCliBinaries(tmpHome, fakePaths, { node, mutatePath: false });
-    expect(result.binDir).toBe(join(tmpHome, ".local", "bin"));
-    const names = result.links.map((l) => l.name).sort();
-    expect(names).toEqual(["pi-supervisord.cmd", "remote-pi.cmd"]);
-    for (const link of result.links) {
-      expect(existsSync(link.path)).toBe(true);
-      const content = readFileSync(link.path, "utf8");
-      expect(content).toContain(`"${node}"`);
-      expect(content).toContain(`"${link.target}"`);
-      expect(content).toContain("%*");
-    }
-  });
+    test("link writes un-bien.cmd + pi-supervisord.cmd pointing at node + targets", () => {
+      const result = linkCliBinaries(tmpHome, fakePaths, {
+        node,
+        mutatePath: false,
+      });
+      expect(result.binDir).toBe(join(tmpHome, ".local", "bin"));
+      const names = result.links.map((l) => l.name).sort();
+      expect(names).toEqual(["pi-supervisord.cmd", "un-bien.cmd"]);
+      for (const link of result.links) {
+        expect(existsSync(link.path)).toBe(true);
+        const content = readFileSync(link.path, "utf8");
+        expect(content).toContain(`"${node}"`);
+        expect(content).toContain(`"${link.target}"`);
+        expect(content).toContain("%*");
+      }
+    });
 
-  test("link is idempotent (re-running overwrites the same .cmd files)", () => {
-    linkCliBinaries(tmpHome, fakePaths, { node, mutatePath: false });
-    const second = linkCliBinaries(tmpHome, fakePaths, { node, mutatePath: false });
-    for (const link of second.links) {
-      expect(readFileSync(link.path, "utf8")).toBe(buildCmdShim(node, link.target));
-    }
-  });
+    test("link is idempotent (re-running overwrites the same .cmd files)", () => {
+      linkCliBinaries(tmpHome, fakePaths, { node, mutatePath: false });
+      const second = linkCliBinaries(tmpHome, fakePaths, {
+        node,
+        mutatePath: false,
+      });
+      for (const link of second.links) {
+        expect(readFileSync(link.path, "utf8")).toBe(
+          buildCmdShim(node, link.target),
+        );
+      }
+    });
 
-  test("unlink removes both .cmd shims, idempotent on second call", () => {
-    linkCliBinaries(tmpHome, fakePaths, { node, mutatePath: false });
-    const first = unlinkCliBinaries(tmpHome);
-    expect(first.removed.map((r) => r.existed)).toEqual([true, true]);
-    for (const r of first.removed) expect(existsSync(r.path)).toBe(false);
-    const second = unlinkCliBinaries(tmpHome);
-    expect(second.removed.map((r) => r.existed)).toEqual([false, false]);
-  });
-});
+    test("unlink removes both .cmd shims, idempotent on second call", () => {
+      linkCliBinaries(tmpHome, fakePaths, { node, mutatePath: false });
+      const first = unlinkCliBinaries(tmpHome);
+      expect(first.removed.map((r) => r.existed)).toEqual([true, true]);
+      for (const r of first.removed) expect(existsSync(r.path)).toBe(false);
+      const second = unlinkCliBinaries(tmpHome);
+      expect(second.removed.map((r) => r.existed)).toEqual([false, false]);
+    });
+  },
+);

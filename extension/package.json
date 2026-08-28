@@ -1,12 +1,12 @@
 {
-  "name": "remote-pi",
+  "name": "un-bien",
   "version": "0.7.0",
-  "description": "Mobile remote control and local agent mesh for the Pi coding agent. Pair your phone via QR over a relay, watch tool calls in real time, run multi-Pi sessions over a local Unix Domain Socket broker, and let agents talk to each other through structured request/reply.",
+  "description": "Mobile remote control and local agent mesh for the Pi coding agent. Pair your phone via QR over a relay, watch tool calls in real time, run multi-Pi sessions over a local Unix Domain Socket broker, and let agents talk to each other through structured request/reply. Derived from remote-pi by Jacob Moura (https://github.com/jacobaraujo7/remote_pi), MIT.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "remote-pi": "dist/index.js",
+    "unbien": "dist/index.js",
     "pi-supervisord": "dist/bin/supervisord.js"
   },
   "scripts": {
@@ -34,19 +34,21 @@
   "pi": {
     "extensions": [
       "./dist"
-    ],
-    "image": "https://raw.githubusercontent.com/jacobaraujo7/remote_pi/main/branding/banner.png"
+    ]
   },
-  "author": "Jacob Moura <jacobmoura7@gmail.com>",
+  "author": "George Harker <georgeharker@gmail.com>",
+  "contributors": [
+    "Jacob Moura <jacobmoura7@gmail.com> (remote-pi, the origin project: https://github.com/jacobaraujo7/remote_pi)"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jacobaraujo7/remote_pi.git",
-    "directory": "pi-extension"
+    "url": "git+https://github.com/georgeharker/un-bien.git",
+    "directory": "extension"
   },
-  "homepage": "https://remote-pi.jacobmoura.work",
+  "homepage": "https://docs.georgeharker.com/un-bien",
   "bugs": {
-    "url": "https://github.com/jacobaraujo7/remote_pi/issues"
+    "url": "https://github.com/georgeharker/un-bien/issues"
   },
   "files": [
     "dist",

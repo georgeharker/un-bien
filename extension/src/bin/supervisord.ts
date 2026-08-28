@@ -9,29 +9,32 @@
  *   node dist/bin/supervisord.js
  *
  * Once running, it:
- *   - Reads `~/.pi/remote/daemons.json`
- *   - Spawns `pi --mode rpc -e <remote-pi/dist/index.js>` per entry
- *   - Listens on `~/.pi/remote/supervisor.sock` for CLI control requests
+ *   - Reads `~/.pi/un-bien/daemons.json`
+ *   - Spawns `pi --mode rpc -e <un-bien/dist/index.js>` per entry
+ *   - Listens on `~/.pi/un-bien/supervisor.sock` for CLI control requests
  *   - Restarts crashed children with exponential backoff
  *
- * Exits cleanly on SIGTERM/SIGINT (used by `remote-pi uninstall`).
+ * Exits cleanly on SIGTERM/SIGINT (used by `un-bien uninstall`).
  */
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { Supervisor, SupervisorAlreadyRunningError } from "../daemon/supervisor.js";
+import {
+ Supervisor,
+ SupervisorAlreadyRunningError,
+} from "../daemon/supervisor.js";
 
 const HELP_TEXT = `pi-supervisord — Remote Pi daemon supervisor
 
 Usage: pi-supervisord
 
-Runs the long-lived supervisor: reads ~/.pi/remote/daemons.json, spawns one
-\`pi --mode rpc\` child per entry, and listens on ~/.pi/remote/supervisor.sock
-for control requests from the \`remote-pi\` CLI.
+Runs the long-lived supervisor: reads ~/.pi/un-bien/daemons.json, spawns one
+\`pi --mode rpc\` child per entry, and listens on ~/.pi/un-bien/supervisor.sock
+for control requests from the \`un-bien\` CLI.
 
 This binary takes NO arguments — it is normally launched by systemd/launchd
-(via \`remote-pi install\`), not by hand. Manage the fleet with:
-  remote-pi daemon start | stop | restart | status
-  remote-pi daemons
+(via \`un-bien install\`), not by hand. Manage the fleet with:
+  un-bien daemon start | stop | restart | status
+  un-bien daemons
 
 Options:
   -h, --help      Show this help and exit
@@ -39,57 +42,57 @@ Options:
 `;
 
 async function main(): Promise<void> {
-  // Guard: any stray argument used to fall through and start a FULL
-  // supervisor (a `pi-supervisord --help` once ran for days). Handle the
-  // conventional flags explicitly and reject unknown args instead of
-  // silently spawning the daemon fleet.
-  const args = process.argv.slice(2);
-  if (args.includes("-h") || args.includes("--help")) {
-    process.stdout.write(HELP_TEXT);
-    return;
-  }
-  if (args.includes("-v") || args.includes("--version")) {
-    process.stdout.write("pi-supervisord (remote-pi)\n");
-    return;
-  }
-  if (args.length > 0) {
-    process.stderr.write(
-      `pi-supervisord: unexpected argument(s): ${args.join(" ")}\n` +
-      "This binary takes no arguments. Run `pi-supervisord --help`.\n",
-    );
-    process.exit(2);
-  }
-
-  // The supervisor needs to point each spawned Pi at the extension
-  // entry it's bundled with. We're at `dist/bin/supervisord.js` after
-  // build; the extension is the sibling `dist/index.js`.
-  const here = fileURLToPath(import.meta.url);
-  const distRoot = dirname(dirname(here));  // dist/bin → dist
-  const extensionPath = join(distRoot, "index.js");
-
-  const supervisor = new Supervisor({ extensionPath });
-  await supervisor.start();
+ // Guard: any stray argument used to fall through and start a FULL
+ // supervisor (a `pi-supervisord --help` once ran for days). Handle the
+ // conventional flags explicitly and reject unknown args instead of
+ // silently spawning the daemon fleet.
+ const args = process.argv.slice(2);
+ if (args.includes("-h") || args.includes("--help")) {
+  process.stdout.write(HELP_TEXT);
+  return;
+ }
+ if (args.includes("-v") || args.includes("--version")) {
+  process.stdout.write("pi-supervisord (un-bien)\n");
+  return;
+ }
+ if (args.length > 0) {
   process.stderr.write(
-    `[pi-supervisord] up — UDS: ~/.pi/remote/supervisor.sock, extension: ${extensionPath}\n`,
+   `pi-supervisord: unexpected argument(s): ${args.join(" ")}\n` +
+    "This binary takes no arguments. Run `pi-supervisord --help`.\n",
   );
+  process.exit(2);
+ }
 
-  const shutdown = async (signal: string) => {
-    process.stderr.write(`[pi-supervisord] received ${signal}, shutting down\n`);
-    await supervisor.stop();
-    process.exit(0);
-  };
-  process.on("SIGTERM", () => void shutdown("SIGTERM"));
-  process.on("SIGINT", () => void shutdown("SIGINT"));
+ // The supervisor needs to point each spawned Pi at the extension
+ // entry it's bundled with. We're at `dist/bin/supervisord.js` after
+ // build; the extension is the sibling `dist/index.js`.
+ const here = fileURLToPath(import.meta.url);
+ const distRoot = dirname(dirname(here)); // dist/bin → dist
+ const extensionPath = join(distRoot, "index.js");
+
+ const supervisor = new Supervisor({ extensionPath });
+ await supervisor.start();
+ process.stderr.write(
+  `[pi-supervisord] up — UDS: ~/.pi/un-bien/supervisor.sock, extension: ${extensionPath}\n`,
+ );
+
+ const shutdown = async (signal: string) => {
+  process.stderr.write(`[pi-supervisord] received ${signal}, shutting down\n`);
+  await supervisor.stop();
+  process.exit(0);
+ };
+ process.on("SIGTERM", () => void shutdown("SIGTERM"));
+ process.on("SIGINT", () => void shutdown("SIGINT"));
 }
 
 main().catch((err) => {
-  // "Already running" is a normal, expected condition (systemd/launchd may
-  // race a manual start, or the user double-launches) — not a crash. Report
-  // it calmly and exit 0 so service managers don't flag a failure loop.
-  if (err instanceof SupervisorAlreadyRunningError) {
-    process.stderr.write(`[pi-supervisord] ${err.message}\n`);
-    process.exit(0);
-  }
-  process.stderr.write(`[pi-supervisord] fatal: ${String(err)}\n`);
-  process.exit(1);
+ // "Already running" is a normal, expected condition (systemd/launchd may
+ // race a manual start, or the user double-launches) — not a crash. Report
+ // it calmly and exit 0 so service managers don't flag a failure loop.
+ if (err instanceof SupervisorAlreadyRunningError) {
+  process.stderr.write(`[pi-supervisord] ${err.message}\n`);
+  process.exit(0);
+ }
+ process.stderr.write(`[pi-supervisord] fatal: ${String(err)}\n`);
+ process.exit(1);
 });

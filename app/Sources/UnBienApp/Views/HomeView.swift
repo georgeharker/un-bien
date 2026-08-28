@@ -56,7 +56,7 @@ struct HomeView: View {
                 Section {
                     let sessions = model.sessions(onRelay: relay.id)
                     if sessions.isEmpty {
-                        Text("No live sessions — pair a machine or start Pi with remote-pi.")
+                        Text("No live sessions — pair a machine or start Pi with un-bien.")
                             .font(.footnote).foregroundStyle(theme.secondaryText)
                     } else {
                         ForEach(sessions) { session in

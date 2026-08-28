@@ -9,20 +9,20 @@ import {
   effectiveAllowRemoteLaunch,
 } from "./local_config.js";
 
-const ENV = "REMOTE_PI_DIRECT_CONFIG";
+const ENV = "UNBIEN_DIRECT_CONFIG";
 
 function makeCwd(): string {
   return mkdtempSync(join(tmpdir(), "rp-localcfg-"));
 }
 
-/** Write a config.json into <cwd>/.pi/remote-pi/. */
+/** Write a config.json into <cwd>/.pi/un-bien/. */
 function writeFileConfig(cwd: string, obj: unknown): void {
-  const dir = join(cwd, ".pi", "remote-pi");
+  const dir = join(cwd, ".pi", "un-bien");
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "config.json"), JSON.stringify(obj));
 }
 
-describe("loadLocalConfig — file vs REMOTE_PI_DIRECT_CONFIG", () => {
+describe("loadLocalConfig — file vs UNBIEN_DIRECT_CONFIG", () => {
   let cwd: string;
 
   beforeEach(() => {
@@ -36,7 +36,10 @@ describe("loadLocalConfig — file vs REMOTE_PI_DIRECT_CONFIG", () => {
 
   test("reads the on-disk file when env is unset", () => {
     writeFileConfig(cwd, { agent_name: "fromfile", auto_start_relay: false });
-    expect(loadLocalConfig(cwd)).toEqual({ agent_name: "fromfile", auto_start_relay: false });
+    expect(loadLocalConfig(cwd)).toEqual({
+      agent_name: "fromfile",
+      auto_start_relay: false,
+    });
   });
 
   test("empty config when neither env nor file present", () => {
@@ -45,8 +48,14 @@ describe("loadLocalConfig — file vs REMOTE_PI_DIRECT_CONFIG", () => {
 
   test("inline env takes precedence over the file", () => {
     writeFileConfig(cwd, { agent_name: "fromfile", auto_start_relay: false });
-    process.env[ENV] = JSON.stringify({ agent_name: "fromenv", auto_start_relay: true });
-    expect(loadLocalConfig(cwd)).toEqual({ agent_name: "fromenv", auto_start_relay: true });
+    process.env[ENV] = JSON.stringify({
+      agent_name: "fromenv",
+      auto_start_relay: true,
+    });
+    expect(loadLocalConfig(cwd)).toEqual({
+      agent_name: "fromenv",
+      auto_start_relay: true,
+    });
   });
 
   test("inline env works with no file on disk", () => {
@@ -67,8 +76,16 @@ describe("loadLocalConfig — file vs REMOTE_PI_DIRECT_CONFIG", () => {
   });
 
   test("only known fields are surfaced (unknown keys dropped)", () => {
-    process.env[ENV] = JSON.stringify({ agent_name: "a", auto_start_relay: true, session_name: "x", junk: 1 });
-    expect(loadLocalConfig(cwd)).toEqual({ agent_name: "a", auto_start_relay: true });
+    process.env[ENV] = JSON.stringify({
+      agent_name: "a",
+      auto_start_relay: true,
+      session_name: "x",
+      junk: 1,
+    });
+    expect(loadLocalConfig(cwd)).toEqual({
+      agent_name: "a",
+      auto_start_relay: true,
+    });
   });
 
   test("non-object env (array/number) falls back to the file", () => {
@@ -94,12 +111,20 @@ describe("loadLocalConfig — workspace / worktree removed (plan 38)", () => {
   });
 
   test("ignores a stale workspace/worktree key from the file", () => {
-    writeFileConfig(cwd, { agent_name: "app", workspace: "acme", worktree: "feat-login" });
+    writeFileConfig(cwd, {
+      agent_name: "app",
+      workspace: "acme",
+      worktree: "feat-login",
+    });
     expect(loadLocalConfig(cwd)).toEqual({ agent_name: "app" });
   });
 
   test("ignores a stale workspace/worktree key from the inline env", () => {
-    process.env[ENV] = JSON.stringify({ agent_name: "app", workspace: "acme", worktree: "feat-login" });
+    process.env[ENV] = JSON.stringify({
+      agent_name: "app",
+      workspace: "acme",
+      worktree: "feat-login",
+    });
     expect(loadLocalConfig(cwd)).toEqual({ agent_name: "app" });
   });
 });
@@ -151,7 +176,10 @@ describe("saveLocalConfig — unaffected by env (still writes the file)", () => 
   test("auto_start_relay defaults to true on save", () => {
     saveLocalConfig(cwd, { agent_name: "saved" });
     delete process.env[ENV]; // ensure we read the file back, not any env
-    expect(loadLocalConfig(cwd)).toEqual({ agent_name: "saved", auto_start_relay: true });
+    expect(loadLocalConfig(cwd)).toEqual({
+      agent_name: "saved",
+      auto_start_relay: true,
+    });
   });
 });
 
@@ -160,9 +188,13 @@ describe("effectiveAllowRemoteLaunch — default OFF (authority-sensitive)", () 
     expect(effectiveAllowRemoteLaunch({})).toBe(false);
   });
   test("explicit true -> true", () => {
-    expect(effectiveAllowRemoteLaunch({ allow_remote_launch: true })).toBe(true);
+    expect(effectiveAllowRemoteLaunch({ allow_remote_launch: true })).toBe(
+      true,
+    );
   });
   test("explicit false -> false", () => {
-    expect(effectiveAllowRemoteLaunch({ allow_remote_launch: false })).toBe(false);
+    expect(effectiveAllowRemoteLaunch({ allow_remote_launch: false })).toBe(
+      false,
+    );
   });
 });

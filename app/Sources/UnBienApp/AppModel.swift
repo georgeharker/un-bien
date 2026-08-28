@@ -499,7 +499,7 @@ public final class AppModel: ObservableObject {
                 group.addTask {
                     try await Task.sleep(nanoseconds: 15_000_000_000)
                     throw RelayConnection.PairingError.unexpected(
-                        "No response from the machine. Is Pi running with remote-pi "
+                        "No response from the machine. Is Pi running with un-bien "
                         + "attached to this relay, and the code still valid?")
                 }
                 let first = try await group.next()!

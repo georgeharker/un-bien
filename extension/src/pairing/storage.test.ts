@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // Tests import the module after stubbing `os.homedir` so the fallback
-// path writes inside a temp dir instead of the dev's real ~/.pi/remote.
+// path writes inside a temp dir instead of the dev's real ~/.pi/un-bien.
 // vi.mock must run before the real module load.
 const _tmpHome = mkdtempSync(join(tmpdir(), "pi-storage-"));
 vi.mock("node:os", async (importOriginal) => {
@@ -80,8 +80,8 @@ class InMemoryBackend implements KeyStoreBackend {
   }
 }
 
-const NEW_SERVICE = "dev.remotepi.pi";
-const OLD_SERVICE = "dev.remotepi.mac";
+const NEW_SERVICE = "dev.unbien.pi";
+const OLD_SERVICE = "dev.unbien.mac";
 const ACCOUNT = "longterm-ed25519";
 
 beforeEach(async () => {
@@ -95,7 +95,7 @@ beforeEach(async () => {
   await _unlinkIdentityFileForTest();
   // peers.json now gates identity minting (issues #95/#69), so a container left
   // by a previous test would make an unrelated "fresh install" case throw.
-  rmSync(join(_tmpHome, ".pi", "remote", "peers.json"), { force: true });
+  rmSync(join(_tmpHome, ".pi", "un-bien", "peers.json"), { force: true });
 });
 
 afterEach(() => {
@@ -103,7 +103,7 @@ afterEach(() => {
   _setKeyringExpectedForTest(null);
   _setKeyringRetryForTest(null);
   _setNativeBindingErrorForTest(null);
-  delete process.env.REMOTE_PI_ALLOW_FILE_IDENTITY;
+  delete process.env.UNBIEN_ALLOW_FILE_IDENTITY;
   vi.restoreAllMocks();
 });
 
@@ -150,7 +150,7 @@ describe("getOrCreateEd25519Keypair — keyring path", () => {
     expect(Buffer.from(first.publicKey).toString("base64")).toBe(
       Buffer.from(second.publicKey).toString("base64"),
     );
-    expect(backend.writes.length).toBe(1);  // only the first call wrote
+    expect(backend.writes.length).toBe(1); // only the first call wrote
   });
 });
 
@@ -176,7 +176,9 @@ describe("getOrCreateEd25519Keypair — keytar migration (plan/27 E1)", () => {
     expect(backend.store.get(`${NEW_SERVICE}|${ACCOUNT}`)).toBe(legacy);
     // Old entry was deleted
     expect(backend.store.has(`${OLD_SERVICE}|${ACCOUNT}`)).toBe(false);
-    expect(backend.deletes.find((d) => d.service === OLD_SERVICE)).toBeDefined();
+    expect(
+      backend.deletes.find((d) => d.service === OLD_SERVICE),
+    ).toBeDefined();
   });
 
   test("new entry already present → does NOT touch legacy entry", async () => {
@@ -210,7 +212,7 @@ describe("getOrCreateEd25519Keypair — headless Linux fallback", () => {
     const backend = new InMemoryBackend();
     backend.failAll("read");
     _setKeyStoreBackendForTest(backend);
-    _setKeyringExpectedForTest(false);  // simulate headless Linux (no core keyring)
+    _setKeyringExpectedForTest(false); // simulate headless Linux (no core keyring)
 
     const kp = await getOrCreateEd25519Keypair();
     expect(kp.publicKey.length).toBe(32);
@@ -223,11 +225,13 @@ describe("getOrCreateEd25519Keypair — headless Linux fallback", () => {
     if (process.platform !== "win32") {
       const stat = statSync(_IDENTITY_FILE_FOR_TEST);
       const perms = stat.mode & 0o777;
-      expect(perms & 0o077).toBe(0);  // group + other bits zero
+      expect(perms & 0o077).toBe(0); // group + other bits zero
     }
 
     // Round-trip: parse and check it deserializes to the same key.
-    const parsed = JSON.parse(readFileSync(_IDENTITY_FILE_FOR_TEST, "utf8")) as { pk: string; sk: string };
+    const parsed = JSON.parse(
+      readFileSync(_IDENTITY_FILE_FOR_TEST, "utf8"),
+    ) as { pk: string; sk: string };
     expect(Buffer.from(parsed.pk, "base64").length).toBe(32);
   });
 
@@ -248,7 +252,6 @@ describe("getOrCreateEd25519Keypair — headless Linux fallback", () => {
       Buffer.from(second.publicKey).toString("base64"),
     );
   });
-
 });
 
 // ── Locked-keychain protection (the "lost pairing after a week idle" bug) ────
@@ -263,7 +266,7 @@ describe("getOrCreateEd25519Keypair — @napi-rs/keyring binding unavailable", (
     const backend = new InMemoryBackend();
     backend.failAll("read");
     _setKeyStoreBackendForTest(backend);
-    _setKeyringExpectedForTest(null);  // real platform check (darwin/win32 on CI hosts)
+    _setKeyringExpectedForTest(null); // real platform check (darwin/win32 on CI hosts)
     _setNativeBindingErrorForTest(new Error("Cannot find native binding."));
 
     const kp = await getOrCreateEd25519Keypair();
@@ -272,8 +275,9 @@ describe("getOrCreateEd25519Keypair — @napi-rs/keyring binding unavailable", (
 
     // Second call is stable — same identity, read straight off the file.
     const again = await getOrCreateEd25519Keypair();
-    expect(Buffer.from(again.publicKey).toString("base64"))
-      .toBe(Buffer.from(kp.publicKey).toString("base64"));
+    expect(Buffer.from(again.publicKey).toString("base64")).toBe(
+      Buffer.from(kp.publicKey).toString("base64"),
+    );
   });
 
   test("with the binding loadable, a locked core keyring still refuses to regenerate", async () => {
@@ -285,7 +289,9 @@ describe("getOrCreateEd25519Keypair — @napi-rs/keyring binding unavailable", (
     // Only meaningful on a platform whose keyring is a core OS service.
     if (process.platform !== "darwin" && process.platform !== "win32") return;
 
-    await expect(getOrCreateEd25519Keypair()).rejects.toBeInstanceOf(KeyringUnavailableError);
+    await expect(getOrCreateEd25519Keypair()).rejects.toBeInstanceOf(
+      KeyringUnavailableError,
+    );
     expect(existsSync(_IDENTITY_FILE_FOR_TEST)).toBe(false);
   });
 });
@@ -298,26 +304,28 @@ describe("getOrCreateEd25519Keypair — locked keyring does NOT regenerate", () 
       sk: Buffer.from(new Uint8Array(64).fill(6)).toString("base64"),
     });
     backend.store.set(`${NEW_SERVICE}|${ACCOUNT}`, original);
-    backend.failNext("read");  // first read throws, retry succeeds
+    backend.failNext("read"); // first read throws, retry succeeds
     _setKeyStoreBackendForTest(backend);
-    _setKeyringExpectedForTest(true);  // macOS/Windows: keyring is core
+    _setKeyringExpectedForTest(true); // macOS/Windows: keyring is core
 
     const kp = await getOrCreateEd25519Keypair();
     // Recovered the ORIGINAL paired key — not a freshly minted one.
     expect(Buffer.from(kp.publicKey).toString("base64")).toBe(
       Buffer.from(new Uint8Array(32).fill(5)).toString("base64"),
     );
-    expect(backend.reads.length).toBeGreaterThanOrEqual(2);  // retried
-    expect(existsSync(_IDENTITY_FILE_FOR_TEST)).toBe(false);  // no file regen
+    expect(backend.reads.length).toBeGreaterThanOrEqual(2); // retried
+    expect(existsSync(_IDENTITY_FILE_FOR_TEST)).toBe(false); // no file regen
   });
 
   test("persistent failure on a core-keyring platform with no file → throws (refuses to regen)", async () => {
     const backend = new InMemoryBackend();
     backend.failAll("read");
     _setKeyStoreBackendForTest(backend);
-    _setKeyringExpectedForTest(true);  // macOS/Windows
+    _setKeyringExpectedForTest(true); // macOS/Windows
 
-    await expect(getOrCreateEd25519Keypair()).rejects.toBeInstanceOf(KeyringUnavailableError);
+    await expect(getOrCreateEd25519Keypair()).rejects.toBeInstanceOf(
+      KeyringUnavailableError,
+    );
     // Critically: no new identity file was written (pairing not silently broken).
     expect(existsSync(_IDENTITY_FILE_FOR_TEST)).toBe(false);
   });
@@ -342,12 +350,12 @@ describe("getOrCreateEd25519Keypair — locked keyring does NOT regenerate", () 
     );
   });
 
-  test("REMOTE_PI_ALLOW_FILE_IDENTITY=1 opts into file identity even on a core-keyring platform", async () => {
+  test("UNBIEN_ALLOW_FILE_IDENTITY=1 opts into file identity even on a core-keyring platform", async () => {
     const backend = new InMemoryBackend();
     backend.failAll("read");
     _setKeyStoreBackendForTest(backend);
     _setKeyringExpectedForTest(true);
-    process.env.REMOTE_PI_ALLOW_FILE_IDENTITY = "1";
+    process.env.UNBIEN_ALLOW_FILE_IDENTITY = "1";
 
     const kp = await getOrCreateEd25519Keypair();
     expect(kp.publicKey.length).toBe(32);
@@ -359,10 +367,19 @@ describe("getOrCreateEd25519Keypair — locked keyring does NOT regenerate", () 
 
 describe("getOrCreateEd25519Keypair — paired devices block identity minting", () => {
   function seedPairedDevice(): void {
-    mkdirSync(join(_tmpHome, ".pi", "remote"), { recursive: true });
-    writeFileSync(join(_tmpHome, ".pi", "remote", "peers.json"), JSON.stringify({
-      peers: [{ name: "Phone", remote_epk: "AAAA", paired_at: new Date(0).toISOString() }],
-    }));
+    mkdirSync(join(_tmpHome, ".pi", "un-bien"), { recursive: true });
+    writeFileSync(
+      join(_tmpHome, ".pi", "un-bien", "peers.json"),
+      JSON.stringify({
+        peers: [
+          {
+            name: "Phone",
+            remote_epk: "AAAA",
+            paired_at: new Date(0).toISOString(),
+          },
+        ],
+      }),
+    );
   }
 
   test("unreadable keyring + existing pairings → throws instead of minting (daemon case)", async () => {
@@ -372,20 +389,21 @@ describe("getOrCreateEd25519Keypair — paired devices block identity minting", 
     const backend = new InMemoryBackend();
     backend.failAll("read");
     _setKeyStoreBackendForTest(backend);
-    _setKeyringExpectedForTest(false);  // headless Linux — used to mint silently
+    _setKeyringExpectedForTest(false); // headless Linux — used to mint silently
 
-    await expect(getOrCreateEd25519Keypair())
-      .rejects.toBeInstanceOf(storage.PairedIdentityMissingError);
+    await expect(getOrCreateEd25519Keypair()).rejects.toBeInstanceOf(
+      storage.PairedIdentityMissingError,
+    );
     expect(existsSync(_IDENTITY_FILE_FOR_TEST)).toBe(false);
   });
 
-  test("REMOTE_PI_ALLOW_FILE_IDENTITY=1 still opts out of the guard", async () => {
+  test("UNBIEN_ALLOW_FILE_IDENTITY=1 still opts out of the guard", async () => {
     seedPairedDevice();
     const backend = new InMemoryBackend();
     backend.failAll("read");
     _setKeyStoreBackendForTest(backend);
     _setKeyringExpectedForTest(false);
-    process.env.REMOTE_PI_ALLOW_FILE_IDENTITY = "1";
+    process.env.UNBIEN_ALLOW_FILE_IDENTITY = "1";
 
     const kp = await getOrCreateEd25519Keypair();
     expect(kp.publicKey).toHaveLength(32);
@@ -407,10 +425,10 @@ describe("getOrCreateEd25519Keypair — paired devices block identity minting", 
 // ── Corrupt peer record isolation ────────────────────────────────────────────
 
 describe("peer record corruption isolation", () => {
-  const peersPath = join(_tmpHome, ".pi", "remote", "peers.json");
+  const peersPath = join(_tmpHome, ".pi", "un-bien", "peers.json");
 
   function writePeers(peers: unknown): void {
-    mkdirSync(join(_tmpHome, ".pi", "remote"), { recursive: true });
+    mkdirSync(join(_tmpHome, ".pi", "un-bien"), { recursive: true });
     writeFileSync(peersPath, JSON.stringify({ peers }, null, 2));
   }
 
@@ -427,11 +445,17 @@ describe("peer record corruption isolation", () => {
   test("a false commit guard preserves the exact raw peer record", async () => {
     const rawHandle = "Bz02uLiwrmQZ0S8qiwtFJAt0KzUvrgepYO_oMQ6yyQE";
     const peers = [
-      { name: "Re-paired Owner", remote_epk: rawHandle, paired_at: "replacement" },
+      {
+        name: "Re-paired Owner",
+        remote_epk: rawHandle,
+        paired_at: "replacement",
+      },
     ];
     writePeers(peers);
 
-    await expect(storage.removePeer(rawHandle, () => false)).resolves.toBe(false);
+    await expect(storage.removePeer(rawHandle, () => false)).resolves.toBe(
+      false,
+    );
     expect(JSON.parse(readFileSync(peersPath, "utf8"))).toEqual({ peers });
   });
 
@@ -458,10 +482,11 @@ describe("peer record corruption isolation", () => {
     ]);
     await expect(storage.removePeer(urlSafeHandle)).resolves.toBe(true);
 
-    const expectedPeers = originalPeers.filter((peer) =>
-      !peer ||
-      typeof peer !== "object" ||
-      (peer as { remote_epk?: unknown }).remote_epk !== urlSafeHandle,
+    const expectedPeers = originalPeers.filter(
+      (peer) =>
+        !peer ||
+        typeof peer !== "object" ||
+        (peer as { remote_epk?: unknown }).remote_epk !== urlSafeHandle,
     );
     expect(JSON.parse(readFileSync(peersPath, "utf8"))).toEqual({
       peers: expectedPeers,
@@ -474,7 +499,7 @@ describe("peer record corruption isolation", () => {
 // ── File identity wins over a READABLE keyring (masking bug) ─────────────────
 //
 // A file-backed/headless install pairs the mobile against the key in
-// `~/.pi/remote/identity.json`. If the platform keyring later becomes readable
+// `~/.pi/un-bien/identity.json`. If the platform keyring later becomes readable
 // (D-Bus/libsecret installed, a desktop session, a stale entry from another
 // install), consulting it FIRST would mask the file identity — returning a
 // different key, or minting a fresh one over an empty keyring — and break the
@@ -488,7 +513,7 @@ describe("getOrCreateEd25519Keypair — file identity wins over a readable keyri
     const seed = new InMemoryBackend();
     seed.failAll("read");
     _setKeyStoreBackendForTest(seed);
-    _setKeyringExpectedForTest(false);  // headless Linux → writes identity.json
+    _setKeyringExpectedForTest(false); // headless Linux → writes identity.json
     const fileKp = await getOrCreateEd25519Keypair();
     expect(existsSync(_IDENTITY_FILE_FOR_TEST)).toBe(true);
     return fileKp;
@@ -500,12 +525,15 @@ describe("getOrCreateEd25519Keypair — file identity wins over a readable keyri
     // A fully-readable keyring now holds a DIFFERENT identity.
     const keyring = new InMemoryBackend();
     const otherPk = Buffer.from(new Uint8Array(32).fill(42)).toString("base64");
-    keyring.store.set(`${NEW_SERVICE}|${ACCOUNT}`, JSON.stringify({
-      pk: otherPk,
-      sk: Buffer.from(new Uint8Array(64).fill(43)).toString("base64"),
-    }));
+    keyring.store.set(
+      `${NEW_SERVICE}|${ACCOUNT}`,
+      JSON.stringify({
+        pk: otherPk,
+        sk: Buffer.from(new Uint8Array(64).fill(43)).toString("base64"),
+      }),
+    );
     _setKeyStoreBackendForTest(keyring);
-    _setKeyringExpectedForTest(true);  // even on a core-keyring platform
+    _setKeyringExpectedForTest(true); // even on a core-keyring platform
 
     const kp = await getOrCreateEd25519Keypair();
     // File identity wins — the mobile is paired against it.
@@ -538,30 +566,45 @@ describe("getOrCreateEd25519Keypair — file identity wins over a readable keyri
   });
 });
 
-
 describe("owner snapshot mutation tokens", () => {
-  const peersPath = join(_tmpHome, ".pi", "remote", "peers.json");
+  const peersPath = join(_tmpHome, ".pi", "un-bien", "peers.json");
   const snapshotStorage = storage as typeof storage & {
-    snapshotOwnerPubkeys(): Promise<readonly { rawOwnerPubkey: unknown; token: unknown }[]>;
-    conditionalRemovePeer(remoteEpk: string, expectedToken: unknown): Promise<{ outcome: string }>;
+    snapshotOwnerPubkeys(): Promise<
+      readonly { rawOwnerPubkey: unknown; token: unknown }[]
+    >;
+    conditionalRemovePeer(
+      remoteEpk: string,
+      expectedToken: unknown,
+    ): Promise<{ outcome: string }>;
   };
 
   function writePeers(peers: unknown): void {
-    mkdirSync(join(_tmpHome, ".pi", "remote"), { recursive: true });
+    mkdirSync(join(_tmpHome, ".pi", "un-bien"), { recursive: true });
     writeFileSync(peersPath, JSON.stringify({ peers }, null, 2));
   }
 
   test("stale re-pair token preserves the replacement record", async () => {
     const rawHandle = "Bz02uLiwrmQZ0S8qiwtFJAt0KzUvrgepYO/oMQ6yyQE=";
-    const original = { name: "first", remote_epk: rawHandle, paired_at: "first" };
-    const replacement = { name: "replacement", remote_epk: rawHandle, paired_at: "replacement" };
+    const original = {
+      name: "first",
+      remote_epk: rawHandle,
+      paired_at: "first",
+    };
+    const replacement = {
+      name: "replacement",
+      remote_epk: rawHandle,
+      paired_at: "replacement",
+    };
     writePeers([original]);
 
     const [snapshot] = await snapshotStorage.snapshotOwnerPubkeys();
     await storage.addPeer(replacement);
-    await expect(snapshotStorage.conditionalRemovePeer(rawHandle, snapshot!.token))
-      .resolves.toMatchObject({ outcome: "stale" });
-    expect(readFileSync(peersPath, "utf8")).toBe(JSON.stringify({ peers: [replacement] }, null, 2));
+    await expect(
+      snapshotStorage.conditionalRemovePeer(rawHandle, snapshot!.token),
+    ).resolves.toMatchObject({ outcome: "stale" });
+    expect(readFileSync(peersPath, "utf8")).toBe(
+      JSON.stringify({ peers: [replacement] }, null, 2),
+    );
   });
 
   test("current token removes only its exact raw representation", async () => {
@@ -573,11 +616,16 @@ describe("owner snapshot mutation tokens", () => {
     ]);
 
     const snapshot = await snapshotStorage.snapshotOwnerPubkeys();
-    const token = snapshot.find((entry) => entry.rawOwnerPubkey === urlSafeHandle)!.token;
-    await expect(snapshotStorage.conditionalRemovePeer(urlSafeHandle, token))
-      .resolves.toMatchObject({ outcome: "removed" });
+    const token = snapshot.find(
+      (entry) => entry.rawOwnerPubkey === urlSafeHandle,
+    )!.token;
+    await expect(
+      snapshotStorage.conditionalRemovePeer(urlSafeHandle, token),
+    ).resolves.toMatchObject({ outcome: "removed" });
     expect(JSON.parse(readFileSync(peersPath, "utf8"))).toEqual({
-      peers: [{ name: "standard", remote_epk: standardHandle, paired_at: "second" }],
+      peers: [
+        { name: "standard", remote_epk: standardHandle, paired_at: "second" },
+      ],
     });
   });
 });

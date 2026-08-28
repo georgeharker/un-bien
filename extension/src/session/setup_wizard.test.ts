@@ -32,14 +32,20 @@ function makeUI(answers: Array<string | undefined>): WizardUI & {
     inputCalls,
     selectCalls,
     notifies,
-    input: vi.fn().mockImplementation(async (title: string, opts?: { defaultValue?: string }) => {
-      inputCalls.push({ title, defaultValue: opts?.defaultValue });
-      return queue.shift();
-    }),
-    select: vi.fn().mockImplementation(async (title: string, options: string[]) => {
-      selectCalls.push({ title, options });
-      return queue.shift();
-    }),
+    input: vi
+      .fn()
+      .mockImplementation(
+        async (title: string, opts?: { defaultValue?: string }) => {
+          inputCalls.push({ title, defaultValue: opts?.defaultValue });
+          return queue.shift();
+        },
+      ),
+    select: vi
+      .fn()
+      .mockImplementation(async (title: string, options: string[]) => {
+        selectCalls.push({ title, options });
+        return queue.shift();
+      }),
     notify: vi.fn().mockImplementation((msg: string, kind: string) => {
       notifies.push({ msg, kind });
     }),
@@ -91,7 +97,8 @@ describe("runSetupWizard (2 prompts + confirm)", () => {
   test("3a) cancel on first prompt → returns null", async () => {
     const ui = makeUI([undefined]);
     const cfg = await runSetupWizard(ui, {
-      agent_name: "foo", use_relay: true,
+      agent_name: "foo",
+      use_relay: true,
     });
     expect(cfg).toBeNull();
   });
@@ -99,7 +106,8 @@ describe("runSetupWizard (2 prompts + confirm)", () => {
   test("3b) cancel on relay prompt → returns null", async () => {
     const ui = makeUI(["agent", undefined]);
     const cfg = await runSetupWizard(ui, {
-      agent_name: "foo", use_relay: true,
+      agent_name: "foo",
+      use_relay: true,
     });
     expect(cfg).toBeNull();
   });
@@ -107,7 +115,8 @@ describe("runSetupWizard (2 prompts + confirm)", () => {
   test("3c) cancel on final confirm → returns null (NO chosen)", async () => {
     const ui = makeUI(["agent", YES, NO]);
     const cfg = await runSetupWizard(ui, {
-      agent_name: "foo", use_relay: true,
+      agent_name: "foo",
+      use_relay: true,
     });
     expect(cfg).toBeNull();
   });
@@ -117,7 +126,8 @@ describe("runSetupWizard (2 prompts + confirm)", () => {
     // first ("No") to confirm the off path. Then confirm Yes.
     const ui = makeUI(["agent", NO, YES]);
     const cfg = await runSetupWizard(ui, {
-      agent_name: "foo", use_relay: false,
+      agent_name: "foo",
+      use_relay: false,
     });
     expect(cfg).toEqual({
       agent_name: "agent",
@@ -128,19 +138,19 @@ describe("runSetupWizard (2 prompts + confirm)", () => {
   test("5) relay-prompt informational notify precedes its question", async () => {
     const ui = makeUI(["agent", YES, YES]);
     await runSetupWizard(ui, {
-      agent_name: "foo", use_relay: true,
+      agent_name: "foo",
+      use_relay: true,
     });
     // The relay-context notify must appear in the notify log.
     expect(
-      ui.notifies.some((n) =>
-        n.msg.includes("relay forwards encrypted messages") ||
-        n.msg.includes("Remote Pi mobile app"),
+      ui.notifies.some(
+        (n) =>
+          n.msg.includes("relay forwards encrypted messages") ||
+          n.msg.includes("Remote Pi mobile app"),
       ),
     ).toBe(true);
     // No daemon-context notify — daemon mode was removed from the wizard.
-    expect(
-      ui.notifies.some((n) => n.msg.includes("Daemon mode")),
-    ).toBe(false);
+    expect(ui.notifies.some((n) => n.msg.includes("Daemon mode"))).toBe(false);
   });
 });
 
@@ -160,11 +170,12 @@ describe("localConfig integration with the wizard", () => {
     });
   });
 
-  test("/remote-pi setup with existing config: wizard uses current as defaults", async () => {
+  test("/unbien setup with existing config: wizard uses current as defaults", async () => {
     // Simulates the data flow without invoking the real handler.
     const cwd = tmpCwd();
     saveLocalConfig(cwd, {
-      agent_name: "old", auto_start_relay: false,
+      agent_name: "old",
+      auto_start_relay: false,
     });
     const current = loadLocalConfig(cwd);
     expect(current.auto_start_relay).toBe(false);
@@ -187,13 +198,11 @@ describe("localConfig integration with the wizard", () => {
 
   test("legacy config without auto_start_relay → treated as true", () => {
     const cwd = tmpCwd();
-    const cfgPath = join(cwd, ".pi", "remote-pi", "config.json");
-    const { mkdirSync, writeFileSync } = require("node:fs") as typeof import("node:fs");
-    mkdirSync(join(cwd, ".pi", "remote-pi"), { recursive: true });
-    writeFileSync(
-      cfgPath,
-      JSON.stringify({ agent_name: "legacy" }, null, 2),
-    );
+    const cfgPath = join(cwd, ".pi", "un-bien", "config.json");
+    const { mkdirSync, writeFileSync } =
+      require("node:fs") as typeof import("node:fs");
+    mkdirSync(join(cwd, ".pi", "un-bien"), { recursive: true });
+    writeFileSync(cfgPath, JSON.stringify({ agent_name: "legacy" }, null, 2));
 
     const loaded = loadLocalConfig(cwd);
     expect(loaded.auto_start_relay).toBeUndefined();
@@ -204,7 +213,10 @@ describe("localConfig integration with the wizard", () => {
     expect(reloaded.auto_start_relay).toBe(true);
     expect(reloaded.agent_name).toBe("legacy-renamed");
     expect(existsSync(cfgPath)).toBe(true);
-    const raw = JSON.parse(readFileSync(cfgPath, "utf8")) as Record<string, unknown>;
+    const raw = JSON.parse(readFileSync(cfgPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
     expect(raw["auto_start_relay"]).toBe(true);
   });
 
@@ -213,16 +225,21 @@ describe("localConfig integration with the wizard", () => {
     // local UDS mesh is always a single fixed session — the field has no
     // meaning. Load should ignore it without error and not persist it back.
     const cwd = tmpCwd();
-    const cfgPath = join(cwd, ".pi", "remote-pi", "config.json");
-    const { mkdirSync, writeFileSync } = require("node:fs") as typeof import("node:fs");
-    mkdirSync(join(cwd, ".pi", "remote-pi"), { recursive: true });
+    const cfgPath = join(cwd, ".pi", "un-bien", "config.json");
+    const { mkdirSync, writeFileSync } =
+      require("node:fs") as typeof import("node:fs");
+    mkdirSync(join(cwd, ".pi", "un-bien"), { recursive: true });
     writeFileSync(
       cfgPath,
-      JSON.stringify({
-        agent_name: "legacy",
-        session_name: "old-session",
-        auto_start_relay: true,
-      }, null, 2),
+      JSON.stringify(
+        {
+          agent_name: "legacy",
+          session_name: "old-session",
+          auto_start_relay: true,
+        },
+        null,
+        2,
+      ),
     );
 
     const loaded = loadLocalConfig(cwd);
@@ -236,7 +253,9 @@ describe("defaultAgentName", () => {
   // plan/38 decision D: the name is the LEAF only — the cwd now travels as its
   // own address axis, so the old `parent/folder` prefix is gone.
   test("returns the leaf (basename) of the cwd", () => {
-    expect(defaultAgentName("/Users/jacob/Projects/remote_pi")).toBe("remote_pi");
+    expect(defaultAgentName("/Users/jacob/Projects/remote_pi")).toBe(
+      "remote_pi",
+    );
     expect(defaultAgentName("/home/dev/myapp/backend")).toBe("backend");
     expect(defaultAgentName("/foo")).toBe("foo");
   });

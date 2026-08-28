@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
- * pi-extension — remote-pi slash commands + AgentBridge wiring
+ * pi-extension — un-bien slash commands + AgentBridge wiring
  *
  * Exported as ExtensionFactory (default export) to be loaded by Pi SDK:
  *   pi -e $(pwd)/dist/index.js
  *
  * State machine:  idle → started → paired
- *   /remote-pi start   connects to relay (idle → started)
- *   /remote-pi pair    shows QR for new peers (started, async → paired via auto-listener)
- *   /remote-pi stop    closes everything (any → idle)
+ *   /unbien start   connects to relay (idle → started)
+ *   /unbien pair    shows QR for new peers (started, async → paired via auto-listener)
+ *   /unbien stop    closes everything (any → idle)
  *
  * Pairing (post plano 06 — sem Noise XX):
  *   App envia inner `pair_request` (id, token, device_name) sobre canal opaco.
@@ -38,8 +38,14 @@ import type {
   ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
 import { SettingsManager, convertToPng } from "@earendil-works/pi-coding-agent";
-import { type Ed25519Keypair } from "./pairing/crypto.js";
-import { buildQRUri, qrSession, renderQRAscii, clampPairTtlMs, TOKEN_TTL_MS } from "./pairing/qr.js";
+import type { Ed25519Keypair } from "./pairing/crypto.js";
+import {
+  buildQRUri,
+  qrSession,
+  renderQRAscii,
+  clampPairTtlMs,
+  TOKEN_TTL_MS,
+} from "./pairing/qr.js";
 import {
   addPeer,
   getOrCreateEd25519Keypair,
@@ -76,8 +82,15 @@ import {
   type ExtensionUiResponseWire,
 } from "./extension_ui_bridge.js";
 import { createPanelBridge, type PanelBridge } from "./panel_bridge.js";
-import { createRpcEnvelope, helloEnvelope, type EnvelopeMessage } from "./session/rpc_envelope.js";
-import { dispatchRpcCommand, type RpcCommandHandlers } from "./session/rpc_inbound.js";
+import {
+  createRpcEnvelope,
+  helloEnvelope,
+  type EnvelopeMessage,
+} from "./session/rpc_envelope.js";
+import {
+  dispatchRpcCommand,
+  type RpcCommandHandlers,
+} from "./session/rpc_inbound.js";
 import { envLog } from "./session/debug_log.js";
 import { roomIdFor } from "./rooms.js";
 import { registerAgentTools } from "./session/tools.js";
@@ -102,10 +115,22 @@ import {
 } from "./session/global_config.js";
 import { acquireCwdLock, type AcquiredLock } from "./session/cwd_lock.js";
 import { addDaemon, listDaemons, removeDaemon } from "./daemon/registry.js";
-import { callSupervisor, supervisorOnline, SupervisorOfflineError } from "./daemon/client.js";
+import {
+  callSupervisor,
+  supervisorOnline,
+  SupervisorOfflineError,
+} from "./daemon/client.js";
 import type { ControlRequest, DaemonInfo } from "./daemon/control_protocol.js";
 import { EXIT_DAEMON_FRESH_SESSION } from "./daemon/rpc_child.js";
-import { installService, uninstallService, linkCliBinaries, unlinkCliBinaries, LAUNCHD_LABEL, SYSTEMD_UNIT, WINDOWS_TASK_NAME } from "./daemon/install.js";
+import {
+  installService,
+  uninstallService,
+  linkCliBinaries,
+  unlinkCliBinaries,
+  LAUNCHD_LABEL,
+  SYSTEMD_UNIT,
+  WINDOWS_TASK_NAME,
+} from "./daemon/install.js";
 import {
   defaultAgentName,
   effectiveAutoStartRelay,
@@ -118,7 +143,18 @@ import { runSetupWizard, type WizardUI } from "./session/setup_wizard.js";
 import { updateFooter, type FooterState } from "./ui/footer.js";
 import { join, dirname, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chmodSync, mkdtempSync, mkdirSync, copyFileSync, existsSync, statSync, unlinkSync, readFileSync, writeFileSync, realpathSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  mkdirSync,
+  copyFileSync,
+  existsSync,
+  statSync,
+  unlinkSync,
+  readFileSync,
+  writeFileSync,
+  realpathSync,
+} from "node:fs";
 import { createInterface } from "node:readline";
 import { spawn, spawnSync } from "node:child_process";
 import { hostname, tmpdir } from "node:os";
@@ -152,7 +188,7 @@ let _relay: RelayClient | null = null;
 /** Relay connectivity as seen by an RPC client (Cockpit). Derived from
  *  `_state` + `_relay`: "disconnected" = relay off (idle); "connected" = live
  *  WS; "reconnecting" = was on, WS dropped, retrying. Surfaced via the
- *  `remote-pi:relay-state` custom message (see `_emitRelayState`). */
+ *  `un-bien:relay-state` custom message (see `_emitRelayState`). */
 export type RelayConnectivity = "connected" | "reconnecting" | "disconnected";
 
 /** Last `RelayConnectivity` emitted, for change-dedup. Starts "disconnected"
@@ -164,8 +200,8 @@ let _lastRelayStatus: RelayConnectivity | null = null;
  *  and swallows it (`action:"handled"`) so it never becomes an LLM turn or a
  *  transcript entry. Starts with NUL so it can't collide with real user input
  *  and doesn't begin with "/" (which would route to the command parser). */
-export const CTRL_PREFIX = "\x00remote-pi-ctrl:";
-let _relayUrl: string | null = null;  // URL used by current _relay connection
+export const CTRL_PREFIX = "\x00un-bien-ctrl:";
+let _relayUrl: string | null = null; // URL used by current _relay connection
 /**
  * Owners currently connected via the relay. Key = app peer pubkey (Ed25519,
  * base64 standard); value = the dedicated PlainPeerChannel routing messages
@@ -176,12 +212,12 @@ let _relayUrl: string | null = null;  // URL used by current _relay connection
  *     `_detachPeerChannel` (or `_goIdle` for the bulk teardown). Don't mutate
  *     directly elsewhere — those helpers keep the footer/log/state in sync.
  *   - `paired` UX state is `_activePeers.size > 0`. The footer and the
- *     `/remote-pi status` output both derive from this.
+ *     `/unbien status` output both derive from this.
  */
 const _activePeers = new Map<string, PlainPeerChannel>();
-let _peerShort = "";  // shortid of the most recently attached peer (UX hint only)
+let _peerShort = ""; // shortid of the most recently attached peer (UX hint only)
 
-const REMOTE_PI_RECEIVED_IMAGE_TYPE = "remote-pi:received-image";
+const UNBIEN_RECEIVED_IMAGE_TYPE = "un-bien:received-image";
 const RECEIVED_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 
 type ReceivedImageDetails = {
@@ -203,11 +239,13 @@ let _imageCacheDir: string | undefined;
 const _pendingReceivedImagePreviews: ReceivedImageDetails[] = [];
 
 function _isBase64Char(code: number): boolean {
-  return (code >= 48 && code <= 57) // 0-9
-    || (code >= 65 && code <= 90) // A-Z
-    || (code >= 97 && code <= 122) // a-z
-    || code === 43 // +
-    || code === 47; // /
+  return (
+    (code >= 48 && code <= 57) || // 0-9
+    (code >= 65 && code <= 90) || // A-Z
+    (code >= 97 && code <= 122) || // a-z
+    code === 43 || // +
+    code === 47
+  ); // /
 }
 
 function _isStrictBase64(data: string): boolean {
@@ -227,15 +265,21 @@ function _isStrictBase64(data: string): boolean {
   return true;
 }
 
-let _myRoomId: string | null = null;   // this Pi's room id (derived from cwd)
+let _myRoomId: string | null = null; // this Pi's room id (derived from cwd)
 // Plan/28 Wave D.1: `thinking` published alongside `model` so the app's
 // Quick Actions sheet hydrates the thinking segmented control on first
 // open instead of starting null. The SDK fires `thinking_level_select`
 // on every change (initial load + user toggle), mirrored to room_meta
 // the same way model is — apps subscribe to one channel for both.
-let _myRoomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel; working?: boolean } | null = null;
-let _currentModel: string | undefined = undefined;  // last-known model name
-let _currentThinking: ThinkingLevel | undefined = undefined;  // last-known thinking level
+let _myRoomMeta: {
+  name: string;
+  cwd: string;
+  model?: string;
+  thinking?: ThinkingLevel;
+  working?: boolean;
+} | null = null;
+let _currentModel: string | undefined; // last-known model name
+let _currentThinking: ThinkingLevel | undefined; // last-known thinking level
 
 // ── Agent-network session (plano 19) ──────────────────────────────────────────
 // MeshNode owns both the local UDS mesh (SessionPeer) and the optional
@@ -256,8 +300,8 @@ let _disposed = false;
 // True once the auto-init has run on the first session_start for this
 // process. Prevents re-running on session replacements (those re-init via
 // the _disposed re-arm path above). The session_start handler below auto-starts
-// remote-pi for ANY session whose local config has auto_start_relay (default
-// true) — interactive AND daemon — instead of only REMOTE_PI_DAEMON=1.
+// un-bien for ANY session whose local config has auto_start_relay (default
+// true) — interactive AND daemon — instead of only UNBIEN_DAEMON=1.
 let _autoInited = false;
 
 // Cached state of global pairings (`peers.json`). Pairing is per-machine, so a
@@ -273,7 +317,9 @@ function _refreshPairingsCache(): void {
       _hasGlobalPairings = peers.length > 0;
       _refreshFooter();
     })
-    .catch(() => { /* keep prior cached value */ });
+    .catch(() => {
+      /* keep prior cached value */
+    });
 }
 
 /** Re-queries the broker for the authoritative peer list. The broker's map is
@@ -284,7 +330,8 @@ function _refreshSessionPeerCount(
   peer: MeshNode,
   ctx?: Pick<ExtensionContext, "ui"> | null,
 ): void {
-  void peer.request("broker", { type: "list_peers" }, 2000)
+  void peer
+    .request("broker", { type: "list_peers" }, 2000)
     .then((reply) => {
       const peers = (reply.body as { peers?: string[] } | null)?.peers;
       if (Array.isArray(peers)) {
@@ -292,7 +339,9 @@ function _refreshSessionPeerCount(
         _refreshFooter(ctx);
       }
     })
-    .catch(() => { /* older broker without list_peers — keep prior count */ });
+    .catch(() => {
+      /* older broker without list_peers — keep prior count */
+    });
 }
 
 /** Friendly model name for room_meta (plano 18). undefined when SDK has none yet. */
@@ -313,7 +362,11 @@ function _setCurrentModel(name: string): void {
   _currentModel = name;
   if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, model: name };
   if (_relay && _myRoomId) {
-    _relay.sendControl({ type: "room_meta_update", room_id: _myRoomId, meta: { model: name } });
+    _relay.sendControl({
+      type: "room_meta_update",
+      room_id: _myRoomId,
+      meta: { model: name },
+    });
   }
 }
 
@@ -327,18 +380,28 @@ function _setCurrentModel(name: string): void {
 function _publishWorking(working: boolean): void {
   if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working };
   if (_relay && _myRoomId) {
-    _relay.sendControl({ type: "room_meta_update", room_id: _myRoomId, meta: { working } });
+    _relay.sendControl({
+      type: "room_meta_update",
+      room_id: _myRoomId,
+      meta: { working },
+    });
   }
 }
 
 function _imageCacheRootDir(): string {
   if (_imageCacheDir) {
-    try { mkdirSync(_imageCacheDir, { recursive: true, mode: 0o700 }); } catch {}
-    try { chmodSync(_imageCacheDir, 0o700); } catch {}
+    try {
+      mkdirSync(_imageCacheDir, { recursive: true, mode: 0o700 });
+    } catch {}
+    try {
+      chmodSync(_imageCacheDir, 0o700);
+    } catch {}
     return _imageCacheDir;
   }
   const dir = mkdtempSync(join(tmpdir(), IMAGE_CACHE_PREFIX));
-  try { chmodSync(dir, 0o700); } catch {}
+  try {
+    chmodSync(dir, 0o700);
+  } catch {}
   _imageCacheDir = dir;
   return dir;
 }
@@ -352,15 +415,20 @@ function _imageExtension(mime: string): string | undefined {
 }
 
 function _safeFilenameToken(value: string): string {
-  return value
-    .trim()
-    .replace(/[^A-Za-z0-9._-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    || "message";
+  return (
+    value
+      .trim()
+      .replace(/[^A-Za-z0-9._-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-+|-+$/g, "") || "message"
+  );
 }
 
-function _safePreviewPath(dir: string, messageId: string, index: number): string {
+function _safePreviewPath(
+  dir: string,
+  messageId: string,
+  index: number,
+): string {
   return join(dir, `${_safeFilenameToken(messageId)}-${index}.preview.png`);
 }
 
@@ -381,18 +449,27 @@ async function _renderablePngPathFromImage(
 
   try {
     const converted = await convertToPng(imageData, mime);
-    if (!converted || converted.mimeType !== IMAGE_PREVIEW_MIME || !converted.data) {
+    if (
+      !converted ||
+      converted.mimeType !== IMAGE_PREVIEW_MIME ||
+      !converted.data
+    ) {
       return undefined;
     }
 
     const previewBytes = Buffer.from(converted.data, "base64");
-    if (previewBytes.length === 0 || previewBytes.length > RECEIVED_IMAGE_MAX_BYTES) {
+    if (
+      previewBytes.length === 0 ||
+      previewBytes.length > RECEIVED_IMAGE_MAX_BYTES
+    ) {
       return undefined;
     }
 
     try {
       writeFileSync(previewPath, previewBytes, { mode: 0o600 });
-      try { chmodSync(previewPath, 0o600); } catch {}
+      try {
+        chmodSync(previewPath, 0o600);
+      } catch {}
       return previewPath;
     } catch {
       _cleanupPreviewFile(previewPath);
@@ -404,10 +481,16 @@ async function _renderablePngPathFromImage(
   return undefined;
 }
 
-function _decodeImagePayload(data: string, mime: string): { ok: true; decoded: Buffer; size: number } | { ok: false; reason: string } {
-  if (!_imageExtension(mime)) return { ok: false, reason: `unsupported mime: ${mime}` };
-  if (data.startsWith("data:")) return { ok: false, reason: "data URI payloads are not supported" };
-  if (!_isStrictBase64(data)) return { ok: false, reason: "invalid base64 payload" };
+function _decodeImagePayload(
+  data: string,
+  mime: string,
+): { ok: true; decoded: Buffer; size: number } | { ok: false; reason: string } {
+  if (!_imageExtension(mime))
+    return { ok: false, reason: `unsupported mime: ${mime}` };
+  if (data.startsWith("data:"))
+    return { ok: false, reason: "data URI payloads are not supported" };
+  if (!_isStrictBase64(data))
+    return { ok: false, reason: "invalid base64 payload" };
 
   const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
   const estimate = (data.length / 4) * 3 - padding;
@@ -417,7 +500,10 @@ function _decodeImagePayload(data: string, mime: string): { ok: true; decoded: B
 
   const decoded = Buffer.from(data, "base64");
   if (decoded.length === 0 || decoded.length > RECEIVED_IMAGE_MAX_BYTES) {
-    return { ok: false, reason: `invalid decoded image size (${decoded.length} bytes)` };
+    return {
+      ok: false,
+      reason: `invalid decoded image size (${decoded.length} bytes)`,
+    };
   }
 
   return { ok: true, decoded, size: decoded.length };
@@ -427,7 +513,7 @@ function _sendReceivedImagePreviewNow(details: ReceivedImageDetails): void {
   if (!_pi) return;
   try {
     _pi.sendMessage<ReceivedImageDetails>({
-      customType: REMOTE_PI_RECEIVED_IMAGE_TYPE,
+      customType: UNBIEN_RECEIVED_IMAGE_TYPE,
       content: "",
       display: true,
       details,
@@ -458,7 +544,9 @@ function _flushPendingReceivedImagePreviews(): void {
   for (const details of pending) _sendReceivedImagePreviewNow(details);
 }
 
-async function _collectReceivedImagePreviews(msg: ClientUserMessage): Promise<ReceivedImageDetails[]> {
+async function _collectReceivedImagePreviews(
+  msg: ClientUserMessage,
+): Promise<ReceivedImageDetails[]> {
   if (!msg.images || msg.images.length === 0) return [];
 
   const previews: ReceivedImageDetails[] = [];
@@ -470,7 +558,9 @@ async function _collectReceivedImagePreviews(msg: ClientUserMessage): Promise<Re
     const mime = typeof image?.mime === "string" ? image.mime : "unknown";
 
     if (!image || typeof image.data !== "string") {
-      console.error(`[remote-pi] malformed image in message ${msg.id} index=${i}`);
+      console.error(
+        `[un-bien] malformed image in message ${msg.id} index=${i}`,
+      );
       previews.push({
         messageId: msg.id,
         index: i,
@@ -484,7 +574,9 @@ async function _collectReceivedImagePreviews(msg: ClientUserMessage): Promise<Re
 
     const decoded = _decodeImagePayload(image.data, image.mime);
     if (!decoded.ok) {
-      console.error(`[remote-pi] skipped image id=${msg.id} index=${i}: ${decoded.reason}`);
+      console.error(
+        `[un-bien] skipped image id=${msg.id} index=${i}: ${decoded.reason}`,
+      );
       previews.push({
         messageId: msg.id,
         index: i,
@@ -498,7 +590,9 @@ async function _collectReceivedImagePreviews(msg: ClientUserMessage): Promise<Re
 
     const ext = _imageExtension(image.mime);
     if (!ext) {
-      console.error(`[remote-pi] unsupported image mime in message ${msg.id} index=${i}: ${image.mime}`);
+      console.error(
+        `[un-bien] unsupported image mime in message ${msg.id} index=${i}: ${image.mime}`,
+      );
       previews.push({
         messageId: msg.id,
         index: i,
@@ -515,7 +609,9 @@ async function _collectReceivedImagePreviews(msg: ClientUserMessage): Promise<Re
 
     try {
       writeFileSync(path, decoded.decoded, { mode: 0o600 });
-      try { chmodSync(path, 0o600); } catch {}
+      try {
+        chmodSync(path, 0o600);
+      } catch {}
 
       const previewPath =
         image.mime === IMAGE_PREVIEW_MIME
@@ -537,7 +633,9 @@ async function _collectReceivedImagePreviews(msg: ClientUserMessage): Promise<Re
       });
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      console.error(`[remote-pi] failed saving image id=${msg.id} index=${i}: ${detail}`);
+      console.error(
+        `[un-bien] failed saving image id=${msg.id} index=${i}: ${detail}`,
+      );
       previews.push({
         messageId: msg.id,
         index: i,
@@ -563,35 +661,50 @@ async function _emitReceivedImagePreviews(
 
 function _registerReceivedImageRenderer(pi: ExtensionAPI): void {
   pi.registerMessageRenderer<ReceivedImageDetails>(
-    REMOTE_PI_RECEIVED_IMAGE_TYPE,
+    UNBIEN_RECEIVED_IMAGE_TYPE,
     (message, _options, theme) => {
       const details = (message.details ?? {}) as Partial<ReceivedImageDetails>;
       const path = typeof details.path === "string" ? details.path : "";
-      const previewPath = typeof details.previewPath === "string" ? details.previewPath : "";
-      const mime = typeof details.mime === "string" ? details.mime : "application/octet-stream";
-      const inlineImagePath = previewPath.length > 0
-        ? previewPath
-        : (mime === IMAGE_PREVIEW_MIME ? path : "");
+      const previewPath =
+        typeof details.previewPath === "string" ? details.previewPath : "";
+      const mime =
+        typeof details.mime === "string"
+          ? details.mime
+          : "application/octet-stream";
+      const inlineImagePath =
+        previewPath.length > 0
+          ? previewPath
+          : mime === IMAGE_PREVIEW_MIME
+            ? path
+            : "";
       const size = typeof details.size === "number" ? details.size : undefined;
-      const index = typeof details.index === "number" ? details.index : undefined;
+      const index =
+        typeof details.index === "number" ? details.index : undefined;
       const text = typeof details.text === "string" ? details.text.trim() : "";
-      const messageId = typeof details.messageId === "string" ? details.messageId : "unknown";
-      const error = typeof details.error === "string" ? details.error : undefined;
-      const reason = typeof details.reason === "string" ? details.reason : undefined;
+      const messageId =
+        typeof details.messageId === "string" ? details.messageId : "unknown";
+      const error =
+        typeof details.error === "string" ? details.error : undefined;
+      const reason =
+        typeof details.reason === "string" ? details.reason : undefined;
 
-      const label = `📷 Photo from Android (${messageId}${index !== undefined ? ` #${index}` : ""})`;
+      const label = `📷 Photo from Android (${messageId}${index === undefined ? "" : ` #${index}`})`;
       const lines = [
         theme.fg("customMessageLabel", label),
         theme.fg("customMessageText", `Saved: ${path || "(not saved)"}`),
       ];
-      if (size !== undefined) lines.push(theme.fg("customMessageText", `Size: ${size} bytes`));
+      if (size !== undefined)
+        lines.push(theme.fg("customMessageText", `Size: ${size} bytes`));
       if (mime) lines.push(theme.fg("customMessageText", `MIME: ${mime}`));
       if (error) lines.push(theme.fg("customMessageText", `Error: ${error}`));
-      if (reason) lines.push(theme.fg("customMessageText", `Reason: ${reason}`));
+      if (reason)
+        lines.push(theme.fg("customMessageText", `Reason: ${reason}`));
       if (text) lines.push(theme.fg("customMessageText", `Text: ${text}`));
 
       const container = new Container();
-      const metadata = new Box(1, 1, (line) => theme.bg("customMessageBg", line));
+      const metadata = new Box(1, 1, (line) =>
+        theme.bg("customMessageBg", line),
+      );
       metadata.addChild(new Text(lines.join("\n")));
       container.addChild(metadata);
 
@@ -617,10 +730,13 @@ function _registerReceivedImageRenderer(pi: ExtensionAPI): void {
 }
 
 function _isReceivedImageContextMessage(message: unknown): boolean {
-  return typeof message === "object"
-    && message !== null
-    && (message as { role?: unknown }).role === "custom"
-    && (message as { customType?: unknown }).customType === REMOTE_PI_RECEIVED_IMAGE_TYPE;
+  return (
+    typeof message === "object" &&
+    message !== null &&
+    (message as { role?: unknown }).role === "custom" &&
+    (message as { customType?: unknown }).customType ===
+      UNBIEN_RECEIVED_IMAGE_TYPE
+  );
 }
 
 /**
@@ -637,22 +753,31 @@ function _isReceivedImageContextMessage(message: unknown): boolean {
  * any other RPC client still read them off the stream), the LLM just never sees
  * them. Keyed on `display === false` rather than a customType allowlist, so any
  * pure-data event we add later is covered by construction. Events meant for the
- * human (`remote-pi:mesh-message`, `remote-pi:mesh-revoked`, …) set
+ * human (`un-bien:mesh-message`, `un-bien:mesh-revoked`, …) set
  * `display: true` and pass through untouched.
  */
 function _isPureDataContextMessage(message: unknown): boolean {
   if (typeof message !== "object" || message === null) return false;
-  const m = message as { role?: unknown; customType?: unknown; display?: unknown };
-  return m.role === "custom"
-    && typeof m.customType === "string"
-    && m.customType.startsWith("remote-pi:")
-    && m.display === false;
+  const m = message as {
+    role?: unknown;
+    customType?: unknown;
+    display?: unknown;
+  };
+  return (
+    m.role === "custom" &&
+    typeof m.customType === "string" &&
+    m.customType.startsWith("un-bien:") &&
+    m.display === false
+  );
 }
 
 function _filterInternalMessagesFromContext<T>(messages: T[] | undefined): T[] {
   return Array.isArray(messages)
-    ? messages.filter((message) =>
-        !_isReceivedImageContextMessage(message) && !_isPureDataContextMessage(message))
+    ? messages.filter(
+        (message) =>
+          !_isReceivedImageContextMessage(message) &&
+          !_isPureDataContextMessage(message),
+      )
     : [];
 }
 
@@ -661,7 +786,11 @@ function _contentFromUserMessage(
 ): Parameters<ExtensionAPI["sendUserMessage"]>[0] {
   return msg.images && msg.images.length > 0
     ? [
-        ...msg.images.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mime })),
+        ...msg.images.map((img) => ({
+          type: "image" as const,
+          data: img.data,
+          mimeType: img.mime,
+        })),
         { type: "text" as const, text: msg.text },
       ]
     : msg.text;
@@ -693,14 +822,17 @@ async function _deliverImageUserMessage(
       await _emitReceivedImagePreviews(msg, previewDelivery);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      console.error(`[remote-pi] failed emitting image preview id=${msg.id}: ${detail}`);
+      console.error(
+        `[un-bien] failed emitting image preview id=${msg.id}: ${detail}`,
+      );
     }
   };
   if (previewDelivery === "immediate") {
     await emitPreview();
   } else {
     void emitPreview().finally(() => {
-      if (!_shouldDeferReceivedImagePreview()) _flushPendingReceivedImagePreviews();
+      if (!_shouldDeferReceivedImagePreview())
+        _flushPendingReceivedImagePreviews();
     });
   }
 
@@ -751,8 +883,14 @@ function _attachBridgeIfReady(): void {
     if (!_meshNode.hasTopology()) _meshNode.setTopology(_selfRevokeTopology);
   }
   void _meshNode
-    .attachBridge({ relay: _relay, relayUrl: _relayUrl, keypair: _cachedEd25519 })
-    .catch(() => { /* best-effort — UDS mesh works regardless */ });
+    .attachBridge({
+      relay: _relay,
+      relayUrl: _relayUrl,
+      keypair: _cachedEd25519,
+    })
+    .catch(() => {
+      /* best-effort — UDS mesh works regardless */
+    });
 }
 
 /**
@@ -779,11 +917,16 @@ function _ctxUi(preferred?: { ui?: unknown } | null): {
   const target = _liveCtx(preferred);
   if (!target) return null;
   try {
-    return (target.ui as {
-      setStatus?: (k: string, v: string | undefined) => void;
-      setTitle?: (t: string) => void;
-      notify?: (message: string, level?: string) => void;
-    } | null | undefined) ?? null;
+    return (
+      (target.ui as
+        | {
+            setStatus?: (k: string, v: string | undefined) => void;
+            setTitle?: (t: string) => void;
+            notify?: (message: string, level?: string) => void;
+          }
+        | null
+        | undefined) ?? null
+    );
   } catch {
     // Stale after newSession/fork/switchSession/reload — caller no-ops.
     return null;
@@ -791,7 +934,10 @@ function _ctxUi(preferred?: { ui?: unknown } | null): {
 }
 
 /** Best-effort TUI notify; never throws (relay reconnect must not crash pi). */
-function _safeNotify(message: string, level: "info" | "warning" | "error" = "info"): void {
+function _safeNotify(
+  message: string,
+  level: "info" | "warning" | "error" = "info",
+): void {
   try {
     const ui = _ctxUi();
     if (ui && typeof ui.notify === "function") ui.notify(message, level);
@@ -801,7 +947,9 @@ function _safeNotify(message: string, level: "info" | "warning" | "error" = "inf
 }
 
 /** Refreshes the Pi TUI footer slots from current module state. Safe no-op when ctx lacks ui. */
-function _refreshFooter(ctx?: { ui?: { setStatus?: unknown; setTitle?: unknown } } | null): void {
+function _refreshFooter(
+  ctx?: { ui?: { setStatus?: unknown; setTitle?: unknown } } | null,
+): void {
   // Prefer live session_start ctx over capturable-stale command ctx (issue #55).
   let ui: {
     setStatus?: (k: string, v: string | undefined) => void;
@@ -812,7 +960,12 @@ function _refreshFooter(ctx?: { ui?: { setStatus?: unknown; setTitle?: unknown }
   } catch {
     return;
   }
-  if (!ui || typeof ui.setStatus !== "function" || typeof ui.setTitle !== "function") return;
+  if (
+    !ui ||
+    typeof ui.setStatus !== "function" ||
+    typeof ui.setTitle !== "function"
+  )
+    return;
   try {
     const state: FooterState = {
       session: _sessionName ?? undefined,
@@ -820,13 +973,18 @@ function _refreshFooter(ctx?: { ui?: { setStatus?: unknown; setTitle?: unknown }
       relayOn: _state !== "idle",
       // `devicePaired` now reflects "any owner currently attached" — picks one
       // shortid representatively (multi-owner UX detail surfaces in the
-      // `/remote-pi status` line, not the footer slot).
+      // `/unbien status` line, not the footer slot).
       devicePaired: _anyPeerActive() ? _peerShort : undefined,
       hasPairings: _hasGlobalPairings,
       agentName: _meshNode?.name(),
     };
     updateFooter(
-      { ui: { setStatus: ui.setStatus.bind(ui), setTitle: ui.setTitle.bind(ui) } },
+      {
+        ui: {
+          setStatus: ui.setStatus.bind(ui),
+          setTitle: ui.setTitle.bind(ui),
+        },
+      },
       state,
     );
   } catch {
@@ -834,7 +992,7 @@ function _refreshFooter(ctx?: { ui?: { setStatus?: unknown; setTitle?: unknown }
   }
 }
 
-// Epoch ms when the state machine entered 'started' (last /remote-pi start).
+// Epoch ms when the state machine entered 'started' (last /unbien start).
 // Used by session_sync to let the app detect Pi restarts (and force a full
 // replay). Cleared on _goIdle.
 let _sessionStartedAt: number | null = null;
@@ -866,22 +1024,33 @@ function _sessionHistoryMessages(): BufferMsg[] {
   const sm = _sessionManager;
   if (sm) {
     try {
-      const entries = sm.getEntries() as Array<{ type?: string; customType?: string; message?: unknown }>;
+      const entries = sm.getEntries() as Array<{
+        type?: string;
+        customType?: string;
+        message?: unknown;
+      }>;
       // DIAGNOSTIC: entry-type breakdown + which entry types carry image content,
       // to confirm whether tool-result images live in `message` entries or in
       // appendEntry'd custom blocks (which this reconstruction currently skips).
       const typeCounts: Record<string, number> = {};
       let imageEntries = "";
       for (const e of entries) {
-        const key = e.type === "custom" && e.customType ? `custom:${e.customType}` : (e.type ?? "?");
+        const key =
+          e.type === "custom" && e.customType
+            ? `custom:${e.customType}`
+            : (e.type ?? "?");
         typeCounts[key] = (typeCounts[key] ?? 0) + 1;
         const s = JSON.stringify(e);
-        if (s.includes("mimeType") || s.includes('"image"')) imageEntries += `[${key}]`;
+        if (s.includes("mimeType") || s.includes('"image"'))
+          imageEntries += `[${key}]`;
       }
-      envLog(`getEntries types=${JSON.stringify(typeCounts)} imageEntries=${imageEntries || "none"}`);
+      envLog(
+        `getEntries types=${JSON.stringify(typeCounts)} imageEntries=${imageEntries || "none"}`,
+      );
       const msgs: BufferMsg[] = [];
       for (const e of entries) {
-        if (e.type === "message" && e.message) msgs.push(e.message as BufferMsg);
+        if (e.type === "message" && e.message)
+          msgs.push(e.message as BufferMsg);
       }
       if (msgs.length > 0) return msgs;
     } catch (err) {
@@ -897,7 +1066,12 @@ let _lastConsumedSteerText: string | null = null;
 type AndroidQueuedItem = QueuedMessageItem & { editable: true };
 let _queuedItems: AndroidQueuedItem[] = [];
 
-type MeshEnvelope = { id: string; from: string; re: string | null; body: unknown };
+type MeshEnvelope = {
+  id: string;
+  from: string;
+  re: string | null;
+  body: unknown;
+};
 let _pendingMeshMessages: MeshEnvelope[] = [];
 let _agentRunActive = false;
 let _agentRunGeneration = 0;
@@ -920,7 +1094,11 @@ function _broadcastQueuedState(): void {
   _broadcastToActive(_queuedStateMessage());
 }
 
-function _resetQueuedItems({ broadcast = false }: { broadcast?: boolean } = {}): void {
+function _resetQueuedItems({
+  broadcast = false,
+}: {
+  broadcast?: boolean;
+} = {}): void {
   _queuedItems = [];
   if (broadcast) _broadcastQueuedState();
 }
@@ -963,7 +1141,9 @@ function _trackPendingSteer(id: string, text: string): void {
 function _consumePendingSteerForStartedUser(text: string): string | null {
   if (_pendingSteers.length === 0) return null;
   const key = _normalizeSteerText(text);
-  const index = key ? _pendingSteers.findIndex((item) => item.text === key) : -1;
+  const index = key
+    ? _pendingSteers.findIndex((item) => item.text === key)
+    : -1;
   const [item] = _pendingSteers.splice(index >= 0 ? index : 0, 1);
   return item?.id ?? null;
 }
@@ -988,8 +1168,16 @@ function _maybeDrainQueuedItem(): void {
 
   const previousTurnId = _currentTurnId;
   _currentTurnId = item.id;
-  const msg: ClientUserMessage = { type: "user_message", id: item.id, text: item.text };
-  const wake = _wakeAgent(item.text, `queued app user_message id=${item.id}`, "steer");
+  const msg: ClientUserMessage = {
+    type: "user_message",
+    id: item.id,
+    text: item.text,
+  };
+  const wake = _wakeAgent(
+    item.text,
+    `queued app user_message id=${item.id}`,
+    "steer",
+  );
   if (!wake.ok) {
     _currentTurnId = previousTurnId;
     _queuedItems = [item, ..._queuedItems];
@@ -1007,7 +1195,7 @@ function _maybeDrainQueuedItem(): void {
 
 /** Test-only override of the message buffer. */
 /**
- * Test-only: emulate what `/remote-pi` does on the returning-user path
+ * Test-only: emulate what `/unbien` does on the returning-user path
  * (join the local mesh, then start the relay) without touching the FS for
  * a `localConfigExists()` lookup. Lets tests bring the relay up without
  * mocking the wizard or the local config storage.
@@ -1022,7 +1210,7 @@ export async function _connectForTest(ctx: unknown): Promise<void> {
   await _cmdStart(real);
 }
 
-/** Test-only: tear everything down (mirrors `/remote-pi stop`). */
+/** Test-only: tear everything down (mirrors `/unbien stop`). */
 export async function _stopForTest(ctx: unknown): Promise<void> {
   await _cmdStop(ctx as Parameters<typeof _cmdStop>[0]);
 }
@@ -1030,16 +1218,24 @@ export async function _stopForTest(ctx: unknown): Promise<void> {
 /** Test-only: read/reset the `_disposed` flag. Production clears it only when
  *  a host reuses this module for a replacement session; tests share one module
  *  across cases, so they also reset it to avoid cross-test pollution. */
-export function _getDisposedForTest(): boolean { return _disposed; }
-export function _setDisposedForTest(v: boolean): void { _disposed = v; }
+export function _getDisposedForTest(): boolean {
+  return _disposed;
+}
+export function _setDisposedForTest(v: boolean): void {
+  _disposed = v;
+}
 
 /** Test-only: reset the once-per-session auto-init gate so session_start re-runs it. */
-export function _resetAutoInitedForTest(): void { _autoInited = false; }
+export function _resetAutoInitedForTest(): void {
+  _autoInited = false;
+}
 
 /** Test-only: clear the globalThis panel/ui bridge ownership so each fresh
  *  `extension(pi)` in a shared test process can (re)claim and rebuild bridges. */
 export function _resetBridgeOwnersForTest(): void {
-  const g = globalThis as typeof globalThis & { [_ROOT_SESSION_OWNER_KEY]?: object };
+  const g = globalThis as typeof globalThis & {
+    [_ROOT_SESSION_OWNER_KEY]?: object;
+  };
   delete g[_ROOT_SESSION_OWNER_KEY];
   _panelBridge?.dispose();
   _panelBridge = null;
@@ -1050,10 +1246,14 @@ export function _resetBridgeOwnersForTest(): void {
 }
 
 /** Test-only: set the auto-init gate for lifecycle replacement tests. */
-export function _setAutoInitedForTest(value: boolean): void { _autoInited = value; }
+export function _setAutoInitedForTest(value: boolean): void {
+  _autoInited = value;
+}
 
 /** Test-only: true when this instance holds a live local-mesh node. */
-export function _hasMeshNodeForTest(): boolean { return _meshNode !== null; }
+export function _hasMeshNodeForTest(): boolean {
+  return _meshNode !== null;
+}
 
 /** Test-only: drive the current real SelfRevoke producer through one sweep. */
 export async function _checkSelfRevokeForTest(): Promise<void> {
@@ -1061,18 +1261,24 @@ export async function _checkSelfRevokeForTest(): Promise<void> {
 }
 
 /** Test-only: the effective (possibly `#N`-suffixed) name the cwd-lock reserved. */
-export function _getLockedNameForTest(): string | null { return _lockedName; }
+export function _getLockedNameForTest(): string | null {
+  return _lockedName;
+}
 
 /** Test-only: release + clear the cwd lock (the lock normally survives stop). */
 export function _resetCwdLockForTest(): void {
-  try { _cwdLock?.release(); } catch { /* ignored */ }
+  try {
+    _cwdLock?.release();
+  } catch {
+    /* ignored */
+  }
   _cwdLock = null;
   _lockedName = null;
 }
 
 /**
  * Test-only: relay-only startup, no UDS mesh join. Replaces the old
- * `remote-pi relay start` handler that some tests captured to bring up
+ * `un-bien relay start` handler that some tests captured to bring up
  * the relay in isolation (e.g. ping/pong tests that don't care about the
  * agent-network broker).
  */
@@ -1113,7 +1319,9 @@ export function _getCurrentTurnIdForTest(): string | null {
 
 export function _getPendingSteerIdsForTest(text: string): string[] {
   const key = _normalizeSteerText(text);
-  return _pendingSteers.filter((item) => item.text === key).map((item) => item.id);
+  return _pendingSteers
+    .filter((item) => item.text === key)
+    .map((item) => item.id);
 }
 
 /** Test-only: override the bound AgentSession so a spy can capture the
@@ -1142,13 +1350,18 @@ function _persistModelDefault(provider: string, modelId: string): void {
     let obj: Record<string, unknown> = {};
     try {
       const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-      if (parsed && typeof parsed === "object") obj = parsed as Record<string, unknown>;
-    } catch { /* no existing/parseable file → start fresh */ }
+      if (parsed && typeof parsed === "object")
+        obj = parsed as Record<string, unknown>;
+    } catch {
+      /* no existing/parseable file → start fresh */
+    }
     obj["defaultProvider"] = provider;
     obj["defaultModel"] = modelId;
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, JSON.stringify(obj, null, 2));
-  } catch { /* best-effort — model change already applied live */ }
+  } catch {
+    /* best-effort — model change already applied live */
+  }
 }
 
 type ClientUserMessage = Extract<ClientMessage, { type: "user_message" }>;
@@ -1185,9 +1398,9 @@ let _selfRevokeEpoch = 0;
 let _selfRevokeTopologyReadyEpoch = -1;
 let _selfRevokeTopology: MeshTopologySnapshot | null = null;
 
-// Per-cwd lock acquired by the first `/remote-pi` invocation in this
+// Per-cwd lock acquired by the first `/unbien` invocation in this
 // process. Holds the UDS socket open until the process exits (OS auto-
-// releases on crash too). Stays held across `/remote-pi stop` cycles —
+// releases on crash too). Stays held across `/unbien stop` cycles —
 // only released when the Node process itself dies.
 let _cwdLock: AcquiredLock | null = null;
 // Effective mesh name this instance locked. Equals the configured/derived name,
@@ -1199,13 +1412,13 @@ let _lockedName: string | null = null;
 
 // ── Session sync limit (mirror cache cap) ─────────────────────────────────────
 //
-// Configurable via REMOTE_PI_SYNC_LIMIT env var (positive int, default 30).
-// Read on every session_sync so QA can `export REMOTE_PI_SYNC_LIMIT=N` between
+// Configurable via UNBIEN_SYNC_LIMIT env var (positive int, default 30).
+// Read on every session_sync so QA can `export UNBIEN_SYNC_LIMIT=N` between
 // runs without restarting the extension. The value is also clamped against
 // the client-provided `limit` (server is authoritative).
 const SYNC_LIMIT_DEFAULT = 30;
 function _getSyncLimit(): number {
-  const raw = process.env["REMOTE_PI_SYNC_LIMIT"];
+  const raw = process.env["UNBIEN_SYNC_LIMIT"];
   const parsed = raw ? parseInt(raw, 10) : NaN;
   return Number.isFinite(parsed) && parsed > 0 ? parsed : SYNC_LIMIT_DEFAULT;
 }
@@ -1223,7 +1436,7 @@ let _relayLifecycleGeneration = 0;
 // those generations. Stop/off/session replacement advance this separate epoch
 // so a queued root can never regain authority by creating a newer child.
 let _rootLifecycleGeneration = 0;
-// Coalesces concurrent `/remote-pi` startup paths inside ONE extension instance.
+// Coalesces concurrent `/unbien` startup paths inside ONE extension instance.
 // Separate Pi processes still keep the existing #N behavior via the cwd lock.
 let _cmdRootInFlight: Promise<void> | null = null;
 
@@ -1262,7 +1475,6 @@ export function _hasActivePeerForTest(appPeerIdStd: string): boolean {
   return _activePeers.has(appPeerIdStd);
 }
 
-
 // ── Multi-channel helpers ─────────────────────────────────────────────────────
 
 /**
@@ -1278,7 +1490,11 @@ export function _hasActivePeerForTest(appPeerIdStd: string): boolean {
  */
 function _broadcastToActive(msg: ServerMessage): void {
   for (const ch of _activePeers.values()) {
-    try { ch.send(msg); } catch { /* best-effort per channel */ }
+    try {
+      ch.send(msg);
+    } catch {
+      /* best-effort per channel */
+    }
   }
 }
 
@@ -1293,7 +1509,10 @@ function _anyPeerActive(): boolean {
  * envelope wire — does NOT use the stock `_routeClientMessageFrom` switch. The
  * SDK primitives (`_wakeAgent`, `_abortCurrentTurn`) are pi, not old protocol.
  */
-function _routeRpcCommandFrom(sender: PlainPeerChannel, env: EnvelopeMessage): void {
+function _routeRpcCommandFrom(
+  sender: PlainPeerChannel,
+  env: EnvelopeMessage,
+): void {
   const frame = env.rpc;
   if (!frame || typeof frame !== "object") return; // no {evt} inbound today
   envLog(`rpc inbound: ${String((frame as Record<string, unknown>).type)}`);
@@ -1312,13 +1531,19 @@ function _routeRpcCommandFrom(sender: PlainPeerChannel, env: EnvelopeMessage): v
     const events = _mapAgentMessagesToEvents(msgs);
     const slice = limit > 0 ? events.slice(-limit) : [];
     const replayFrames = _historyReplayEnvelopes(slice);
-    envLog(`session_sync(env): msgs=${msgs.length} (buffer=${_messageBuffer.length}, sm=${_sessionManager ? "y" : "n"}) events=${events.length} replay=${replayFrames.length}`);
+    envLog(
+      `session_sync(env): msgs=${msgs.length} (buffer=${_messageBuffer.length}, sm=${_sessionManager ? "y" : "n"}) events=${events.length} replay=${replayFrames.length}`,
+    );
     for (const replay of replayFrames) sender.sendEnvelope(replay);
     return;
   }
   const handlers: RpcCommandHandlers = {
     prompt: async (message, opts) => {
-      const wake = _wakeAgent(message, "app rpc prompt", opts.streamingBehavior === "steer" ? "steer" : undefined);
+      const wake = _wakeAgent(
+        message,
+        "app rpc prompt",
+        opts.streamingBehavior === "steer" ? "steer" : undefined,
+      );
       if (!wake.ok) throw new Error(wake.detail);
     },
     steer: async (message) => {
@@ -1338,7 +1563,8 @@ function _routeRpcCommandFrom(sender: PlainPeerChannel, env: EnvelopeMessage): v
       const reg = actionCtx?.modelRegistry ?? ensureModelRegistry(actionCtx);
       reg.refresh();
       const model = reg.find(provider, modelId);
-      if (!model) throw new Error(`model "${provider}/${modelId}" not in registry`);
+      if (!model)
+        throw new Error(`model "${provider}/${modelId}" not in registry`);
       // Route via the minimal ActionPi view (matches handleModelSet): the
       // registry's `find` returns the minimal SdkModelLike, structurally fine
       // for setModel at runtime.
@@ -1353,8 +1579,12 @@ function _routeRpcCommandFrom(sender: PlainPeerChannel, env: EnvelopeMessage): v
     },
   };
   void dispatchRpcCommand(frame as Record<string, unknown>, handlers)
-    .then((resp) => { if (resp) sender.sendEnvelope(resp); })
-    .catch((err) => { console.error(`[remote-pi] rpc inbound dispatch failed: ${String(err)}`); });
+    .then((resp) => {
+      if (resp) sender.sendEnvelope(resp);
+    })
+    .catch((err) => {
+      console.error(`[un-bien] rpc inbound dispatch failed: ${String(err)}`);
+    });
 }
 
 /** Broadcast for the extension_ui bridge. extension_ui is ENVELOPE-ONLY
@@ -1374,43 +1604,89 @@ function _uiBroadcast(msg: ServerMessage): void {
  *  live stream uses — the envelope-native replacement for stock session_history.
  *  Tool cards survive (mapped to tool_execution_start/end), unlike a bare
  *  message replay. */
-function _historyReplayEnvelopes(events: SessionHistoryEvent[]): EnvelopeMessage[] {
+function _historyReplayEnvelopes(
+  events: SessionHistoryEvent[],
+): EnvelopeMessage[] {
   const out: EnvelopeMessage[] = [];
-  const content = (text: string, images?: ReadonlyArray<{ data: string; mime: string }>): unknown[] => {
+  const content = (
+    text: string,
+    images?: ReadonlyArray<{ data: string; mime: string }>,
+  ): unknown[] => {
     const c: unknown[] = [];
     if (text) c.push({ type: "text", text });
-    for (const img of images ?? []) c.push({ type: "image", data: img.data, mimeType: img.mime });
+    for (const img of images ?? [])
+      c.push({ type: "image", data: img.data, mimeType: img.mime });
     return c;
   };
   for (const e of events) {
     switch (e.type) {
       case "user_input":
-        out.push({ rpc: { type: "message_end", message: { role: "user", id: e.id, content: content(e.text, e.images) } } });
+        out.push({
+          rpc: {
+            type: "message_end",
+            message: {
+              role: "user",
+              id: e.id,
+              content: content(e.text, e.images),
+            },
+          },
+        });
         break;
       case "agent_message":
-        out.push({ rpc: { type: "message_end", message: { role: "assistant", content: content(e.text, e.images) } } });
+        out.push({
+          rpc: {
+            type: "message_end",
+            message: { role: "assistant", content: content(e.text, e.images) },
+          },
+        });
         break;
       case "tool_request":
-        out.push({ rpc: { type: "tool_execution_start", toolCallId: e.tool_call_id, toolName: e.tool, args: e.args } });
+        out.push({
+          rpc: {
+            type: "tool_execution_start",
+            toolCallId: e.tool_call_id,
+            toolName: e.tool,
+            args: e.args,
+          },
+        });
         break;
       case "tool_result": {
         // The app pulls tool images from INSIDE `result` (imagesFromToolResult);
         // _mapAgentMessagesToEvents split them into a separate `images` array, so
         // rebuild a `{content:[text?, image...]}` result carrying the blocks.
         const imgs = e.images ?? [];
-        const result = imgs.length > 0
-          ? {
-              content: [
-                ...(typeof e.result === "string" && e.result ? [{ type: "text", text: e.result }] : []),
-                ...imgs.map((img) => ({ type: "image", data: img.data, mimeType: img.mime })),
-              ],
-            }
-          : e.result;
-        out.push({ rpc: { type: "tool_execution_end", toolCallId: e.tool_call_id, result, isError: !!e.error } });
+        const result =
+          imgs.length > 0
+            ? {
+                content: [
+                  ...(typeof e.result === "string" && e.result
+                    ? [{ type: "text", text: e.result }]
+                    : []),
+                  ...imgs.map((img) => ({
+                    type: "image",
+                    data: img.data,
+                    mimeType: img.mime,
+                  })),
+                ],
+              }
+            : e.result;
+        out.push({
+          rpc: {
+            type: "tool_execution_end",
+            toolCallId: e.tool_call_id,
+            result,
+            isError: !!e.error,
+          },
+        });
         break;
       }
       case "compaction":
-        out.push({ rpc: { type: "compaction_end", result: { summary: e.summary, tokensBefore: e.tokens_before } } });
+        out.push({
+          rpc: {
+            type: "compaction_end",
+            result: { summary: e.summary, tokensBefore: e.tokens_before },
+          },
+        });
         break;
     }
   }
@@ -1434,11 +1710,17 @@ function _broadcastEnvelope(env: EnvelopeMessage): void {
   {
     // Observability only (not a route gate): watch the {rpc|evt} wire during
     // e2e bring-up. Frame type only — payloads can be large / carry images.
-    const kind = env.rpc ? `rpc:${(env.rpc as { type?: string }).type ?? "?"}` : `evt:${env.evt?.channel ?? "?"}`;
+    const kind = env.rpc
+      ? `rpc:${(env.rpc as { type?: string }).type ?? "?"}`
+      : `evt:${env.evt?.channel ?? "?"}`;
     envLog(`envelope -> ${_activePeers.size} peer(s): ${kind}`);
   }
   for (const ch of _activePeers.values()) {
-    try { ch.sendEnvelope(env); } catch { /* best-effort per channel */ }
+    try {
+      ch.sendEnvelope(env);
+    } catch {
+      /* best-effort per channel */
+    }
   }
 }
 
@@ -1447,7 +1729,10 @@ function _broadcastEnvelope(env: EnvelopeMessage): void {
  * `_peerShort` (last-attached shortid) so the footer + status can pick
  * a representative device when only one is connected.
  */
-function _attachPeerChannel(appPeerId: string, channel: PlainPeerChannel): void {
+function _attachPeerChannel(
+  appPeerId: string,
+  channel: PlainPeerChannel,
+): void {
   _activePeers.set(appPeerId, channel);
   _peerShort = appPeerId.slice(0, 8);
 }
@@ -1457,7 +1742,11 @@ function _attachPeerChannel(appPeerId: string, channel: PlainPeerChannel): void 
 function _detachPeerChannel(appPeerId: string): void {
   const ch = _activePeers.get(appPeerId);
   if (!ch) return;
-  try { ch.detach(); } catch { /* best-effort */ }
+  try {
+    ch.detach();
+  } catch {
+    /* best-effort */
+  }
   _activePeers.delete(appPeerId);
   if (_peerShort === appPeerId.slice(0, 8)) {
     // Pick a different remaining peer for the UX hint, or clear when none.
@@ -1477,7 +1766,7 @@ function _detachPeerChannel(appPeerId: string): void {
  *   1. Broker-assigned name (when this Pi is on the local UDS mesh) — may
  *      carry a `#N` suffix from a name collision. Matches what other
  *      agents see, so the mobile UI shows the exact same string.
- *   2. `agent_name` from `<cwd>/.pi/remote-pi/config.json` — set by the
+ *   2. `agent_name` from `<cwd>/.pi/un-bien/config.json` — set by the
  *      wizard on first run; this is "the name the user configured".
  *   3. `defaultAgentName(cwd)` (parent/folder) — fallback when no config
  *      exists yet and the mesh hasn't been joined.
@@ -1535,7 +1824,9 @@ function _runtimeOwnerFingerprint(runtimeKey: string): string {
 function _inspectPeerRecord(record: unknown): InspectedPeerRecord | null {
   if (!record || typeof record !== "object") {
     const fingerprint = _rawOwnerFingerprint(record);
-    console.warn(`[remote-pi] event=invalid_owner_record owner_fp=${fingerprint}`);
+    console.warn(
+      `[un-bien] event=invalid_owner_record owner_fp=${fingerprint}`,
+    );
     return null;
   }
 
@@ -1543,14 +1834,17 @@ function _inspectPeerRecord(record: unknown): InspectedPeerRecord | null {
   const rawHandle = candidate.remote_epk;
   if (typeof rawHandle !== "string") {
     const fingerprint = _rawOwnerFingerprint(rawHandle);
-    console.warn(`[remote-pi] event=invalid_owner_record owner_fp=${fingerprint}`);
+    console.warn(
+      `[un-bien] event=invalid_owner_record owner_fp=${fingerprint}`,
+    );
     return null;
   }
 
   const safeRecord: PeerRecord = {
     name: typeof candidate.name === "string" ? candidate.name : "Unknown Owner",
     remote_epk: rawHandle,
-    paired_at: typeof candidate.paired_at === "string" ? candidate.paired_at : "",
+    paired_at:
+      typeof candidate.paired_at === "string" ? candidate.paired_at : "",
   };
   try {
     const runtimeKey = canonicalizeEd25519PublicKey(
@@ -1560,7 +1854,9 @@ function _inspectPeerRecord(record: unknown): InspectedPeerRecord | null {
     return { record: safeRecord, rawHandle, runtimeKey };
   } catch {
     const fingerprint = _rawOwnerFingerprint(rawHandle);
-    console.warn(`[remote-pi] event=invalid_owner_record owner_fp=${fingerprint}`);
+    console.warn(
+      `[un-bien] event=invalid_owner_record owner_fp=${fingerprint}`,
+    );
     return { record: safeRecord, rawHandle, runtimeKey: null };
   }
 }
@@ -1568,11 +1864,11 @@ function _inspectPeerRecord(record: unknown): InspectedPeerRecord | null {
 function _reportRevocationByFingerprint(canonicalOwnerPubkey: string): void {
   const fingerprint = _runtimeOwnerFingerprint(canonicalOwnerPubkey);
   _pi?.sendMessage({
-    customType: "remote-pi:mesh-revoked",
+    customType: "un-bien:mesh-revoked",
     content:
       `🔒 Revoked by Owner ${fingerprint}…\n\n` +
       `The mobile app for this Owner removed this PC from the mesh. ` +
-      `Re-pair via /remote-pi pair if this was unexpected.`,
+      `Re-pair via /unbien pair if this was unexpected.`,
     display: true,
   });
 }
@@ -1585,7 +1881,9 @@ function _revokeActiveOwnerRuntime(canonicalOwnerPubkey: string): void {
   _reportRevocationByFingerprint(canonicalOwnerPubkey);
 }
 
-async function _findKnownPeer(appPeerIdStd: string): Promise<PeerRecord | null> {
+async function _findKnownPeer(
+  appPeerIdStd: string,
+): Promise<PeerRecord | null> {
   let runtimeKey: string;
   try {
     runtimeKey = canonicalizeEd25519PublicKey(appPeerIdStd, "Relay Owner key");
@@ -1620,7 +1918,7 @@ function _goIdle(byeReason?: import("./protocol/types.js").ByeReason): void {
     _broadcastToActive({ type: "bye", reason: byeReason });
   }
 
-  // Cancel any pending reconnect attempt. Critical: /remote-pi stop must
+  // Cancel any pending reconnect attempt. Critical: /unbien stop must
   // win the race against a scheduled reconnect.
   if (_reconnectTimer !== null) {
     clearTimeout(_reconnectTimer);
@@ -1635,7 +1933,11 @@ function _goIdle(byeReason?: import("./protocol/types.js").ByeReason): void {
 
   // Tear down every per-owner channel and clear the map.
   for (const ch of _activePeers.values()) {
-    try { ch.detach(); } catch { /* best-effort */ }
+    try {
+      ch.detach();
+    } catch {
+      /* best-effort */
+    }
   }
   _activePeers.clear();
   _peerShort = "";
@@ -1669,7 +1971,7 @@ function _goIdle(byeReason?: import("./protocol/types.js").ByeReason): void {
 
   _state = "idle";
   _refreshFooter();
-  _emitRelayState();  // → disconnected
+  _emitRelayState(); // → disconnected
 }
 
 /**
@@ -1684,7 +1986,7 @@ function _goIdle(byeReason?: import("./protocol/types.js").ByeReason): void {
  */
 function _onRelayClose(closedRelay: RelayClient): void {
   if (_relay !== closedRelay) return; // delayed close from a replaced Relay
-  if (_state === "idle") return;  // already torn down (e.g. /remote-pi stop)
+  if (_state === "idle") return; // already torn down (e.g. /unbien stop)
 
   _relayLifecycleGeneration += 1;
   _stopAutoListener?.();
@@ -1694,7 +1996,11 @@ function _onRelayClose(closedRelay: RelayClient): void {
   // auto-listener re-attaches owners after `_attemptReconnect` succeeds
   // (via the same known-peer + pair_request paths used on first connect).
   for (const ch of _activePeers.values()) {
-    try { ch.detach(); } catch { /* best-effort */ }
+    try {
+      ch.detach();
+    } catch {
+      /* best-effort */
+    }
   }
   if (_queuedItems.length > 0) _resetQueuedItems({ broadcast: true });
   _activePeers.clear();
@@ -1704,7 +2010,7 @@ function _onRelayClose(closedRelay: RelayClient): void {
   _lastConsumedSteerText = null;
   _resetQueuedItems();
 
-  _relay = null;  // _relayUrl preserved for retry
+  _relay = null; // _relayUrl preserved for retry
 
   // Cross-PC routing relies on _relay; bring it down. Will be re-instated
   // by _attemptReconnect on success.
@@ -1712,7 +2018,7 @@ function _onRelayClose(closedRelay: RelayClient): void {
 
   _state = "started";
   _refreshFooter();
-  _emitRelayState();  // → reconnecting
+  _emitRelayState(); // → reconnecting
 
   const reconnectUrl = _relayUrl;
   if (reconnectUrl) {
@@ -1732,12 +2038,9 @@ function _isCurrentReconnect(
   );
 }
 
-function _scheduleReconnect(
-  lifecycleGeneration: number,
-  url: string,
-): void {
-  if (_reconnectTimer !== null) return;  // already scheduled
-  if (!_cachedEd25519) return;  // can't reconnect without the cached identity
+function _scheduleReconnect(lifecycleGeneration: number, url: string): void {
+  if (_reconnectTimer !== null) return; // already scheduled
+  if (!_cachedEd25519) return; // can't reconnect without the cached identity
   if (!_isCurrentReconnect(lifecycleGeneration, url)) return;
 
   const idx = Math.min(_reconnectAttempt, RECONNECT_BACKOFFS_MS.length - 1);
@@ -1777,14 +2080,22 @@ async function _attemptReconnect(
   } catch {
     // A reconnect candidate stays local until publication; every rejected
     // candidate is deterministically closed before stale-return or retry.
-    try { relay.close(); } catch { /* best-effort rejected candidate cleanup */ }
+    try {
+      relay.close();
+    } catch {
+      /* best-effort rejected candidate cleanup */
+    }
     if (!_isCurrentReconnect(lifecycleGeneration, url)) return;
     _scheduleReconnect(lifecycleGeneration, url);
     return;
   }
 
   if (!_isCurrentReconnect(lifecycleGeneration, url)) {
-    try { relay.close(); } catch { /* best-effort stale candidate cleanup */ }
+    try {
+      relay.close();
+    } catch {
+      /* best-effort stale candidate cleanup */
+    }
     return;
   }
 
@@ -1812,7 +2123,7 @@ function _relayStatus(): RelayConnectivity {
 }
 
 /**
- * Emit the `remote-pi:relay-state` custom message so an RPC client (Cockpit)
+ * Emit the `un-bien:relay-state` custom message so an RPC client (Cockpit)
  * can render a relay on/off indicator. Pure data (`display:false`) — never
  * shown in the transcript. De-duped on the connectivity value; pass
  * `force=true` to answer an explicit `relay:status` query regardless.
@@ -1829,7 +2140,7 @@ function _emitRelayState(force = false): void {
   // change re-emits, so connectivity is eventually consistent. See issue #55.
   try {
     _pi?.sendMessage({
-      customType: "remote-pi:relay-state",
+      customType: "un-bien:relay-state",
       content: `Relay ${status}`,
       details: {
         status,
@@ -1857,16 +2168,19 @@ function _controlCtx(): Pick<ExtensionContext, "ui" | "cwd"> {
 /**
  * `ui.notify` for headless contexts (daemon auto-init + control channel). There
  * is no TUI, and the RPC client (Cockpit) already gets everything it needs via
- * structured events (`remote-pi:relay-state`, `remote-pi:name-assigned`,
+ * structured events (`un-bien:relay-state`, `un-bien:name-assigned`,
  * room_meta) — so routine INFO chatter would just pollute the client's captured
  * stderr. We drop info and forward only warnings/errors (kept for the
  * supervisor's journal / genuine failures). The interactive Pi keeps its normal
  * footer/notify path — this only affects headless ctxs.
  */
-function _headlessUi(): { notify: (msg: string, type?: "info" | "warning" | "error") => void } {
+function _headlessUi(): {
+  notify: (msg: string, type?: "info" | "warning" | "error") => void;
+} {
   return {
     notify: (msg: string, type?: "info" | "warning" | "error") => {
-      if (type === "warning" || type === "error") process.stderr.write(`${msg}\n`);
+      if (type === "warning" || type === "error")
+        process.stderr.write(`${msg}\n`);
     },
   };
 }
@@ -1892,11 +2206,10 @@ export async function _handleControl(cmd: string): Promise<void> {
       _emitRelayState(true);
       return;
     case "relay:off":
-      if (_getState() !== "idle") _goIdle("peer_stop");
-      else {
+      if (_getState() === "idle") {
         _rootLifecycleGeneration += 1;
         _relayLifecycleGeneration += 1;
-      }
+      } else _goIdle("peer_stop");
       _emitRelayState(true);
       return;
     case "relay:toggle":
@@ -1924,12 +2237,12 @@ export async function _handleControl(cmd: string): Promise<void> {
  *      name = a new room. We cycle the relay (`_goIdle` → `_cmdStart`) so the
  *      room follows; the app re-keys the conversation onto the new tile (the
  *      inherent cost of room-per-name). Skipped when the relay was off.
- * Finally re-emits `remote-pi:name-assigned` so the Cockpit updates its label.
+ * Finally re-emits `un-bien:name-assigned` so the Cockpit updates its label.
  *
  * The explicit name IS persisted (decision E only skips the runtime `#N`).
  */
 async function _renameAgent(newName: string): Promise<void> {
-  if (!newName) return;  // empty rename → no-op
+  if (!newName) return; // empty rename → no-op
   const ctx = _controlCtx();
   const cwd = process.cwd();
   saveLocalConfig(cwd, { agent_name: newName });
@@ -1947,18 +2260,19 @@ async function _renameAgent(newName: string): Promise<void> {
 
   let assigned = newName;
   try {
-    assigned = await _meshNode.rename(newName);  // broker soft rejoin
+    assigned = await _meshNode.rename(newName); // broker soft rejoin
   } catch (err) {
-    ctx.ui.notify(`[remote-pi] rename failed: ${String(err)}`, "error");
+    ctx.ui.notify(`[un-bien] rename failed: ${String(err)}`, "error");
   }
 
-  if (wasStarted && !_disposed) await _cmdStart(ctx);  // relay back up → roomIdFor(cwd, assigned)
+  if (wasStarted && !_disposed) await _cmdStart(ctx); // relay back up → roomIdFor(cwd, assigned)
 
   _pi?.sendMessage({
-    customType: "remote-pi:name-assigned",
-    content: assigned === newName
-      ? `Mesh name: ${assigned}`
-      : `Mesh name reassigned: "${newName}" → "${assigned}" (collision)`,
+    customType: "un-bien:name-assigned",
+    content:
+      assigned === newName
+        ? `Mesh name: ${assigned}`
+        : `Mesh name reassigned: "${newName}" → "${assigned}" (collision)`,
     details: { requested: newName, assigned, changed: assigned !== newName },
     display: false,
   });
@@ -1993,7 +2307,10 @@ export function _onPeerDisconnect(appPeerId?: string): void {
   // starts cleanly.
   _currentTurnId = null;
   _refreshFooter();
-  _safeNotify("[remote-pi] All app peers disconnected, listening for reconnect", "info");
+  _safeNotify(
+    "[un-bien] All app peers disconnected, listening for reconnect",
+    "info",
+  );
   // Auto-listener stays up — same listener catches the reconnect on any peer.
 }
 
@@ -2024,7 +2341,12 @@ function _attachOwner(
     relay,
     appPeerId,
     _myRoomId ?? undefined,
-    (msg) => _routeClientMessageFrom(channel, msg, (_liveCtx() as typeof _noopCtx) ?? _noopCtx),
+    (msg) =>
+      _routeClientMessageFrom(
+        channel,
+        msg,
+        (_liveCtx() as typeof _noopCtx) ?? _noopCtx,
+      ),
     () => _onPeerDisconnect(appPeerId),
     (env) => _routeRpcCommandFrom(channel, env),
   );
@@ -2035,14 +2357,16 @@ function _attachOwner(
   // arrives. Additive to the stock session_history caps (parity transition).
   const _sid = _sessionManager?.getSessionId();
   channel.sendEnvelope(helloEnvelope(_capabilities(), _sid));
-  envLog(`attach: peer=${appPeerId.slice(0, 8)} hello sent (caps + sessionId=${_sid ?? "?"}); active=${_activePeers.size}`);
+  envLog(
+    `attach: peer=${appPeerId.slice(0, 8)} hello sent (caps + sessionId=${_sid ?? "?"}); active=${_activePeers.size}`,
+  );
   // Transcript reconstruction is request-driven (app sends session_sync on open)
   // — see _handleSessionSync; nothing to replay proactively here.
   _refreshFooter();
 
   _safeNotify(
-    `[remote-pi] Owner attached: peer=${peerShort}, name=${peerName} ` +
-    `(${_activePeers.size} active)`,
+    `[un-bien] Owner attached: peer=${peerShort}, name=${peerName} ` +
+      `(${_activePeers.size} active)`,
     "info",
   );
 
@@ -2077,8 +2401,11 @@ function _installAutoListener(relay: RelayClient): () => void {
     _relayLifecycleGeneration === listenerGeneration;
   const onMsg = async (line: string) => {
     let outer: { peer?: string; ct?: string };
-    try { outer = JSON.parse(line) as { peer?: string; ct?: string }; }
-    catch { return; }
+    try {
+      outer = JSON.parse(line) as { peer?: string; ct?: string };
+    } catch {
+      return;
+    }
 
     if (!outer.peer || !outer.ct) return;
 
@@ -2095,9 +2422,12 @@ function _installAutoListener(relay: RelayClient): () => void {
         !parsed ||
         typeof parsed !== "object" ||
         typeof (parsed as Record<string, unknown>).type !== "string"
-      ) return;
+      )
+        return;
       inner = parsed as ClientMessage;
-    } catch { return; }
+    } catch {
+      return;
+    }
 
     const appPeerId = outer.peer;
 
@@ -2117,7 +2447,11 @@ function _installAutoListener(relay: RelayClient): () => void {
       // line that triggered the attach (we already consumed it); route
       // it explicitly via the new channel so the sender gets a reply.
       // Use _liveCtx (session_start-fresh) — not bare _lastCtx (#55).
-      _routeClientMessageFrom(channel, inner, (_liveCtx() as typeof _noopCtx) ?? _noopCtx);
+      _routeClientMessageFrom(
+        channel,
+        inner,
+        (_liveCtx() as typeof _noopCtx) ?? _noopCtx,
+      );
       return;
     }
 
@@ -2150,7 +2484,9 @@ function _readExtensionVersion(): string {
     const here = fileURLToPath(import.meta.url);
     // dist/index.js → ../package.json. src/index.ts under tsx → also one level up.
     const pkgPath = join(here, "..", "..", "package.json");
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string };
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as {
+      version?: string;
+    };
     return typeof pkg.version === "string" ? pkg.version : "0.0.0";
   } catch {
     return "0.0.0";
@@ -2196,7 +2532,10 @@ function _capabilities(): string[] {
 function _safeTmuxName(name: string | undefined, fallback: string): string {
   const base = (name ?? "").trim() || fallback;
   // tmux disallows `.` and `:` in session names; strip anything risky.
-  const clean = base.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "");
+  const clean = base
+    .replace(/[^A-Za-z0-9_-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "");
   return clean.slice(0, 40) || "pi";
 }
 
@@ -2209,10 +2548,14 @@ export function _buildTmuxLaunchArgs(name: string, cwd: string): string[] {
 /**
  * Honor a `session_launch` request. Gated by the caller: config opt-in already
  * checked. `tmux` mode spawns a detached tmux running `pi` in `cwd` (which
- * joins the relay if that cwd has remote-pi auto-start); `rpc` is not wired yet.
+ * joins the relay if that cwd has un-bien auto-start); `rpc` is not wired yet.
  * Returns null on success or an error string.
  */
-function _launchSession(mode: "tmux" | "rpc", cwd: string, name: string | undefined): string | null {
+function _launchSession(
+  mode: "tmux" | "rpc",
+  cwd: string,
+  name: string | undefined,
+): string | null {
   if (mode === "rpc") return "launch mode 'rpc' is not supported yet";
   if (mode !== "tmux") return `unknown launch mode '${mode}'`;
   if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
@@ -2249,13 +2592,17 @@ async function _handlePairRequest(
   const status = qrSession.consumeToken(inner.token);
   if (status !== "ok") {
     const code: PairErrorCode =
-      status === "expired"  ? "token_expired"
-      : status === "consumed" ? "token_consumed"
-      : "token_unknown";
+      status === "expired"
+        ? "token_expired"
+        : status === "consumed"
+          ? "token_consumed"
+          : "token_unknown";
     const msg =
-      code === "token_expired"  ? "Ephemeral token expired. Generate a new QR with /remote-pi pair."
-      : code === "token_consumed" ? "Token already consumed by another pair_request."
-      : "Token was not issued by this Pi.";
+      code === "token_expired"
+        ? "Ephemeral token expired. Generate a new QR with /unbien pair."
+        : code === "token_consumed"
+          ? "Token already consumed by another pair_request."
+          : "Token was not issued by this Pi.";
     sendError(code, msg);
     return;
   }
@@ -2274,7 +2621,11 @@ async function _handlePairRequest(
     });
     if (!hasListenerAuthority()) return;
     _refreshPairingsCache();
-    if (producer && _selfRevoke === producer && _selfRevokeEpoch === producerEpoch) {
+    if (
+      producer &&
+      _selfRevoke === producer &&
+      _selfRevokeEpoch === producerEpoch
+    ) {
       void producer.requestFreshCheck().catch(() => {
         // The regular cadence retries; pairing itself already succeeded.
       });
@@ -2285,12 +2636,13 @@ async function _handlePairRequest(
     return;
   }
 
-  const cwd = _lastCtx && "cwd" in _lastCtx
-    ? (_lastCtx as ExtensionCommandContext).cwd
-    : process.cwd();
+  const cwd =
+    _lastCtx && "cwd" in _lastCtx
+      ? (_lastCtx as ExtensionCommandContext).cwd
+      : process.cwd();
   // Prefer the user-configured agent_name (with broker suffix when on the
   // mesh) over the legacy parent/folder path — matches what the user sees
-  // in the terminal title and in /remote-pi status.
+  // in the terminal title and in /unbien status.
   const sessionName = _displayName(cwd);
 
   _attachOwner(relay, appPeerId, inner.device_name);
@@ -2319,7 +2671,7 @@ async function _handlePairRequest(
   // close the QR screen and show the new device. Pure data event (display:false)
   // — still emitted to the RPC stdout via the session stream.
   _pi?.sendMessage({
-    customType: "remote-pi:paired",
+    customType: "un-bien:paired",
     content: `Paired with ${inner.device_name}`,
     details: { name: inner.device_name, peerId: appPeerId, pairedAt },
     display: false,
@@ -2340,12 +2692,13 @@ let _lastCtx: Pick<ExtensionContext, "ui" | "abort" | "cwd"> | null = null;
 // (an app Quick Action OR a `/new` typed in the Pi TUI). It carries only
 // base-ctx methods (no newSession — that's command-ctx only), so command ops
 // keep using `_lastCtx`.
-let _lastEventCtx: Pick<ExtensionContext, "compact" | "abort" | "ui"> | null = null;
+let _lastEventCtx: Pick<ExtensionContext, "compact" | "abort" | "ui"> | null =
+  null;
 const _noopCtx = { ui: { notify: () => undefined }, abort: () => undefined };
 
 // A single Pi process can load this extension TWICE in the SAME session:
 // pi-supervisord launches each daemon child as `pi -e <dist>/index.js`, but if
-// remote-pi is ALSO installed as a pi-package (auto-discovered from
+// un-bien is ALSO installed as a pi-package (auto-discovered from
 // ~/.pi/agent/extensions or <cwd>/.pi/extensions), Pi loads it a second time
 // for that same session. Both loads receive the same session-scoped `pi` and
 // would re-run registerTool/registerCommand for identical names — a hard
@@ -2363,9 +2716,11 @@ const _noopCtx = { ui: { notify: () => undefined }, abort: () => undefined };
 // both module instances resolve the SAME set. Keying weakly by `pi` records the
 // fact without adding a foreign property to the API object and lets each `pi`
 // be GC'd when its session ends (no leak).
-const _APPLIED_REGISTRY_KEY = Symbol.for("remote-pi.extension.appliedRegistry");
+const _APPLIED_REGISTRY_KEY = Symbol.for("un-bien.extension.appliedRegistry");
 function _appliedRegistry(): WeakSet<object> {
-  const g = globalThis as typeof globalThis & { [_APPLIED_REGISTRY_KEY]?: WeakSet<object> };
+  const g = globalThis as typeof globalThis & {
+    [_APPLIED_REGISTRY_KEY]?: WeakSet<object>;
+  };
   return (g[_APPLIED_REGISTRY_KEY] ??= new WeakSet<object>());
 }
 
@@ -2383,26 +2738,32 @@ function _appliedRegistry(): WeakSet<object> {
 // pi-subagents uses for its manager: the root claims it, children see it owned
 // and skip, and the root RELEASES it on its own shutdown so a replacement root
 // session can re-claim. One owner gates all bridges (no per-bridge slots).
-const _ROOT_SESSION_OWNER_KEY = Symbol.for("remote-pi.rootSession.owner");
+const _ROOT_SESSION_OWNER_KEY = Symbol.for("un-bien.rootSession.owner");
 /** True if `pi` owns the root slot (or just claimed a free one); false if another pi owns it. */
 function _claimRootSession(pi: object): boolean {
-  const g = globalThis as typeof globalThis & { [_ROOT_SESSION_OWNER_KEY]?: object };
+  const g = globalThis as typeof globalThis & {
+    [_ROOT_SESSION_OWNER_KEY]?: object;
+  };
   if (g[_ROOT_SESSION_OWNER_KEY]) return g[_ROOT_SESSION_OWNER_KEY] === pi;
   g[_ROOT_SESSION_OWNER_KEY] = pi;
   return true;
 }
 function _isRootSession(pi: object): boolean {
-  const g = globalThis as typeof globalThis & { [_ROOT_SESSION_OWNER_KEY]?: object };
+  const g = globalThis as typeof globalThis & {
+    [_ROOT_SESSION_OWNER_KEY]?: object;
+  };
   return g[_ROOT_SESSION_OWNER_KEY] === pi;
 }
 function _releaseRootSession(pi: object): void {
-  const g = globalThis as typeof globalThis & { [_ROOT_SESSION_OWNER_KEY]?: object };
+  const g = globalThis as typeof globalThis & {
+    [_ROOT_SESSION_OWNER_KEY]?: object;
+  };
   if (g[_ROOT_SESSION_OWNER_KEY] === pi) delete g[_ROOT_SESSION_OWNER_KEY];
 }
 
 const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   const applied = _appliedRegistry();
-  if (applied.has(pi)) return;  // this session's pi was already wired
+  if (applied.has(pi)) return; // this session's pi was already wired
   applied.add(pi);
 
   _pi = pi;
@@ -2423,12 +2784,14 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     _rpcEnvelope = createRpcEnvelope(pi, _broadcastEnvelope);
   }
 
-  // Plano 19: ensure ~/.pi/remote/{sessions,skills}/ exist and deploy the
+  // Plano 19: ensure ~/.pi/un-bien/{sessions,skills}/ exist and deploy the
   // agent-network skill on first load. resources_discover lets Pi find it.
   try {
     ensureGlobalDirs();
     _deployAgentNetworkSkill();
-  } catch { /* best-effort init */ }
+  } catch {
+    /* best-effort init */
+  }
 
   // Seed the global-pairings cache from peers.json so the footer can show
   // 🟢/🟡 correctly the moment the relay is up (no race with first refresh).
@@ -2524,11 +2887,19 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     if (!_anyPeerActive() || !_currentTurnId) return;
     const ae = event.assistantMessageEvent;
     if (ae.type === "text_delta") {
-      _broadcastToActive({ type: "agent_chunk", in_reply_to: _currentTurnId, delta: ae.delta });
+      _broadcastToActive({
+        type: "agent_chunk",
+        in_reply_to: _currentTurnId,
+        delta: ae.delta,
+      });
     } else if (ae.type === "thinking_delta") {
       // un-bien extension: stream model reasoning so paired apps can render a
       // (collapsible) thinking block. Additive — stock clients ignore it.
-      _broadcastToActive({ type: "agent_reasoning", in_reply_to: _currentTurnId, delta: ae.delta });
+      _broadcastToActive({
+        type: "agent_reasoning",
+        in_reply_to: _currentTurnId,
+        delta: ae.delta,
+      });
     }
   });
 
@@ -2569,12 +2940,23 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // or RPC. Previous impl overwrote on `agent_end` and lost everything but the
   // last turn (see diagnostics 14, 15).
   pi.on("message_end", (event) => {
-    const m = event?.message as { role?: string; content?: unknown; stopReason?: string; errorMessage?: string } | undefined;
+    const m = event?.message as
+      | {
+          role?: string;
+          content?: unknown;
+          stopReason?: string;
+          errorMessage?: string;
+        }
+      | undefined;
     if (!m) return;
     if (m.role === "user" && _anyPeerActive()) {
       _broadcastConsumedSteerForUserContent(m.content);
     }
-    if (m.role === "user" || m.role === "assistant" || m.role === "toolResult") {
+    if (
+      m.role === "user" ||
+      m.role === "assistant" ||
+      m.role === "toolResult"
+    ) {
       _messageBuffer.push(m as unknown as BufferMsg);
     }
     // un-bien: agent-emitted inline graphics. The live stream is text deltas
@@ -2599,12 +2981,22 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // assistant message with stopReason "error" + an `errorMessage` (pi-ai).
     // `error` is an existing ServerMessage the app already renders — no
     // protocol/app change. `in_reply_to` ties it to the turn the app awaits.
-    if (m.role === "assistant" && m.stopReason === "error" && _anyPeerActive()) {
-      const message = typeof m.errorMessage === "string" && m.errorMessage
-        ? m.errorMessage
-        : "Provider error";
+    if (
+      m.role === "assistant" &&
+      m.stopReason === "error" &&
+      _anyPeerActive()
+    ) {
+      const message =
+        typeof m.errorMessage === "string" && m.errorMessage
+          ? m.errorMessage
+          : "Provider error";
       const errMsg: ServerMessage = _currentTurnId
-        ? { type: "error", in_reply_to: _currentTurnId, code: "provider_error", message }
+        ? {
+            type: "error",
+            in_reply_to: _currentTurnId,
+            code: "provider_error",
+            message,
+          }
         : { type: "error", code: "provider_error", message };
       _broadcastToActive(errMsg);
     }
@@ -2645,23 +3037,37 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // whose model only materialises at turn 1 still reports it to the app.
     if (!_currentModel) {
       try {
-        const m = (ctx as Partial<ExtensionContext> & { getModel?: () => { name?: string; id?: string } | undefined }).getModel?.();
+        const m = (
+          ctx as Partial<ExtensionContext> & {
+            getModel?: () => { name?: string; id?: string } | undefined;
+          }
+        ).getModel?.();
         const name = m?.name ?? m?.id;
         if (name) _setCurrentModel(name);
-      } catch { /* defensive — never block a turn on a model lookup */ }
+      } catch {
+        /* defensive — never block a turn on a model lookup */
+      }
     }
     // Plan/32 Part B: publish working=true as room_meta (raw, no debounce —
     // the debounce lives in the app). Same shape as the model/thinking updates.
     if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working: true };
     if (_relay && _myRoomId) {
-      _relay.sendControl({ type: "room_meta_update", room_id: _myRoomId, meta: { working: true } });
+      _relay.sendControl({
+        type: "room_meta_update",
+        room_id: _myRoomId,
+        meta: { working: true },
+      });
     }
   });
   pi.on("turn_end", () => {
     // Plan/32 Part B: publish working=false as room_meta (raw, no debounce).
     if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working: false };
     if (_relay && _myRoomId) {
-      _relay.sendControl({ type: "room_meta_update", room_id: _myRoomId, meta: { working: false } });
+      _relay.sendControl({
+        type: "room_meta_update",
+        room_id: _myRoomId,
+        meta: { working: false },
+      });
     }
     _maybeDrainQueuedItem();
   });
@@ -2671,9 +3077,10 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // compaction proceeds.
   pi.on("session_before_compact", (event) => {
     if (event.preparation) {
-      event.preparation.messagesToSummarize = _filterInternalMessagesFromContext(
-        event.preparation.messagesToSummarize,
-      );
+      event.preparation.messagesToSummarize =
+        _filterInternalMessagesFromContext(
+          event.preparation.messagesToSummarize,
+        );
       event.preparation.turnPrefixMessages = _filterInternalMessagesFromContext(
         event.preparation.turnPrefixMessages,
       );
@@ -2681,16 +3088,29 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     _publishWorking(true);
   });
   pi.on("session_compact", (event) => {
-    const entry = event?.compactionEntry as { summary?: unknown; tokensBefore?: unknown } | undefined;
+    const entry = event?.compactionEntry as
+      | { summary?: unknown; tokensBefore?: unknown }
+      | undefined;
     const summary = typeof entry?.summary === "string" ? entry.summary : "";
-    const tokensBefore = typeof entry?.tokensBefore === "number" ? entry.tokensBefore : 0;
+    const tokensBefore =
+      typeof entry?.tokensBefore === "number" ? entry.tokensBefore : 0;
     const ts = Date.now();
     // (2) Persist in history: the CompactionEntry never reaches _messageBuffer
     // via message_end (only user/assistant/toolResult), so push a synthetic
     // marker the mapper turns into a `compaction` event — survives session_sync.
-    _messageBuffer.push({ role: "compaction", content: summary, timestamp: ts, tokensBefore });
+    _messageBuffer.push({
+      role: "compaction",
+      content: summary,
+      timestamp: ts,
+      tokensBefore,
+    });
     // (1) Live result to every connected owner.
-    _broadcastToActive({ type: "compaction", summary, tokens_before: tokensBefore, ts });
+    _broadcastToActive({
+      type: "compaction",
+      summary,
+      tokens_before: tokensBefore,
+      ts,
+    });
     // (3) Working ends.
     _publishWorking(false);
     _maybeDrainQueuedItem();
@@ -2710,9 +3130,11 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // Only the ROOT owner rebinds (re-claims a slot freed by its own shutdown);
     // a subagent child's session_start must not seize it. Covers both bridges.
     if (_claimRootSession(pi)) {
-      if (!_extensionUiBridge) _extensionUiBridge = createExtensionUiBridge(pi, _uiBroadcast);
+      if (!_extensionUiBridge)
+        _extensionUiBridge = createExtensionUiBridge(pi, _uiBroadcast);
       if (!_panelBridge) _panelBridge = createPanelBridge(pi, _panelBroadcast);
-      if (!_rpcEnvelope) _rpcEnvelope = createRpcEnvelope(pi, _broadcastEnvelope);
+      if (!_rpcEnvelope)
+        _rpcEnvelope = createRpcEnvelope(pi, _broadcastEnvelope);
     }
     // Rearm a reused-but-disposed instance. The session_shutdown teardown (below)
     // sets _disposed=true assuming the host re-evaluates THIS module fresh for the
@@ -2729,9 +3151,9 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       };
       void _cmdRoot(ctx, restartAuthority);
     }
-    // Auto-start remote-pi on a fresh boot when the cwd's local config has
+    // Auto-start un-bien on a fresh boot when the cwd's local config has
     // auto_start_relay enabled (default true). Covers BOTH interactive
-    // sessions (previously required typing /remote-pi each session) AND
+    // sessions (previously required typing /unbien each session) AND
     // headless daemons. We init here — on session_start — NOT via a
     // factory-return setTimeout(0): the SDK only calls bindCore() (which
     // replaces the throwing action-method stubs like pi.sendMessage) right
@@ -2744,19 +3166,19 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // use the headless ctx; interactive sessions use the real session_start
     // ctx (has ui.notify + dialogs for the first-run wizard).
     if (!_autoInited) {
-      // Daemon: always init (supervisor sets REMOTE_PI_DIRECT_CONFIG so a config
+      // Daemon: always init (supervisor sets UNBIEN_DIRECT_CONFIG so a config
       // is present at process.cwd()). Interactive: only init when the
       // session_start ctx announces its cwd AND a local config already exists
       // there — never auto-pop the first-run wizard on session_start (a new dir
-      // with no config stays idle until the user runs /remote-pi once). The
+      // with no config stays idle until the user runs /unbien once). The
       // cwd guard also keeps tests with a minimal ctx (no cwd) from triggering
       // the wizard path.
-      const isDaemon = process.env["REMOTE_PI_DAEMON"] === "1";
+      const isDaemon = process.env["UNBIEN_DAEMON"] === "1";
       // One-shot / non-interactive Pi (`pi -p` / `pi --print`) is documented as
       // "process the prompt and exit". Auto-starting the relay there opens a WS
       // that is never `.unref()`'d, so the idle Node event loop never drains and
       // the process hangs forever after printing its answer (issue #44). Daemon
-      // mode (REMOTE_PI_DAEMON=1) and normal interactive sessions never pass
+      // mode (UNBIEN_DAEMON=1) and normal interactive sessions never pass
       // `-p`/`--print`, so they still auto-start the relay exactly as before.
       const isPrintMode =
         process.argv.includes("-p") || process.argv.includes("--print");
@@ -2769,7 +3191,10 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       ) {
         _autoInited = true;
         const initCtx = isDaemon
-          ? ({ ui: _headlessUi(), cwd: process.cwd() } as Pick<ExtensionContext, "ui" | "cwd">)
+          ? ({ ui: _headlessUi(), cwd: process.cwd() } as Pick<
+              ExtensionContext,
+              "ui" | "cwd"
+            >)
           : ctx;
         void _cmdRoot(initCtx);
       }
@@ -2786,7 +3211,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // FRESH — a brand-new instance whose `_meshNode`, `_relay`, and `_cwdLock`
   // start back at null. The OUTGOING instance's broker socket, relay WS, and
   // cwd-lock UDS keep running regardless (module state is gone, but the OS
-  // handles aren't). In daemon mode (REMOTE_PI_DAEMON=1, set by the Cockpit) the
+  // handles aren't). In daemon mode (UNBIEN_DAEMON=1, set by the Cockpit) the
   // fresh instance re-runs `_cmdRoot` on load, so without releasing the old
   // handles first we end up with TWO mesh peers under the same name on the
   // broker + two rooms on the relay. The per-cwd lock is meant to stop the
@@ -2836,10 +3261,10 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // the SAME relay room, so an explicit offline→online flap would be wrong.
     // Revoke producer/Relay/bridge authority while the global node is still
     // visible, before close() can begin its asynchronous UDS leave.
-    if (_state !== "idle") {
-      _goIdle();
-    } else {
+    if (_state === "idle") {
       _meshNode?.detachBridge();
+    } else {
+      _goIdle();
     }
 
     const meshNode = _meshNode;
@@ -2847,14 +3272,26 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     _sessionName = null;
     _sessionPeerCount = 0;
     let meshClose: Promise<void> | null = null;
-    try { meshClose = meshNode?.close() ?? null; } catch { /* best-effort */ }
+    try {
+      meshClose = meshNode?.close() ?? null;
+    } catch {
+      /* best-effort */
+    }
 
     if (_cwdLock) {
-      try { _cwdLock.release(); } catch { /* best-effort */ }
+      try {
+        _cwdLock.release();
+      } catch {
+        /* best-effort */
+      }
       _cwdLock = null;
       _lockedName = null;
     }
-    try { await meshClose; } catch { /* best-effort */ }
+    try {
+      await meshClose;
+    } catch {
+      /* best-effort */
+    }
   });
 
   // ── Commands ──────────────────────────────────────────────────────────────
@@ -2863,30 +3300,53 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // multi-session UDS + granular relay control; in practice every install
   // converged on one session and the relay was always either fully on or
   // fully off. The simplified surface keeps the day-to-day path one-key
-  // (`/remote-pi`) and exposes only the actions that have distinct user
+  // (`/unbien`) and exposes only the actions that have distinct user
   // intent: setup, status, stop, pair, devices, revoke, set-relay.
-  pi.registerCommand("remote-pi", {
-    description: "Connect (join local mesh + start relay), or run setup on first use",
+  pi.registerCommand("unbien", {
+    description:
+      "Connect (join local mesh + start relay), or run setup on first use",
     getArgumentCompletions: async (prefix) => {
       if (prefix.startsWith("revoke ") || prefix === "revoke") {
-        const shortPrefix = prefix === "revoke" ? "" : prefix.slice("revoke ".length);
+        const shortPrefix =
+          prefix === "revoke" ? "" : prefix.slice("revoke ".length);
         return _shortidCompletions(shortPrefix, "revoke ");
       }
       return [
-        "setup", "status", "stop",
-        "pair", "devices", "revoke",
+        "setup",
+        "status",
+        "stop",
+        "pair",
+        "devices",
+        "revoke",
         "rename",
         "set-relay",
-        "relay", "relay start", "relay stop", "relay status", "relay url",
+        "relay",
+        "relay start",
+        "relay stop",
+        "relay status",
+        "relay url",
         "config",
-        "peers",  // plan/25 Wave D — local + cross-PC inventory
-        "create", "remove", "daemons",  // daemon registry (plan/26 W1)
-        // Fleet ops use the `daemon` prefix so `/remote-pi stop` keeps
+        "peers", // plan/25 Wave D — local + cross-PC inventory
+        "create",
+        "remove",
+        "daemons", // daemon registry (plan/26 W1)
+        // Fleet ops use the `daemon` prefix so `/unbien stop` keeps
         // meaning "stop this local Pi" — the local UX shipped in plan/25.
-        "daemon start", "daemon stop", "daemon restart",
-        "daemon send", "daemon status",
-        "cron", "cron add", "cron list", "cron remove", "cron enable", "cron disable", "cron run", "cron log",
-        "install", "uninstall",  // service install (plan/26 W3)
+        "daemon start",
+        "daemon stop",
+        "daemon restart",
+        "daemon send",
+        "daemon status",
+        "cron",
+        "cron add",
+        "cron list",
+        "cron remove",
+        "cron enable",
+        "cron disable",
+        "cron run",
+        "cron log",
+        "install",
+        "uninstall", // service install (plan/26 W3)
       ]
         .filter((o) => o.startsWith(prefix))
         .map((o) => ({ value: o, label: o }));
@@ -2894,81 +3354,245 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     handler: async (args, ctx) => {
       _lastCtx = ctx;
       const sub = args.trim();
-      if      (sub === "")                       { await _cmdRoot(ctx); }
-      else if (sub === "setup")                  { await _cmdSetup(ctx); }
-      else if (sub === "status")                 { _cmdStatus(ctx); }
-      else if (sub === "stop")                   { await _cmdStop(ctx); }
-      else if (sub === "pair" || sub.startsWith("pair ")) { await _cmdPair(ctx, sub.slice("pair".length).trim()); }
-      else if (sub === "devices")                { await _cmdList(ctx); }
-      else if (sub.startsWith("revoke"))         { await _cmdRevoke(sub.slice("revoke".length).trim(), ctx); }
-      else if (sub.startsWith("set-relay"))      { _cmdSetRelay(sub.slice("set-relay".length).trim(), ctx); }
-      else if (sub === "relay" || sub.startsWith("relay ")) { await _cmdRelay(sub.slice("relay".length).trim(), ctx); }
-      else if (sub === "config")                 { _cmdConfig(ctx); }
-      else if (sub === "rename" || sub.startsWith("rename ")) { await _renameAgent(sub.slice("rename".length).trim()); }
-      else if (sub === "peers")                  { await _cmdPeers(ctx); }
-      else if (sub.startsWith("create"))         { await _cmdCreate(sub.slice("create".length).trim(), ctx); }
-      else if (sub.startsWith("remove"))         { await _cmdRemove(sub.slice("remove".length).trim(), ctx); }
-      else if (sub === "daemons")                { await _cmdDaemonsList(ctx); }
-      else if (sub === "daemon start" || sub.startsWith("daemon start "))     { await _cmdDaemonStart(ctx, sub.slice("daemon start".length).trim() || undefined); }
-      else if (sub === "daemon stop" || sub.startsWith("daemon stop "))       { await _cmdDaemonStop(ctx, sub.slice("daemon stop".length).trim() || undefined); }
-      else if (sub === "daemon restart" || sub.startsWith("daemon restart ")) { await _cmdDaemonRestart(ctx, sub.slice("daemon restart".length).trim() || undefined); }
-      else if (sub === "daemon status")          { await _cmdDaemonStatus(ctx); }
-      else if (sub.startsWith("daemon send"))    { await _cmdDaemonSend(sub.slice("daemon send".length).trim(), ctx); }
-      else if (sub === "cron" || sub.startsWith("cron ")) { await _cmdCron(sub.slice("cron".length).trim(), ctx); }
-      else if (sub === "install")                { _cmdInstall(ctx, { linkCli: true }); }
-      else if (sub === "uninstall")              { _cmdUninstall(ctx, { linkCli: true }); }
-      else                                       { await _cmdRoot(ctx); }
+      if (sub === "") {
+        await _cmdRoot(ctx);
+      } else if (sub === "setup") {
+        await _cmdSetup(ctx);
+      } else if (sub === "status") {
+        _cmdStatus(ctx);
+      } else if (sub === "stop") {
+        await _cmdStop(ctx);
+      } else if (sub === "pair" || sub.startsWith("pair ")) {
+        await _cmdPair(ctx, sub.slice("pair".length).trim());
+      } else if (sub === "devices") {
+        await _cmdList(ctx);
+      } else if (sub.startsWith("revoke")) {
+        await _cmdRevoke(sub.slice("revoke".length).trim(), ctx);
+      } else if (sub.startsWith("set-relay")) {
+        _cmdSetRelay(sub.slice("set-relay".length).trim(), ctx);
+      } else if (sub === "relay" || sub.startsWith("relay ")) {
+        await _cmdRelay(sub.slice("relay".length).trim(), ctx);
+      } else if (sub === "config") {
+        _cmdConfig(ctx);
+      } else if (sub === "rename" || sub.startsWith("rename ")) {
+        await _renameAgent(sub.slice("rename".length).trim());
+      } else if (sub === "peers") {
+        await _cmdPeers(ctx);
+      } else if (sub.startsWith("create")) {
+        await _cmdCreate(sub.slice("create".length).trim(), ctx);
+      } else if (sub.startsWith("remove")) {
+        await _cmdRemove(sub.slice("remove".length).trim(), ctx);
+      } else if (sub === "daemons") {
+        await _cmdDaemonsList(ctx);
+      } else if (sub === "daemon start" || sub.startsWith("daemon start ")) {
+        await _cmdDaemonStart(
+          ctx,
+          sub.slice("daemon start".length).trim() || undefined,
+        );
+      } else if (sub === "daemon stop" || sub.startsWith("daemon stop ")) {
+        await _cmdDaemonStop(
+          ctx,
+          sub.slice("daemon stop".length).trim() || undefined,
+        );
+      } else if (
+        sub === "daemon restart" ||
+        sub.startsWith("daemon restart ")
+      ) {
+        await _cmdDaemonRestart(
+          ctx,
+          sub.slice("daemon restart".length).trim() || undefined,
+        );
+      } else if (sub === "daemon status") {
+        await _cmdDaemonStatus(ctx);
+      } else if (sub.startsWith("daemon send")) {
+        await _cmdDaemonSend(sub.slice("daemon send".length).trim(), ctx);
+      } else if (sub === "cron" || sub.startsWith("cron ")) {
+        await _cmdCron(sub.slice("cron".length).trim(), ctx);
+      } else if (sub === "install") {
+        _cmdInstall(ctx, { linkCli: true });
+      } else if (sub === "uninstall") {
+        _cmdUninstall(ctx, { linkCli: true });
+      } else {
+        await _cmdRoot(ctx);
+      }
     },
   });
 
   // Nested registrations (one entry per public action). The flat handler
-  // above already routes `/remote-pi <sub>` — these exist for the SDK's
+  // above already routes `/unbien <sub>` — these exist for the SDK's
   // command palette and slash-autocomplete in some UI modes.
-  pi.registerCommand("remote-pi setup",    { description: "Run the setup wizard and update local config", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdSetup(ctx); } });
-  pi.registerCommand("remote-pi status",   { description: "Show local mesh + relay status", handler: async (_, ctx) => { _lastCtx = ctx; _cmdStatus(ctx); } });
-  pi.registerCommand("remote-pi stop",     { description: "Stop everything (leave local mesh + disconnect relay)", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdStop(ctx); } });
-  pi.registerCommand("remote-pi pair",     { description: "Show a QR code to pair a new mobile device (optional: --ttl <seconds>)", handler: async (args, ctx) => { _lastCtx = ctx; await _cmdPair(ctx, args.trim()); } });
-  pi.registerCommand("remote-pi devices",  { description: "List paired mobile devices", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdList(ctx); } });
-  pi.registerCommand("remote-pi rename",  { description: "Rename this agent in the current session (updates mesh + relay room)", handler: async (args, ctx) => { _lastCtx = ctx; await _renameAgent(args.trim()); } });
-  pi.registerCommand("remote-pi revoke", {
+  pi.registerCommand("un-bien setup", {
+    description: "Run the setup wizard and update local config",
+    handler: async (_, ctx) => {
+      _lastCtx = ctx;
+      await _cmdSetup(ctx);
+    },
+  });
+  pi.registerCommand("un-bien status", {
+    description: "Show local mesh + relay status",
+    handler: async (_, ctx) => {
+      _lastCtx = ctx;
+      _cmdStatus(ctx);
+    },
+  });
+  pi.registerCommand("un-bien stop", {
+    description: "Stop everything (leave local mesh + disconnect relay)",
+    handler: async (_, ctx) => {
+      _lastCtx = ctx;
+      await _cmdStop(ctx);
+    },
+  });
+  pi.registerCommand("un-bien pair", {
+    description:
+      "Show a QR code to pair a new mobile device (optional: --ttl <seconds>)",
+    handler: async (args, ctx) => {
+      _lastCtx = ctx;
+      await _cmdPair(ctx, args.trim());
+    },
+  });
+  pi.registerCommand("un-bien devices", {
+    description: "List paired mobile devices",
+    handler: async (_, ctx) => {
+      _lastCtx = ctx;
+      await _cmdList(ctx);
+    },
+  });
+  pi.registerCommand("un-bien rename", {
+    description:
+      "Rename this agent in the current session (updates mesh + relay room)",
+    handler: async (args, ctx) => {
+      _lastCtx = ctx;
+      await _renameAgent(args.trim());
+    },
+  });
+  pi.registerCommand("un-bien revoke", {
     description: "Revoke a paired device by its shortid",
     getArgumentCompletions: async (prefix) => _shortidCompletions(prefix),
-    handler: async (args, ctx) => { _lastCtx = ctx; await _cmdRevoke(args.trim(), ctx); },
+    handler: async (args, ctx) => {
+      _lastCtx = ctx;
+      await _cmdRevoke(args.trim(), ctx);
+    },
   });
-  pi.registerCommand("remote-pi set-relay", { description: "Persist a new relay URL to user config", handler: async (args, ctx) => { _lastCtx = ctx; _cmdSetRelay(args.trim(), ctx); } });
-  pi.registerCommand("remote-pi config", { description: "Show the effective relay URL and where it came from", handler: async (_, ctx) => { _lastCtx = ctx; _cmdConfig(ctx); } });
-  pi.registerCommand("remote-pi relay", { description: "Relay control: start | stop | status | url <http(s) url> (no arg toggles)", handler: async (args, ctx) => { _lastCtx = ctx; await _cmdRelay(args.trim(), ctx); } });
+  pi.registerCommand("un-bien set-relay", {
+    description: "Persist a new relay URL to user config",
+    handler: async (args, ctx) => {
+      _lastCtx = ctx;
+      _cmdSetRelay(args.trim(), ctx);
+    },
+  });
+  pi.registerCommand("un-bien config", {
+    description: "Show the effective relay URL and where it came from",
+    handler: async (_, ctx) => {
+      _lastCtx = ctx;
+      _cmdConfig(ctx);
+    },
+  });
+  pi.registerCommand("un-bien relay", {
+    description:
+      "Relay control: start | stop | status | url <http(s) url> (no arg toggles)",
+    handler: async (args, ctx) => {
+      _lastCtx = ctx;
+      await _cmdRelay(args.trim(), ctx);
+    },
+  });
 
   // Plan/25 Wave D
-  pi.registerCommand("remote-pi peers", {
+  pi.registerCommand("un-bien peers", {
     description: "List local + cross-PC mesh peers, grouped by PC label",
-    handler: async (_, ctx) => { _lastCtx = ctx; await _cmdPeers(ctx); },
+    handler: async (_, ctx) => {
+      _lastCtx = ctx;
+      await _cmdPeers(ctx);
+    },
   });
 
   // Daemon registry (plan/26 Wave 1) — create + remove. start/stop/send/
   // status/install/uninstall come in later waves with the supervisor.
-  pi.registerCommand("remote-pi create", {
-    description: "Register a folder as a daemon and start it (when the supervisor is running)",
-    handler: async (args, ctx) => { _lastCtx = ctx; await _cmdCreate(args.trim(), ctx); },
+  pi.registerCommand("un-bien create", {
+    description:
+      "Register a folder as a daemon and start it (when the supervisor is running)",
+    handler: async (args, ctx) => {
+      _lastCtx = ctx;
+      await _cmdCreate(args.trim(), ctx);
+    },
   });
-  pi.registerCommand("remote-pi remove", {
+  pi.registerCommand("un-bien remove", {
     description: "Stop + unregister a daemon by id (local config is preserved)",
-    handler: async (args, ctx) => { _lastCtx = ctx; await _cmdRemove(args.trim(), ctx); },
+    handler: async (args, ctx) => {
+      _lastCtx = ctx;
+      await _cmdRemove(args.trim(), ctx);
+    },
   });
 
-  // Fleet ops via the supervisor (plan/26 W2). `/remote-pi stop` stays as
-  // local stop — fleet stop is `/remote-pi daemon stop`.
-  pi.registerCommand("remote-pi daemons",        { description: "List registered daemons + state", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdDaemonsList(ctx); } });
-  pi.registerCommand("remote-pi daemon start",   { description: "Start daemons: all, or one by id (`daemon start <id>`)", handler: async (args, ctx) => { _lastCtx = ctx; await _cmdDaemonStart(ctx, args.trim() || undefined); } });
-  pi.registerCommand("remote-pi daemon stop",    { description: "Stop daemons: all, or one by id (`daemon stop <id>`)", handler: async (args, ctx) => { _lastCtx = ctx; await _cmdDaemonStop(ctx, args.trim() || undefined); } });
-  pi.registerCommand("remote-pi daemon restart", { description: "Restart daemons: all, or one by id (`daemon restart <id>`)", handler: async (args, ctx) => { _lastCtx = ctx; await _cmdDaemonRestart(ctx, args.trim() || undefined); } });
-  pi.registerCommand("remote-pi daemon status",  { description: "Show fleet runtime status (pid, uptime, restarts)", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdDaemonStatus(ctx); } });
-  pi.registerCommand("remote-pi daemon send",    { description: "Send a prompt to a daemon: `daemon send <id> \"<text>\"`", handler: async (args, ctx) => { _lastCtx = ctx; await _cmdDaemonSend(args.trim(), ctx); } });
-  pi.registerCommand("remote-pi cron",           { description: "Schedule recurring prompts to daemons: `cron <add|list|remove|enable|disable|run|log>`", handler: async (args, ctx) => { _lastCtx = ctx; await _cmdCron(args.trim(), ctx); } });
+  // Fleet ops via the supervisor (plan/26 W2). `/unbien stop` stays as
+  // local stop — fleet stop is `/unbien daemon stop`.
+  pi.registerCommand("un-bien daemons", {
+    description: "List registered daemons + state",
+    handler: async (_, ctx) => {
+      _lastCtx = ctx;
+      await _cmdDaemonsList(ctx);
+    },
+  });
+  pi.registerCommand("un-bien daemon start", {
+    description: "Start daemons: all, or one by id (`daemon start <id>`)",
+    handler: async (args, ctx) => {
+      _lastCtx = ctx;
+      await _cmdDaemonStart(ctx, args.trim() || undefined);
+    },
+  });
+  pi.registerCommand("un-bien daemon stop", {
+    description: "Stop daemons: all, or one by id (`daemon stop <id>`)",
+    handler: async (args, ctx) => {
+      _lastCtx = ctx;
+      await _cmdDaemonStop(ctx, args.trim() || undefined);
+    },
+  });
+  pi.registerCommand("un-bien daemon restart", {
+    description: "Restart daemons: all, or one by id (`daemon restart <id>`)",
+    handler: async (args, ctx) => {
+      _lastCtx = ctx;
+      await _cmdDaemonRestart(ctx, args.trim() || undefined);
+    },
+  });
+  pi.registerCommand("un-bien daemon status", {
+    description: "Show fleet runtime status (pid, uptime, restarts)",
+    handler: async (_, ctx) => {
+      _lastCtx = ctx;
+      await _cmdDaemonStatus(ctx);
+    },
+  });
+  pi.registerCommand("un-bien daemon send", {
+    description: 'Send a prompt to a daemon: `daemon send <id> "<text>"`',
+    handler: async (args, ctx) => {
+      _lastCtx = ctx;
+      await _cmdDaemonSend(args.trim(), ctx);
+    },
+  });
+  pi.registerCommand("un-bien cron", {
+    description:
+      "Schedule recurring prompts to daemons: `cron <add|list|remove|enable|disable|run|log>`",
+    handler: async (args, ctx) => {
+      _lastCtx = ctx;
+      await _cmdCron(args.trim(), ctx);
+    },
+  });
 
   // Service install / uninstall (plan/26 W3)
-  pi.registerCommand("remote-pi install",   { description: "Install pi-supervisord as a system service + link the remote-pi CLI (systemd/launchd/Task Scheduler; Windows prompts for admin)", handler: async (_, ctx) => { _lastCtx = ctx; _cmdInstall(ctx, { linkCli: true }); } });
-  pi.registerCommand("remote-pi uninstall", { description: "Remove the pi-supervisord system service + the CLI shims (daemons registry preserved; Windows prompts for admin)", handler: async (_, ctx) => { _lastCtx = ctx; _cmdUninstall(ctx, { linkCli: true }); } });
+  pi.registerCommand("un-bien install", {
+    description:
+      "Install pi-supervisord as a system service + link the un-bien CLI (systemd/launchd/Task Scheduler; Windows prompts for admin)",
+    handler: async (_, ctx) => {
+      _lastCtx = ctx;
+      _cmdInstall(ctx, { linkCli: true });
+    },
+  });
+  pi.registerCommand("un-bien uninstall", {
+    description:
+      "Remove the pi-supervisord system service + the CLI shims (daemons registry preserved; Windows prompts for admin)",
+    handler: async (_, ctx) => {
+      _lastCtx = ctx;
+      _cmdUninstall(ctx, { linkCli: true });
+    },
+  });
 
   // Auto-init now runs from the session_start handler (above), AFTER the
   // SDK calls bindCore(). The original setTimeout(0) here fired before bindCore
@@ -2976,7 +3600,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // _emitRelayState crashed the headless pi process with "Extension runtime not
   // initialized" in a 5s supervisor crash-loop. The session_start handler now
   // auto-starts for ANY session with auto_start_relay (default true), so new
-  // interactive pi sessions are on remote automatically — no /remote-pi needed.
+  // interactive pi sessions are on remote automatically — no /unbien needed.
 };
 
 export default extension;
@@ -2984,7 +3608,7 @@ export default extension;
 // ── Command implementations ───────────────────────────────────────────────────
 
 /**
- * `/remote-pi status` — full state snapshot. Two lines: local mesh + relay.
+ * `/unbien status` — full state snapshot. Two lines: local mesh + relay.
  *
  * Always callable; safe when nothing is up (renders the off variants).
  * Reuses the same icons as the footer so terminal + status output stay
@@ -3005,10 +3629,12 @@ function _cmdStatus(ctx: Pick<ExtensionContext, "ui">): void {
   // Relay line — paired state is derived from _activePeers.size now.
   let relayLine: string;
   if (_state === "idle") {
-    relayLine = `⚪ Relay: off (${relayUrl}) — run /remote-pi to start`;
+    relayLine = `⚪ Relay: off (${relayUrl}) — run /unbien to start`;
   } else if (_activePeers.size > 0) {
     const count = _activePeers.size;
-    const shortids = [..._activePeers.keys()].map((peerId) => peerId.slice(0, 8)).join(", ");
+    const shortids = [..._activePeers.keys()]
+      .map((peerId) => peerId.slice(0, 8))
+      .join(", ");
     relayLine = `🟢 Relay: ${count} owner${count === 1 ? "" : "s"} online (${shortids}) (${relayUrl})`;
   } else {
     relayLine = _hasGlobalPairings
@@ -3016,11 +3642,11 @@ function _cmdStatus(ctx: Pick<ExtensionContext, "ui">): void {
       : `🟡 Relay: on, waiting for first pairing (${relayUrl})`;
   }
 
-  ctx.ui.notify(`[remote-pi]\n  ${meshLine}\n  ${relayLine}`, "info");
+  ctx.ui.notify(`[un-bien]\n  ${meshLine}\n  ${relayLine}`, "info");
 }
 
 /**
- * Plan/25 Wave D: `/remote-pi peers`.
+ * Plan/25 Wave D: `/unbien peers`.
  *
  * Queries the local broker for the aggregated peer inventory (`list_peers`
  * returns locals + cross-PC entries prefixed with `<pc_label>:`). Formats
@@ -3029,37 +3655,47 @@ function _cmdStatus(ctx: Pick<ExtensionContext, "ui">): void {
  */
 async function _cmdPeers(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
   if (!_meshNode) {
-    ctx.ui.notify("[remote-pi] Not on the local mesh. Run /remote-pi to join.", "warning");
+    ctx.ui.notify(
+      "[un-bien] Not on the local mesh. Run /unbien to join.",
+      "warning",
+    );
     return;
   }
   let peers: string[];
   try {
-    const reply = await _meshNode.request("broker", { type: "list_peers" }, 2000);
+    const reply = await _meshNode.request(
+      "broker",
+      { type: "list_peers" },
+      2000,
+    );
     peers = (reply.body as { peers?: string[] } | null)?.peers ?? [];
   } catch (err) {
-    ctx.ui.notify(`[remote-pi] peers list failed: ${String(err)}`, "error");
+    ctx.ui.notify(`[un-bien] peers list failed: ${String(err)}`, "error");
     return;
   }
   // Exclude self from the printed list — `list_peers` returns every peer
   // registered with the broker including the caller, which is noise here.
   const selfName = _meshNode.name();
-  ctx.ui.notify(`[remote-pi] peers:\n${formatPeerInventory(peers, selfName)}`, "info");
+  ctx.ui.notify(
+    `[un-bien] peers:\n${formatPeerInventory(peers, selfName)}`,
+    "info",
+  );
 }
 
 /**
- * Root handler for `/remote-pi`. On first run (no local config) drops into
+ * Root handler for `/unbien`. On first run (no local config) drops into
  * the wizard; on subsequent runs auto-joins the local mesh + starts the
  * relay (if opted in during setup), then prints the status.
  *
- * `/remote-pi` is intentionally the only command users need day-to-day:
+ * `/unbien` is intentionally the only command users need day-to-day:
  * idempotent connect + status display.
  */
 async function _cmdRoot(
   ctx: Pick<ExtensionContext, "ui" | "cwd">,
   restartAuthority?: RootRestartAuthority,
 ): Promise<void> {
-  const rootLifecycleGeneration = restartAuthority?.rootLifecycleGeneration
-    ?? _rootLifecycleGeneration;
+  const rootLifecycleGeneration =
+    restartAuthority?.rootLifecycleGeneration ?? _rootLifecycleGeneration;
 
   if (_cmdRootInFlight) {
     try {
@@ -3098,36 +3734,46 @@ async function _cmdRootInner(
   // clears while an outgoing continuation may still be pending.
   if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) return;
 
-  const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd();
+  const cwd =
+    "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd();
   // Lock identity is (cwd, name). Several agents may run in the SAME folder; the
   // requested name just has to be made unique. Derive the name the same way
   // `_cmdJoin` does so the lock and the mesh registration agree on identity.
-  const requestedName = loadLocalConfig(cwd).agent_name || defaultAgentName(cwd);
+  const requestedName =
+    loadLocalConfig(cwd).agent_name || defaultAgentName(cwd);
 
   // Per-(cwd,name) lock. Interactive agents may coexist by auto-suffixing
   // (`name#2`, `name#3`, …), but supervised daemons must be singletons for their
   // registered cwd/name. If a daemon silently came up as `#2`, the supervisor
   // would report "running" while the mesh had duplicate peers for one repo.
   if (_cwdLock === null) {
-    const isDaemon = process.env["REMOTE_PI_DAEMON"] === "1";
+    const isDaemon = process.env["UNBIEN_DAEMON"] === "1";
     const maxAttempts = isDaemon ? 1 : 1000;
     for (let n = 1; n <= maxAttempts; n++) {
       const candidate = n === 1 ? requestedName : `${requestedName}#${n}`;
       const result = await acquireCwdLock(cwd, candidate);
       if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) {
         if (result.ok) {
-          try { result.release(); } catch { /* best-effort stale lock cleanup */ }
+          try {
+            result.release();
+          } catch {
+            /* best-effort stale lock cleanup */
+          }
         }
         return;
       }
-      if (result.ok) { _cwdLock = result; _lockedName = candidate; break; }
+      if (result.ok) {
+        _cwdLock = result;
+        _lockedName = candidate;
+        break;
+      }
     }
     if (_cwdLock === null) {
       if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) return;
       ctx.ui.notify(
-        process.env["REMOTE_PI_DAEMON"] === "1"
-          ? `[remote-pi] Daemon not started: another live agent already owns "${requestedName}" in this folder. Stop the old Pi process, then restart the daemon.`
-          : `[remote-pi] Could not start: too many agents named "${requestedName}" already running in this folder.`,
+        process.env["UNBIEN_DAEMON"] === "1"
+          ? `[un-bien] Daemon not started: another live agent already owns "${requestedName}" in this folder. Stop the old Pi process, then restart the daemon.`
+          : `[un-bien] Could not start: too many agents named "${requestedName}" already running in this folder.`,
         "warning",
       );
       return;
@@ -3148,12 +3794,12 @@ async function _cmdRootInner(
     });
     if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) return;
     if (!newConfig) {
-      ctx.ui.notify("[remote-pi] Setup cancelled.", "info");
+      ctx.ui.notify("[un-bien] Setup cancelled.", "info");
       return;
     }
     saveLocalConfig(cwd, newConfig);
     ctx.ui.notify(
-      `[remote-pi] Config saved to ${cwd}/.pi/remote-pi/config.json`,
+      `[un-bien] Config saved to ${cwd}/.pi/un-bien/config.json`,
       "info",
     );
     if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) return;
@@ -3176,20 +3822,24 @@ async function _cmdRootInner(
   // `_cmdJoin` returns void on a canceled/failed join, so recheck both the
   // root lifecycle and publication before bringing the Relay up.
   if (!_isCurrentRootLifecycle(rootLifecycleGeneration) || !_meshNode) return;
-  if (effectiveAutoStartRelay(config) && _state === "idle") await _cmdStart(ctx);
+  if (effectiveAutoStartRelay(config) && _state === "idle")
+    await _cmdStart(ctx);
   if (!_isCurrentRootLifecycle(rootLifecycleGeneration) || !_meshNode) return;
   _cmdStatus(ctx);
 }
 
 /**
- * `/remote-pi setup` — re-run the wizard. Defaults pre-fill from the
+ * `/unbien setup` — re-run the wizard. Defaults pre-fill from the
  * existing config so it doubles as an "edit" flow.
  */
-async function _cmdSetup(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
-  const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd();
+async function _cmdSetup(
+  ctx: Pick<ExtensionContext, "ui" | "cwd">,
+): Promise<void> {
+  const cwd =
+    "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd();
   const ui = ctx.ui as unknown as WizardUI;
   if (typeof ui.select !== "function") {
-    ctx.ui.notify("[remote-pi] Setup requires an interactive UI.", "warning");
+    ctx.ui.notify("[un-bien] Setup requires an interactive UI.", "warning");
     return;
   }
   const current = loadLocalConfig(cwd);
@@ -3199,28 +3849,26 @@ async function _cmdSetup(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
     use_relay: effectiveAutoStartRelay(current),
   });
   if (!newConfig) {
-    ctx.ui.notify("[remote-pi] Setup cancelled.", "info");
+    ctx.ui.notify("[un-bien] Setup cancelled.", "info");
     return;
   }
   saveLocalConfig(cwd, newConfig);
-  ctx.ui.notify(
-    "[remote-pi] Config updated. Run /remote-pi to apply now.",
-    "info",
-  );
+  ctx.ui.notify("[un-bien] Config updated. Run /unbien to apply now.", "info");
 }
 
-async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
+async function _cmdStart(
+  ctx: Pick<ExtensionContext, "ui" | "cwd">,
+): Promise<void> {
   if (_state !== "idle") {
-    ctx.ui.notify("[remote-pi] Already started.", "warning");
+    ctx.ui.notify("[un-bien] Already started.", "warning");
     return;
   }
   const lifecycleGeneration = ++_relayLifecycleGeneration;
-  const isCurrentCandidate = (): boolean => (
+  const isCurrentCandidate = (): boolean =>
     !_disposed &&
     lifecycleGeneration === _relayLifecycleGeneration &&
     _state === "idle" &&
-    _relay === null
-  );
+    _relay === null;
 
   let edKp: Awaited<ReturnType<typeof getOrCreateEd25519Keypair>>;
   try {
@@ -3237,10 +3885,10 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
       // abort cleanly with an actionable message instead of crashing or
       // re-pairing. Unlocking the keychain and re-running fixes it.
       ctx.ui.notify(
-        "[remote-pi] Could not read this machine's identity: the system " +
-        "keychain is locked or access was denied. Unlock it (open the app / " +
-        "log in) and run /remote-pi again. Your pairing is NOT lost. " +
-        "(Set REMOTE_PI_ALLOW_FILE_IDENTITY=1 only for headless hosts.)",
+        "[un-bien] Could not read this machine's identity: the system " +
+          "keychain is locked or access was denied. Unlock it (open the app / " +
+          "log in) and run /unbien again. Your pairing is NOT lost. " +
+          "(Set UNBIEN_ALLOW_FILE_IDENTITY=1 only for headless hosts.)",
         "error",
       );
       return;
@@ -3252,12 +3900,12 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
       // wipe peers.json seconds later and take the phone offline, so storage
       // refuses. Surface the actionable fix instead of failing silently.
       ctx.ui.notify(
-        "[remote-pi] Could not read this machine's identity, but devices are " +
-        "already paired — refusing to generate a new one (that would revoke " +
-        "them). This process likely cannot reach the same keyring as the " +
-        "session that paired (e.g. a systemd --user daemon). Give the service " +
-        "keyring access, or copy the paired keypair to ~/.pi/remote/identity.json " +
-        "(0600) so both contexts read the same identity.",
+        "[un-bien] Could not read this machine's identity, but devices are " +
+          "already paired — refusing to generate a new one (that would revoke " +
+          "them). This process likely cannot reach the same keyring as the " +
+          "session that paired (e.g. a systemd --user daemon). Give the service " +
+          "keyring access, or copy the paired keypair to ~/.pi/un-bien/identity.json " +
+          "(0600) so both contexts read the same identity.",
         "error",
       );
       return;
@@ -3273,7 +3921,8 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
   const { url: relayUrl, source } = resolveRelayUrl();
   const myShort = Buffer.from(edKp.publicKey).toString("base64").slice(0, 8);
 
-  const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd();
+  const cwd =
+    "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd();
   // Same name we send in pair_ok — keeps room_meta.name and the per-pair
   // session_name aligned so the app shows consistent labels.
   const sessionName = _displayName(cwd);
@@ -3314,13 +3963,16 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
         const modelId = sm.getDefaultModel();
         if (modelId) {
           const found = provider
-            ? ensureModelRegistry((c ?? _lastEventCtx ?? _lastCtx) as unknown as ActionCtx | null)
-                .find(provider, modelId)
+            ? ensureModelRegistry(
+                (c ?? _lastEventCtx ?? _lastCtx) as unknown as ActionCtx | null,
+              ).find(provider, modelId)
             : undefined;
           _currentModel = found?.name ?? modelId;
         }
       }
-    } catch { /* defensive — never block start on a model lookup */ }
+    } catch {
+      /* defensive — never block start on a model lookup */
+    }
   }
 
   // Plan/28 Wave D.1: seed thinking from the SDK's current level so the
@@ -3330,9 +3982,16 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
   // `thinking_level_select` event handler above.
   try {
     _currentThinking = _pi?.getThinkingLevel() as ThinkingLevel | undefined;
-  } catch { /* defensive — never block /remote-pi start on this */ }
+  } catch {
+    /* defensive — never block /unbien start on this */
+  }
 
-  const roomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel } = { name: sessionName, cwd };
+  const roomMeta: {
+    name: string;
+    cwd: string;
+    model?: string;
+    thinking?: ThinkingLevel;
+  } = { name: sessionName, cwd };
   const modelName = _currentModelName();
   if (modelName) roomMeta.model = modelName;
   if (_currentThinking) roomMeta.thinking = _currentThinking;
@@ -3341,7 +4000,10 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
   // entry that surfaces in the app as a phantom legacy session.
   _myRoomMeta = roomMeta;
 
-  ctx.ui.notify(`[remote-pi] Connecting to relay ${relayUrl} (source: ${source}, room: ${roomId})…`, "info");
+  ctx.ui.notify(
+    `[un-bien] Connecting to relay ${relayUrl} (source: ${source}, room: ${roomId})…`,
+    "info",
+  );
 
   // Transport opens WebSocket; convert the canonical http(s):// stored
   // form to ws(s):// at this boundary. The relayUrl variable keeps the
@@ -3352,19 +4014,23 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
   } catch (err) {
     // A rejected local candidate is never published and must always be closed,
     // regardless of whether this lifecycle is still authoritative.
-    try { relay.close(); } catch { /* best-effort rejected candidate cleanup */ }
+    try {
+      relay.close();
+    } catch {
+      /* best-effort rejected candidate cleanup */
+    }
     // A stop, shutdown/replacement, relay-off, or newer start may supersede a
     // candidate before its rejection arrives. Keep the outgoing context silent;
     // only the authoritative attempt may report an error.
     if (!isCurrentCandidate()) return;
     if (err instanceof RoomAlreadyOpenError) {
       ctx.ui.notify(
-        "[remote-pi] Already running in this cwd. Stop the other terminal first.",
+        "[un-bien] Already running in this cwd. Stop the other terminal first.",
         "error",
       );
       return;
     }
-    ctx.ui.notify(`[remote-pi] relay connect failed: ${String(err)}`, "error");
+    ctx.ui.notify(`[un-bien] relay connect failed: ${String(err)}`, "error");
     return;
   }
 
@@ -3372,7 +4038,11 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
   // stop/relay-off, or a newer start may have invalidated it while connect()
   // was pending; never let that stale continuation resurrect the Relay.
   if (!isCurrentCandidate()) {
-    try { relay.close(); } catch { /* best-effort stale candidate cleanup */ }
+    try {
+      relay.close();
+    } catch {
+      /* best-effort stale candidate cleanup */
+    }
     return;
   }
 
@@ -3381,7 +4051,7 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
   _peerShort = myShort;
   _myRoomId = roomId;
   _state = "started";
-  // Set _sessionStartedAt ONLY on first /remote-pi start since process boot.
+  // Set _sessionStartedAt ONLY on first /unbien start since process boot.
   // Subsequent start cycles (after stop) preserve the original epoch so the
   // app keeps treating it as the same session (and merges new events from
   // the terminal turns that happened during the idle window). Pi process
@@ -3411,29 +4081,20 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
       storage: { snapshotOwnerPubkeys, conditionalRemovePeer },
       myPubkey: edKp.publicKey,
       onRevoke: (rawOwnerPubkey, canonicalOwnerPubkey) => {
-        if (
-          _selfRevoke !== producer ||
-          producerEpoch !== _selfRevokeEpoch
-        ) {
+        if (_selfRevoke !== producer || producerEpoch !== _selfRevokeEpoch) {
           return;
         }
         _revokeActiveOwnerRuntime(canonicalOwnerPubkey);
         void rawOwnerPubkey; // exact storage removal already happened upstream
       },
       onAuthoritativeOwners: (canonicalOwnerPubkeys) => {
-        if (
-          _selfRevoke !== producer ||
-          producerEpoch !== _selfRevokeEpoch
-        ) {
+        if (_selfRevoke !== producer || producerEpoch !== _selfRevokeEpoch) {
           return;
         }
         const presentOwners = new Set(canonicalOwnerPubkeys);
         let effectFailed = false;
         for (const canonicalOwnerPubkey of [..._activePeers.keys()]) {
-          if (
-            _selfRevoke !== producer ||
-            producerEpoch !== _selfRevokeEpoch
-          ) {
+          if (_selfRevoke !== producer || producerEpoch !== _selfRevokeEpoch) {
             return;
           }
           if (presentOwners.has(canonicalOwnerPubkey)) continue;
@@ -3443,13 +4104,11 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
             effectFailed = true;
           }
         }
-        if (effectFailed) throw new Error("Owner runtime reconciliation failed");
+        if (effectFailed)
+          throw new Error("Owner runtime reconciliation failed");
       },
       onTopologyChanged: (snapshot) => {
-        if (
-          _selfRevoke !== producer ||
-          producerEpoch !== _selfRevokeEpoch
-        ) {
+        if (_selfRevoke !== producer || producerEpoch !== _selfRevokeEpoch) {
           return;
         }
         _selfRevokeTopology = snapshot;
@@ -3476,40 +4135,46 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
   // startup is callback-driven above, so it must not issue a second attach.
   if (!createdProducer) _attachBridgeIfReady();
 
-  _emitRelayState();  // → connected
-  ctx.ui.notify(`[remote-pi] state: started (peer=${myShort}) — Connected to relay ${relayUrl}`, "info");
+  _emitRelayState(); // → connected
+  ctx.ui.notify(
+    `[un-bien] state: started (peer=${myShort}) — Connected to relay ${relayUrl}`,
+    "info",
+  );
 }
 
 /**
- * `/remote-pi pair` — always generates a fresh QR when the relay is up.
+ * `/unbien pair` — always generates a fresh QR when the relay is up.
  *
  * Pre-W2D this rejected with "Already paired with X" once one owner was
- * connected, forcing /remote-pi stop to pair a second device — the
+ * connected, forcing /unbien stop to pair a second device — the
  * catch-22 the multi-channel refactor was designed to break. Now the new
  * device is **added** to `_activePeers` after scanning, while existing
  * owners keep their session.
  */
-async function _cmdPair(ctx: Pick<ExtensionContext, "ui" | "cwd">, args = ""): Promise<void> {
+async function _cmdPair(
+  ctx: Pick<ExtensionContext, "ui" | "cwd">,
+  args = "",
+): Promise<void> {
   const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : "";
 
-  // Auto-bootstrap when services are down. Before this, `/remote-pi pair`
-  // on a fresh terminal forced the user to call `/remote-pi` first — every
+  // Auto-bootstrap when services are down. Before this, `/unbien pair`
+  // on a fresh terminal forced the user to call `/unbien` first — every
   // session began with the same surprise warning + second command. Now we
   // do the join + relay-start inline so the common "I just opened a
   // terminal and want to pair my phone" flow is a single command.
   //
   // We don't run the first-time wizard here: pair is a focused operation
   // and the wizard prompts are wrong UX in that flow. If there's no local
-  // config, the user truly needs to run `/remote-pi` first to configure.
+  // config, the user truly needs to run `/unbien` first to configure.
   if (_state === "idle") {
     if (!localConfigExists(cwd)) {
       ctx.ui.notify(
-        "[remote-pi] First-time setup needed. Run /remote-pi to configure, then /remote-pi pair.",
+        "[un-bien] First-time setup needed. Run /unbien to configure, then /unbien pair.",
         "warning",
       );
       return;
     }
-    ctx.ui.notify("[remote-pi] Starting mesh + relay before pairing…", "info");
+    ctx.ui.notify("[un-bien] Starting mesh + relay before pairing…", "info");
     if (!_meshNode) await _cmdJoin(ctx);
     if (_state === "idle") await _cmdStart(ctx);
   }
@@ -3518,8 +4183,8 @@ async function _cmdPair(ctx: Pick<ExtensionContext, "ui" | "cwd">, args = ""): P
   // the relay. Without a live WS there's nothing for the scan to land on.
   if (_state === "idle" || !_relay) {
     ctx.ui.notify(
-      "[remote-pi] Pair requires the relay to be connected. " +
-      "Run /remote-pi to start it (or fix your relay URL via /remote-pi set-relay).",
+      "[un-bien] Pair requires the relay to be connected. " +
+        "Run /unbien to start it (or fix your relay URL via /unbien set-relay).",
       "warning",
     );
     return;
@@ -3534,7 +4199,9 @@ async function _cmdPair(ctx: Pick<ExtensionContext, "ui" | "cwd">, args = ""): P
   // Optional `--ttl <seconds>` — RPC clients (e.g. Cockpit) pass a caller-
   // defined expiry. Defaults to TOKEN_TTL_MS, clamped to the safe window.
   const ttlMatch = /--ttl\s+(\d+)/.exec(args);
-  const ttlMs = ttlMatch ? clampPairTtlMs(Number(ttlMatch[1]) * 1000) : TOKEN_TTL_MS;
+  const ttlMs = ttlMatch
+    ? clampPairTtlMs(Number(ttlMatch[1]) * 1000)
+    : TOKEN_TTL_MS;
   const { token, expiresAt } = qrSession.issueToken(ttlMs);
   const roomId = _myRoomId ?? roomIdFor(cwd, sessionName);
   const qrUri = buildQRUri(token, edKp.publicKey, sessionName, roomId);
@@ -3549,7 +4216,7 @@ async function _cmdPair(ctx: Pick<ExtensionContext, "ui" | "cwd">, args = ""): P
   if (_pi) {
     const qrAscii = renderQRAscii(qrUri);
     _pi.sendMessage({
-      customType: "remote-pi:pair-code",
+      customType: "un-bien:pair-code",
       content:
         `📱 Scan to pair:\n\n${qrAscii}\n` +
         `📋 Or copy this pairing code (camera-less devices):\n\n${qrUri}`,
@@ -3561,17 +4228,17 @@ async function _cmdPair(ctx: Pick<ExtensionContext, "ui" | "cwd">, args = ""): P
   }
 
   ctx.ui.notify(
-    `[remote-pi] QR ready — valid until ${new Date(expiresAt).toLocaleTimeString()}. ` +
-    `Scan with the app, or copy the pairing code printed above.`,
+    `[un-bien] QR ready — valid until ${new Date(expiresAt).toLocaleTimeString()}. ` +
+      `Scan with the app, or copy the pairing code printed above.`,
     "info",
   );
   // Returns immediately; the auto-listener transitions to 'paired' on pair_request.
 }
 
 /**
- * `/remote-pi stop` — full teardown. Leaves the local UDS mesh AND closes
+ * `/unbien stop` — full teardown. Leaves the local UDS mesh AND closes
  * the relay. Safe when one or both are already off. To resume, run
- * `/remote-pi` again.
+ * `/unbien` again.
  */
 async function _cmdStop(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
   // Invalidate queued root work and local async candidates even when none has
@@ -3582,7 +4249,7 @@ async function _cmdStop(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
   const relayUp = _state !== "idle";
   if (!meshUp && !relayUp) {
     _relayLifecycleGeneration += 1;
-    ctx.ui.notify("[remote-pi] Already stopped — nothing to do.", "info");
+    ctx.ui.notify("[un-bien] Already stopped — nothing to do.", "info");
     return;
   }
 
@@ -3600,35 +4267,52 @@ async function _cmdStop(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
   _sessionName = null;
   _sessionPeerCount = 0;
   let meshClose: Promise<void> | null = null;
-  try { meshClose = meshNode?.close() ?? null; } catch { /* best-effort */ }
-  try { await meshClose; } catch { /* best-effort */ }
+  try {
+    meshClose = meshNode?.close() ?? null;
+  } catch {
+    /* best-effort */
+  }
+  try {
+    await meshClose;
+  } catch {
+    /* best-effort */
+  }
 
-  ctx.ui.notify("[remote-pi] Stopped (mesh + relay disconnected).", "info");
+  ctx.ui.notify("[un-bien] Stopped (mesh + relay disconnected).", "info");
   _refreshFooter(ctx);
 }
 
 async function _cmdList(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
   const peers = await listPeers();
-  if (peers.length === 0) { ctx.ui.notify("[remote-pi] No paired devices.", "info"); return; }
+  if (peers.length === 0) {
+    ctx.ui.notify("[un-bien] No paired devices.", "info");
+    return;
+  }
   // Multi-channel (W2D): each peer is either `online` (channel attached
   // right now) or `offline` (in peers.json but not connected). Replaces
   // the singleton " (active)" marker that only ever marked one peer.
-  const lines = peers.flatMap((record) => {
-    const inspected = _inspectPeerRecord(record);
-    if (!inspected) return [];
-    const tag = inspected.runtimeKey !== null && _activePeers.has(inspected.runtimeKey)
-      ? " 🟢 online"
-      : " ⚪ offline";
-    return `• ${inspected.rawHandle.slice(0, 8)} — ${inspected.record.name}${tag}`;
-  }).join("\n");
-  ctx.ui.notify(`[remote-pi] Paired devices:\n${lines}`, "info");
+  const lines = peers
+    .flatMap((record) => {
+      const inspected = _inspectPeerRecord(record);
+      if (!inspected) return [];
+      const tag =
+        inspected.runtimeKey !== null && _activePeers.has(inspected.runtimeKey)
+          ? " 🟢 online"
+          : " ⚪ offline";
+      return `• ${inspected.rawHandle.slice(0, 8)} — ${inspected.record.name}${tag}`;
+    })
+    .join("\n");
+  ctx.ui.notify(`[un-bien] Paired devices:\n${lines}`, "info");
 }
 
-async function _cmdRevoke(arg: string, ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
+async function _cmdRevoke(
+  arg: string,
+  ctx: Pick<ExtensionContext, "ui" | "cwd">,
+): Promise<void> {
   const shortid = arg.trim();
   if (!shortid) {
     ctx.ui.notify(
-      "[remote-pi] Usage: /remote-pi revoke <shortid>. Run /remote-pi list to see shortids.",
+      "[un-bien] Usage: /unbien revoke <shortid>. Run /unbien list to see shortids.",
       "warning",
     );
     return;
@@ -3641,19 +4325,19 @@ async function _cmdRevoke(arg: string, ctx: Pick<ExtensionContext, "ui" | "cwd">
   if (_state === "idle") {
     if (!localConfigExists(cwd)) {
       ctx.ui.notify(
-        "[remote-pi] First-time setup needed. Run /remote-pi to configure, then /remote-pi revoke.",
+        "[un-bien] First-time setup needed. Run /unbien to configure, then /unbien revoke.",
         "warning",
       );
       return;
     }
-    ctx.ui.notify("[remote-pi] Starting mesh + relay before revoking…", "info");
+    ctx.ui.notify("[un-bien] Starting mesh + relay before revoking…", "info");
     if (!_meshNode) await _cmdJoin(ctx);
     if (_state === "idle") await _cmdStart(ctx);
   }
   if (_state === "idle" || !_relay) {
     ctx.ui.notify(
-      "[remote-pi] Revoke requires the relay to be connected. " +
-      "Run /remote-pi to start it (or fix your relay URL via /remote-pi set-relay).",
+      "[un-bien] Revoke requires the relay to be connected. " +
+        "Run /unbien to start it (or fix your relay URL via /unbien set-relay).",
       "warning",
     );
     return;
@@ -3666,16 +4350,18 @@ async function _cmdRevoke(arg: string, ctx: Pick<ExtensionContext, "ui" | "cwd">
 
   if (matches.length === 0) {
     ctx.ui.notify(
-      "[remote-pi] No peer matching that shortid. Run /remote-pi devices to see shortids.",
+      "[un-bien] No peer matching that shortid. Run /unbien devices to see shortids.",
       "warning",
     );
     return;
   }
 
   if (matches.length > 1) {
-    const collisions = matches.map((peer) => peer.rawHandle.slice(0, 8)).join(", ");
+    const collisions = matches
+      .map((peer) => peer.rawHandle.slice(0, 8))
+      .join(", ");
     ctx.ui.notify(
-      `[remote-pi] Ambiguous shortid — ${matches.length} matches: ${collisions}. Use mais chars.`,
+      `[un-bien] Ambiguous shortid — ${matches.length} matches: ${collisions}. Use mais chars.`,
       "warning",
     );
     return;
@@ -3689,13 +4375,17 @@ async function _cmdRevoke(arg: string, ctx: Pick<ExtensionContext, "ui" | "cwd">
   // is indexed by its canonical identity.
   if (peer.runtimeKey !== null && _activePeers.has(peer.runtimeKey)) {
     const channel = _activePeers.get(peer.runtimeKey);
-    try { channel?.send({ type: "bye", reason: "session_replaced" }); } catch { /* best-effort */ }
+    try {
+      channel?.send({ type: "bye", reason: "session_replaced" });
+    } catch {
+      /* best-effort */
+    }
     _detachPeerChannel(peer.runtimeKey);
     _refreshFooter();
   }
 
   ctx.ui.notify(
-    `[remote-pi] Revoked: ${peer.record.name} (${peer.rawHandle.slice(0, 8)}…)`,
+    `[un-bien] Revoked: ${peer.record.name} (${peer.rawHandle.slice(0, 8)}…)`,
     "info",
   );
 }
@@ -3723,34 +4413,34 @@ function _cmdSetRelay(arg: string, ctx: Pick<ExtensionContext, "ui">): void {
   const raw = arg.trim();
   if (!raw) {
     ctx.ui.notify(
-      "[remote-pi] Usage: /remote-pi set-relay <http:// or https:// url>",
+      "[un-bien] Usage: /unbien set-relay <http:// or https:// url>",
       "warning",
     );
     return;
   }
   if (isWebSocketScheme(raw)) {
     ctx.ui.notify(
-      `[remote-pi] Use http:// or https://. The extension converts to WebSocket automatically.`,
+      `[un-bien] Use http:// or https://. The extension converts to WebSocket automatically.`,
       "error",
     );
     return;
   }
   if (!isValidRelayUrl(raw)) {
     ctx.ui.notify(
-      `[remote-pi] Invalid URL: ${raw}. Must start with http:// or https://`,
+      `[un-bien] Invalid URL: ${raw}. Must start with http:// or https://`,
       "error",
     );
     return;
   }
   saveConfig({ relay: raw });
   ctx.ui.notify(
-    `[remote-pi] Relay set to ${raw}. Run /remote-pi relay stop then /remote-pi relay start to apply.`,
+    `[un-bien] Relay set to ${raw}. Run /unbien relay stop then /unbien relay start to apply.`,
     "info",
   );
 }
 
 /**
- * `/remote-pi config` — print the effective relay URL and where it came from.
+ * `/unbien config` — print the effective relay URL and where it came from.
  *
  * Documented in the README ("Verify the active URL and its source") and in
  * CLAUDE.md, but like the `relay` family (issue #119) it had no handler and
@@ -3759,19 +4449,24 @@ function _cmdSetRelay(arg: string, ctx: Pick<ExtensionContext, "ui">): void {
  */
 function _cmdConfig(ctx: Pick<ExtensionContext, "ui">): void {
   const { url, source } = resolveRelayUrl();
-  const origin = source === "env"
-    ? "REMOTE_PI_RELAY environment variable"
-    : source === "config"
-      ? "~/.pi/remote/config.json (set via /remote-pi set-relay)"
-      : "built-in default";
-  const live = _relayUrl && _relayUrl !== url
-    ? `\n  ⚠ Live connection still on ${_relayUrl} — run /remote-pi relay stop then /remote-pi relay start to apply.`
-    : "";
-  ctx.ui.notify(`[remote-pi]\n  Relay URL: ${url}\n  Source: ${source} — ${origin}${live}`, "info");
+  const origin =
+    source === "env"
+      ? "UNBIEN_RELAY environment variable"
+      : source === "config"
+        ? "~/.pi/un-bien/config.json (set via /unbien set-relay)"
+        : "built-in default";
+  const live =
+    _relayUrl && _relayUrl !== url
+      ? `\n  ⚠ Live connection still on ${_relayUrl} — run /unbien relay stop then /unbien relay start to apply.`
+      : "";
+  ctx.ui.notify(
+    `[un-bien]\n  Relay URL: ${url}\n  Source: ${source} — ${origin}${live}`,
+    "info",
+  );
 }
 
 /**
- * `/remote-pi relay [start|stop|status|url <url>]` — issue #119.
+ * `/unbien relay [start|stop|status|url <url>]` — issue #119.
  *
  * The README has always documented this family (`relay url` to point at a
  * self-hosted relay, `relay stop` + `relay start` to apply the change), but no
@@ -3783,7 +4478,7 @@ function _cmdConfig(ctx: Pick<ExtensionContext, "ui">): void {
  * Verbs map onto the same primitives the RPC control channel already uses
  * (`_handleControl`), so the slash command and the Cockpit button can't drift:
  * relay-only up (`_cmdStart`) / relay-only down (`_goIdle`), never touching
- * local-mesh membership — that stays `/remote-pi stop`'s job.
+ * local-mesh membership — that stays `/unbien stop`'s job.
  */
 async function _cmdRelay(arg: string, ctx: ExtensionContext): Promise<void> {
   const raw = arg.trim();
@@ -3794,22 +4489,25 @@ async function _cmdRelay(arg: string, ctx: ExtensionContext): Promise<void> {
     case "":
     case "toggle":
       await _handleControl("relay:toggle");
-      ctx.ui.notify(`[remote-pi] Relay ${_relayStatus()}.`, "info");
+      ctx.ui.notify(`[un-bien] Relay ${_relayStatus()}.`, "info");
       _refreshFooter(ctx);
       return;
     case "start":
     case "on":
       if (_getState() === "idle") await _cmdStart(ctx);
-      else ctx.ui.notify(`[remote-pi] Relay already ${_relayStatus()}.`, "info");
+      else ctx.ui.notify(`[un-bien] Relay already ${_relayStatus()}.`, "info");
       _emitRelayState(true);
       return;
     case "stop":
     case "off":
       if (_getState() === "idle") {
-        ctx.ui.notify("[remote-pi] Relay already disconnected.", "info");
+        ctx.ui.notify("[un-bien] Relay already disconnected.", "info");
       } else {
         _goIdle("peer_stop");
-        ctx.ui.notify("[remote-pi] Relay disconnected (local mesh untouched).", "info");
+        ctx.ui.notify(
+          "[un-bien] Relay disconnected (local mesh untouched).",
+          "info",
+        );
       }
       _emitRelayState(true);
       _refreshFooter(ctx);
@@ -3825,7 +4523,7 @@ async function _cmdRelay(arg: string, ctx: ExtensionContext): Promise<void> {
       return;
     default:
       ctx.ui.notify(
-        "[remote-pi] Usage: /remote-pi relay [start|stop|status|url <http(s) url>]",
+        "[un-bien] Usage: /unbien relay [start|stop|status|url <http(s) url>]",
         "warning",
       );
       return;
@@ -3835,22 +4533,25 @@ async function _cmdRelay(arg: string, ctx: ExtensionContext): Promise<void> {
 // ── Daemon registry commands (plan/26 Wave 1) ─────────────────────────────────
 
 /**
- * `/remote-pi create [<cwd>] [--name <name>]`
+ * `/unbien create [<cwd>] [--name <name>]`
  *
- * Promotes a folder to a daemon entry in `~/.pi/remote/daemons.json`. The
+ * Promotes a folder to a daemon entry in `~/.pi/un-bien/daemons.json`. The
  * cwd is **always normalized to an absolute realpath** before storage —
  * `~/Movies`, `./Movies`, `../foo/Movies` all collapse to a single
  * canonical entry. Relative paths resolve against the Pi process's
  * current working directory, not the slash-command's `ctx.cwd`.
  *
- * Side effects on the cwd's local config (`<cwd>/.pi/remote-pi/config.json`):
+ * Side effects on the cwd's local config (`<cwd>/.pi/un-bien/config.json`):
  *   - If the config doesn't exist: created with `auto_start_relay=true`
  *     (mandatory for daemons) and `agent_name` from `--name` if provided.
  *   - If the config already exists: left untouched. Re-running `create`
  *     on an existing daemon is idempotent at this layer; the registry
  *     itself rejects duplicate cwds.
  */
-async function _cmdCreate(arg: string, ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+async function _cmdCreate(
+  arg: string,
+  ctx: Pick<ExtensionContext, "ui">,
+): Promise<void> {
   // Parse `[cwd] [--name "value with spaces" | --name word]` in any order.
   // The first non-flag token is the cwd; the rest of the line after
   // `--name` (quoted or unquoted) is the display name.
@@ -3859,7 +4560,7 @@ async function _cmdCreate(arg: string, ctx: Pick<ExtensionContext, "ui">): Promi
   const cwdRaw = arg.replace(/--name\s+"[^"]+"|--name\s+\S+/, "").trim();
   if (!cwdRaw) {
     ctx.ui.notify(
-      "[remote-pi] Usage: /remote-pi create <absolute-or-relative-cwd> [--name \"Display name\"]",
+      '[un-bien] Usage: /unbien create <absolute-or-relative-cwd> [--name "Display name"]',
       "warning",
     );
     return;
@@ -3869,17 +4570,17 @@ async function _cmdCreate(arg: string, ctx: Pick<ExtensionContext, "ui">): Promi
   try {
     result = addDaemon(cwdRaw, name);
   } catch (err) {
-    ctx.ui.notify(`[remote-pi] create failed: ${String(err)}`, "error");
+    ctx.ui.notify(`[un-bien] create failed: ${String(err)}`, "error");
     return;
   }
 
-  // No local `.pi/remote-pi/config.json` is written anymore — the name lives
+  // No local `.pi/un-bien/config.json` is written anymore — the name lives
   // in the registry and the supervisor injects the full config (agent_name,
-  // auto_start_relay true) via REMOTE_PI_DIRECT_CONFIG when it spawns the
+  // auto_start_relay true) via UNBIEN_DIRECT_CONFIG when it spawns the
   // daemon. The cwd needs no init folder.
 
   ctx.ui.notify(
-    `[remote-pi] Daemon registered: id=${result.id} name="${result.name}" cwd=${result.cwd}`,
+    `[un-bien] Daemon registered: id=${result.id} name="${result.name}" cwd=${result.cwd}`,
     "info",
   );
 
@@ -3891,33 +4592,39 @@ async function _cmdCreate(arg: string, ctx: Pick<ExtensionContext, "ui">): Promi
   // registration and tell the user it'll boot on the next supervisor start.
   try {
     await callSupervisor({ op: "start", id: result.id });
-    ctx.ui.notify(`[remote-pi] Daemon started: id=${result.id}`, "info");
+    ctx.ui.notify(`[un-bien] Daemon started: id=${result.id}`, "info");
   } catch (err) {
     if (err instanceof SupervisorOfflineError) {
       ctx.ui.notify(
-        `[remote-pi] Registered, but the supervisor is offline — not running yet. ` +
-        `Run \`remote-pi install\` (or start \`pi-supervisord\`); it auto-starts on the next supervisor boot.`,
+        `[un-bien] Registered, but the supervisor is offline — not running yet. ` +
+          `Run \`un-bien install\` (or start \`pi-supervisord\`); it auto-starts on the next supervisor boot.`,
         "warning",
       );
       return;
     }
-    ctx.ui.notify(`[remote-pi] Registered, but auto-start failed: ${String(err)}`, "error");
+    ctx.ui.notify(
+      `[un-bien] Registered, but auto-start failed: ${String(err)}`,
+      "error",
+    );
   }
 }
 
 /**
- * `/remote-pi remove <id>`
+ * `/unbien remove <id>`
  *
  * Unregisters a daemon by its 8-hex-char id (the same id printed by
- * `/remote-pi create` and `/remote-pi daemons`). The cwd's local config
+ * `/unbien create` and `/unbien daemons`). The cwd's local config
  * stays on disk — re-creating later with the same cwd is a no-op
  * because the existing config wins.
  */
-async function _cmdRemove(arg: string, ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+async function _cmdRemove(
+  arg: string,
+  ctx: Pick<ExtensionContext, "ui">,
+): Promise<void> {
   const id = arg.trim();
   if (!id) {
     ctx.ui.notify(
-      "[remote-pi] Usage: /remote-pi remove <id>. Run /remote-pi daemons to see ids.",
+      "[un-bien] Usage: /unbien remove <id>. Run /unbien daemons to see ids.",
       "warning",
     );
     return;
@@ -3931,19 +4638,25 @@ async function _cmdRemove(arg: string, ctx: Pick<ExtensionContext, "ui">): Promi
   try {
     const data = await callSupervisor({ op: "unregister", id });
     if (!data.removed) {
-      const known = listDaemons().map((d) => d.id).join(", ") || "(none)";
-      ctx.ui.notify(`[remote-pi] No daemon with id "${id}". Known ids: ${known}`, "warning");
+      const known =
+        listDaemons()
+          .map((d) => d.id)
+          .join(", ") || "(none)";
+      ctx.ui.notify(
+        `[un-bien] No daemon with id "${id}". Known ids: ${known}`,
+        "warning",
+      );
       return;
     }
     ctx.ui.notify(
-      `[remote-pi] Daemon removed + process stopped: id=${id} cwd=${data.cwd}. ` +
-      `Local config at ${data.cwd}/.pi/remote-pi/config.json was kept.`,
+      `[un-bien] Daemon removed + process stopped: id=${id} cwd=${data.cwd}. ` +
+        `Local config at ${data.cwd}/.pi/un-bien/config.json was kept.`,
       "info",
     );
     return;
   } catch (err) {
     if (!(err instanceof SupervisorOfflineError)) {
-      ctx.ui.notify(`[remote-pi] remove failed: ${String(err)}`, "error");
+      ctx.ui.notify(`[un-bien] remove failed: ${String(err)}`, "error");
       return;
     }
     // Supervisor offline — fall through to registry-only removal below.
@@ -3953,19 +4666,25 @@ async function _cmdRemove(arg: string, ctx: Pick<ExtensionContext, "ui">): Promi
   try {
     result = removeDaemon(id);
   } catch (err) {
-    ctx.ui.notify(`[remote-pi] remove failed: ${String(err)}`, "error");
+    ctx.ui.notify(`[un-bien] remove failed: ${String(err)}`, "error");
     return;
   }
 
   if (!result.removed) {
-    const known = listDaemons().map((d) => d.id).join(", ") || "(none)";
-    ctx.ui.notify(`[remote-pi] No daemon with id "${id}". Known ids: ${known}`, "warning");
+    const known =
+      listDaemons()
+        .map((d) => d.id)
+        .join(", ") || "(none)";
+    ctx.ui.notify(
+      `[un-bien] No daemon with id "${id}". Known ids: ${known}`,
+      "warning",
+    );
     return;
   }
 
   ctx.ui.notify(
-    `[remote-pi] Daemon removed from registry: id=${id} cwd=${result.cwd}. ` +
-    `Supervisor was offline, so any running process was NOT stopped. Local config kept.`,
+    `[un-bien] Daemon removed from registry: id=${id} cwd=${result.cwd}. ` +
+      `Supervisor was offline, so any running process was NOT stopped. Local config kept.`,
     "warning",
   );
 }
@@ -3976,15 +4695,18 @@ async function _cmdRemove(arg: string, ctx: Pick<ExtensionContext, "ui">): Promi
 // the supervisor isn't running we fall back to a friendly hint instead of
 // the raw error, so the user can't get stuck on "what's wrong?".
 
-function _notifyOffline(ctx: Pick<ExtensionContext, "ui">, err: SupervisorOfflineError): void {
-  ctx.ui.notify(`[remote-pi] ${err.message}`, "warning");
+function _notifyOffline(
+  ctx: Pick<ExtensionContext, "ui">,
+  err: SupervisorOfflineError,
+): void {
+  ctx.ui.notify(`[un-bien] ${err.message}`, "warning");
 }
 
 function _formatDaemonTable(daemons: DaemonInfo[]): string {
   if (daemons.length === 0) return "(no daemons registered)";
   const rows = daemons.map((d) => {
-    const uptime = d.uptime_s !== undefined ? `${d.uptime_s}s` : "—";
-    const pid = d.pid !== undefined ? String(d.pid) : "—";
+    const uptime = d.uptime_s === undefined ? "—" : `${d.uptime_s}s`;
+    const pid = d.pid === undefined ? "—" : String(d.pid);
     const restarts = d.restart_count ?? 0;
     return `  ${d.id}  ${d.state.padEnd(8)}  pid=${pid}  up=${uptime}  restarts=${restarts}  ${d.name}  ${d.cwd}`;
   });
@@ -3992,123 +4714,174 @@ function _formatDaemonTable(daemons: DaemonInfo[]): string {
 }
 
 /**
- * `/remote-pi daemons` — registry + runtime state in one view. When the
+ * `/unbien daemons` — registry + runtime state in one view. When the
  * supervisor is offline we still show registry-only output (state =
  * "stopped" everywhere), so the user can see what's configured even
  * before `install`.
  */
-async function _cmdDaemonsList(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+async function _cmdDaemonsList(
+  ctx: Pick<ExtensionContext, "ui">,
+): Promise<void> {
   if (!(await supervisorOnline())) {
     const registry = listDaemons();
     if (registry.length === 0) {
-      ctx.ui.notify("[remote-pi] No daemons registered. Run /remote-pi create <cwd>.", "info");
+      ctx.ui.notify(
+        "[un-bien] No daemons registered. Run /unbien create <cwd>.",
+        "info",
+      );
       return;
     }
-    const rows = registry.map((d) => {
-      const cfg = loadLocalConfig(d.cwd);
-      const name = cfg.agent_name ?? defaultAgentName(d.cwd);
-      return `  ${d.id}  ${name}  ${d.cwd}  (supervisor offline)`;
-    }).join("\n");
-    ctx.ui.notify(`[remote-pi] Daemons (registry only — run install to bring supervisor up):\n${rows}`, "info");
+    const rows = registry
+      .map((d) => {
+        const cfg = loadLocalConfig(d.cwd);
+        const name = cfg.agent_name ?? defaultAgentName(d.cwd);
+        return `  ${d.id}  ${name}  ${d.cwd}  (supervisor offline)`;
+      })
+      .join("\n");
+    ctx.ui.notify(
+      `[un-bien] Daemons (registry only — run install to bring supervisor up):\n${rows}`,
+      "info",
+    );
     return;
   }
   try {
     const data = await callSupervisor({ op: "list" });
-    ctx.ui.notify(`[remote-pi] Daemons:\n${_formatDaemonTable(data.daemons)}`, "info");
+    ctx.ui.notify(
+      `[un-bien] Daemons:\n${_formatDaemonTable(data.daemons)}`,
+      "info",
+    );
   } catch (err) {
-    if (err instanceof SupervisorOfflineError) { _notifyOffline(ctx, err); return; }
-    ctx.ui.notify(`[remote-pi] daemons failed: ${String(err)}`, "error");
+    if (err instanceof SupervisorOfflineError) {
+      _notifyOffline(ctx, err);
+      return;
+    }
+    ctx.ui.notify(`[un-bien] daemons failed: ${String(err)}`, "error");
   }
 }
 
-async function _cmdDaemonStatus(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+async function _cmdDaemonStatus(
+  ctx: Pick<ExtensionContext, "ui">,
+): Promise<void> {
   try {
     const data = await callSupervisor({ op: "status" });
-    ctx.ui.notify(`[remote-pi] Fleet status:\n${_formatDaemonTable(data.daemons)}`, "info");
+    ctx.ui.notify(
+      `[un-bien] Fleet status:\n${_formatDaemonTable(data.daemons)}`,
+      "info",
+    );
   } catch (err) {
-    if (err instanceof SupervisorOfflineError) { _notifyOffline(ctx, err); return; }
-    ctx.ui.notify(`[remote-pi] status failed: ${String(err)}`, "error");
+    if (err instanceof SupervisorOfflineError) {
+      _notifyOffline(ctx, err);
+      return;
+    }
+    ctx.ui.notify(`[un-bien] status failed: ${String(err)}`, "error");
   }
 }
 
-async function _cmdDaemonStart(ctx: Pick<ExtensionContext, "ui">, id?: string): Promise<void> {
+async function _cmdDaemonStart(
+  ctx: Pick<ExtensionContext, "ui">,
+  id?: string,
+): Promise<void> {
   try {
     if (id) {
       const data = await callSupervisor({ op: "start", id });
       ctx.ui.notify(
         data.started
-          ? `[remote-pi] Started daemon ${id} (${data.state}).`
-          : `[remote-pi] Daemon ${id} already ${data.state}.`,
+          ? `[un-bien] Started daemon ${id} (${data.state}).`
+          : `[un-bien] Daemon ${id} already ${data.state}.`,
         "info",
       );
       return;
     }
     const data = await callSupervisor({ op: "start_all" });
     ctx.ui.notify(
-      `[remote-pi] Started ${data.started.length} daemon(s), ` +
-      `${data.already_running.length} already running.`,
+      `[un-bien] Started ${data.started.length} daemon(s), ` +
+        `${data.already_running.length} already running.`,
       "info",
     );
   } catch (err) {
-    if (err instanceof SupervisorOfflineError) { _notifyOffline(ctx, err); return; }
-    ctx.ui.notify(`[remote-pi] start failed: ${String(err)}`, "error");
+    if (err instanceof SupervisorOfflineError) {
+      _notifyOffline(ctx, err);
+      return;
+    }
+    ctx.ui.notify(`[un-bien] start failed: ${String(err)}`, "error");
   }
 }
 
-async function _cmdDaemonStop(ctx: Pick<ExtensionContext, "ui">, id?: string): Promise<void> {
+async function _cmdDaemonStop(
+  ctx: Pick<ExtensionContext, "ui">,
+  id?: string,
+): Promise<void> {
   try {
     if (id) {
       const data = await callSupervisor({ op: "stop", id });
       ctx.ui.notify(
         data.stopped
-          ? `[remote-pi] Stopped daemon ${id}.`
-          : `[remote-pi] Daemon ${id} already ${data.state}.`,
+          ? `[un-bien] Stopped daemon ${id}.`
+          : `[un-bien] Daemon ${id} already ${data.state}.`,
         "info",
       );
       return;
     }
     const data = await callSupervisor({ op: "stop_all" });
     ctx.ui.notify(
-      `[remote-pi] Stopped ${data.stopped.length} daemon(s), ` +
-      `${data.already_stopped.length} already stopped.`,
+      `[un-bien] Stopped ${data.stopped.length} daemon(s), ` +
+        `${data.already_stopped.length} already stopped.`,
       "info",
     );
   } catch (err) {
-    if (err instanceof SupervisorOfflineError) { _notifyOffline(ctx, err); return; }
-    ctx.ui.notify(`[remote-pi] stop failed: ${String(err)}`, "error");
+    if (err instanceof SupervisorOfflineError) {
+      _notifyOffline(ctx, err);
+      return;
+    }
+    ctx.ui.notify(`[un-bien] stop failed: ${String(err)}`, "error");
   }
 }
 
-async function _cmdDaemonRestart(ctx: Pick<ExtensionContext, "ui">, id?: string): Promise<void> {
+async function _cmdDaemonRestart(
+  ctx: Pick<ExtensionContext, "ui">,
+  id?: string,
+): Promise<void> {
   try {
     if (id) {
       const data = await callSupervisor({ op: "restart", id });
-      ctx.ui.notify(`[remote-pi] Restarted daemon ${id} (${data.state}).`, "info");
+      ctx.ui.notify(
+        `[un-bien] Restarted daemon ${id} (${data.state}).`,
+        "info",
+      );
       return;
     }
     const data = await callSupervisor({ op: "restart_all" });
-    ctx.ui.notify(`[remote-pi] Restarted ${data.restarted.length} daemon(s).`, "info");
+    ctx.ui.notify(
+      `[un-bien] Restarted ${data.restarted.length} daemon(s).`,
+      "info",
+    );
   } catch (err) {
-    if (err instanceof SupervisorOfflineError) { _notifyOffline(ctx, err); return; }
-    ctx.ui.notify(`[remote-pi] restart failed: ${String(err)}`, "error");
+    if (err instanceof SupervisorOfflineError) {
+      _notifyOffline(ctx, err);
+      return;
+    }
+    ctx.ui.notify(`[un-bien] restart failed: ${String(err)}`, "error");
   }
 }
 
 /**
- * `/remote-pi daemon send <id> "<text>"` — injects a prompt into a
+ * `/unbien daemon send <id> "<text>"` — injects a prompt into a
  * running daemon via its RPC stdin. The agent processes the prompt as
  * if a user typed it; output flows back via the relay/mesh, not here.
  *
  * Fire-and-forget at this layer — the CLI just confirms delivery.
  */
-async function _cmdDaemonSend(arg: string, ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+async function _cmdDaemonSend(
+  arg: string,
+  ctx: Pick<ExtensionContext, "ui">,
+): Promise<void> {
   // Parse `<id> <text...>` — id is the first token, rest is the prompt.
   // The text may be quoted; if so, strip the outer quotes. Otherwise
   // take the entire remainder verbatim.
   const m = arg.match(/^(\S+)\s+(?:"([^"]*)"|(.*))$/);
   if (!m) {
     ctx.ui.notify(
-      "[remote-pi] Usage: /remote-pi daemon send <id> \"<prompt text>\"",
+      '[un-bien] Usage: /unbien daemon send <id> "<prompt text>"',
       "warning",
     );
     return;
@@ -4116,19 +4889,28 @@ async function _cmdDaemonSend(arg: string, ctx: Pick<ExtensionContext, "ui">): P
   const id = m[1]!;
   const text = (m[2] ?? m[3] ?? "").trim();
   if (!text) {
-    ctx.ui.notify("[remote-pi] daemon send: prompt text is empty.", "warning");
+    ctx.ui.notify("[un-bien] daemon send: prompt text is empty.", "warning");
     return;
   }
   try {
     const data = await callSupervisor({ op: "send", id, text });
     if (data.delivered) {
-      ctx.ui.notify(`[remote-pi] Sent to ${id}: ${text.slice(0, 60)}${text.length > 60 ? "…" : ""}`, "info");
+      ctx.ui.notify(
+        `[un-bien] Sent to ${id}: ${text.slice(0, 60)}${text.length > 60 ? "…" : ""}`,
+        "info",
+      );
     } else {
-      ctx.ui.notify(`[remote-pi] daemon ${id} did not accept the prompt (not running?)`, "warning");
+      ctx.ui.notify(
+        `[un-bien] daemon ${id} did not accept the prompt (not running?)`,
+        "warning",
+      );
     }
   } catch (err) {
-    if (err instanceof SupervisorOfflineError) { _notifyOffline(ctx, err); return; }
-    ctx.ui.notify(`[remote-pi] daemon send failed: ${String(err)}`, "error");
+    if (err instanceof SupervisorOfflineError) {
+      _notifyOffline(ctx, err);
+      return;
+    }
+    ctx.ui.notify(`[un-bien] daemon send failed: ${String(err)}`, "error");
   }
 }
 
@@ -4139,16 +4921,19 @@ function _tokenizeArgs(s: string): string[] {
   const out: string[] = [];
   const re = /"([^"]*)"|(\S+)/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(s)) !== null) out.push(m[1] !== undefined ? m[1] : m[2]!);
+  while ((m = re.exec(s)) !== null) out.push(m[1] === undefined ? m[2]! : m[1]);
   return out;
 }
 
 /**
- * `/remote-pi cron <add|list|remove|enable|disable|run|log>` — schedules
+ * `/unbien cron <add|list|remove|enable|disable|run|log>` — schedules
  * recurring prompts to daemons via the supervisor. All subcommands require the
  * supervisor running (offline → friendly notice, not a crash).
  */
-async function _cmdCron(arg: string, ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+async function _cmdCron(
+  arg: string,
+  ctx: Pick<ExtensionContext, "ui">,
+): Promise<void> {
   const trimmed = arg.trim();
   const sp = trimmed.indexOf(" ");
   const sub = (sp === -1 ? trimmed : trimmed.slice(0, sp)).toLowerCase();
@@ -4156,31 +4941,59 @@ async function _cmdCron(arg: string, ctx: Pick<ExtensionContext, "ui">): Promise
   try {
     switch (sub) {
       case "":
-      case "list":    return await _cronList(ctx);
-      case "add":     return await _cronAdd(rest, ctx);
+      case "list":
+        return await _cronList(ctx);
+      case "add":
+        return await _cronAdd(rest, ctx);
       case "remove":
-      case "rm":      return await _cronMutate({ op: "cron_remove", job_id: rest.trim() }, rest.trim(), ctx);
-      case "enable":  return await _cronMutate({ op: "cron_enable", job_id: rest.trim(), enabled: true }, rest.trim(), ctx);
-      case "disable": return await _cronMutate({ op: "cron_enable", job_id: rest.trim(), enabled: false }, rest.trim(), ctx);
-      case "run":     return await _cronRun(rest.trim(), ctx);
-      case "log":     return await _cronLog(rest, ctx);
+      case "rm":
+        return await _cronMutate(
+          { op: "cron_remove", job_id: rest.trim() },
+          rest.trim(),
+          ctx,
+        );
+      case "enable":
+        return await _cronMutate(
+          { op: "cron_enable", job_id: rest.trim(), enabled: true },
+          rest.trim(),
+          ctx,
+        );
+      case "disable":
+        return await _cronMutate(
+          { op: "cron_enable", job_id: rest.trim(), enabled: false },
+          rest.trim(),
+          ctx,
+        );
+      case "run":
+        return await _cronRun(rest.trim(), ctx);
+      case "log":
+        return await _cronLog(rest, ctx);
       default:
-        ctx.ui.notify("[remote-pi] Usage: /remote-pi cron <add|list|remove|enable|disable|run|log>", "warning");
+        ctx.ui.notify(
+          "[un-bien] Usage: /unbien cron <add|list|remove|enable|disable|run|log>",
+          "warning",
+        );
     }
   } catch (err) {
     if (err instanceof SupervisorOfflineError) {
       ctx.ui.notify(
-        "[remote-pi] Cron needs the supervisor running. Run `remote-pi install` " +
-        "(or start `pi-supervisord`).",
+        "[un-bien] Cron needs the supervisor running. Run `un-bien install` " +
+          "(or start `pi-supervisord`).",
         "warning",
       );
       return;
     }
-    ctx.ui.notify(`[remote-pi] cron ${sub || "list"} failed: ${String(err)}`, "error");
+    ctx.ui.notify(
+      `[un-bien] cron ${sub || "list"} failed: ${String(err)}`,
+      "error",
+    );
   }
 }
 
-async function _cronAdd(rest: string, ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+async function _cronAdd(
+  rest: string,
+  ctx: Pick<ExtensionContext, "ui">,
+): Promise<void> {
   const toks = _tokenizeArgs(rest);
   let tz: string | undefined;
   let wake = false;
@@ -4198,14 +5011,17 @@ async function _cronAdd(rest: string, ctx: Pick<ExtensionContext, "ui">): Promis
   const [daemonId, schedule, prompt] = pos;
   if (!daemonId || !schedule || !prompt) {
     ctx.ui.notify(
-      '[remote-pi] Usage: /remote-pi cron add <daemonId> "<cron-expr>" "<prompt>" ' +
-      "[--tz Area/City] [--wake] [--no-skip-busy] [--catchup]",
+      '[un-bien] Usage: /unbien cron add <daemonId> "<cron-expr>" "<prompt>" ' +
+        "[--tz Area/City] [--wake] [--no-skip-busy] [--catchup]",
       "warning",
     );
     return;
   }
   const req: Extract<ControlRequest, { op: "cron_add" }> = {
-    op: "cron_add", daemon_id: daemonId, schedule, prompt,
+    op: "cron_add",
+    daemon_id: daemonId,
+    schedule,
+    prompt,
   };
   if (tz) req.tz = tz;
   if (wake) req.wake = true;
@@ -4213,8 +5029,8 @@ async function _cronAdd(rest: string, ctx: Pick<ExtensionContext, "ui">): Promis
   if (catchup) req.catchup = true;
   const data = await callSupervisor(req);
   ctx.ui.notify(
-    `[remote-pi] Cron ${data.job.id} added → daemon ${daemonId}: "${schedule}"` +
-    `${tz ? ` (${tz})` : ""}. Next run: ${data.job.next_run ?? "?"}`,
+    `[un-bien] Cron ${data.job.id} added → daemon ${daemonId}: "${schedule}"` +
+      `${tz ? ` (${tz})` : ""}. Next run: ${data.job.next_run ?? "?"}`,
     "info",
   );
 }
@@ -4222,14 +5038,18 @@ async function _cronAdd(rest: string, ctx: Pick<ExtensionContext, "ui">): Promis
 async function _cronList(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
   const data = await callSupervisor({ op: "cron_list" });
   if (data.jobs.length === 0) {
-    ctx.ui.notify("[remote-pi] No cron jobs.", "info");
+    ctx.ui.notify("[un-bien] No cron jobs.", "info");
     return;
   }
-  const lines = data.jobs.map((j) =>
-    `${j.enabled ? "✓" : "✗"} ${j.id}  "${j.schedule}"${j.tz ? ` (${j.tz})` : ""}  → ${j.daemon_id}  ` +
-    `next:${j.next_run ?? "?"}  last:${j.last_status ?? "—"}${j.last_run ? `@${j.last_run}` : ""}`,
+  const lines = data.jobs.map(
+    (j) =>
+      `${j.enabled ? "✓" : "✗"} ${j.id}  "${j.schedule}"${j.tz ? ` (${j.tz})` : ""}  → ${j.daemon_id}  ` +
+      `next:${j.next_run ?? "?"}  last:${j.last_status ?? "—"}${j.last_run ? `@${j.last_run}` : ""}`,
   );
-  ctx.ui.notify(`[remote-pi] Cron jobs (${data.jobs.length}):\n${lines.join("\n")}`, "info");
+  ctx.ui.notify(
+    `[un-bien] Cron jobs (${data.jobs.length}):\n${lines.join("\n")}`,
+    "info",
+  );
 }
 
 async function _cronMutate(
@@ -4238,50 +5058,75 @@ async function _cronMutate(
   ctx: Pick<ExtensionContext, "ui">,
 ): Promise<void> {
   if (!jobId) {
-    ctx.ui.notify(`[remote-pi] Usage: /remote-pi cron ${req.op === "cron_remove" ? "remove" : "enable|disable"} <jobId>`, "warning");
+    ctx.ui.notify(
+      `[un-bien] Usage: /unbien cron ${req.op === "cron_remove" ? "remove" : "enable|disable"} <jobId>`,
+      "warning",
+    );
     return;
   }
   if (req.op === "cron_remove") {
     const data = await callSupervisor(req);
-    ctx.ui.notify(data.removed ? `[remote-pi] Cron ${jobId} removed.` : `[remote-pi] No cron job ${jobId}.`, data.removed ? "info" : "warning");
+    ctx.ui.notify(
+      data.removed
+        ? `[un-bien] Cron ${jobId} removed.`
+        : `[un-bien] No cron job ${jobId}.`,
+      data.removed ? "info" : "warning",
+    );
   } else {
     const data = await callSupervisor(req);
     ctx.ui.notify(
-      data.updated ? `[remote-pi] Cron ${jobId} ${data.enabled ? "enabled" : "disabled"}.` : `[remote-pi] No cron job ${jobId}.`,
+      data.updated
+        ? `[un-bien] Cron ${jobId} ${data.enabled ? "enabled" : "disabled"}.`
+        : `[un-bien] No cron job ${jobId}.`,
       data.updated ? "info" : "warning",
     );
   }
 }
 
-async function _cronRun(jobId: string, ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+async function _cronRun(
+  jobId: string,
+  ctx: Pick<ExtensionContext, "ui">,
+): Promise<void> {
   if (!jobId) {
-    ctx.ui.notify("[remote-pi] Usage: /remote-pi cron run <jobId>", "warning");
+    ctx.ui.notify("[un-bien] Usage: /unbien cron run <jobId>", "warning");
     return;
   }
   const data = await callSupervisor({ op: "cron_run", job_id: jobId });
-  ctx.ui.notify(`[remote-pi] Cron ${jobId} fired now → ${data.result}`, "info");
+  ctx.ui.notify(`[un-bien] Cron ${jobId} fired now → ${data.result}`, "info");
 }
 
-async function _cronLog(rest: string, ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+async function _cronLog(
+  rest: string,
+  ctx: Pick<ExtensionContext, "ui">,
+): Promise<void> {
   const toks = _tokenizeArgs(rest);
   let jobId: string | undefined;
   let tail = 20;
   for (let i = 0; i < toks.length; i++) {
     const t = toks[i]!;
-    if (t === "--tail") { const n = Number(toks[++i]); if (Number.isFinite(n)) tail = n; }
-    else if (!t.startsWith("--")) jobId = t;
+    if (t === "--tail") {
+      const n = Number(toks[++i]);
+      if (Number.isFinite(n)) tail = n;
+    } else if (!t.startsWith("--")) jobId = t;
   }
-  const req: Extract<ControlRequest, { op: "cron_log" }> = { op: "cron_log", tail };
+  const req: Extract<ControlRequest, { op: "cron_log" }> = {
+    op: "cron_log",
+    tail,
+  };
   if (jobId) req.job_id = jobId;
   const data = await callSupervisor(req);
   if (data.entries.length === 0) {
-    ctx.ui.notify("[remote-pi] No cron log entries.", "info");
+    ctx.ui.notify("[un-bien] No cron log entries.", "info");
     return;
   }
-  const lines = data.entries.map((e) =>
-    `${new Date(e.ts).toISOString()}  ${e.fired ? "▶" : "∅"} ${e.result}  ${e.job_id} → ${e.daemon_id}  ${e.prompt_preview}`,
+  const lines = data.entries.map(
+    (e) =>
+      `${new Date(e.ts).toISOString()}  ${e.fired ? "▶" : "∅"} ${e.result}  ${e.job_id} → ${e.daemon_id}  ${e.prompt_preview}`,
   );
-  ctx.ui.notify(`[remote-pi] Cron log (last ${data.entries.length}):\n${lines.join("\n")}`, "info");
+  ctx.ui.notify(
+    `[un-bien] Cron log (last ${data.entries.length}):\n${lines.join("\n")}`,
+    "info",
+  );
 }
 
 // ── Install/uninstall the supervisor service (plan/26 W3) ────────────────────
@@ -4289,30 +5134,33 @@ async function _cronLog(rest: string, ctx: Pick<ExtensionContext, "ui">): Promis
 // Installs `pi-supervisord` as a user-level system service (systemd
 // `--user` unit on Linux, launchd LaunchAgent on macOS). Once installed:
 //   - Supervisor starts at login + survives reboots.
-//   - `remote-pi daemon start/stop/send/...` work without manually
+//   - `un-bien daemon start/stop/send/...` work without manually
 //     spawning the supervisor.
 // Uninstall is the inverse — leaves the registry (`daemons.json`) intact,
 // so re-installing later picks up where you left off.
 
 /**
- * `linkCli` controls whether we symlink `remote-pi` + `pi-supervisord`
+ * `linkCli` controls whether we symlink `un-bien` + `pi-supervisord`
  * into `~/.local/bin/`. The slash-command path passes `true` (user is
- * inside Pi's TUI — they installed via `pi install npm:remote-pi` and
+ * inside Pi's TUI — they installed via `pi install npm:un-bien` and
  * need us to expose the CLI for them). The standalone-CLI path passes
  * `false` because the user is already running our binary from PATH (they
- * did `npm install -g remote-pi`), so re-linking would point their
- * `remote-pi` at the Pi-extension copy and diverge on upgrades.
+ * did `npm install -g un-bien`), so re-linking would point their
+ * `un-bien` at the Pi-extension copy and diverge on upgrades.
  */
 /** Returns true on success, false when install failed (so the standalone CLI
  *  can exit non-zero — e.g. the Cockpit / CI detect failure by exit code).
  *  We do NOT process.exit here: this also runs inside the Pi TUI, where exiting
  *  would kill the session. */
-function _cmdInstall(ctx: Pick<ExtensionContext, "ui">, opts: { linkCli?: boolean } = {}): boolean {
+function _cmdInstall(
+  ctx: Pick<ExtensionContext, "ui">,
+  opts: { linkCli?: boolean } = {},
+): boolean {
   const linkCli = opts.linkCli ?? false;
   try {
     const result = installService();
     const sections = [
-      `[remote-pi] Supervisor service installed (${result.platform}).`,
+      `[un-bien] Supervisor service installed (${result.platform}).`,
       `  Unit: ${result.unitPath}`,
       `  Steps:\n${result.log.map((l) => "    " + l).join("\n")}`,
     ];
@@ -4327,13 +5175,13 @@ function _cmdInstall(ctx: Pick<ExtensionContext, "ui">, opts: { linkCli?: boolea
         if (process.platform === "win32") {
           sections.push(
             `  ⚠ ${link.binDir} was just added to your user PATH (it wasn't there yet).`,
-            `    Open a NEW terminal and run \`remote-pi daemons\` to verify.`,
+            `    Open a NEW terminal and run \`un-bien daemons\` to verify.`,
           );
         } else {
           sections.push(
             `  ⚠ ${link.binDir} is not on $PATH yet. Add this line to ~/.zshrc / ~/.bashrc:`,
             `      export PATH="$HOME/.local/bin:$PATH"`,
-            `    Then open a new terminal and run \`remote-pi daemons\` to verify.`,
+            `    Then open a new terminal and run \`un-bien daemons\` to verify.`,
           );
         }
       }
@@ -4341,33 +5189,38 @@ function _cmdInstall(ctx: Pick<ExtensionContext, "ui">, opts: { linkCli?: boolea
     ctx.ui.notify(sections.join("\n"), "info");
     return true;
   } catch (err) {
-    ctx.ui.notify(`[remote-pi] install failed: ${String(err)}`, "error");
+    ctx.ui.notify(`[un-bien] install failed: ${String(err)}`, "error");
     return false;
   }
 }
 
-function _cmdUninstall(ctx: Pick<ExtensionContext, "ui">, opts: { linkCli?: boolean } = {}): void {
+function _cmdUninstall(
+  ctx: Pick<ExtensionContext, "ui">,
+  opts: { linkCli?: boolean } = {},
+): void {
   const linkCli = opts.linkCli ?? false;
   try {
     const result = uninstallService();
     const sections = [
-      `[remote-pi] Supervisor service uninstalled (${result.platform}).`,
+      `[un-bien] Supervisor service uninstalled (${result.platform}).`,
       `  Unit: ${result.unitPath} (${result.removed ? "removed" : "not present"})`,
       `  Steps:\n${result.log.map((l) => "    " + l).join("\n")}`,
-      `  Note: daemons registry (~/.pi/remote/daemons.json) kept — re-install restores everything.`,
+      `  Note: daemons registry (~/.pi/un-bien/daemons.json) kept — re-install restores everything.`,
     ];
     if (linkCli) {
       const unlink = unlinkCliBinaries();
       sections.push(
         `  CLI bins cleanup (${unlink.binDir}):`,
         unlink.removed
-          .map((r) => `    ${r.name} (${r.existed ? "removed" : "not present"})`)
+          .map(
+            (r) => `    ${r.name} (${r.existed ? "removed" : "not present"})`,
+          )
           .join("\n"),
       );
     }
     ctx.ui.notify(sections.join("\n"), "info");
   } catch (err) {
-    ctx.ui.notify(`[remote-pi] uninstall failed: ${String(err)}`, "error");
+    ctx.ui.notify(`[un-bien] uninstall failed: ${String(err)}`, "error");
   }
 }
 
@@ -4381,7 +5234,7 @@ function _resolveExtensionDir(): string {
   // dist/index.js or src/index.ts → parent = <dist or src>; sibling = ../skills
   const parent = here.replace(/\/[^/]+$/, "");
   const candidateA = join(parent, "..", "skills"); // dist → ../skills
-  const candidateB = join(parent, "skills");        // src → skills
+  const candidateB = join(parent, "skills"); // src → skills
   if (existsSync(candidateA)) return parent.replace(/\/dist$/, "");
   if (existsSync(candidateB)) return parent;
   return parent;
@@ -4392,24 +5245,30 @@ function _deployAgentNetworkSkill(): void {
   //   <skillsRoot>/<skill-name>/SKILL.md
   // The skill `name:` frontmatter must equal the parent directory name. We
   // ship the source pre-arranged that way so deploy is a straight copy into
-  // ~/.pi/remote/skills/agent-network/SKILL.md.
+  // ~/.pi/un-bien/skills/agent-network/SKILL.md.
   const root = _resolveExtensionDir();
   const src1 = join(root, "skills", "agent-network", "SKILL.md");
   const src2 = join(root, "..", "skills", "agent-network", "SKILL.md");
-  const src = existsSync(src1) ? src1 : (existsSync(src2) ? src2 : null);
+  const src = existsSync(src1) ? src1 : existsSync(src2) ? src2 : null;
   if (!src) return;
   const dstDir = join(skillsDir(), "agent-network");
   const dst = join(dstDir, "SKILL.md");
   try {
     mkdirSync(dstDir, { recursive: true });
     copyFileSync(src, dst);
-    // Cleanup legacy deploy at ~/.pi/remote/skills/agent-network.md (flat
+    // Cleanup legacy deploy at ~/.pi/un-bien/skills/agent-network.md (flat
     // layout, fails the Pi SDK's name-vs-parent-dir validation).
     const legacy = join(skillsDir(), "agent-network.md");
     if (existsSync(legacy)) {
-      try { unlinkSync(legacy); } catch { /* ignored */ }
+      try {
+        unlinkSync(legacy);
+      } catch {
+        /* ignored */
+      }
     }
-  } catch { /* best-effort */ }
+  } catch {
+    /* best-effort */
+  }
 }
 
 /**
@@ -4433,12 +5292,11 @@ function _deployAgentNetworkSkill(): void {
  * that requires a fix in the Pi runtime (no extension-level error event
  * exists for it). See `.orchestration/results/mesh-liveness-stale-peer.md`.
  */
-type SendUserMessageOptions =
-  NonNullable<Parameters<ExtensionAPI["sendUserMessage"]>[1]>;
+type SendUserMessageOptions = NonNullable<
+  Parameters<ExtensionAPI["sendUserMessage"]>[1]
+>;
 
-type WakeAgentResult =
-  | { ok: true }
-  | { ok: false; detail: string };
+type WakeAgentResult = { ok: true } | { ok: false; detail: string };
 
 function _wakeAgent(
   content: Parameters<ExtensionAPI["sendUserMessage"]>[0],
@@ -4447,19 +5305,24 @@ function _wakeAgent(
 ): WakeAgentResult {
   if (!_pi) {
     const detail = "agent session not bound yet";
-    console.error(`[remote-pi] ${label}: ${detail} — message dropped`);
+    console.error(`[un-bien] ${label}: ${detail} — message dropped`);
     return { ok: false, detail };
   }
   try {
     const options = steeringBehavior
-      ? ({ deliverAs: steeringBehavior })
+      ? { deliverAs: steeringBehavior }
       : undefined;
     _pi.sendUserMessage(content, options);
     return { ok: true };
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    console.error(`[remote-pi] ${label}: agent rejected incoming message: ${detail}`);
-    _safeNotify(`[remote-pi] failed to process incoming message: ${detail}`, "error");
+    console.error(
+      `[un-bien] ${label}: agent rejected incoming message: ${detail}`,
+    );
+    _safeNotify(
+      `[un-bien] failed to process incoming message: ${detail}`,
+      "error",
+    );
     return { ok: false, detail };
   }
 }
@@ -4482,13 +5345,14 @@ function _wakeAgent(
  * `agent_send(..., re=<id>)`.
  */
 function _meshMessageForAgent(env: MeshEnvelope) {
-  const bodyText = typeof env.body === "string" ? env.body : JSON.stringify(env.body);
+  const bodyText =
+    typeof env.body === "string" ? env.body : JSON.stringify(env.body);
   const header = `[agent-network] message from "${env.from}" (id=${env.id}${env.re ? `, re=${env.re}` : ""}):`;
   const footer = env.re
     ? "(This is a reply to a previous message of yours.)"
     : `(If a reply is expected, call agent_send with to="${env.from}" and re="${env.id}".)`;
   return {
-    customType: "remote-pi:mesh-message",
+    customType: "un-bien:mesh-message",
     content: `${header}\n${bodyText}\n\n${footer}`,
     display: true,
   };
@@ -4518,16 +5382,23 @@ function _scheduleMeshMessageDrain(): void {
       });
     } catch (err) {
       _agentRunActive = false;
-      _pendingMeshMessages = [...batch.slice(delivered), ..._pendingMeshMessages];
+      _pendingMeshMessages = [
+        ...batch.slice(delivered),
+        ..._pendingMeshMessages,
+      ];
       const detail = err instanceof Error ? err.message : String(err);
-      console.error(`[remote-pi] queued mesh delivery failed: ${detail}`);
-      _safeNotify(`[remote-pi] failed to process queued mesh messages: ${detail}`, "error");
+      console.error(`[un-bien] queued mesh delivery failed: ${detail}`);
+      _safeNotify(
+        `[un-bien] failed to process queued mesh messages: ${detail}`,
+        "error",
+      );
     }
   });
 }
 
 function _deliverMeshMessageToAgent(env: MeshEnvelope): void {
-  const bodyText = typeof env.body === "string" ? env.body : JSON.stringify(env.body);
+  const bodyText =
+    typeof env.body === "string" ? env.body : JSON.stringify(env.body);
   const toolCallId = `mesh_${env.id}`;
   _broadcastToActive({
     type: "tool_request",
@@ -4537,10 +5408,16 @@ function _deliverMeshMessageToAgent(env: MeshEnvelope): void {
       ? { from: env.from, re: env.re, message: bodyText }
       : { from: env.from, message: bodyText },
   });
-  _broadcastToActive({ type: "tool_result", tool_call_id: toolCallId, result: { from: env.from, message: bodyText } });
+  _broadcastToActive({
+    type: "tool_result",
+    tool_call_id: toolCallId,
+    result: { from: env.from, message: bodyText },
+  });
 
   if (!_pi) {
-    console.error(`[remote-pi] agent-network message from "${env.from}": agent session not bound yet — message dropped`);
+    console.error(
+      `[un-bien] agent-network message from "${env.from}": agent session not bound yet — message dropped`,
+    );
     return;
   }
   _pendingMeshMessages.push(env);
@@ -4559,8 +5436,11 @@ export function _deliverMeshMessageToAgentForTest(env: MeshEnvelope): void {
  * longer user-configurable: every Pi on the same machine joins the same
  * broker.
  */
-async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
-  const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd();
+async function _cmdJoin(
+  ctx: Pick<ExtensionContext, "ui" | "cwd">,
+): Promise<void> {
+  const cwd =
+    "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd();
   const local = loadLocalConfig(cwd);
   const sessionName = LOCAL_SESSION_NAME;
   // What the user configured for this agent…
@@ -4572,13 +5452,15 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
   const agentName = _lockedName ?? requestedName;
 
   if (_meshNode) {
-    ctx.ui.notify("[remote-pi] Already on the local mesh.", "warning");
+    ctx.ui.notify("[un-bien] Already on the local mesh.", "warning");
     return;
   }
   const joinGeneration = ++_meshJoinGeneration;
 
   ensureGlobalDirs();
-  mkdirSync(join(skillsDir(), "..", "sessions", sessionName), { recursive: true });
+  mkdirSync(join(skillsDir(), "..", "sessions", sessionName), {
+    recursive: true,
+  });
 
   const sock = sessionSockPath(sessionName);
   const audit = sessionAuditPath(sessionName);
@@ -4587,13 +5469,17 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
   // name instead of registering behind a mute `name#N` ghost. Canonicalize via
   // realpath so symlinked cwds map to one identity (matches roomIdForCwd).
   let canonCwd = cwd;
-  try { canonCwd = realpathSync(cwd); } catch { /* cwd missing — use raw path */ }
+  try {
+    canonCwd = realpathSync(cwd);
+  } catch {
+    /* cwd missing — use raw path */
+  }
   const peer = new MeshNode({
     sockPath: sock,
     name: agentName,
     cwd: canonCwd,
     auditPath: audit,
-    takeoverExisting: process.env["REMOTE_PI_DAEMON"] === "1",
+    takeoverExisting: process.env["UNBIEN_DAEMON"] === "1",
   });
 
   peer.onMessage((env) => {
@@ -4605,7 +5491,8 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
       _refreshSessionPeerCount(peer, ctx);
       // Plan/25 Wave B: push fresh peer list to all siblings so their
       // remotePeers cache stays current without polling.
-      void peer.request("broker", { type: "list_peers" }, 2000)
+      void peer
+        .request("broker", { type: "list_peers" }, 2000)
         .then((reply) => {
           const body = reply.body as {
             peers?: string[];
@@ -4629,10 +5516,12 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
           // No-op when the bridge isn't up (follower / relay down).
           if (local) peer.onLocalPeersChanged(local);
         })
-        .catch(() => { /* bridge not bound yet, or list_peers failed */ });
+        .catch(() => {
+          /* bridge not bound yet, or list_peers failed */
+        });
       return;
     }
-    if (env.from === "broker") return;  // other broker control messages — ignore
+    if (env.from === "broker") return; // other broker control messages — ignore
 
     // Real agent-to-agent message (SessionPeer already correlated replies via
     // env.re before this point). Show it in the app's TOOL timeline and wake
@@ -4651,11 +5540,8 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
     _refreshSessionPeerCount(peer, ctx);
   });
 
-  const isCurrentCandidate = (): boolean => (
-    !_disposed &&
-    joinGeneration === _meshJoinGeneration &&
-    _meshNode === null
-  );
+  const isCurrentCandidate = (): boolean =>
+    !_disposed && joinGeneration === _meshJoinGeneration && _meshNode === null;
 
   try {
     const assigned = await peer.connect();
@@ -4663,12 +5549,16 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
     // newer join invalidates its generation; close it instead of publishing a
     // ghost peer or allowing _cmdRoot to continue into Relay startup.
     if (!isCurrentCandidate()) {
-      try { await peer.close(); } catch { /* best-effort */ }
+      try {
+        await peer.close();
+      } catch {
+        /* best-effort */
+      }
       return;
     }
     _meshNode = peer;
     _sessionName = sessionName;
-    _sessionPeerCount = 1;  // optimistic — overwritten by list_peers below
+    _sessionPeerCount = 1; // optimistic — overwritten by list_peers below
     // Broker broadcasts `peer_joined` only to existing peers when a new one
     // arrives — the newcomer doesn't get retroactive joined events. Ask the
     // broker for the live peer list to seed the count correctly on join.
@@ -4687,15 +5577,20 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
     // name (wizard / explicit `agent_name`) already lives in config or re-derives
     // from `basename(cwd)`; the event above carries the live `#N` for the UI.
     _pi?.sendMessage({
-      customType: "remote-pi:name-assigned",
-      content: assigned === requestedName
-        ? `Mesh name: ${assigned}`
-        : `Mesh name reassigned: "${requestedName}" → "${assigned}" (collision)`,
-      details: { requested: requestedName, assigned, changed: assigned !== requestedName },
+      customType: "un-bien:name-assigned",
+      content:
+        assigned === requestedName
+          ? `Mesh name: ${assigned}`
+          : `Mesh name reassigned: "${requestedName}" → "${assigned}" (collision)`,
+      details: {
+        requested: requestedName,
+        assigned,
+        changed: assigned !== requestedName,
+      },
       display: false,
     });
     ctx.ui.notify(
-      `[remote-pi] Joined local mesh as "${assigned}" (${peer.currentRole()})`,
+      `[un-bien] Joined local mesh as "${assigned}" (${peer.currentRole()})`,
       "info",
     );
     _refreshFooter(ctx);
@@ -4707,10 +5602,14 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
     // A replacement/stop/newer join can invalidate this candidate before its
     // failure arrives. Clean it up and never notify the outgoing session ctx.
     if (!isCurrentCandidate()) {
-      try { await peer.close(); } catch { /* best-effort */ }
+      try {
+        await peer.close();
+      } catch {
+        /* best-effort */
+      }
       return;
     }
-    ctx.ui.notify(`[remote-pi] join failed: ${String(err)}`, "error");
+    ctx.ui.notify(`[un-bien] join failed: ${String(err)}`, "error");
   }
 }
 
@@ -4730,11 +5629,8 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
 function _abortCurrentTurn(
   fallbackCtx?: Pick<ExtensionContext, "abort">,
 ): boolean {
-  const candidates: Array<Pick<ExtensionContext, "abort"> | null | undefined> = [
-    _lastEventCtx,
-    _lastCtx,
-    fallbackCtx,
-  ];
+  const candidates: Array<Pick<ExtensionContext, "abort"> | null | undefined> =
+    [_lastEventCtx, _lastCtx, fallbackCtx];
 
   for (const candidate of candidates) {
     if (!candidate || candidate === _noopCtx) continue;
@@ -4777,7 +5673,11 @@ export function _routeClientMessageFrom(
         });
         return;
       }
-      sender.send({ type: "cancelled", in_reply_to: msg.id, target_id: msg.target_id });
+      sender.send({
+        type: "cancelled",
+        in_reply_to: msg.id,
+        target_id: msg.target_id,
+      });
     } catch (err) {
       sender.send({
         type: "error",
@@ -4797,7 +5697,12 @@ export function _routeClientMessageFrom(
         _clearQueuedItems(msg.id);
         break;
       }
-      _upsertQueuedItem({ id: msg.id, text, editable: true, created_at: Date.now() });
+      _upsertQueuedItem({
+        id: msg.id,
+        text,
+        editable: true,
+        created_at: Date.now(),
+      });
       _maybeDrainQueuedItem();
       break;
     }
@@ -4820,7 +5725,8 @@ export function _routeClientMessageFrom(
       // image bubble. No-image path is byte-identical to before (no `images`
       // key on the wire).
       const requestedSteer = msg.streaming_behavior === "steer";
-      const inferredBusySteer = !requestedSteer && _myRoomMeta?.working === true;
+      const inferredBusySteer =
+        !requestedSteer && _myRoomMeta?.working === true;
       const shouldSteer = requestedSteer || inferredBusySteer;
       // A reconnecting app can correctly send `steer` while our mirror has no
       // turn id (for example, the turn started while no owner was attached).
@@ -4829,10 +5735,15 @@ export function _routeClientMessageFrom(
       // rejects the message as a normal busy prompt. Seed a fallback id so
       // later chunks/done have a target instead of being dropped.
       if (msg.images && msg.images.length > 0) {
-        void _deliverImageUserMessage(sender, msg, shouldSteer).catch((error) => {
-          const detail = error instanceof Error ? error.message : String(error);
-          console.error(`[remote-pi] failed delivering image message id=${msg.id}: ${detail}`);
-        });
+        void _deliverImageUserMessage(sender, msg, shouldSteer).catch(
+          (error) => {
+            const detail =
+              error instanceof Error ? error.message : String(error);
+            console.error(
+              `[un-bien] failed delivering image message id=${msg.id}: ${detail}`,
+            );
+          },
+        );
         break;
       }
 
@@ -4888,34 +5799,51 @@ export function _routeClientMessageFrom(
       // a prior New session. compact() is a base-ctx method, so the
       // session_start ctx suffices. Fall back to _lastCtx defensively if no
       // session_start has landed yet (keeps the pre-replacement happy path).
-      handleSessionCompact((_lastEventCtx ?? _lastCtx) as ActionCtx | null, sender, msg);
+      handleSessionCompact(
+        (_lastEventCtx ?? _lastCtx) as ActionCtx | null,
+        sender,
+        msg,
+      );
       break;
     case "session_launch": {
       // Remote launch: owner-key gate (sender is an authenticated owner) +
       // config opt-in. Advertised via the `remote_launch` capability only when
       // enabled, so a compliant app won't even show the affordance otherwise.
-      const cwd = typeof msg.cwd === "string" && msg.cwd.length > 0 ? msg.cwd : process.cwd();
+      const cwd =
+        typeof msg.cwd === "string" && msg.cwd.length > 0
+          ? msg.cwd
+          : process.cwd();
       if (!effectiveAllowRemoteLaunch(loadLocalConfig(cwd))) {
         sender.send({
           type: "action_error",
           in_reply_to: msg.id,
           action: "session_launch",
-          error: "remote launch is disabled on this machine (set allow_remote_launch)",
+          error:
+            "remote launch is disabled on this machine (set allow_remote_launch)",
         });
         break;
       }
       const launchError = _launchSession(msg.mode, cwd, msg.name);
       sender.send(
         launchError
-          ? { type: "action_error", in_reply_to: msg.id, action: "session_launch", error: launchError }
-          : { type: "action_ok", in_reply_to: msg.id, action: "session_launch" },
+          ? {
+              type: "action_error",
+              in_reply_to: msg.id,
+              action: "session_launch",
+              error: launchError,
+            }
+          : {
+              type: "action_ok",
+              in_reply_to: msg.id,
+              action: "session_launch",
+            },
       );
       break;
     }
     case "session_new": {
       const actionCtx = _lastCtx as ActionCtx | null;
-      const daemonMode = process.env["REMOTE_PI_DAEMON"] === "1";
-      // Fresh Pi session via the supervisor: ack, clear remote-pi's mirror, then
+      const daemonMode = process.env["UNBIEN_DAEMON"] === "1";
+      // Fresh Pi session via the supervisor: ack, clear un-bien's mirror, then
       // exit with the private code so the supervisor relaunches without
       // --continue → a genuinely fresh session. Used when there's NO command ctx
       // AND as recovery when the captured _lastCtx has gone STALE after an
@@ -4924,7 +5852,11 @@ export function _routeClientMessageFrom(
       // replacement", which previously surfaced to the app as a hard failure
       // ("session_new failed") and left New Context wedged.
       const restartFresh = () => {
-        sender.send({ type: "action_ok", in_reply_to: msg.id, action: "session_new" });
+        sender.send({
+          type: "action_ok",
+          in_reply_to: msg.id,
+          action: "session_new",
+        });
         _resetSessionForNew(msg.id);
         setTimeout(() => process.exit(EXIT_DAEMON_FRESH_SESSION), 100);
       };
@@ -4964,7 +5896,11 @@ export function _routeClientMessageFrom(
             });
             return;
           }
-          sender.send({ type: "action_ok", in_reply_to: msg.id, action: "session_new" });
+          sender.send({
+            type: "action_ok",
+            in_reply_to: msg.id,
+            action: "session_new",
+          });
           _resetSessionForNew(msg.id);
         } catch (e) {
           const emsg = String((e as Error)?.message ?? e ?? "");
@@ -4998,7 +5934,7 @@ export function _routeClientMessageFrom(
       break;
     case "list_models":
       handleListModels(
-        ((_lastEventCtx ?? _lastCtx) as ActionCtx | null),
+        (_lastEventCtx ?? _lastCtx) as ActionCtx | null,
         ensureModelRegistry((_lastEventCtx ?? _lastCtx) as ActionCtx | null),
         sender,
         msg,
@@ -5052,7 +5988,7 @@ function _handleSessionSync(
   // local cache with this response — no delta/since_ts logic.
   const serverLimit = _getSyncLimit();
   const requested = msg.limit ?? serverLimit;
-  const effectiveLimit = Math.min(requested, serverLimit);  // server clamps
+  const effectiveLimit = Math.min(requested, serverLimit); // server clamps
 
   const allEvents = _mapAgentMessagesToEvents(_messageBuffer);
   const slice = effectiveLimit > 0 ? allEvents.slice(-effectiveLimit) : [];
@@ -5072,7 +6008,8 @@ function _handleSessionSync(
   // Envelope-native reconstruction: replay the same sliced history as {rpc}
   // frames the app folds via applyRPC (the app ignores the stock session_history
   // above). Request-driven, so it lands after the app has opened the session.
-  for (const frame of _historyReplayEnvelopes(slice)) sender.sendEnvelope(frame);
+  for (const frame of _historyReplayEnvelopes(slice))
+    sender.sendEnvelope(frame);
 
   // Plan/57 — replay ask_user flows still awaiting an answer. The bridge
   // broadcasts `started` once; a peer that connects afterwards would otherwise
@@ -5156,12 +6093,24 @@ function _enrichEditToolArgs(base: ToolArgs): ToolArgs {
   for (const rawEdit of edits) {
     if (!rawEdit || typeof rawEdit !== "object") continue;
     const edit = rawEdit as ToolArgs;
-    const oldText = _stringArg(edit, ["oldText", "old_text", "old_string", "oldString"]);
-    const newText = _stringArg(edit, ["newText", "new_text", "new_string", "newString"]);
+    const oldText = _stringArg(edit, [
+      "oldText",
+      "old_text",
+      "old_string",
+      "oldString",
+    ]);
+    const newText = _stringArg(edit, [
+      "newText",
+      "new_text",
+      "new_string",
+      "newString",
+    ]);
     if (!oldText && !newText) continue;
 
-    const matchAt = oldText && text !== null ? text.indexOf(oldText, searchFrom) : -1;
-    const fallbackAt = oldText && matchAt < 0 && text !== null ? text.indexOf(oldText) : matchAt;
+    const matchAt =
+      oldText && text !== null ? text.indexOf(oldText, searchFrom) : -1;
+    const fallbackAt =
+      oldText && matchAt < 0 && text !== null ? text.indexOf(oldText) : matchAt;
     const startOffset = fallbackAt >= 0 ? fallbackAt : searchFrom;
     if (text === null) continue;
     const hunk = _buildEditHunk(text, startOffset, oldText, newText);
@@ -5175,11 +6124,16 @@ function _enrichEditToolArgs(base: ToolArgs): ToolArgs {
 function _readToolFile(filePath: string): string | null {
   if (!filePath) return null;
   const cwd = _lastCtx && "cwd" in _lastCtx ? _lastCtx.cwd : process.cwd();
-  const homePath = filePath.startsWith("~/") && process.env.HOME
-    ? resolve(process.env.HOME, filePath.slice(2))
-    : null;
-  const candidates = [filePath, resolve(cwd, filePath), resolve(process.cwd(), filePath), homePath]
-    .filter((p): p is string => typeof p === "string");
+  const homePath =
+    filePath.startsWith("~/") && process.env.HOME
+      ? resolve(process.env.HOME, filePath.slice(2))
+      : null;
+  const candidates = [
+    filePath,
+    resolve(cwd, filePath),
+    resolve(process.cwd(), filePath),
+    homePath,
+  ].filter((p): p is string => typeof p === "string");
   for (const candidate of candidates) {
     try {
       return readFileSync(candidate, "utf8");
@@ -5189,7 +6143,6 @@ function _readToolFile(filePath: string): string | null {
   }
   return null;
 }
-
 
 function _buildEditHunk(
   fileText: string,
@@ -5211,7 +6164,12 @@ function _buildEditHunk(
 
   if (beforeStart > 0) out.push({ kind: "ellipsis" });
   for (let i = beforeStart; i < startIndex; i++) {
-    out.push({ kind: "context", oldLine: i + 1, newLine: i + 1, text: fileLines[i] ?? "" });
+    out.push({
+      kind: "context",
+      oldLine: i + 1,
+      newLine: i + 1,
+      text: fileLines[i] ?? "",
+    });
   }
   let commonPrefix = 0;
   while (
@@ -5226,27 +6184,47 @@ function _buildEditHunk(
   while (
     commonSuffix < oldLines.length - commonPrefix &&
     commonSuffix < newLines.length - commonPrefix &&
-    oldLines[oldLines.length - 1 - commonSuffix] === newLines[newLines.length - 1 - commonSuffix]
+    oldLines[oldLines.length - 1 - commonSuffix] ===
+      newLines[newLines.length - 1 - commonSuffix]
   ) {
     commonSuffix++;
   }
 
   for (let i = 0; i < commonPrefix; i++) {
-    out.push({ kind: "context", oldLine: oldStart + i, newLine: newStart + i, text: oldLines[i] ?? "" });
+    out.push({
+      kind: "context",
+      oldLine: oldStart + i,
+      newLine: newStart + i,
+      text: oldLines[i] ?? "",
+    });
   }
   for (let i = commonPrefix; i < oldLines.length - commonSuffix; i++) {
-    out.push({ kind: "remove", oldLine: oldStart + i, text: oldLines[i] ?? "" });
+    out.push({
+      kind: "remove",
+      oldLine: oldStart + i,
+      text: oldLines[i] ?? "",
+    });
   }
   for (let i = commonPrefix; i < newLines.length - commonSuffix; i++) {
     out.push({ kind: "add", newLine: newStart + i, text: newLines[i] ?? "" });
   }
   for (let i = oldLines.length - commonSuffix; i < oldLines.length; i++) {
     const newLine = newStart + newLines.length - (oldLines.length - i);
-    out.push({ kind: "context", oldLine: oldStart + i, newLine, text: oldLines[i] ?? "" });
+    out.push({
+      kind: "context",
+      oldLine: oldStart + i,
+      newLine,
+      text: oldLines[i] ?? "",
+    });
   }
   for (let i = afterStart; i < afterEnd; i++) {
     const newLine = newStart + newLines.length + (i - afterStart);
-    out.push({ kind: "context", oldLine: i + 1, newLine, text: fileLines[i] ?? "" });
+    out.push({
+      kind: "context",
+      oldLine: i + 1,
+      newLine,
+      text: fileLines[i] ?? "",
+    });
   }
   if (afterEnd < fileLines.length) out.push({ kind: "ellipsis" });
   return out;
@@ -5305,7 +6283,11 @@ function _stringifyToolResult(value: unknown): string {
     const obj = value as { content?: unknown; text?: unknown };
     if (Array.isArray(obj.content)) return _stringifyContent(obj.content);
     if (typeof obj.text === "string") return obj.text;
-    try { return JSON.stringify(value); } catch { return ""; }
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "";
+    }
   }
   return value === null || value === undefined ? "" : String(value);
 }
@@ -5322,7 +6304,11 @@ function _imagesFromContent(content: unknown): WireImage[] {
   for (const c of content) {
     if (!c || typeof c !== "object") continue;
     const block = c as { type?: string; data?: unknown; mimeType?: unknown };
-    if (block.type === "image" && typeof block.data === "string" && typeof block.mimeType === "string") {
+    if (
+      block.type === "image" &&
+      typeof block.data === "string" &&
+      typeof block.mimeType === "string"
+    ) {
       out.push({ data: block.data, mime: block.mimeType });
     }
   }
@@ -5385,7 +6371,10 @@ export function _mapAgentMessagesToEvents(
     } else if (m.role === "assistant") {
       const content = Array.isArray(m.content) ? m.content : [];
       const usage = m.usage
-        ? { input_tokens: m.usage.input ?? 0, output_tokens: m.usage.output ?? 0 }
+        ? {
+            input_tokens: m.usage.input ?? 0,
+            output_tokens: m.usage.output ?? 0,
+          }
         : undefined;
       // Agent-emitted inline graphics (base64 already encoded in the content).
       // Attach to the first text agent_message so a re-sync rebuilds the bubble
@@ -5394,7 +6383,13 @@ export function _mapAgentMessagesToEvents(
       let imagesAttached = false;
       for (const raw of content) {
         if (!raw || typeof raw !== "object") continue;
-        const block = raw as { type?: string; text?: unknown; id?: unknown; name?: unknown; arguments?: unknown };
+        const block = raw as {
+          type?: string;
+          text?: unknown;
+          id?: unknown;
+          name?: unknown;
+          arguments?: unknown;
+        };
         if (block.type === "text") {
           const text = String(block.text ?? "");
           if (!text) continue;
@@ -5448,7 +6443,7 @@ export function _mapAgentMessagesToEvents(
 // ── Standalone CLI ────────────────────────────────────────────────────────────
 
 /**
- * `remote-pi restart-supervisor` — restarts the `pi-supervisord` PROCESS
+ * `un-bien restart-supervisor` — restarts the `pi-supervisord` PROCESS
  * (not the daemons). The supervisor is a long-running Node process with no
  * hot-reload, so after a `dist` rebuild the old code keeps running until the
  * process is restarted. The Cockpit "Restart supervisor" button shells out to
@@ -5459,7 +6454,11 @@ export function _mapAgentMessagesToEvents(
  */
 /** One step of a restart sequence. `ignoreFailure` steps (e.g. `schtasks /End`
  *  when the task isn't running) don't abort the sequence. */
-export interface RestartStep { cmd: string; args: string[]; ignoreFailure?: boolean }
+export interface RestartStep {
+  cmd: string;
+  args: string[];
+  ignoreFailure?: boolean;
+}
 
 /** Pure: the OS command sequence that restarts the supervisor service, or null
  *  when the platform isn't supported. Most platforms are 1 step; Windows is 2
@@ -5468,12 +6467,24 @@ export function _restartSupervisorCommand(
   platform: NodeJS.Platform,
   uid: number,
 ): RestartStep[] | null {
-  if (platform === "darwin") return [{ cmd: "launchctl", args: ["kickstart", "-k", `gui/${uid}/${LAUNCHD_LABEL}`] }];
-  if (platform === "linux") return [{ cmd: "systemctl", args: ["--user", "restart", SYSTEMD_UNIT] }];
-  if (platform === "win32") return [
-    { cmd: "schtasks", args: ["/End", "/TN", WINDOWS_TASK_NAME], ignoreFailure: true },
-    { cmd: "schtasks", args: ["/Run", "/TN", WINDOWS_TASK_NAME] },
-  ];
+  if (platform === "darwin")
+    return [
+      {
+        cmd: "launchctl",
+        args: ["kickstart", "-k", `gui/${uid}/${LAUNCHD_LABEL}`],
+      },
+    ];
+  if (platform === "linux")
+    return [{ cmd: "systemctl", args: ["--user", "restart", SYSTEMD_UNIT] }];
+  if (platform === "win32")
+    return [
+      {
+        cmd: "schtasks",
+        args: ["/End", "/TN", WINDOWS_TASK_NAME],
+        ignoreFailure: true,
+      },
+      { cmd: "schtasks", args: ["/Run", "/TN", WINDOWS_TASK_NAME] },
+    ];
   return null;
 }
 
@@ -5482,30 +6493,39 @@ function _restartSupervisor(): void {
   const steps = _restartSupervisorCommand(process.platform, uid);
   if (!steps) {
     console.error(
-      `[remote-pi] restart-supervisor is not supported on '${process.platform}' yet. ` +
-      "Restart pi-supervisord manually.",
+      `[un-bien] restart-supervisor is not supported on '${process.platform}' yet. ` +
+        "Restart pi-supervisord manually.",
     );
     process.exit(1);
   }
   for (const step of steps) {
-    const r = spawnSync(step.cmd, step.args, { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
+    const r = spawnSync(step.cmd, step.args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+    });
     if (r.error) {
       if (step.ignoreFailure) continue;
-      console.error(`[remote-pi] restart-supervisor failed: ${step.cmd} not runnable (${r.error.message}). Is the service installed? Run \`remote-pi install\`.`);
+      console.error(
+        `[un-bien] restart-supervisor failed: ${step.cmd} not runnable (${r.error.message}). Is the service installed? Run \`un-bien install\`.`,
+      );
       process.exit(1);
     }
     if (r.status !== 0 && !step.ignoreFailure) {
       const detail = (r.stderr || r.stdout || "").trim();
-      console.error(`[remote-pi] restart-supervisor failed (${step.cmd} exited ${r.status})${detail ? `: ${detail}` : ""}.`);
+      console.error(
+        `[un-bien] restart-supervisor failed (${step.cmd} exited ${r.status})${detail ? `: ${detail}` : ""}.`,
+      );
       process.exit(r.status === null ? 1 : r.status);
     }
   }
-  console.log("[remote-pi] Supervisor restarted.");
+  console.log("[un-bien] Supervisor restarted.");
 }
 
 function _isDirectRun(): boolean {
   try {
-    return fileURLToPath(import.meta.url) === realpathSync(process.argv[1] ?? "");
+    return (
+      fileURLToPath(import.meta.url) === realpathSync(process.argv[1] ?? "")
+    );
   } catch {
     return false;
   }
@@ -5513,7 +6533,7 @@ function _isDirectRun(): boolean {
 
 /**
  * Read-only probe of the local UDS broker for the mesh roster, backing
- * `remote-pi peers`. Opens a raw connection to `sockPath`, sends a single
+ * `un-bien peers`. Opens a raw connection to `sockPath`, sends a single
  * unregistered `list_peers` request, and resolves with the peer names from the
  * broker's reply (local UDS peers + cross-PC `<pc>:<peer>` entries).
  *
@@ -5540,31 +6560,46 @@ export async function probeListPeers(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      try { sock.destroy(); } catch { /* already gone */ }
+      try {
+        sock.destroy();
+      } catch {
+        /* already gone */
+      }
       resolve(result);
     };
     const timer = setTimeout(() => done(null), timeoutMs);
     sock.setEncoding("utf8");
     sock.on("connect", () => {
-      try { sock.write(JSON.stringify({ type: "list_peers" }) + "\n"); }
-      catch { done(null); }
+      try {
+        sock.write(JSON.stringify({ type: "list_peers" }) + "\n");
+      } catch {
+        done(null);
+      }
     });
     sock.on("data", (chunk: string) => {
       buf += chunk;
       const nl = buf.indexOf("\n");
-      if (nl < 0) return;  // wait for a full line
+      if (nl < 0) return; // wait for a full line
       const line = buf.slice(0, nl);
       try {
-        const env = JSON.parse(line) as { body?: { type?: string; peers?: unknown } };
+        const env = JSON.parse(line) as {
+          body?: { type?: string; peers?: unknown };
+        };
         const body = env.body;
-        if (body && body.type === "list_peers_reply" && Array.isArray(body.peers)) {
+        if (
+          body &&
+          body.type === "list_peers_reply" &&
+          Array.isArray(body.peers)
+        ) {
           done(body.peers.filter((p): p is string => typeof p === "string"));
           return;
         }
-      } catch { /* fall through */ }
-      done(null);  // a line arrived but it wasn't the reply we expected
+      } catch {
+        /* fall through */
+      }
+      done(null); // a line arrived but it wasn't the reply we expected
     });
-    sock.on("error", () => done(null));  // ECONNREFUSED / ENOENT → mesh offline
+    sock.on("error", () => done(null)); // ECONNREFUSED / ENOENT → mesh offline
     sock.on("close", () => done(null));
   });
 }
@@ -5575,44 +6610,52 @@ if (_isDirectRun()) {
     const peers = (await listPeers())
       .map(_inspectPeerRecord)
       .filter((peer): peer is InspectedPeerRecord => peer !== null);
-    if (peers.length === 0) { console.log("[remote-pi] No peers"); }
-    else {
+    if (peers.length === 0) {
+      console.log("[un-bien] No peers");
+    } else {
       for (const peer of peers) {
         console.log(`• ${peer.rawHandle.slice(0, 8)} — ${peer.record.name}`);
       }
     }
   } else if (subcmd === "revoke") {
     const shortid = (cliArgs[0] ?? "").trim();
-    if (!shortid) {
-      console.log("Usage: revoke <shortid>");
-    } else {
+    if (shortid) {
       const matches = (await listPeers())
         .map(_inspectPeerRecord)
         .filter((peer): peer is InspectedPeerRecord => peer !== null)
         .filter((peer) => peer.rawHandle.startsWith(shortid));
       if (matches.length === 0) console.log("No peer matching that shortid");
-      else if (matches.length > 1) console.log(`Ambiguous: ${matches.map((peer) => peer.rawHandle.slice(0, 8)).join(", ")}`);
+      else if (matches.length > 1)
+        console.log(
+          `Ambiguous: ${matches.map((peer) => peer.rawHandle.slice(0, 8)).join(", ")}`,
+        );
       else {
         const peer = matches[0]!;
         const { removePeer } = await import("./pairing/storage.js");
         await removePeer(peer.rawHandle);
-        console.log(`Revoked: ${peer.record.name} (${peer.rawHandle.slice(0, 8)}…)`);
+        console.log(
+          `Revoked: ${peer.record.name} (${peer.rawHandle.slice(0, 8)}…)`,
+        );
       }
+    } else {
+      console.log("Usage: revoke <shortid>");
     }
   } else if (subcmd === "set-relay") {
     const raw = (cliArgs[0] ?? "").trim();
     if (!raw) {
       console.log(`Usage: set-relay <url> (default: ${kDefaultRelayUrl})`);
     } else if (isWebSocketScheme(raw)) {
-      console.log(`Use http:// or https://. The extension converts to WebSocket automatically.`);
-    } else if (!isValidRelayUrl(raw)) {
-      console.log(`Invalid URL: ${raw}. Must start with http:// or https://`);
-    } else {
+      console.log(
+        `Use http:// or https://. The extension converts to WebSocket automatically.`,
+      );
+    } else if (isValidRelayUrl(raw)) {
       saveConfig({ relay: raw });
       console.log(`Relay set to ${raw}`);
+    } else {
+      console.log(`Invalid URL: ${raw}. Must start with http:// or https://`);
     }
   } else if (subcmd === "create") {
-    // Standalone: `remote-pi create <cwd> [--name "X"]`. The shell already
+    // Standalone: `un-bien create <cwd> [--name "X"]`. The shell already
     // split the args and stripped the outer quotes, so an arg like
     // `Tmp Agent` arrives as a single element with embedded space. Re-add
     // quotes around any arg containing whitespace so the regex-based
@@ -5620,37 +6663,63 @@ if (_isDirectRun()) {
     // as it would from a Pi interactive prompt.
     const joined = cliArgs.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ");
     await _cmdCreate(joined, {
-      ui: { notify: (msg: string) => console.log(msg) } as unknown as ExtensionContext["ui"],
+      ui: {
+        notify: (msg: string) => console.log(msg),
+      } as unknown as ExtensionContext["ui"],
     });
   } else if (subcmd === "remove") {
     const id = (cliArgs[0] ?? "").trim();
     await _cmdRemove(id, {
-      ui: { notify: (msg: string) => console.log(msg) } as unknown as ExtensionContext["ui"],
+      ui: {
+        notify: (msg: string) => console.log(msg),
+      } as unknown as ExtensionContext["ui"],
     });
   } else if (subcmd === "daemons") {
     // Mirror the slash handler: ask the supervisor when reachable,
     // fall back to registry-only when not.
-    const stubCtx = { ui: { notify: (msg: string) => console.log(msg) } as unknown as ExtensionContext["ui"] };
+    const stubCtx = {
+      ui: {
+        notify: (msg: string) => console.log(msg),
+      } as unknown as ExtensionContext["ui"],
+    };
     await _cmdDaemonsList(stubCtx);
   } else if (subcmd === "daemon") {
-    // `remote-pi daemon <op> [args]`. Reuse the fleet-ops handlers — they
+    // `un-bien daemon <op> [args]`. Reuse the fleet-ops handlers — they
     // already accept a minimal ctx with `notify`.
     const op = cliArgs[0] ?? "";
-    const rest = cliArgs.slice(1).map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ");
-    const stubCtx = { ui: { notify: (msg: string) => console.log(msg) } as unknown as ExtensionContext["ui"] };
-    if      (op === "start")   { await _cmdDaemonStart(stubCtx, cliArgs[1]); }
-    else if (op === "stop")    { await _cmdDaemonStop(stubCtx, cliArgs[1]); }
-    else if (op === "restart") { await _cmdDaemonRestart(stubCtx, cliArgs[1]); }
-    else if (op === "status")  { await _cmdDaemonStatus(stubCtx); }
-    else if (op === "send")    { await _cmdDaemonSend(rest, stubCtx); }
-    else {
-      console.log("Usage: remote-pi daemon <start|stop|restart [<id>]|status|send <id> \"<text>\">");
+    const rest = cliArgs
+      .slice(1)
+      .map((a) => (/\s/.test(a) ? `"${a}"` : a))
+      .join(" ");
+    const stubCtx = {
+      ui: {
+        notify: (msg: string) => console.log(msg),
+      } as unknown as ExtensionContext["ui"],
+    };
+    if (op === "start") {
+      await _cmdDaemonStart(stubCtx, cliArgs[1]);
+    } else if (op === "stop") {
+      await _cmdDaemonStop(stubCtx, cliArgs[1]);
+    } else if (op === "restart") {
+      await _cmdDaemonRestart(stubCtx, cliArgs[1]);
+    } else if (op === "status") {
+      await _cmdDaemonStatus(stubCtx);
+    } else if (op === "send") {
+      await _cmdDaemonSend(rest, stubCtx);
+    } else {
+      console.log(
+        'Usage: un-bien daemon <start|stop|restart [<id>]|status|send <id> "<text>">',
+      );
     }
   } else if (subcmd === "cron") {
-    // `remote-pi cron <op> [args]`. Re-quote args with spaces so the shared
+    // `un-bien cron <op> [args]`. Re-quote args with spaces so the shared
     // parser sees the same shape as a Pi slash prompt.
     const joined = cliArgs.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ");
-    const stubCtx = { ui: { notify: (msg: string) => console.log(msg) } as unknown as ExtensionContext["ui"] };
+    const stubCtx = {
+      ui: {
+        notify: (msg: string) => console.log(msg),
+      } as unknown as ExtensionContext["ui"],
+    };
     await _cmdCron(joined, stubCtx);
   } else if (subcmd === "peers") {
     // Read-only roster of the local + cross-PC mesh. Unlike `devices` (which
@@ -5660,71 +6729,83 @@ if (_isDirectRun()) {
     // Broker._tryObserverProbe). Null = no broker reachable on this machine.
     const peers = await probeListPeers(sessionSockPath(LOCAL_SESSION_NAME));
     if (peers === null) {
-      console.log("[remote-pi] Mesh offline — no agent is running on this machine.");
+      console.log(
+        "[un-bien] Mesh offline — no agent is running on this machine.",
+      );
     } else {
-      console.log(`[remote-pi] peers:\n${formatPeerInventory(peers)}`);
+      console.log(`[un-bien] peers:\n${formatPeerInventory(peers)}`);
     }
   } else if (subcmd === "claude") {
     await _cmdClaudeCli(cliArgs);
   } else if (subcmd === "install") {
-    // CLI mode = user installed via `npm install -g remote-pi`, so the
-    // `remote-pi` / `pi-supervisord` bins are already on $PATH via npm's
+    // CLI mode = user installed via `npm install -g un-bien`, so the
+    // `un-bien` / `pi-supervisord` bins are already on $PATH via npm's
     // global prefix. Explicit `linkCli: false` so we never stomp those
     // with symlinks pointing at a parallel Pi-extension install.
-    const stubCtx = { ui: { notify: (msg: string) => console.log(msg) } as unknown as ExtensionContext["ui"] };
+    const stubCtx = {
+      ui: {
+        notify: (msg: string) => console.log(msg),
+      } as unknown as ExtensionContext["ui"],
+    };
     // Propagate failure as a non-zero exit so callers (Cockpit / CI) detect it
     // — installService throws on a failed schtasks/launchctl/systemctl step.
     if (!_cmdInstall(stubCtx, { linkCli: false })) process.exit(1);
   } else if (subcmd === "uninstall") {
-    const stubCtx = { ui: { notify: (msg: string) => console.log(msg) } as unknown as ExtensionContext["ui"] };
+    const stubCtx = {
+      ui: {
+        notify: (msg: string) => console.log(msg),
+      } as unknown as ExtensionContext["ui"],
+    };
     // `linkCli: true` even from the CLI: unlinking is ALWAYS safe and must run
     // regardless of how install ran. `unlinkCliBinaries` only removes OUR
-    // reserved symlinks (`remote-pi` / `pi-supervisord`) under `~/.local/bin`;
+    // reserved symlinks (`un-bien` / `pi-supervisord`) under `~/.local/bin`;
     // npm-global bins live in a different prefix and are never touched. So a
-    // user who installed via the TUI (`/remote-pi install`, which links) and
+    // user who installed via the TUI (`/unbien install`, which links) and
     // uninstalls from a shell still gets the links cleaned up — the asymmetry
-    // that left an orphaned `~/.local/bin/remote-pi` behind.
+    // that left an orphaned `~/.local/bin/unbien` behind.
     _cmdUninstall(stubCtx, { linkCli: true });
   } else if (subcmd === "restart-supervisor") {
     _restartSupervisor();
   } else {
-    console.log([
-      "Usage: remote-pi <command>",
-      "",
-      "Daemon registry:",
-      "  create <cwd> [--name \"Name\"]   Register a folder as a daemon",
-      "  remove <id>                     Unregister a daemon",
-      "  daemons                         List registered daemons",
-      "",
-      "Fleet control:",
-      "  daemon start [<id>]             Start all daemons, or one by id",
-      "  daemon stop [<id>]              Stop all daemons, or one by id",
-      "  daemon restart [<id>]           Restart all daemons, or one by id",
-      "  daemon status                   Show pid / uptime / restarts",
-      "  daemon send <id> \"<text>\"       Send a prompt to a daemon",
-      "  cron add <id> \"<expr>\" \"<txt>\"  Schedule a recurring prompt (≥60s; --tz, --wake)",
-      "  cron list|run|remove|log        Manage scheduled prompts (needs the supervisor)",
-      "",
-      "Service:",
-      "  install                         Install pi-supervisord as a system service",
-      "  uninstall                       Remove the system service",
-      "  restart-supervisor              Restart the pi-supervisord process",
-      "",
-      "Devices:",
-      "  devices                         List paired phones (peers.json)",
-      "  revoke <shortid>                Revoke a paired device",
-      "",
-      "Config:",
-      "  set-relay <url>                 Set the relay URL (http:// or https://)",
-      "",
-      "Agent mesh:",
-      "  peers                           List agents on the local + cross-PC mesh",
-      "  claude [cwd]                    Start Claude Code connected to the agent mesh",
-    ].join("\n"));
+    console.log(
+      [
+        "Usage: un-bien <command>",
+        "",
+        "Daemon registry:",
+        '  create <cwd> [--name "Name"]   Register a folder as a daemon',
+        "  remove <id>                     Unregister a daemon",
+        "  daemons                         List registered daemons",
+        "",
+        "Fleet control:",
+        "  daemon start [<id>]             Start all daemons, or one by id",
+        "  daemon stop [<id>]              Stop all daemons, or one by id",
+        "  daemon restart [<id>]           Restart all daemons, or one by id",
+        "  daemon status                   Show pid / uptime / restarts",
+        '  daemon send <id> "<text>"       Send a prompt to a daemon',
+        '  cron add <id> "<expr>" "<txt>"  Schedule a recurring prompt (≥60s; --tz, --wake)',
+        "  cron list|run|remove|log        Manage scheduled prompts (needs the supervisor)",
+        "",
+        "Service:",
+        "  install                         Install pi-supervisord as a system service",
+        "  uninstall                       Remove the system service",
+        "  restart-supervisor              Restart the pi-supervisord process",
+        "",
+        "Devices:",
+        "  devices                         List paired phones (peers.json)",
+        "  revoke <shortid>                Revoke a paired device",
+        "",
+        "Config:",
+        "  set-relay <url>                 Set the relay URL (http:// or https://)",
+        "",
+        "Agent mesh:",
+        "  peers                           List agents on the local + cross-PC mesh",
+        "  claude [cwd]                    Start Claude Code connected to the agent mesh",
+      ].join("\n"),
+    );
   }
 }
 
-// ── `remote-pi claude` — launch Claude Code connected to the mesh ─────────────
+// ── `un-bien claude` — launch Claude Code connected to the mesh ─────────────
 
 /**
  * Resolve the packaged agent-network skill path
@@ -5734,14 +6815,14 @@ if (_isDirectRun()) {
  * if the file is missing (e.g. running before `pnpm build`).
  */
 function _agentNetworkSkillPath(): string | null {
-  const here = fileURLToPath(import.meta.url);            // dist/index.js (or src/index.ts via tsx)
-  const pkgRoot = dirname(dirname(here));                 // package root (dist → ..; src → ..)
+  const here = fileURLToPath(import.meta.url); // dist/index.js (or src/index.ts via tsx)
+  const pkgRoot = dirname(dirname(here)); // package root (dist → ..; src → ..)
   const skill = join(pkgRoot, "skills", "agent-network", "SKILL.md");
   return existsSync(skill) ? skill : null;
 }
 
 async function _cmdClaudeCli(args: string[]): Promise<void> {
-  // Contract: `remote-pi claude [cwd] [claude-flags...]`. The optional cwd is
+  // Contract: `un-bien claude [cwd] [claude-flags...]`. The optional cwd is
   // ONLY the leading positional (first token, not a flag); everything after it
   // is forwarded verbatim to the `claude` binary (e.g. `--resume`, `-c`,
   // `-p "prompt"`). Restricting cwd to the leading token avoids mistaking a
@@ -5753,16 +6834,25 @@ async function _cmdClaudeCli(args: string[]): Promise<void> {
   // Wizard when no local config exists
   if (!localConfigExists(targetCwd)) {
     const suggested = defaultAgentName(targetCwd);
-    process.stdout.write(`\n[remote-pi] No config found for ${targetCwd}\n`);
+    process.stdout.write(`\n[un-bien] No config found for ${targetCwd}\n`);
     process.stdout.write("Let's set up this agent.\n\n");
 
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const rl = createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
     const agentName: string = await new Promise((res) =>
-      rl.question(`Agent name [${suggested}]: `, (ans) => { rl.close(); res(ans.trim() || suggested); }),
+      rl.question(`Agent name [${suggested}]: `, (ans) => {
+        rl.close();
+        res(ans.trim() || suggested);
+      }),
     );
 
-    saveLocalConfig(targetCwd, { agent_name: agentName, auto_start_relay: true });
-    process.stdout.write(`[remote-pi] Config saved: agent="${agentName}"\n\n`);
+    saveLocalConfig(targetCwd, {
+      agent_name: agentName,
+      auto_start_relay: true,
+    });
+    process.stdout.write(`[un-bien] Config saved: agent="${agentName}"\n\n`);
   }
 
   // Resolve mesh server script path (dist/mcp/mesh_server.js)
@@ -5771,14 +6861,16 @@ async function _cmdClaudeCli(args: string[]): Promise<void> {
   const meshServerPath = resolve(distRoot, "mcp/mesh_server.js");
 
   if (!existsSync(meshServerPath)) {
-    console.log(`[remote-pi] mesh server not found at ${meshServerPath}. Run pnpm build first.`);
+    console.log(
+      `[un-bien] mesh server not found at ${meshServerPath}. Run pnpm build first.`,
+    );
     process.exit(1);
   }
 
   const absCwd = resolve(targetCwd);
-  const SERVER_NAME = "remote-pi-mesh";
+  const SERVER_NAME = "un-bien-mesh";
 
-  // The mesh MCP must be visible ONLY inside a `remote-pi claude` session — a
+  // The mesh MCP must be visible ONLY inside a `un-bien claude` session — a
   // plain `claude` in the same repo must NOT inherit it (otherwise every
   // ordinary session silently joins the mesh as a stray agent).
   //
@@ -5795,7 +6887,9 @@ async function _cmdClaudeCli(args: string[]): Promise<void> {
   // versions left behind (and that is the source of the inherited-mesh bug).
   // Idempotent — a no-op (non-zero, ignored) when the entry is already gone.
   spawnSync("claude", ["mcp", "remove", SERVER_NAME, "-s", "local"], {
-    cwd: absCwd, stdio: "ignore", shell: false,
+    cwd: absCwd,
+    stdio: "ignore",
+    shell: false,
   });
 
   // Ephemeral MCP config consumed by `--mcp-config` below. We do NOT bake a
@@ -5804,16 +6898,19 @@ async function _cmdClaudeCli(args: string[]): Promise<void> {
   // empirically — NOT the git root, NOT CLAUDE_PROJECT_DIR). We spawn claude
   // with `cwd: absCwd`, the MCP child inherits it, so the server self-identifies
   // as the right agent without leaking that path to any other session.
-  // Unique per pid so concurrent `remote-pi claude` launches don't collide.
-  const mcpConfigPath = join(tmpdir(), `remote-pi-mesh-mcp-${process.pid}.json`);
-  writeFileSync(mcpConfigPath, JSON.stringify({
-    mcpServers: {
-      [SERVER_NAME]: { command: process.execPath, args: [meshServerPath] },
-    },
-  }));
+  // Unique per pid so concurrent `un-bien claude` launches don't collide.
+  const mcpConfigPath = join(tmpdir(), `un-bien-mesh-mcp-${process.pid}.json`);
+  writeFileSync(
+    mcpConfigPath,
+    JSON.stringify({
+      mcpServers: {
+        [SERVER_NAME]: { command: process.execPath, args: [meshServerPath] },
+      },
+    }),
+  );
 
   // Inject the agent-network protocol as a system prompt instead of deploying a
-  // skill file into ~/.claude. Anyone running `remote-pi claude` is here to use
+  // skill file into ~/.claude. Anyone running `un-bien claude` is here to use
   // the mesh, so load the protocol unconditionally — no lazy skill gating, no
   // global skills-dir pollution, and the packaged file is the single source of
   // truth shared with the Pi runtime. Skipped only if the file is missing.
@@ -5847,21 +6944,31 @@ async function _cmdClaudeCli(args: string[]): Promise<void> {
   // Any extra args the user passed (e.g. `--resume`, `-c`) are appended last so
   // they reach the claude binary; ours come first as sensible defaults.
   try {
-    spawnSync("claude", [
-      "--mcp-config", mcpConfigPath,
-      "--dangerously-load-development-channels", `server:${SERVER_NAME}`,
-      "--dangerously-skip-permissions",
-      ...(skillPath ? [`--append-system-prompt-file=${skillPath}`] : []),
-      ...passthroughArgs,
-    ], {
-      cwd: absCwd,
-      stdio: "inherit",
-      shell: false,
-    });
+    spawnSync(
+      "claude",
+      [
+        "--mcp-config",
+        mcpConfigPath,
+        "--dangerously-load-development-channels",
+        `server:${SERVER_NAME}`,
+        "--dangerously-skip-permissions",
+        ...(skillPath ? [`--append-system-prompt-file=${skillPath}`] : []),
+        ...passthroughArgs,
+      ],
+      {
+        cwd: absCwd,
+        stdio: "inherit",
+        shell: false,
+      },
+    );
   } finally {
     // Session over — drop the ephemeral config so it never lingers as a stray
     // file. spawnSync blocks until claude exits, so claude has long since read
     // it. Best-effort: ignore if already gone.
-    try { unlinkSync(mcpConfigPath); } catch { /* already removed */ }
+    try {
+      unlinkSync(mcpConfigPath);
+    } catch {
+      /* already removed */
+    }
   }
 }

@@ -1,5 +1,9 @@
 import { describe, expect, test, vi } from "vitest";
-import { updateFooter, type FooterContext, type FooterState } from "./footer.js";
+import {
+  updateFooter,
+  type FooterContext,
+  type FooterState,
+} from "./footer.js";
 
 function makeMockCtx(): FooterContext & {
   statusCalls: Array<{ key: string; value: string | undefined }>;
@@ -9,9 +13,11 @@ function makeMockCtx(): FooterContext & {
   const titleCalls: string[] = [];
   return {
     ui: {
-      setStatus: vi.fn().mockImplementation((key: string, value: string | undefined) => {
-        statusCalls.push({ key, value });
-      }),
+      setStatus: vi
+        .fn()
+        .mockImplementation((key: string, value: string | undefined) => {
+          statusCalls.push({ key, value });
+        }),
       setTitle: vi.fn().mockImplementation((title: string) => {
         titleCalls.push(title);
       }),
@@ -30,21 +36,27 @@ describe("updateFooter — footer slots ('local' rendering)", () => {
       relayOn: false,
     };
     updateFooter(ctx, state);
-    const sessionSlot = ctx.statusCalls.find((c) => c.key === "remote-pi:session");
+    const sessionSlot = ctx.statusCalls.find(
+      (c) => c.key === "un-bien:session",
+    );
     expect(sessionSlot?.value).toBe("📡 local (3)");
   });
 
   test("session slot cleared when not joined", () => {
     const ctx = makeMockCtx();
     updateFooter(ctx, { relayOn: false });
-    const sessionSlot = ctx.statusCalls.find((c) => c.key === "remote-pi:session");
+    const sessionSlot = ctx.statusCalls.find(
+      (c) => c.key === "un-bien:session",
+    );
     expect(sessionSlot?.value).toBeUndefined();
   });
 
   test("singular peer count keeps numeric form (no pluralization in footer)", () => {
     const ctx = makeMockCtx();
     updateFooter(ctx, { session: "local", peerCount: 1, relayOn: false });
-    const sessionSlot = ctx.statusCalls.find((c) => c.key === "remote-pi:session");
+    const sessionSlot = ctx.statusCalls.find(
+      (c) => c.key === "un-bien:session",
+    );
     expect(sessionSlot?.value).toBe("📡 local (1)");
   });
 });

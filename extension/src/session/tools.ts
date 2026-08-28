@@ -3,7 +3,7 @@ import { Type } from "typebox";
 import type { TransportErrorReason } from "./envelope.js";
 import type { AckResult, SessionPeer } from "./peer.js";
 
-const NOT_IN_SESSION = "Not in a session. Run /remote-pi join first";
+const NOT_IN_SESSION = "Not in a session. Run /unbien join first";
 const ACK_TIMEOUT_MS = 5_000;
 const LEGACY_REQUEST_TIMEOUT_MS = 30_000;
 const LIST_PEERS_TIMEOUT_MS = 2_000;
@@ -20,7 +20,13 @@ interface RequestInput {
   timeout_ms?: number;
 }
 
-type SendStatus = "received" | "busy" | "denied" | "timeout" | "sent" | "refused";
+type SendStatus =
+  | "received"
+  | "busy"
+  | "denied"
+  | "timeout"
+  | "sent"
+  | "refused";
 
 interface SendDetails {
   status: SendStatus;
@@ -61,20 +67,30 @@ export function registerAgentTools(
         "Recipient agent name (e.g. 'backend'), 'broadcast', or array of names. " +
         "Broadcast/multicast are fire-and-forget; unicast returns an ACK status.",
     }),
-    body: Type.Unknown({ description: "Free-form JSON payload. String or object — your choice." }),
-    re: Type.Optional(Type.String({
-      description:
-        "Set this to the `id` of an incoming message when you are REPLYING to it. " +
-        "The peer correlates your answer with their original send via this field.",
-    })),
+    body: Type.Unknown({
+      description: "Free-form JSON payload. String or object — your choice.",
+    }),
+    re: Type.Optional(
+      Type.String({
+        description:
+          "Set this to the `id` of an incoming message when you are REPLYING to it. " +
+          "The peer correlates your answer with their original send via this field.",
+      }),
+    ),
   });
 
   const RequestParams = Type.Object({
-    to: Type.String({ description: "Recipient agent name. Must be a single peer (not broadcast)." }),
+    to: Type.String({
+      description:
+        "Recipient agent name. Must be a single peer (not broadcast).",
+    }),
     body: Type.Unknown({ description: "Free-form JSON payload to send." }),
-    timeout_ms: Type.Optional(Type.Number({
-      description: "Optional override of the default 30s reply timeout. Per-request.",
-    })),
+    timeout_ms: Type.Optional(
+      Type.Number({
+        description:
+          "Optional override of the default 30s reply timeout. Per-request.",
+      }),
+    ),
   });
 
   pi.registerTool<typeof SendParams, SendDetails>({
@@ -95,7 +111,11 @@ export function registerAgentTools(
     execute: async (_toolCallId, params) => {
       const peer = getSessionPeer();
       if (!peer) {
-        const details: SendDetails = { status: "refused", ok: false, error: NOT_IN_SESSION };
+        const details: SendDetails = {
+          status: "refused",
+          ok: false,
+          error: NOT_IN_SESSION,
+        };
         return {
           content: [{ type: "text", text: NOT_IN_SESSION }],
           details,
@@ -104,7 +124,11 @@ export function registerAgentTools(
       const { to, body, re } = params as SendInput;
       if (to === peer.address() || to === peer.name()) {
         const msg = `Refused: cannot agent_send to yourself ("${to}"). Just do the work directly.`;
-        const details: SendDetails = { status: "refused", ok: false, error: msg };
+        const details: SendDetails = {
+          status: "refused",
+          ok: false,
+          error: msg,
+        };
         return {
           content: [{ type: "text", text: msg }],
           details,
@@ -124,7 +148,11 @@ export function registerAgentTools(
           };
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          const details: SendDetails = { status: "timeout", ok: false, error: msg };
+          const details: SendDetails = {
+            status: "timeout",
+            ok: false,
+            error: msg,
+          };
           return {
             content: [{ type: "text", text: `Broadcast failed: ${msg}` }],
             details,
@@ -134,20 +162,29 @@ export function registerAgentTools(
 
       // Unicast: wait for broker ACK.
       try {
-        const ack = await peer.sendWithAck(to, body, re ?? null, ACK_TIMEOUT_MS);
+        const ack = await peer.sendWithAck(
+          to,
+          body,
+          re ?? null,
+          ACK_TIMEOUT_MS,
+        );
         const ok = ack.status === "received";
         const details: SendDetails = {
           status: ack.status,
           ok,
-          ...(ack.target !== undefined ? { target: ack.target } : {}),
-          ...(ack.error !== undefined ? { error: ack.error } : {}),
-          ...(ack.reason !== undefined ? { reason: ack.reason } : {}),
+          ...(ack.target === undefined ? {} : { target: ack.target }),
+          ...(ack.error === undefined ? {} : { error: ack.error }),
+          ...(ack.reason === undefined ? {} : { reason: ack.reason }),
         };
         const text = _formatAck(to, ack, re);
         return { content: [{ type: "text", text }], details };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        const details: SendDetails = { status: "timeout", ok: false, error: msg };
+        const details: SendDetails = {
+          status: "timeout",
+          ok: false,
+          error: msg,
+        };
         return {
           content: [{ type: "text", text: `Failed to send: ${msg}` }],
           details,
@@ -191,7 +228,9 @@ export function registerAgentTools(
         );
         const body = reply.body as { peers?: unknown } | null;
         const peers = Array.isArray(body?.peers)
-          ? (body!.peers as unknown[]).filter((p): p is string => typeof p === "string")
+          ? (body!.peers as unknown[]).filter(
+              (p): p is string => typeof p === "string",
+            )
           : [];
         // Drop self from the list — the caller is the only one who can't
         // address itself anyway, so listing it is noise. Peers are ADDRESSES
@@ -241,14 +280,16 @@ export function registerAgentTools(
           details: { error: msg },
         };
       }
-      const timeout = typeof timeout_ms === "number" && timeout_ms > 0
-        ? timeout_ms
-        : LEGACY_REQUEST_TIMEOUT_MS;
+      const timeout =
+        typeof timeout_ms === "number" && timeout_ms > 0
+          ? timeout_ms
+          : LEGACY_REQUEST_TIMEOUT_MS;
       try {
         const reply = await peer.request(to, body, timeout);
-        const text = typeof reply.body === "string"
-          ? reply.body
-          : JSON.stringify(reply.body);
+        const text =
+          typeof reply.body === "string"
+            ? reply.body
+            : JSON.stringify(reply.body);
         return {
           content: [{ type: "text", text }],
           details: reply.body,
@@ -264,7 +305,11 @@ export function registerAgentTools(
   });
 }
 
-function _formatAck(to: string, ack: AckResult, re: string | null | undefined): string {
+function _formatAck(
+  to: string,
+  ack: AckResult,
+  re: string | null | undefined,
+): string {
   const reSuffix = re ? ` (re=${re})` : "";
   const errorSuffix = ack.error ? ` (${ack.error})` : "";
 
@@ -275,24 +320,32 @@ function _formatAck(to: string, ack: AckResult, re: string | null | undefined): 
       // plan/34 removed busy-drop: the current broker never returns `busy`. If
       // we still see it, an OUT-OF-DATE broker leader dropped the message — so
       // be honest that it was NOT delivered, and point at the fix.
-      return `NOT delivered — "${to}"${reSuffix} came back BUSY, which only ` +
+      return (
+        `NOT delivered — "${to}"${reSuffix} came back BUSY, which only ` +
         `happens when an out-of-date broker leader dropped the message. ` +
-        `Restart the agent leading the local broker (oldest Pi/remote-pi process) ` +
-        `to pick up the new build, then resend.`;
+        `Restart the agent leading the local broker (oldest Pi/unbien process) ` +
+        `to pick up the new build, then resend.`
+      );
     case "denied":
       if (ack.reason === "not_authorized") {
-        return `Relay did not authorize delivery to "${to}"${reSuffix}${errorSuffix}. ` +
-          `Do not blindly retry; verify authorization first.`;
+        return (
+          `Relay did not authorize delivery to "${to}"${reSuffix}${errorSuffix}. ` +
+          `Do not blindly retry; verify authorization first.`
+        );
       }
       if (ack.reason === "bad_envelope") {
-        return `Relay rejected the envelope for "${to}"${reSuffix}${errorSuffix}. ` +
-          `Do not blindly retry; correct the envelope first.`;
+        return (
+          `Relay rejected the envelope for "${to}"${reSuffix}${errorSuffix}. ` +
+          `Do not blindly retry; correct the envelope first.`
+        );
       }
       return `"${to}" denied the message${reSuffix}. Do not retry; report to user.`;
     case "timeout":
       if (ack.reason === "offline") {
-        return `Immediate Relay offline transport error for "${to}"${reSuffix}${errorSuffix}; ` +
-          `reported as timeout without waiting for the ACK deadline.`;
+        return (
+          `Immediate Relay offline transport error for "${to}"${reSuffix}${errorSuffix}; ` +
+          `reported as timeout without waiting for the ACK deadline.`
+        );
       }
       return `No ACK from "${to}" within ${ACK_TIMEOUT_MS}ms${reSuffix} — transport error. Investigate or retry later.`;
   }

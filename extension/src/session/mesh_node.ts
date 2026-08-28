@@ -1,13 +1,14 @@
-import { SessionPeer, type AckResult, type SessionPeerOptions } from "./peer.js";
+import {
+  SessionPeer,
+  type AckResult,
+  type SessionPeerOptions,
+} from "./peer.js";
 import type { Envelope } from "./envelope.js";
 import type { Broker } from "./broker.js";
 import type { BrokerRemote } from "./broker_remote.js";
 import type { PiForwardClient } from "../transport/pi_forward_client.js";
 import { RelayClient } from "../transport/relay_client.js";
-import {
-  attachCrossPcBridge,
-  type CrossPcBridge,
-} from "./bridge.js";
+import { attachCrossPcBridge, type CrossPcBridge } from "./bridge.js";
 import { getOrCreateEd25519Keypair } from "../pairing/storage.js";
 import type { Ed25519Keypair } from "./../pairing/crypto.js";
 import {
@@ -37,7 +38,7 @@ export interface MeshSelfRelayBridge {
 }
 
 export interface MeshNodeOptions {
-  /** UDS broker socket path (e.g. ~/.pi/remote/sessions/local/broker.sock). */
+  /** UDS broker socket path (e.g. ~/.pi/un-bien/sessions/local/broker.sock). */
   sockPath: string;
   /** Requested mesh name (broker may add a #N collision suffix). */
   name: string;
@@ -98,18 +99,23 @@ function ownTopology(snapshot: MeshTopologySnapshot): MeshTopologySnapshot {
   });
   const siblingKeys = new Set<string>();
   const siblingAliases = new Set<string>();
-  const siblings: Array<Readonly<{
-    pcLabel: string;
-    pcPubkey: string;
-    legacyPcLabel: string;
-  }>> = [];
+  const siblings: Array<
+    Readonly<{
+      pcLabel: string;
+      pcPubkey: string;
+      legacyPcLabel: string;
+    }>
+  > = [];
   for (const [index, sibling] of snapshot.siblings.entries()) {
     const pcPubkey = canonicalizeEd25519PublicKey(
       sibling?.pcPubkey,
       `siblings[${index}].pcPubkey`,
     );
     if (pcPubkey === selfPubkey) continue;
-    const pcLabel = validateAlias(sibling?.pcLabel, `siblings[${index}].pcLabel`);
+    const pcLabel = validateAlias(
+      sibling?.pcLabel,
+      `siblings[${index}].pcLabel`,
+    );
     const legacyPcLabel = validateLegacyPcLabel(
       sibling?.legacyPcLabel,
       `siblings[${index}].legacyPcLabel`,
@@ -143,10 +149,12 @@ function topologyEquals(
   }
   return left.siblings.every((identity, index) => {
     const other = right.siblings[index];
-    return other !== undefined &&
+    return (
+      other !== undefined &&
       identity.pcPubkey === other.pcPubkey &&
       identity.pcLabel === other.pcLabel &&
-      identity.legacyPcLabel === other.legacyPcLabel;
+      identity.legacyPcLabel === other.legacyPcLabel
+    );
   });
 }
 
@@ -156,18 +164,25 @@ function keypairEquals(
 ): boolean {
   if (left === right) return true;
   if (!left || !right) return false;
-  return Buffer.from(left.publicKey).equals(Buffer.from(right.publicKey)) &&
-    Buffer.from(left.secretKey).equals(Buffer.from(right.secretKey));
+  return (
+    Buffer.from(left.publicKey).equals(Buffer.from(right.publicKey)) &&
+    Buffer.from(left.secretKey).equals(Buffer.from(right.secretKey))
+  );
 }
 
-function bridgeParamsEqual(left: BridgeParams | null, right: BridgeParams): boolean {
-  return left !== null &&
+function bridgeParamsEqual(
+  left: BridgeParams | null,
+  right: BridgeParams,
+): boolean {
+  return (
+    left !== null &&
     left.relayUrl === right.relayUrl &&
     left.cwd === right.cwd &&
     left.sessionName === right.sessionName &&
     left.meshRequestTimeoutMs === right.meshRequestTimeoutMs &&
     left.injectedRelay === right.injectedRelay &&
-    keypairEquals(left.keypair, right.keypair);
+    keypairEquals(left.keypair, right.keypair)
+  );
 }
 
 export class MeshNode {
@@ -196,25 +211,31 @@ export class MeshNode {
   /** Self-managed relay reconnect state. Injected Relay reconnect is host-owned. */
   private relayReconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private relayBackoffIdx = 0;
-  private static readonly RELAY_RECONNECT_BACKOFFS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
+  private static readonly RELAY_RECONNECT_BACKOFFS_MS = [
+    1_000, 2_000, 5_000, 10_000, 30_000,
+  ];
 
   constructor(opts: MeshNodeOptions) {
     this.log = opts.log ?? ((): void => {});
-    const peerOpts: SessionPeerOptions = { sockPath: opts.sockPath, name: opts.name };
+    const peerOpts: SessionPeerOptions = {
+      sockPath: opts.sockPath,
+      name: opts.name,
+    };
     if (opts.cwd !== undefined) peerOpts.cwd = opts.cwd;
-    if (opts.takeoverExisting !== undefined) peerOpts.takeoverExisting = opts.takeoverExisting;
+    if (opts.takeoverExisting !== undefined)
+      peerOpts.takeoverExisting = opts.takeoverExisting;
     if (opts.auditPath !== undefined) peerOpts.auditPath = opts.auditPath;
     this.peer_ = new SessionPeer(peerOpts);
     if (opts.bridge) {
       this.bridgeParams = {
         relayUrl: opts.bridge.relayUrl,
         cwd: opts.bridge.cwd,
-        ...(opts.bridge.sessionName !== undefined
-          ? { sessionName: opts.bridge.sessionName }
-          : {}),
-        ...(opts.bridge.meshRequestTimeoutMs !== undefined
-          ? { meshRequestTimeoutMs: opts.bridge.meshRequestTimeoutMs }
-          : {}),
+        ...(opts.bridge.sessionName === undefined
+          ? {}
+          : { sessionName: opts.bridge.sessionName }),
+        ...(opts.bridge.meshRequestTimeoutMs === undefined
+          ? {}
+          : { meshRequestTimeoutMs: opts.bridge.meshRequestTimeoutMs }),
       };
     }
   }
@@ -252,10 +273,10 @@ export class MeshNode {
     const next: BridgeParams = {
       relayUrl: opts.relayUrl,
       injectedRelay: opts.relay,
-      ...(opts.keypair !== undefined ? { keypair: opts.keypair } : {}),
-      ...(opts.meshRequestTimeoutMs !== undefined
-        ? { meshRequestTimeoutMs: opts.meshRequestTimeoutMs }
-        : {}),
+      ...(opts.keypair === undefined ? {} : { keypair: opts.keypair }),
+      ...(opts.meshRequestTimeoutMs === undefined
+        ? {}
+        : { meshRequestTimeoutMs: opts.meshRequestTimeoutMs }),
     };
     if (!bridgeParamsEqual(this.bridgeParams, next)) {
       this.bridgeGeneration += 1;
@@ -306,7 +327,9 @@ export class MeshNode {
   private _wireReconnect(): void {
     if (this.reconnectWired) return;
     this.reconnectWired = true;
-    this.peer_.onReconnect(() => { void this._onReconnect(); });
+    this.peer_.onReconnect(() => {
+      void this._onReconnect();
+    });
   }
 
   private async _onReconnect(): Promise<void> {
@@ -318,7 +341,9 @@ export class MeshNode {
     try {
       await this._requestBridge();
     } catch (error) {
-      this.log(`mesh bridge: re-attach after failover failed: ${String(error)}`);
+      this.log(
+        `mesh bridge: re-attach after failover failed: ${String(error)}`,
+      );
     } finally {
       const currentParams = this.bridgeParams;
       if (
@@ -374,9 +399,14 @@ export class MeshNode {
     if (!paramsAtStart) return;
     const revisionAtStart = this.topologyRevision;
 
-    const keypair = paramsAtStart.keypair ?? this.keypair ??
-      await getOrCreateEd25519Keypair();
-    if (generation !== this.bridgeGeneration || paramsAtStart !== this.bridgeParams) {
+    const keypair =
+      paramsAtStart.keypair ??
+      this.keypair ??
+      (await getOrCreateEd25519Keypair());
+    if (
+      generation !== this.bridgeGeneration ||
+      paramsAtStart !== this.bridgeParams
+    ) {
       return;
     }
 
@@ -386,7 +416,10 @@ export class MeshNode {
       candidateRelay = paramsAtStart.injectedRelay;
     } else {
       const roomName = paramsAtStart.sessionName ?? this.peer_.name();
-      candidateRelay = new RelayClient(toWebSocketUrl(paramsAtStart.relayUrl), keypair);
+      candidateRelay = new RelayClient(
+        toWebSocketUrl(paramsAtStart.relayUrl),
+        keypair,
+      );
       const roomId = roomIdFor(paramsAtStart.cwd!, roomName);
       try {
         await candidateRelay.connect({
@@ -406,7 +439,9 @@ export class MeshNode {
     }
 
     let candidateClosed = false;
-    const markCandidateClosed = (): void => { candidateClosed = true; };
+    const markCandidateClosed = (): void => {
+      candidateClosed = true;
+    };
     let markerInstalled = false;
     let result: CrossPcBridge | null = null;
     let publishedCloseHandler: (() => void) | null = null;
@@ -420,21 +455,27 @@ export class MeshNode {
         relayUrl: paramsAtStart.relayUrl,
         keypair,
         ...(this.latestTopology ? { topology: this.latestTopology } : {}),
-        ...(paramsAtStart.meshRequestTimeoutMs !== undefined
-          ? { meshRequestTimeoutMs: paramsAtStart.meshRequestTimeoutMs }
-          : {}),
+        ...(paramsAtStart.meshRequestTimeoutMs === undefined
+          ? {}
+          : { meshRequestTimeoutMs: paramsAtStart.meshRequestTimeoutMs }),
         log: this.log,
       });
 
-      if (this._attemptIsStale(
-        generation,
-        paramsAtStart,
-        broker,
-        candidateRelay,
-        candidateClosed,
-      )) {
+      if (
+        this._attemptIsStale(
+          generation,
+          paramsAtStart,
+          broker,
+          candidateRelay,
+          candidateClosed,
+        )
+      ) {
         result.detach();
-        this._removeMarker(candidateRelay, markCandidateClosed, markerInstalled);
+        this._removeMarker(
+          candidateRelay,
+          markCandidateClosed,
+          markerInstalled,
+        );
         markerInstalled = false;
         if (candidateRelayOwned) this._closeOwnedRelay(candidateRelay);
         return;
@@ -450,24 +491,31 @@ export class MeshNode {
 
       result.activate();
       if (candidateRelayOwned) {
-        publishedCloseHandler = (): void => this._onSelfRelayClosed(candidateRelay);
+        publishedCloseHandler = (): void =>
+          this._onSelfRelayClosed(candidateRelay);
         candidateRelay.on("close", publishedCloseHandler);
         publishedCloseInstalled = true;
       }
 
-      if (this._attemptIsStale(
-        generation,
-        paramsAtStart,
-        broker,
-        candidateRelay,
-        candidateClosed,
-      )) {
+      if (
+        this._attemptIsStale(
+          generation,
+          paramsAtStart,
+          broker,
+          candidateRelay,
+          candidateClosed,
+        )
+      ) {
         if (publishedCloseInstalled && publishedCloseHandler) {
           candidateRelay.off("close", publishedCloseHandler);
           publishedCloseInstalled = false;
         }
         result.detach();
-        this._removeMarker(candidateRelay, markCandidateClosed, markerInstalled);
+        this._removeMarker(
+          candidateRelay,
+          markCandidateClosed,
+          markerInstalled,
+        );
         markerInstalled = false;
         if (candidateRelayOwned) this._closeOwnedRelay(candidateRelay);
         return;
@@ -490,12 +538,24 @@ export class MeshNode {
       }
     } catch (error) {
       if (publishedCloseInstalled && publishedCloseHandler) {
-        try { candidateRelay.off("close", publishedCloseHandler); } catch { /* best-effort */ }
+        try {
+          candidateRelay.off("close", publishedCloseHandler);
+        } catch {
+          /* best-effort */
+        }
       }
       if (markerInstalled) {
-        try { candidateRelay.off("close", markCandidateClosed); } catch { /* best-effort */ }
+        try {
+          candidateRelay.off("close", markCandidateClosed);
+        } catch {
+          /* best-effort */
+        }
       }
-      try { result?.detach(); } catch { /* preserve original error */ }
+      try {
+        result?.detach();
+      } catch {
+        /* preserve original error */
+      }
       if (candidateRelayOwned) this._closeOwnedRelay(candidateRelay);
       throw error;
     }
@@ -508,13 +568,15 @@ export class MeshNode {
     candidateRelay: RelayClient,
     candidateClosed: boolean,
   ): boolean {
-    return this.closed ||
+    return (
+      this.closed ||
       generation !== this.bridgeGeneration ||
       paramsAtStart !== this.bridgeParams ||
       this.peer_.currentRole() !== "leader" ||
       this.peer_.localBroker() !== broker ||
       candidateClosed ||
-      this._relayIsClosed(candidateRelay);
+      this._relayIsClosed(candidateRelay)
+    );
   }
 
   private _relayIsClosed(relay: RelayClient): boolean {
@@ -532,7 +594,11 @@ export class MeshNode {
   private _closeOwnedRelay(relay: RelayClient): void {
     if (this.closedOwnedRelays.has(relay)) return;
     this.closedOwnedRelays.add(relay);
-    try { relay.close(); } catch { /* best-effort candidate cleanup */ }
+    try {
+      relay.close();
+    } catch {
+      /* best-effort candidate cleanup */
+    }
   }
 
   private _teardownPublishedBridge(closeOwnedRelay: boolean): void {
@@ -550,9 +616,17 @@ export class MeshNode {
     this.relayCloseHandler = null;
 
     if (relay && closeHandler) {
-      try { relay.off("close", closeHandler); } catch { /* best-effort */ }
+      try {
+        relay.off("close", closeHandler);
+      } catch {
+        /* best-effort */
+      }
     }
-    try { bridge?.detach(); } catch { /* best-effort teardown */ }
+    try {
+      bridge?.detach();
+    } catch {
+      /* best-effort teardown */
+    }
     if (closeOwnedRelay && relayOwned && relay) this._closeOwnedRelay(relay);
   }
 
@@ -574,7 +648,8 @@ export class MeshNode {
     if (this.closed || this.relayReconnectTimer) return;
     if (!this.bridgeParams || this.bridgeParams.injectedRelay) return;
     const backoffs = MeshNode.RELAY_RECONNECT_BACKOFFS_MS;
-    const delay = backoffs[Math.min(this.relayBackoffIdx, backoffs.length - 1)]!;
+    const delay =
+      backoffs[Math.min(this.relayBackoffIdx, backoffs.length - 1)]!;
     const timer = setTimeout(() => {
       this.relayReconnectTimer = null;
       void this._attemptRelayReconnect();
@@ -585,7 +660,8 @@ export class MeshNode {
 
   private async _attemptRelayReconnect(): Promise<void> {
     try {
-      if (this.closed || !this.bridgeParams || this.bridgeParams.injectedRelay) return;
+      if (this.closed || !this.bridgeParams || this.bridgeParams.injectedRelay)
+        return;
       if (this.peer_.currentRole() !== "leader" || this.activeBridge) return;
       this.bridgeAttachQueued = true;
       await this._requestBridge();
@@ -620,19 +696,32 @@ export class MeshNode {
   }
 
   /** Fire-and-forget send. `to` may be a name, `<pc>:<name>`, or "broadcast". */
-  async send(to: string | string[], body: unknown, re: string | null = null): Promise<void> {
+  async send(
+    to: string | string[],
+    body: unknown,
+    re: string | null = null,
+  ): Promise<void> {
     return this.peer_.send(to, body, re);
   }
 
   /** Unicast send + await broker ACK (received/busy/denied/timeout). */
-  async sendWithAck(to: string, body: unknown, re: string | null = null, timeoutMs?: number): Promise<AckResult> {
+  async sendWithAck(
+    to: string,
+    body: unknown,
+    re: string | null = null,
+    timeoutMs?: number,
+  ): Promise<AckResult> {
     return timeoutMs === undefined
       ? this.peer_.sendWithAck(to, body, re)
       : this.peer_.sendWithAck(to, body, re, timeoutMs);
   }
 
   /** Send + await the first reply whose `re` matches the outbound id. */
-  async request(to: string, body: unknown, timeoutMs?: number): Promise<Envelope> {
+  async request(
+    to: string,
+    body: unknown,
+    timeoutMs?: number,
+  ): Promise<Envelope> {
     return timeoutMs === undefined
       ? this.peer_.request(to, body)
       : this.peer_.request(to, body, timeoutMs);
@@ -671,7 +760,11 @@ export class MeshNode {
   }
 
   async listPeers(timeoutMs = 2_000): Promise<string[]> {
-    const reply = await this.peer_.request("broker", { type: "list_peers" }, timeoutMs);
+    const reply = await this.peer_.request(
+      "broker",
+      { type: "list_peers" },
+      timeoutMs,
+    );
     const body = reply.body as { peers?: string[] } | null;
     return (body?.peers ?? []).filter((peer) => peer !== this.peer_.address());
   }

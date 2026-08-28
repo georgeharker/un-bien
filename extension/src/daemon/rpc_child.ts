@@ -1,16 +1,20 @@
-import { ChildProcess, execFileSync, spawn } from "node:child_process";
+import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { DaemonState } from "./control_protocol.js";
-import { defaultAgentName, loadLocalConfig, type LocalConfig } from "../session/local_config.js";
+import {
+  defaultAgentName,
+  loadLocalConfig,
+  type LocalConfig,
+} from "../session/local_config.js";
 
 /**
  * Wrapper around a `pi --mode rpc -e <extension>` child process for the
  * supervisor.
  *
  * Lifecycle:
- *   - `spawn()` boots the child with the daemon's cwd + `REMOTE_PI_DAEMON=1`
+ *   - `spawn()` boots the child with the daemon's cwd + `UNBIEN_DAEMON=1`
  *     env so the extension knows to skip the interactive wizard.
  *   - `sendPrompt(text)` writes a Pi RPC `prompt` command to stdin.
  *   - The child's stdout (Pi RPC events) is currently consumed line-by-line
@@ -26,17 +30,17 @@ import { defaultAgentName, loadLocalConfig, type LocalConfig } from "../session/
 export interface RpcChildOptions {
   /** Path to the `pi` binary. Defaults to "pi" (must be on PATH). */
   piBin?: string;
-  /** Absolute path to the remote-pi `dist/index.js` to load as -e. */
+  /** Absolute path to the un-bien `dist/index.js` to load as -e. */
   extensionPath: string;
   /** Working directory for the spawned process. Determines which local
    *  config the extension reads. */
   cwd: string;
   /** Additional env vars merged on top of `process.env` + the mandatory
-   *  `REMOTE_PI_DAEMON=1`. */
+   *  `UNBIEN_DAEMON=1`. */
   env?: NodeJS.ProcessEnv;
   /**
-   * Daemon config injected into the child via `REMOTE_PI_DIRECT_CONFIG`
-   * (JSON inline) instead of a per-cwd `.pi/remote-pi/config.json` file. The
+   * Daemon config injected into the child via `UNBIEN_DIRECT_CONFIG`
+   * (JSON inline) instead of a per-cwd `.pi/un-bien/config.json` file. The
    * supervisor builds this from the registry. When set, the child reads it
    * env-first (see `loadLocalConfig`) and no config file is needed. Also the
    * source of the `--name` for the session. Falls back to the on-disk config
@@ -73,12 +77,23 @@ const WIN_EXECUTABLE_EXTS = [".exe", ".cmd", ".bat", ".com"];
  * line spawns the unrunnable script → ENOENT → "crashed". So we prefer a result
  * with a real Windows executable extension and only fall back to the first line.
  */
-export function resolvePiBin(piBin: string, plat: NodeJS.Platform = process.platform): string {
+export function resolvePiBin(
+  piBin: string,
+  plat: NodeJS.Platform = process.platform,
+): string {
   if (plat !== "win32") return piBin;
-  if (piBin.includes("\\") || piBin.includes("/") || /\.[a-z0-9]+$/i.test(piBin)) return piBin;
+  if (
+    piBin.includes("\\") ||
+    piBin.includes("/") ||
+    /\.[a-z0-9]+$/i.test(piBin)
+  )
+    return piBin;
   try {
     const out = execFileSync("where", [piBin], { encoding: "utf8" });
-    const lines = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const lines = out
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
     const runnable = lines.find((l) =>
       WIN_EXECUTABLE_EXTS.some((ext) => l.toLowerCase().endsWith(ext)),
     );
@@ -92,7 +107,10 @@ export function resolvePiBin(piBin: string, plat: NodeJS.Platform = process.plat
 
 /** What to pass to `spawn`: the executable and any args to prepend before the
  *  caller's args. On POSIX (and for `.exe`) `prefixArgs` is empty. */
-export interface PiSpawnTarget { command: string; prefixArgs: string[] }
+export interface PiSpawnTarget {
+  command: string;
+  prefixArgs: string[];
+}
 
 /**
  * Resolve `pi` to a directly-spawnable target (plan/40). On Windows `pi` is an
@@ -128,7 +146,11 @@ export function resolvePiSpawn(
  */
 export function _npmShimTarget(cmdPath: string): string | null {
   let content: string;
-  try { content = readFileSync(cmdPath, "utf8"); } catch { return null; }
+  try {
+    content = readFileSync(cmdPath, "utf8");
+  } catch {
+    return null;
+  }
   const m = content.match(/"%dp0%\\([^"]+\.[cm]?js)"/i);
   if (!m) return null;
   const target = join(dirname(cmdPath), m[1]);
@@ -148,7 +170,11 @@ export function _npmShimTarget(cmdPath: string): string | null {
  */
 export function busyTransition(line: string): boolean | null {
   let obj: unknown;
-  try { obj = JSON.parse(line); } catch { return null; }
+  try {
+    obj = JSON.parse(line);
+  } catch {
+    return null;
+  }
   const t = (obj as { type?: unknown } | null)?.type;
   if (t === "message_start") return true;
   if (t === "message_end") return false;
@@ -156,15 +182,27 @@ export function busyTransition(line: string): boolean | null {
 }
 
 /** Parses a `get_state` RPC response line, returning its id + isStreaming. */
-function parseGetStateResponse(line: string): { id?: string; isStreaming?: boolean } | null {
+function parseGetStateResponse(
+  line: string,
+): { id?: string; isStreaming?: boolean } | null {
   let obj: unknown;
-  try { obj = JSON.parse(line); } catch { return null; }
-  const o = obj as { type?: unknown; command?: unknown; id?: unknown; data?: unknown };
+  try {
+    obj = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  const o = obj as {
+    type?: unknown;
+    command?: unknown;
+    id?: unknown;
+    data?: unknown;
+  };
   if (o.type !== "response" || o.command !== "get_state") return null;
   const data = o.data as { isStreaming?: unknown } | undefined;
   return {
     id: typeof o.id === "string" ? o.id : undefined,
-    isStreaming: typeof data?.isStreaming === "boolean" ? data.isStreaming : undefined,
+    isStreaming:
+      typeof data?.isStreaming === "boolean" ? data.isStreaming : undefined,
   };
 }
 
@@ -182,7 +220,7 @@ function parseGetStateResponse(line: string): { id?: string; isStreaming?: boole
  * `--name <sessionName>`, when given, pins the session's display name to the
  * daemon's identity (its `agent_name`) so every restart shows up under the
  * same stable name in the picker/app instead of an auto-generated one. The
- * daemon's name is set at registration (`remote-pi create <cwd> --name "…"`).
+ * daemon's name is set at registration (`un-bien create <cwd> --name "…"`).
  * Omitted when no name resolves, so the arg list stays minimal.
  *
  * `--approve` is mandatory for a daemon (pi ≥0.79 project trust): RPC mode is
@@ -202,11 +240,13 @@ export function rpcSpawnArgs(
   useContinue = true,
 ): string[] {
   return [
-    "--mode", "rpc",
+    "--mode",
+    "rpc",
     "--approve",
     ...(useContinue ? ["--continue"] : []),
     ...(sessionName ? ["--name", sessionName] : []),
-    "-e", extensionPath,
+    "-e",
+    extensionPath,
   ];
 }
 
@@ -229,20 +269,31 @@ export class RpcChild extends EventEmitter {
    *  only; `refreshBusy` syncs it authoritatively via get_state.isStreaming. */
   private _busy = false;
   /** In-flight `get_state` requests, keyed by request id. */
-  private readonly _statePending = new Map<string, { resolve: (b: boolean) => void; timer: ReturnType<typeof setTimeout> }>();
+  private readonly _statePending = new Map<
+    string,
+    { resolve: (b: boolean) => void; timer: ReturnType<typeof setTimeout> }
+  >();
 
   constructor(private readonly opts: RpcChildOptions) {
     super();
   }
 
-  get state(): DaemonState { return this._state; }
+  get state(): DaemonState {
+    return this._state;
+  }
   /** Passive busy hint from the stream. Prefer `refreshBusy()` for an
    *  authoritative check before acting on it (cron skip_if_busy). */
-  get isBusy(): boolean { return this._busy; }
-  get pid(): number | undefined { return this.child?.pid; }
-  get restartCount(): number { return this._restartCount; }
+  get isBusy(): boolean {
+    return this._busy;
+  }
+  get pid(): number | undefined {
+    return this.child?.pid;
+  }
+  get restartCount(): number {
+    return this._restartCount;
+  }
   get uptimeMs(): number | undefined {
-    return this._startedAt !== null ? Date.now() - this._startedAt : undefined;
+    return this._startedAt === null ? undefined : Date.now() - this._startedAt;
   }
 
   /**
@@ -251,7 +302,7 @@ export class RpcChild extends EventEmitter {
    */
   spawn(): void {
     if (this.child) return;
-    this._stopping = false;  // fresh start — a later signal IS a real crash
+    this._stopping = false; // fresh start — a later signal IS a real crash
     this._busy = false;
     this._state = "starting";
 
@@ -265,15 +316,20 @@ export class RpcChild extends EventEmitter {
     this.forceFreshSessionOnNextSpawn = false;
     // On Windows `prefixArgs` carries pi's cli.js (we spawn node directly); on
     // POSIX it's empty and `command` is `pi` itself.
-    const args = [...piTarget.prefixArgs, ...rpcSpawnArgs(this.opts.extensionPath, sessionName, useContinue)];
+    const args = [
+      ...piTarget.prefixArgs,
+      ...rpcSpawnArgs(this.opts.extensionPath, sessionName, useContinue),
+    ];
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       ...this.opts.env,
       // Mandatory daemon marker — `_cmdRoot` in index.ts can use this to
       // bail early if local config is missing (no wizard in RPC mode).
-      REMOTE_PI_DAEMON: "1",
+      UNBIEN_DAEMON: "1",
       // Inject the daemon config inline so the child needs no config file.
-      ...(this.opts.config ? { REMOTE_PI_DIRECT_CONFIG: JSON.stringify(this.opts.config) } : {}),
+      ...(this.opts.config
+        ? { UNBIEN_DIRECT_CONFIG: JSON.stringify(this.opts.config) }
+        : {}),
     };
 
     const child = spawn(piTarget.command, args, {
@@ -292,7 +348,7 @@ export class RpcChild extends EventEmitter {
 
     child.stdout?.on("data", (chunk: Buffer) => this._onStdout(chunk));
     child.stderr?.on("data", (chunk: Buffer) => {
-      // Forward stderr to our own stderr so `journalctl --user -u remote-pi-supervisord`
+      // Forward stderr to our own stderr so `journalctl --user -u unbien-supervisord`
       // sees daemon logs (with cwd prefix for disambiguation).
       process.stderr.write(`[${this.opts.cwd}] ${chunk.toString()}`);
     });
@@ -301,7 +357,7 @@ export class RpcChild extends EventEmitter {
       // spawn() itself failed (e.g. `pi` binary not found).
       this._state = "crashed";
       process.stderr.write(
-        `[remote-pi-supervisord] spawn failed for ${this.opts.cwd}: ${String(err)}\n`,
+        `[unbien-supervisord] spawn failed for ${this.opts.cwd}: ${String(err)}\n`,
       );
       this.emit("exit", { code: null, signal: null, isCrash: true });
     });
@@ -318,8 +374,13 @@ export class RpcChild extends EventEmitter {
    * Returns false if the child isn't running (caller decides how to report).
    */
   sendPrompt(text: string, requestId?: string): boolean {
-    if (!this.child || !this.child.stdin || this._state !== "running") return false;
-    const cmd = { id: requestId ?? `sv-${Date.now()}`, type: "prompt", message: text };
+    if (!this.child || !this.child.stdin || this._state !== "running")
+      return false;
+    const cmd = {
+      id: requestId ?? `sv-${Date.now()}`,
+      type: "prompt",
+      message: text,
+    };
     try {
       this.child.stdin.write(JSON.stringify(cmd) + "\n");
       return true;
@@ -335,14 +396,24 @@ export class RpcChild extends EventEmitter {
    */
   async stop(timeoutMs = 5000): Promise<void> {
     if (!this.child) return;
-    this._stopping = true;  // deliberate — the upcoming signal-exit is NOT a crash
+    this._stopping = true; // deliberate — the upcoming signal-exit is NOT a crash
     const child = this.child;
     return new Promise<void>((resolve) => {
-      const onExit = () => { resolve(); };
+      const onExit = () => {
+        resolve();
+      };
       this.once("exit", onExit);
-      try { child.kill("SIGTERM"); } catch { /* already dead */ }
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        /* already dead */
+      }
       const t = setTimeout(() => {
-        try { child.kill("SIGKILL"); } catch { /* race — already dead */ }
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* race — already dead */
+        }
       }, timeoutMs);
       this.once("exit", () => clearTimeout(t));
     });
@@ -391,7 +462,9 @@ export class RpcChild extends EventEmitter {
       }, timeoutMs);
       this._statePending.set(id, { resolve, timer });
       try {
-        this.child!.stdin!.write(JSON.stringify({ id, type: "get_state" }) + "\n");
+        this.child!.stdin!.write(
+          JSON.stringify({ id, type: "get_state" }) + "\n",
+        );
       } catch {
         clearTimeout(timer);
         this._statePending.delete(id);
@@ -409,7 +482,8 @@ export class RpcChild extends EventEmitter {
     // Daemon app-action `/new`: child exits with a private code, supervisor
     // restarts it, and the next spawn omits --continue once to create a fresh
     // session. Later restarts go back to --continue.
-    if (code === EXIT_DAEMON_FRESH_SESSION) this.forceFreshSessionOnNextSpawn = true;
+    if (code === EXIT_DAEMON_FRESH_SESSION)
+      this.forceFreshSessionOnNextSpawn = true;
     // A deliberate stop() kills by signal — not a crash, so the supervisor
     // must NOT auto-restart it. Only an UNexpected exit counts as a crash.
     const isCrash = !this._stopping && (code !== 0 || signal !== null);

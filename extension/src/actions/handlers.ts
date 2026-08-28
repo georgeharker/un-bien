@@ -81,7 +81,7 @@ export interface ActionPi {
  * a runtime TypeError.
  */
 export interface ActionCtx {
-  compact?: (options?: object) => void;
+  compact?: (options?: Record<string, unknown>) => void;
   /**
    * Starts a new session. `withSession` is the SDK's blessed hook for
    * post-replacement work: it receives a FRESH, command-capable ctx bound to
@@ -95,7 +95,7 @@ export interface ActionCtx {
   /**
    * Live session registry from Pi's extension ctx. Includes providers/models
    * registered dynamically via `pi.registerProvider(...)`, unlike the fallback
-   * disk-backed registry remote-pi can build on its own.
+   * disk-backed registry un-bien can build on its own.
    */
   modelRegistry?: ActionModelRegistry;
 }
@@ -128,7 +128,11 @@ export function wireFromModel(model: Model<any>): WireModel {
 
 // ── ack helpers ────────────────────────────────────────────────────────────
 
-function ok(sender: ActionReplySender, msg: { id: string }, action: ActionName): void {
+function ok(
+  sender: ActionReplySender,
+  msg: { id: string },
+  action: ActionName,
+): void {
   sender.send({ type: "action_ok", in_reply_to: msg.id, action });
 }
 
@@ -188,7 +192,8 @@ export function handleSessionCompact(
   msg: SessionCompactMsg,
 ): void {
   runSync(sender, msg, "session_compact", () => {
-    if (!ctx?.compact) throw new Error("compact unavailable (no active session ctx)");
+    if (!ctx?.compact)
+      throw new Error("compact unavailable (no active session ctx)");
     // Force the summary to English regardless of the conversation language —
     // the summary is surfaced to the app via the `compaction` message, which
     // is an English-only surface. `customInstructions` is appended to the SDK's
@@ -211,14 +216,17 @@ export async function handleSessionNew(
   // fan out an empty session_history) off this signal — a `cancelled`/errored
   // new-session must NOT reset, so we return runAsync's success boolean.
   return runAsync(sender, msg, "session_new", async () => {
-    if (!ctx?.newSession) throw new Error("newSession unavailable (no command ctx yet)");
+    if (!ctx?.newSession)
+      throw new Error("newSession unavailable (no command ctx yet)");
     // newSession marks the caller's captured ctx (index.ts's `_lastCtx`) STALE
     // — reusing it later throws "stale after session replacement" (the
     // compact-after-New-session crash). `withSession` hands back a fresh,
     // command-capable ctx bound to the new session; forward it via onReplaced
     // so the caller re-captures and keeps later actions off the stale ctx.
     const result = await ctx.newSession({
-      withSession: async (freshCtx) => { onReplaced?.(freshCtx); },
+      withSession: async (freshCtx) => {
+        onReplaced?.(freshCtx);
+      },
     });
     // `cancelled: true` happens when the SDK's hook chain vetoes the new
     // session (e.g. an extension's `session_before_switch` returned a
@@ -248,13 +256,15 @@ export async function handleModelSet(
   await runAsync(sender, msg, "model_set", async () => {
     // Prefer Pi's LIVE session registry when available so the app sees models
     // registered dynamically by extensions via `pi.registerProvider(...)`.
-    // Fall back to remote-pi's own disk-backed registry when no ctx exists.
+    // Fall back to un-bien's own disk-backed registry when no ctx exists.
     const liveReg = ctx?.modelRegistry ?? reg;
     // Refresh first so a model just-added via `/login` is visible.
     liveReg.refresh();
     const model = liveReg.find(msg.provider, msg.model_id);
     if (!model) {
-      throw new Error(`model "${msg.provider}/${msg.model_id}" not in registry`);
+      throw new Error(
+        `model "${msg.provider}/${msg.model_id}" not in registry`,
+      );
     }
     const success = await pi.setModel(model);
     if (!success) throw new Error("no auth configured for this model");
@@ -279,7 +289,7 @@ export function handleListModels(
   try {
     // Prefer Pi's LIVE session registry when available so the app sees models
     // registered dynamically by extensions via `pi.registerProvider(...)`.
-    // Fall back to remote-pi's own disk-backed registry when no ctx exists.
+    // Fall back to un-bien's own disk-backed registry when no ctx exists.
     const liveReg = ctx?.modelRegistry ?? reg;
     liveReg.refresh();
     const models = liveReg.getAvailable().map(wireFromModel);

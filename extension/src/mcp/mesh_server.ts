@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * MCP server that bridges Claude Code to the remote-pi agent mesh.
+ * MCP server that bridges Claude Code to the un-bien agent mesh.
  *
  * Spawned by Claude Code as an MCP server subprocess (stdio).
  * Joins the mesh through the shared `MeshNode` abstraction — the SAME
@@ -9,18 +9,26 @@
  * and (as leader) bring up its own cross-PC relay bridge with its own
  * Pi-key. As a follower it rides the existing leader's bridge.
  *
- * Launched by `remote-pi claude` (registers this in Claude's local MCP
+ * Launched by `un-bien claude` (registers this in Claude's local MCP
  * scope). Args: [--cwd <path>] [--name <agentName>] [--no-bridge]
- * Env: REMOTE_PI_MCP_CWD, REMOTE_PI_MCP_NAME
+ * Env: UNBIEN_MCP_CWD, UNBIEN_MCP_NAME
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { MeshNode } from "../session/mesh_node.js";
-import { loadLocalConfig, defaultAgentName, localConfigExists } from "../session/local_config.js";
+import {
+  loadLocalConfig,
+  defaultAgentName,
+  localConfigExists,
+} from "../session/local_config.js";
 import { formatMeshAckResult } from "./mesh_result.js";
-import { sessionSockPath, sessionAuditPath, LOCAL_SESSION_NAME } from "../session/global_config.js";
+import {
+  sessionSockPath,
+  sessionAuditPath,
+  LOCAL_SESSION_NAME,
+} from "../session/global_config.js";
 import { resolveRelayUrl } from "../config.js";
 import { acquireCwdLock, type AcquiredLock } from "../session/cwd_lock.js";
 import { realpathSync } from "node:fs";
@@ -32,17 +40,21 @@ const _argv = process.argv.slice(2);
 // Claude sets as this subprocess's `process.cwd()`. We deliberately do NOT use
 // CLAUDE_PROJECT_DIR: that's the git repo root, which would collapse every
 // monorepo subproject (app/, relay/, …) into one identity + one lock. The
-// `remote-pi claude` launcher therefore registers us WITHOUT a baked `--cwd`,
+// `un-bien claude` launcher therefore registers us WITHOUT a baked `--cwd`,
 // so one shared local-scope entry self-identifies per session. `--cwd` and
-// REMOTE_PI_MCP_CWD remain as explicit overrides (tests / manual launches).
-let _cwd = process.env["REMOTE_PI_MCP_CWD"] ?? process.cwd();
-let _nameOverride = process.env["REMOTE_PI_MCP_NAME"];
+// UNBIEN_MCP_CWD remain as explicit overrides (tests / manual launches).
+let _cwd = process.env["UNBIEN_MCP_CWD"] ?? process.cwd();
+let _nameOverride = process.env["UNBIEN_MCP_NAME"];
 let _bridgeEnabled = true;
 
 for (let i = 0; i < _argv.length; i++) {
-  if (_argv[i] === "--cwd" && _argv[i + 1]) { _cwd = _argv[++i]!; }
-  else if (_argv[i] === "--name" && _argv[i + 1]) { _nameOverride = _argv[++i]; }
-  else if (_argv[i] === "--no-bridge") { _bridgeEnabled = false; }
+  if (_argv[i] === "--cwd" && _argv[i + 1]) {
+    _cwd = _argv[++i]!;
+  } else if (_argv[i] === "--name" && _argv[i + 1]) {
+    _nameOverride = _argv[++i];
+  } else if (_argv[i] === "--no-bridge") {
+    _bridgeEnabled = false;
+  }
 }
 
 const _cfg = loadLocalConfig(_cwd);
@@ -71,7 +83,7 @@ const { url: relayUrl } = resolveRelayUrl();
 // would corrupt the MCP protocol. Claude Code captures an MCP server's stderr
 // into its mcp-logs, which is where these land for debugging.
 function logErr(msg: string): void {
-  process.stderr.write(`[remote-pi-mesh ${isoNow()}] ${msg}\n`);
+  process.stderr.write(`[un-bien-mesh ${isoNow()}] ${msg}\n`);
 }
 
 // Survive stray async failures. This process runs background work (relay WS
@@ -82,7 +94,9 @@ function logErr(msg: string): void {
 // log loudly and keep running instead of dying. (We intentionally do NOT
 // process.exit here: the tools stay available even if the mesh is degraded.)
 process.on("unhandledRejection", (reason) => {
-  logErr(`unhandledRejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`);
+  logErr(
+    `unhandledRejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`,
+  );
 });
 process.on("uncaughtException", (err) => {
   logErr(`uncaughtException: ${err.stack ?? err.message}`);
@@ -91,12 +105,16 @@ process.on("uncaughtException", (err) => {
 // Canonicalize so the (cwd, name) the broker keys us by matches roomIdForCwd
 // and the Pi extension's own register (symlinked cwds map to one identity).
 let _canonCwd = _cwd;
-try { _canonCwd = realpathSync(_cwd); } catch { /* cwd missing — use raw path */ }
+try {
+  _canonCwd = realpathSync(_cwd);
+} catch {
+  /* cwd missing — use raw path */
+}
 
 const mesh = new MeshNode({
   sockPath: BROKER_SOCK,
   name: AGENT_NAME,
-  cwd: _canonCwd,  // plan/38: register with (cwd, name) → address `<cwd>@<name>`
+  cwd: _canonCwd, // plan/38: register with (cwd, name) → address `<cwd>@<name>`
   auditPath: AUDIT_PATH,
   // Own Pi-key cross-PC bridge — active only when this node leads (no Pi /
   // daemon already hosting the broker for this cwd). As a follower the
@@ -104,7 +122,9 @@ const mesh = new MeshNode({
   ...(_bridgeEnabled ? { bridge: { relayUrl, cwd: _cwd } } : {}),
   // Silent: stdout is the MCP JSON-RPC channel and stderr noise isn't wanted.
   // Real failures still surface via the global handlers / fail-loud below.
-  log: () => { /* no-op */ },
+  log: () => {
+    /* no-op */
+  },
 });
 
 let meshReady = false;
@@ -115,11 +135,11 @@ let degradedReason = "connecting to the mesh…";
 // ── MCP server setup ──────────────────────────────────────────────────────────
 
 const mcp = new McpServer(
-  { name: "remote-pi-mesh", version: "0.4.3" },
+  { name: "un-bien-mesh", version: "0.4.3" },
   {
     capabilities: { experimental: { "claude/channel": {} } },
     instructions: [
-      `You are connected to the remote-pi agent mesh as "${AGENT_NAME}".`,
+      `You are connected to the un-bien agent mesh as "${AGENT_NAME}".`,
       "At the start of each turn call get_messages to check for incoming messages from other agents.",
       "Use list_peers to discover available agents.",
       "Use agent_send to send messages — pass the exact address returned by list_peers (form `<cwd>@<name>`, `<pc>:` prefix cross-PC) VERBATIM; never build one by hand.",
@@ -131,59 +151,105 @@ const mcp = new McpServer(
 
 function notReady() {
   return {
-    content: [{ type: "text" as const, text: `Mesh not available yet — ${degradedReason}` }],
+    content: [
+      {
+        type: "text" as const,
+        text: `Mesh not available yet — ${degradedReason}`,
+      },
+    ],
     isError: true,
   };
 }
 
-mcp.registerTool("list_peers", {
-  description: "List all agents currently in the mesh (local + remote PCs).",
-  inputSchema: {},
-}, async () => {
-  if (!meshReady) return notReady();
-  try {
-    const peers = await mesh.listPeers();
-    return { content: [{ type: "text" as const, text: peers.length > 0 ? peers.join("\n") : "(no peers)" }] };
-  } catch (e) {
-    return { content: [{ type: "text" as const, text: `list_peers failed: ${String(e)}` }], isError: true };
-  }
-});
-
-mcp.registerTool("agent_send", {
-  description: 'Send a message to another agent. Use "broadcast" to send to all peers.',
-  inputSchema: {
-    to: z.string().describe('Peer address from list_peers (form "<cwd>@<name>", or "<pc>:<cwd>@<name>" cross-PC) echoed verbatim, or "broadcast"'),
-    body: z.unknown().describe("Message body — any JSON value"),
-    re: z.string().optional().describe("Optional: id of the message you are replying to"),
+mcp.registerTool(
+  "list_peers",
+  {
+    description: "List all agents currently in the mesh (local + remote PCs).",
+    inputSchema: {},
   },
-}, async ({ to, body, re }) => {
-  if (!meshReady) return notReady();
-  if (to === mesh.address() || to === mesh.name()) {
-    return { content: [{ type: "text" as const, text: "Cannot send to yourself" }], isError: true };
-  }
-  try {
-    if (to === "broadcast") {
-      await mesh.send(to, body, re ?? null);
-      return { content: [{ type: "text" as const, text: "Broadcast sent" }] };
+  async () => {
+    if (!meshReady) return notReady();
+    try {
+      const peers = await mesh.listPeers();
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: peers.length > 0 ? peers.join("\n") : "(no peers)",
+          },
+        ],
+      };
+    } catch (e) {
+      return {
+        content: [
+          { type: "text" as const, text: `list_peers failed: ${String(e)}` },
+        ],
+        isError: true,
+      };
     }
-    const ack = await mesh.sendWithAck(to, body, re ?? null);
-    return formatMeshAckResult(to, ack);
-  } catch (e) {
-    return { content: [{ type: "text" as const, text: `send failed: ${String(e)}` }], isError: true };
-  }
-});
+  },
+);
 
-mcp.registerTool("get_messages", {
-  description: "Return and clear all pending incoming messages from other agents. Call at the start of each turn.",
-  inputSchema: {},
-}, async () => {
-  const msgs = inbox.splice(0);
-  if (msgs.length === 0) return { content: [{ type: "text" as const, text: "(no messages)" }] };
-  const lines = msgs.map((m) =>
-    `[${m.at}] from=${m.from}${m.re ? ` re=${m.re}` : ""}\nid=${m.id}\n${JSON.stringify(m.body, null, 2)}`,
-  );
-  return { content: [{ type: "text" as const, text: lines.join("\n\n") }] };
-});
+mcp.registerTool(
+  "agent_send",
+  {
+    description:
+      'Send a message to another agent. Use "broadcast" to send to all peers.',
+    inputSchema: {
+      to: z
+        .string()
+        .describe(
+          'Peer address from list_peers (form "<cwd>@<name>", or "<pc>:<cwd>@<name>" cross-PC) echoed verbatim, or "broadcast"',
+        ),
+      body: z.unknown().describe("Message body — any JSON value"),
+      re: z
+        .string()
+        .optional()
+        .describe("Optional: id of the message you are replying to"),
+    },
+  },
+  async ({ to, body, re }) => {
+    if (!meshReady) return notReady();
+    if (to === mesh.address() || to === mesh.name()) {
+      return {
+        content: [{ type: "text" as const, text: "Cannot send to yourself" }],
+        isError: true,
+      };
+    }
+    try {
+      if (to === "broadcast") {
+        await mesh.send(to, body, re ?? null);
+        return { content: [{ type: "text" as const, text: "Broadcast sent" }] };
+      }
+      const ack = await mesh.sendWithAck(to, body, re ?? null);
+      return formatMeshAckResult(to, ack);
+    } catch (e) {
+      return {
+        content: [{ type: "text" as const, text: `send failed: ${String(e)}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+mcp.registerTool(
+  "get_messages",
+  {
+    description:
+      "Return and clear all pending incoming messages from other agents. Call at the start of each turn.",
+    inputSchema: {},
+  },
+  async () => {
+    const msgs = inbox.splice(0);
+    if (msgs.length === 0)
+      return { content: [{ type: "text" as const, text: "(no messages)" }] };
+    const lines = msgs.map(
+      (m) =>
+        `[${m.at}] from=${m.from}${m.re ? ` re=${m.re}` : ""}\nid=${m.id}\n${JSON.stringify(m.body, null, 2)}`,
+    );
+    return { content: [{ type: "text" as const, text: lines.join("\n\n") }] };
+  },
+);
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
@@ -192,7 +258,7 @@ function isoNow(): string {
 }
 
 // Background lock+join state. The cwd lock enforces the per-folder singleton
-// (at most one remote-pi agent — Pi OR Claude — per folder; a second peer with
+// (at most one un-bien agent — Pi OR Claude — per folder; a second peer with
 // the same cwd-derived name would be a ghost).
 //
 // We retry only briefly — just enough to ride out a restart RACE (the previous
@@ -202,7 +268,7 @@ function isoNow(): string {
 // the wrong folder, or this folder already has a live agent — a duplicate
 // session). Failing makes Claude show the MCP as errored so you actually see it.
 const JOIN_RETRY_MS = 2_000;
-const MAX_JOIN_ATTEMPTS = 4;  // ~6–8s grace for a restart race, then fail loud
+const MAX_JOIN_ATTEMPTS = 4; // ~6–8s grace for a restart race, then fail loud
 let _lock: AcquiredLock | null = null;
 let _lockRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let _lockAttempt = 0;
@@ -231,11 +297,17 @@ async function main(): Promise<void> {
     };
     inbox.push(msg);
     // Push via claude/channel so Claude wakes immediately (when the session
-    // was launched with --dangerously-load-development-channels server:remote-pi-mesh).
-    void mcp.server.notification({
-      method: "notifications/claude/channel",
-      params: { content: `📨 Message from ${msg.from}:\n${JSON.stringify(msg.body, null, 2)}` },
-    }).catch(() => { /* channels not enabled — get_messages polling covers it */ });
+    // was launched with --dangerously-load-development-channels server:un-bien-mesh).
+    void mcp.server
+      .notification({
+        method: "notifications/claude/channel",
+        params: {
+          content: `📨 Message from ${msg.from}:\n${JSON.stringify(msg.body, null, 2)}`,
+        },
+      })
+      .catch(() => {
+        /* channels not enabled — get_messages polling covers it */
+      });
   });
 
   // Connect the stdio transport FIRST and unconditionally, so Claude Code
@@ -248,8 +320,8 @@ async function main(): Promise<void> {
   process.stdin.on("close", shutdown);
   await mcp.connect(transport);
 
-  // Only join the mesh if this folder is an actual remote-pi agent — i.e. it
-  // has a local config (written by the `remote-pi claude` wizard) or an
+  // Only join the mesh if this folder is an actual un-bien agent — i.e. it
+  // has a local config (written by the `un-bien claude` wizard) or an
   // explicit name override. `-s local` MCP registrations are inherited by
   // EVERY claude session in the git repo, so without this gate a plain claude
   // opened in any subfolder would auto-grab that folder's lock and join as a
@@ -261,7 +333,7 @@ async function main(): Promise<void> {
     void tryJoinMesh();
   } else {
     degradedReason =
-      `this folder is not a remote-pi agent (no config). Run "remote-pi claude" ` +
+      `this folder is not a un-bien agent (no config). Run "un-bien claude" ` +
       `here to make it one. Mesh tools are idle.`;
   }
 }
@@ -276,7 +348,9 @@ async function tryJoinMesh(): Promise<void> {
   if (!res.ok) {
     _lockAttempt++;
     if (_lockAttempt >= MAX_JOIN_ATTEMPTS) {
-      _failLoud(`folder already served by another remote-pi agent (lock: ${res.lockPath})`);
+      _failLoud(
+        `folder already served by another un-bien agent (lock: ${res.lockPath})`,
+      );
     }
     degradedReason = `folder busy (lock ${res.lockPath}); attempt ${_lockAttempt}/${MAX_JOIN_ATTEMPTS}`;
     _scheduleJoinRetry(JOIN_RETRY_MS);
@@ -293,7 +367,11 @@ async function tryJoinMesh(): Promise<void> {
     // Got the lock but the broker join failed (e.g. socket churn). Release the
     // lock so another contender isn't starved, then retry / fail loud.
     _lockAttempt++;
-    try { _lock.release(); } catch { /* best-effort */ }
+    try {
+      _lock.release();
+    } catch {
+      /* best-effort */
+    }
     _lock = null;
     if (_lockAttempt >= MAX_JOIN_ATTEMPTS) {
       _failLoud(`mesh join failed: ${String(e)}`);
@@ -319,9 +397,9 @@ function _scheduleJoinRetry(delayMs: number): void {
 function _failLoud(reason: string): never {
   logErr(
     `FATAL: ${reason}. Exiting so the failure is visible. cwd=${_cwd}. ` +
-    `Most likely you launched claude in the WRONG FOLDER, or this folder ` +
-    `already has a running remote-pi agent (a duplicate session). ` +
-    `Launch one agent per folder via "remote-pi claude" from the project dir.`,
+      `Most likely you launched claude in the WRONG FOLDER, or this folder ` +
+      `already has a running un-bien agent (a duplicate session). ` +
+      `Launch one agent per folder via "un-bien claude" from the project dir.`,
   );
   process.exit(1);
 }
@@ -334,14 +412,23 @@ function _failLoud(reason: string): never {
 function shutdown(): void {
   if (_shuttingDown) return;
   _shuttingDown = true;
-  if (_lockRetryTimer) { clearTimeout(_lockRetryTimer); _lockRetryTimer = null; }
-  try { _lock?.release(); } catch { /* OS frees the UDS lock on exit anyway */ }
+  if (_lockRetryTimer) {
+    clearTimeout(_lockRetryTimer);
+    _lockRetryTimer = null;
+  }
+  try {
+    _lock?.release();
+  } catch {
+    /* OS frees the UDS lock on exit anyway */
+  }
   void Promise.resolve(mesh.close())
-    .catch(() => { /* best-effort */ })
+    .catch(() => {
+      /* best-effort */
+    })
     .finally(() => process.exit(0));
 }
 
 main().catch((err: unknown) => {
-  process.stderr.write(`[remote-pi-mesh] fatal: ${String(err)}\n`);
+  process.stderr.write(`[un-bien-mesh] fatal: ${String(err)}\n`);
   process.exit(1);
 });

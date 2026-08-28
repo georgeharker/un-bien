@@ -1,7 +1,7 @@
 import SwiftUI
 import UnBienCore
 
-/// Pairing — paste the `remotepi://pair?…` code (cross-platform). QR camera
+/// Pairing — paste the `unbien://pair?…` code (cross-platform). QR camera
 /// scanning is an iOS-only enhancement layered on later; the paste fallback is
 /// the parity floor (DESIGN §12) and the only path that also works on macOS.
 struct PairSheet: View {
@@ -21,7 +21,7 @@ struct PairSheet: View {
         NavigationStack {
             Form {
                 Section("Pairing code") {
-                    TextField("remotepi://pair?…", text: $pasted, axis: .vertical)
+                    TextField("unbien://pair?…", text: $pasted, axis: .vertical)
                         .lineLimit(2...4)
                         #if os(iOS)
                         .textInputAutocapitalization(.never)

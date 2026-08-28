@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import {
@@ -16,22 +24,28 @@ import { daemonIdForCwd } from "./id.js";
 import { defaultAgentName } from "../session/local_config.js";
 
 /** Each test runs against an isolated $HOME-like directory so the registry
- *  writes never touch the developer's real `~/.pi/remote/daemons.json`. */
+ *  writes never touch the developer's real `~/.pi/un-bien/daemons.json`. */
 let testHome: string;
 
 beforeEach(() => {
   testHome = mkdtempSync(join(tmpdir(), "pi-regtest-"));
-  process.env["REMOTE_PI_HOME"] = testHome;
+  process.env["UNBIEN_HOME"] = testHome;
 });
 
 afterEach(() => {
-  delete process.env["REMOTE_PI_HOME"];
-  try { rmSync(testHome, { recursive: true, force: true }); } catch { /* best-effort */ }
+  delete process.env["UNBIEN_HOME"];
+  try {
+    rmSync(testHome, { recursive: true, force: true });
+  } catch {
+    /* best-effort */
+  }
 });
 
 describe("registryPath", () => {
-  test("honors REMOTE_PI_HOME env override", () => {
-    expect(registryPath()).toBe(join(testHome, ".pi", "remote", "daemons.json"));
+  test("honors UNBIEN_HOME env override", () => {
+    expect(registryPath()).toBe(
+      join(testHome, ".pi", "un-bien", "daemons.json"),
+    );
   });
 });
 
@@ -79,7 +93,9 @@ describe("loadRegistry / saveRegistry", () => {
 
   test("round-trip: save then load", () => {
     saveRegistry({ daemons: [{ cwd: "/tmp/a" }, { cwd: "/tmp/b" }] });
-    expect(loadRegistry()).toEqual({ daemons: [{ cwd: "/tmp/a" }, { cwd: "/tmp/b" }] });
+    expect(loadRegistry()).toEqual({
+      daemons: [{ cwd: "/tmp/a" }, { cwd: "/tmp/b" }],
+    });
   });
 
   test("creates parent dirs on save", () => {
@@ -89,14 +105,14 @@ describe("loadRegistry / saveRegistry", () => {
 
   test("malformed JSON tolerated (returns empty)", () => {
     const path = registryPath();
-    mkdirSync(join(testHome, ".pi", "remote"), { recursive: true });
+    mkdirSync(join(testHome, ".pi", "un-bien"), { recursive: true });
     require("node:fs").writeFileSync(path, "{not-json");
     expect(loadRegistry()).toEqual({ daemons: [] });
   });
 
   test("unknown shape tolerated", () => {
     const path = registryPath();
-    mkdirSync(join(testHome, ".pi", "remote"), { recursive: true });
+    mkdirSync(join(testHome, ".pi", "un-bien"), { recursive: true });
     require("node:fs").writeFileSync(path, JSON.stringify({ foo: "bar" }));
     expect(loadRegistry()).toEqual({ daemons: [] });
   });
@@ -129,7 +145,9 @@ describe("addDaemon", () => {
   test("on-disk file matches loadRegistry output", () => {
     const tmp = mkdtempSync(join(tmpdir(), "pi-disk-"));
     addDaemon(tmp);
-    const onDisk = JSON.parse(readFileSync(registryPath(), "utf8")) as { daemons: Array<{cwd: string}> };
+    const onDisk = JSON.parse(readFileSync(registryPath(), "utf8")) as {
+      daemons: Array<{ cwd: string }>;
+    };
     expect(onDisk.daemons).toHaveLength(1);
     expect(onDisk.daemons[0]!.cwd).toBe(realpathSync(tmp));
   });
@@ -171,8 +189,16 @@ describe("listDaemons", () => {
     addDaemon(b);
     const out = listDaemons();
     expect(out).toEqual([
-      { id: daemonIdForCwd(realpathSync(a)), cwd: realpathSync(a), name: defaultAgentName(realpathSync(a)) },
-      { id: daemonIdForCwd(realpathSync(b)), cwd: realpathSync(b), name: defaultAgentName(realpathSync(b)) },
+      {
+        id: daemonIdForCwd(realpathSync(a)),
+        cwd: realpathSync(a),
+        name: defaultAgentName(realpathSync(a)),
+      },
+      {
+        id: daemonIdForCwd(realpathSync(b)),
+        cwd: realpathSync(b),
+        name: defaultAgentName(realpathSync(b)),
+      },
     ]);
   });
 
@@ -181,7 +207,9 @@ describe("listDaemons", () => {
     const cwd = realpathSync(dir);
     saveRegistry({ daemons: [{ cwd }] }); // pre-name-field shape
     const out = listDaemons();
-    expect(out).toEqual([{ id: daemonIdForCwd(cwd), cwd, name: defaultAgentName(cwd) }]);
+    expect(out).toEqual([
+      { id: daemonIdForCwd(cwd), cwd, name: defaultAgentName(cwd) },
+    ]);
   });
 
   test("empty registry yields []", () => {

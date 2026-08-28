@@ -1,4 +1,4 @@
-{"type":"extension_ui_request","id":"ac6c1e68-a93f-464c-ac11-9928b1086f22","method":"notify","message":"sharedserver: profile \"pi\": attached remote-pi-relay","notifyType":"info"}
+{"type":"extension_ui_request","id":"ac6c1e68-a93f-464c-ac11-9928b1086f22","method":"notify","message":"sharedserver: profile \"pi\": attached un-bien-relay","notifyType":"info"}
 {"type":"extension_ui_request","id":"5a209370-9e36-4123-857f-409ae624c992","method":"notify","message":"mcp-combiner: combiner \"mcp-combiner\" attached on port 9741 (mcp-combiner --mcp --config /Users/USER/.cache/secrets/user.mcpservers.json --port 9741 --log-file /Users/USER/.local/state/mcp-combiner/mcp-combiner-py.log --log-level info)","notifyType":"info"}
 {"type":"extension_ui_request","id":"2e5368df-29c8-45f7-8343-f5a40b4f8bcc","method":"setStatus","statusKey":"mcp","statusText":"\u001b[38;2;138;190;183m\ud83d\udd0c MCP: 1 server enabled\u001b[39m"}
 {"type":"extension_ui_request","id":"bc6be0ac-4d78-4704-aa48-4c97797f071f","method":"setStatus","statusKey":"system-prompt","statusText":"system-prompt: enabled"}

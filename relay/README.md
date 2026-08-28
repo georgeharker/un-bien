@@ -1,3 +1,8 @@
+> **Derived from [remote-pi](https://github.com/jacobaraujo7/remote_pi)** by Jacob
+> Moura, used under the MIT License. This tree is part of the
+> [un-bien](../README.md) monorepo (Cargo package `un-bien-relay`) and is
+> mid-rework — the content below still carries upstream branding.
+
 # Remote Pi — Relay
 
 A lightweight WebSocket relay server that connects the **Remote Pi** mobile app to
@@ -112,7 +117,7 @@ state at the next mutation.
 ### Environment variables
 
 | Variable | Default | Description |
-|---|---|---|
+| --- | --- | --- |
 | `REMOTEPI_RELAY_PORT` | `3000` | TCP port that serves the WebSocket upgrade, `/health`, and `/mesh/*` (all on the same port) |
 | `REMOTEPI_MESH_DB_PATH` | `/data/mesh.db` in Docker · `data/mesh.db` (cwd-relative) for bare-metal builds | Path to the SQLite database that stores signed membership versions. The parent directory is created automatically on first boot. The Docker image presets this to `/data/mesh.db` and declares `/data` as a volume — see the volume note above |
 | `RUST_LOG` | _(none)_ | Log level filter — e.g. `info`, `debug`, `warn` |
