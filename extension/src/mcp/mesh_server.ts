@@ -9,7 +9,7 @@
  * and (as leader) bring up its own cross-PC relay bridge with its own
  * Pi-key. As a follower it rides the existing leader's bridge.
  *
- * Launched by `un-bien claude` (registers this in Claude's local MCP
+ * Launched by `unbien claude` (registers this in Claude's local MCP
  * scope). Args: [--cwd <path>] [--name <agentName>] [--no-bridge]
  * Env: UNBIEN_MCP_CWD, UNBIEN_MCP_NAME
  */
@@ -40,7 +40,7 @@ const _argv = process.argv.slice(2);
 // Claude sets as this subprocess's `process.cwd()`. We deliberately do NOT use
 // CLAUDE_PROJECT_DIR: that's the git repo root, which would collapse every
 // monorepo subproject (app/, relay/, …) into one identity + one lock. The
-// `un-bien claude` launcher therefore registers us WITHOUT a baked `--cwd`,
+// `unbien claude` launcher therefore registers us WITHOUT a baked `--cwd`,
 // so one shared local-scope entry self-identifies per session. `--cwd` and
 // UNBIEN_MCP_CWD remain as explicit overrides (tests / manual launches).
 let _cwd = process.env["UNBIEN_MCP_CWD"] ?? process.cwd();
@@ -321,7 +321,7 @@ async function main(): Promise<void> {
   await mcp.connect(transport);
 
   // Only join the mesh if this folder is an actual un-bien agent — i.e. it
-  // has a local config (written by the `un-bien claude` wizard) or an
+  // has a local config (written by the `unbien claude` wizard) or an
   // explicit name override. `-s local` MCP registrations are inherited by
   // EVERY claude session in the git repo, so without this gate a plain claude
   // opened in any subfolder would auto-grab that folder's lock and join as a
@@ -333,7 +333,7 @@ async function main(): Promise<void> {
     void tryJoinMesh();
   } else {
     degradedReason =
-      `this folder is not a un-bien agent (no config). Run "un-bien claude" ` +
+      `this folder is not a un-bien agent (no config). Run "unbien claude" ` +
       `here to make it one. Mesh tools are idle.`;
   }
 }
@@ -399,7 +399,7 @@ function _failLoud(reason: string): never {
     `FATAL: ${reason}. Exiting so the failure is visible. cwd=${_cwd}. ` +
       `Most likely you launched claude in the WRONG FOLDER, or this folder ` +
       `already has a running un-bien agent (a duplicate session). ` +
-      `Launch one agent per folder via "un-bien claude" from the project dir.`,
+      `Launch one agent per folder via "unbien claude" from the project dir.`,
   );
   process.exit(1);
 }

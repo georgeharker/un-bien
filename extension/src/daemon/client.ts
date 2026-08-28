@@ -20,7 +20,7 @@ import { usesNamedPipe } from "../session/ipc.js";
  *
  * `SupervisorOfflineError` is the common error: thrown when the socket
  * file is missing OR the connect fails (no listener). The CLI handler
- * formats it as a friendly "Run `un-bien install` first" message.
+ * formats it as a friendly "Run `unbien install` first" message.
  */
 
 const CONNECT_TIMEOUT_MS = 1000;
@@ -30,7 +30,7 @@ export class SupervisorOfflineError extends Error {
   constructor(public readonly sockPath: string) {
     super(
       `Supervisor is not running. UDS not responding at ${sockPath}.\n` +
-        "Run `un-bien install` to set it up, or start it manually with `pi-supervisord`.",
+        "Run `unbien install` to set it up, or start it manually with `pi-supervisord`.",
     );
     this.name = "SupervisorOfflineError";
   }

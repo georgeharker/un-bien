@@ -86,7 +86,7 @@ export class SupervisorAlreadyRunningError extends Error {
   constructor(public readonly sockPath: string) {
     super(
       `Another pi-supervisord is already running (UDS held at ${sockPath}). ` +
-        "Refusing to start a second instance. Use `un-bien daemon …` to control it, " +
+        "Refusing to start a second instance. Use `unbien daemon …` to control it, " +
         "or stop the running one first.",
     );
     this.name = "SupervisorAlreadyRunningError";

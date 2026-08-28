@@ -319,7 +319,7 @@ export class Broker {
   }
 
   private async _handleLine(conn: PeerConn, line: string): Promise<void> {
-    // Unregistered conn: a read-only `list_peers` probe (the `un-bien peers`
+    // Unregistered conn: a read-only `list_peers` probe (the `unbien peers`
     // CLI — answered without registering, so it leaves no trace on the mesh) or
     // the mandatory `register` handshake. Anything else `_handleRegister` drops.
     if (!conn.name) {
@@ -414,7 +414,7 @@ export class Broker {
 
   /**
    * Answer a read-only `list_peers` request from an UNREGISTERED connection
-   * (the `un-bien peers` CLI probe). Returns true when the line was such a
+   * (the `unbien peers` CLI probe). Returns true when the line was such a
    * probe — the reply is written and the connection stays unregistered: no
    * name assigned, no `peer_joined`/`peer_left` broadcast, no sibling push, so
    * querying the roster from the shell never perturbs the mesh. Returns false

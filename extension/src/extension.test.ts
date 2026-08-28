@@ -400,29 +400,29 @@ describe("extension default export", () => {
     (extension as ExtensionFactory)(pi);
     // Local session (plan/25)
     expect(registeredCommands).toContain("unbien");
-    expect(registeredCommands).toContain("un-bien setup");
-    expect(registeredCommands).toContain("un-bien status");
-    expect(registeredCommands).toContain("un-bien stop");
-    expect(registeredCommands).toContain("un-bien pair");
-    expect(registeredCommands).toContain("un-bien devices");
-    expect(registeredCommands).toContain("un-bien revoke");
-    expect(registeredCommands).toContain("un-bien set-relay");
+    expect(registeredCommands).toContain("unbien setup");
+    expect(registeredCommands).toContain("unbien status");
+    expect(registeredCommands).toContain("unbien stop");
+    expect(registeredCommands).toContain("unbien pair");
+    expect(registeredCommands).toContain("unbien devices");
+    expect(registeredCommands).toContain("unbien revoke");
+    expect(registeredCommands).toContain("unbien set-relay");
     // Daemon registry (plan/26 W1)
-    expect(registeredCommands).toContain("un-bien create");
-    expect(registeredCommands).toContain("un-bien remove");
+    expect(registeredCommands).toContain("unbien create");
+    expect(registeredCommands).toContain("unbien remove");
     // Fleet ops (plan/26 W2) — use `daemon` prefix to avoid clashing with
     // /unbien stop (local) since both have very different semantics.
-    expect(registeredCommands).toContain("un-bien daemons");
-    expect(registeredCommands).toContain("un-bien daemon start");
-    expect(registeredCommands).toContain("un-bien daemon stop");
-    expect(registeredCommands).toContain("un-bien daemon restart");
-    expect(registeredCommands).toContain("un-bien daemon status");
-    expect(registeredCommands).toContain("un-bien daemon send");
+    expect(registeredCommands).toContain("unbien daemons");
+    expect(registeredCommands).toContain("unbien daemon start");
+    expect(registeredCommands).toContain("unbien daemon stop");
+    expect(registeredCommands).toContain("unbien daemon restart");
+    expect(registeredCommands).toContain("unbien daemon status");
+    expect(registeredCommands).toContain("unbien daemon send");
     // Service install (plan/26 W3) — systemd / launchd
-    expect(registeredCommands).toContain("un-bien install");
-    expect(registeredCommands).toContain("un-bien uninstall");
+    expect(registeredCommands).toContain("unbien install");
+    expect(registeredCommands).toContain("unbien uninstall");
     // Cross-PC peer inventory (plan/25 W D)
-    expect(registeredCommands).toContain("un-bien peers");
+    expect(registeredCommands).toContain("unbien peers");
   });
 
   test("restart-supervisor maps to the right OS command sequence per platform", () => {
@@ -461,17 +461,17 @@ describe("extension default export", () => {
     // `relay` is back as ONE command with verbs (start/stop/status/url), not the
     // five separate registrations plan/19 trimmed — the README documents it and
     // without it every `/unbien relay …` silently reprinted the status panel.
-    expect(registeredCommands).toContain("un-bien relay");
-    expect(registeredCommands).toContain("un-bien config");
+    expect(registeredCommands).toContain("unbien relay");
+    expect(registeredCommands).toContain("unbien config");
     for (const removed of [
-      "un-bien join",
+      "unbien join",
       "un-bien leave",
       "un-bien sessions",
-      "un-bien relay start",
-      "un-bien relay stop",
-      "un-bien relay status",
-      "un-bien relay url",
-      "un-bien start",
+      "unbien relay start",
+      "unbien relay stop",
+      "unbien relay status",
+      "unbien relay url",
+      "unbien start",
       "un-bien list",
       "un-bien add-relay",
     ]) {
@@ -483,7 +483,7 @@ describe("extension default export", () => {
   // from the TUI dispatcher (only the Cockpit `rename:` control path worked).
   // Re-adding it aligns the implementation with the documented surface.
   test("/unbien rename is registered and dispatches to _renameAgent", async () => {
-    const rename = captureHandler("un-bien rename");
+    const rename = captureHandler("unbien rename");
     expect(typeof rename).toBe("function");
     // Empty arg → _renameAgent no-ops (same contract as the control channel).
     await expect(rename("", makeMockCtx())).resolves.toBeUndefined();
@@ -510,7 +510,7 @@ describe("state machine + pair_request flow", () => {
       return _tokenStatus;
     });
     // Force idle via stop
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx());
   });
 
@@ -527,7 +527,7 @@ describe("state machine + pair_request flow", () => {
     // (config never exists → first-time path) but writable on Windows (a config
     // could exist → wrong auto-bootstrap path, slow real-socket work).
     const cwd = mkdtempSync(join(tmpdir(), "pi-ext-cwd-"));
-    const pair = captureHandler("un-bien pair");
+    const pair = captureHandler("unbien pair");
     const ctx = makeMockCtx(cwd);
     await pair("", ctx);
     expect(ctx.ui.notify).toHaveBeenCalledWith(
@@ -964,7 +964,7 @@ describe("/unbien revoke", () => {
       _consumeCalls.push(token);
       return _tokenStatus;
     });
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx());
   });
 
@@ -975,7 +975,7 @@ describe("/unbien revoke", () => {
       paired_at: "now",
     });
 
-    const revoke = captureHandler("un-bien revoke");
+    const revoke = captureHandler("unbien revoke");
     const ctx = makeMockCtx();
     await revoke("", ctx);
 
@@ -997,7 +997,7 @@ describe("/unbien revoke", () => {
     // config on every OS, so revoke bails (mirrors pair) rather than editing
     // the file offline. (Fresh tmpdir — see the "pair without start" test.)
     const cwd = mkdtempSync(join(tmpdir(), "pi-ext-cwd-"));
-    const revoke = captureHandler("un-bien revoke");
+    const revoke = captureHandler("unbien revoke");
     const ctx = makeMockCtx(cwd);
     await revoke("aaaa1111", ctx);
 
@@ -1026,7 +1026,7 @@ describe("/unbien revoke", () => {
     captureHandler("unbien");
     await _connectForTest(makeMockCtx());
 
-    const revoke = captureHandler("un-bien revoke");
+    const revoke = captureHandler("unbien revoke");
     const ctx = makeMockCtx();
     await revoke(OWNER_STANDARD_FIXTURE.slice(0, 8), ctx);
 
@@ -1048,7 +1048,7 @@ describe("/unbien revoke", () => {
     captureHandler("unbien");
     await _connectForTest(makeMockCtx());
 
-    const revoke = captureHandler("un-bien revoke");
+    const revoke = captureHandler("unbien revoke");
     const ctx = makeMockCtx();
     await revoke("ffffffff", ctx);
 
@@ -1075,7 +1075,7 @@ describe("/unbien revoke", () => {
     captureHandler("unbien");
     await _connectForTest(makeMockCtx());
 
-    const revoke = captureHandler("un-bien revoke");
+    const revoke = captureHandler("unbien revoke");
     const ctx = makeMockCtx();
     await revoke("abcd", ctx);
 
@@ -1115,7 +1115,7 @@ describe("/unbien revoke", () => {
       timeout: 2000,
     });
 
-    const revoke = captureHandler("un-bien revoke");
+    const revoke = captureHandler("unbien revoke");
     const ctx = makeMockCtx();
     await revoke(OWNER_STANDARD_FIXTURE.slice(0, 8), ctx);
 
@@ -1163,7 +1163,7 @@ describe("/unbien revoke", () => {
     );
     await vi.waitFor(() => expect(_getActivePeerCountForTest()).toBe(2));
 
-    const revoke = captureHandler("un-bien revoke");
+    const revoke = captureHandler("unbien revoke");
     await revoke(OWNER_URL_SAFE_FIXTURE, makeMockCtx());
     expect(_removedPeers).toEqual([OWNER_URL_SAFE_FIXTURE]);
     expect(_hasActivePeerForTest(OWNER_STANDARD_FIXTURE)).toBe(false);
@@ -1273,7 +1273,7 @@ describe("/unbien revoke", () => {
       timeout: 2000,
     });
 
-    const devices = captureHandler("un-bien devices");
+    const devices = captureHandler("unbien devices");
     const ctx = makeMockCtx();
     await devices("", ctx);
 
@@ -1585,7 +1585,7 @@ describe("multi-channel broadcast (W2D)", () => {
       _consumeCalls.push(token);
       return _tokenStatus;
     });
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx());
   });
 
@@ -1603,7 +1603,7 @@ describe("multi-channel broadcast (W2D)", () => {
     // see the "pair without start" test for the cross-platform rationale.)
     expect(_getState()).toBe("idle");
     const cwd = mkdtempSync(join(tmpdir(), "pi-ext-cwd-"));
-    const pair = captureHandler("un-bien pair");
+    const pair = captureHandler("unbien pair");
     const ctx = makeMockCtx(cwd);
     await pair("", ctx);
 
@@ -1618,7 +1618,7 @@ describe("multi-channel broadcast (W2D)", () => {
     expect(_getActivePeerCountForTest()).toBe(1);
 
     // QR generation must succeed (no "Already paired" rejection).
-    const pair = captureHandler("un-bien pair");
+    const pair = captureHandler("unbien pair");
     const ctx = makeMockCtx();
     await pair("", ctx);
 
@@ -1703,7 +1703,7 @@ describe("multi-channel broadcast (W2D)", () => {
     await _pairForTest(OWNER_STANDARD_FIXTURE);
     await _pairAdditionalForTest(OTHER_OWNER_STANDARD_FIXTURE, "Android");
 
-    const revoke = captureHandler("un-bien revoke");
+    const revoke = captureHandler("unbien revoke");
     await revoke(OWNER_STANDARD_FIXTURE.slice(0, 8), makeMockCtx());
 
     expect(_hasActivePeerForTest(OWNER_STANDARD_FIXTURE)).toBe(false);
@@ -3168,7 +3168,7 @@ describe("user_input mirroring", () => {
       _consumeCalls.push(token);
       return _tokenStatus;
     });
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx());
   });
 
@@ -3294,7 +3294,7 @@ describe("tool visibility", () => {
       _consumeCalls.push(token);
       return _tokenStatus;
     });
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx());
   });
 
@@ -3634,12 +3634,12 @@ describe("/unbien set-relay + config", () => {
     _setRelayCalls.length = 0;
     delete process.env["UNBIEN_RELAY"];
     relayRef.current = null;
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx());
   });
 
   test("set-relay empty arg → usage warning, nothing saved", async () => {
-    const setRelay = captureHandler("un-bien set-relay");
+    const setRelay = captureHandler("unbien set-relay");
     const ctx = makeMockCtx();
     await setRelay("", ctx);
 
@@ -3651,7 +3651,7 @@ describe("/unbien set-relay + config", () => {
   });
 
   test("set-relay stores http:// as-is (canonical scheme)", async () => {
-    const setRelay = captureHandler("un-bien set-relay");
+    const setRelay = captureHandler("unbien set-relay");
     const ctx = makeMockCtx();
     await setRelay("http://foo:3000", ctx);
 
@@ -3663,7 +3663,7 @@ describe("/unbien set-relay + config", () => {
   });
 
   test("set-relay stores https:// as-is (canonical scheme)", async () => {
-    const setRelay = captureHandler("un-bien set-relay");
+    const setRelay = captureHandler("unbien set-relay");
     const ctx = makeMockCtx();
     await setRelay("https://relay.example.tld", ctx);
 
@@ -3675,7 +3675,7 @@ describe("/unbien set-relay + config", () => {
   });
 
   test("set-relay rejects ws:// scheme with conversion hint", async () => {
-    const setRelay = captureHandler("un-bien set-relay");
+    const setRelay = captureHandler("unbien set-relay");
     const ctx = makeMockCtx();
     await setRelay("ws://foo:3000", ctx);
 
@@ -3687,7 +3687,7 @@ describe("/unbien set-relay + config", () => {
   });
 
   test("set-relay rejects wss:// scheme with conversion hint", async () => {
-    const setRelay = captureHandler("un-bien set-relay");
+    const setRelay = captureHandler("unbien set-relay");
     const ctx = makeMockCtx();
     await setRelay("wss://relay.example.tld", ctx);
 
@@ -3699,7 +3699,7 @@ describe("/unbien set-relay + config", () => {
   });
 
   test("set-relay rejects malformed URL", async () => {
-    const setRelay = captureHandler("un-bien set-relay");
+    const setRelay = captureHandler("unbien set-relay");
     const ctx = makeMockCtx();
     await setRelay("not a url at all", ctx);
 
@@ -3711,7 +3711,7 @@ describe("/unbien set-relay + config", () => {
   });
 
   test("set-relay persists http:// URL via saveConfig (canonical form)", async () => {
-    const setRelay = captureHandler("un-bien set-relay");
+    const setRelay = captureHandler("unbien set-relay");
     const ctx = makeMockCtx();
     await setRelay("http://192.168.1.10:3000", ctx);
 
@@ -3726,7 +3726,7 @@ describe("/unbien set-relay + config", () => {
   // had no handler — every `relay …` fell through to the status panel, so a
   // user following the README silently stayed on the community relay.
   test("relay url persists the URL through the same writer as set-relay", async () => {
-    const relay = captureHandler("un-bien relay");
+    const relay = captureHandler("unbien relay");
     const ctx = makeMockCtx();
     await relay("url http://192.168.1.20:3000", ctx);
 
@@ -3738,7 +3738,7 @@ describe("/unbien set-relay + config", () => {
   });
 
   test("relay url rejects ws:// like set-relay does", async () => {
-    const relay = captureHandler("un-bien relay");
+    const relay = captureHandler("unbien relay");
     const ctx = makeMockCtx();
     await relay("url ws://foo:3000", ctx);
 
@@ -3750,7 +3750,7 @@ describe("/unbien set-relay + config", () => {
   });
 
   test("relay stop on an idle relay reports it instead of silently reprinting status", async () => {
-    const relay = captureHandler("un-bien relay");
+    const relay = captureHandler("unbien relay");
     const ctx = makeMockCtx();
     await relay("stop", ctx);
 
@@ -3761,7 +3761,7 @@ describe("/unbien set-relay + config", () => {
   });
 
   test("relay with an unknown verb prints usage", async () => {
-    const relay = captureHandler("un-bien relay");
+    const relay = captureHandler("unbien relay");
     const ctx = makeMockCtx();
     await relay("frobnicate", ctx);
 
@@ -3799,10 +3799,10 @@ describe("/unbien set-relay + config", () => {
   });
 
   test("/unbien status shows the saved URL after set-relay", async () => {
-    const setRelay = captureHandler("un-bien set-relay");
+    const setRelay = captureHandler("unbien set-relay");
     await setRelay("http://10.0.0.5:4000", makeMockCtx());
 
-    const status = captureHandler("un-bien status");
+    const status = captureHandler("unbien status");
     const ctx = makeMockCtx();
     await status("", ctx);
 
@@ -3811,7 +3811,7 @@ describe("/unbien set-relay + config", () => {
   });
 
   test("/unbien status shows the default URL when nothing set", async () => {
-    const status = captureHandler("un-bien status");
+    const status = captureHandler("unbien status");
     const ctx = makeMockCtx();
     await status("", ctx);
 
@@ -3822,7 +3822,7 @@ describe("/unbien set-relay + config", () => {
   test("/unbien status reflects env override (canonicalized to https://)", async () => {
     // Env var with wss:// is coerced back to https:// by resolveRelayUrl.
     process.env["UNBIEN_RELAY"] = "wss://from-env.test";
-    const status = captureHandler("un-bien status");
+    const status = captureHandler("unbien status");
     const ctx = makeMockCtx();
     await status("", ctx);
 
@@ -3832,7 +3832,7 @@ describe("/unbien set-relay + config", () => {
   });
 
   test("saved URL is used by _cmdStart on next connect (http:// stored as-is)", async () => {
-    const setRelay = captureHandler("un-bien set-relay");
+    const setRelay = captureHandler("unbien set-relay");
     await setRelay("http://10.0.0.5:4000", makeMockCtx());
 
     captureHandler("unbien");
@@ -3873,7 +3873,7 @@ describe("routeClientMessage cancel handling", () => {
       _consumeCalls.push(token);
       return _tokenStatus;
     });
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", {
       ui: { notify: vi.fn() },
       cwd: "/tmp/unbien-cancel-reset",
@@ -3889,7 +3889,7 @@ describe("routeClientMessage cancel handling", () => {
       cwd: "/tmp/unbien-cancel-stale",
     });
 
-    const status = captureHandler("un-bien status");
+    const status = captureHandler("unbien status");
     await status("", {
       ui: { notify: vi.fn() },
       cwd: "/tmp/unbien-cancel-stale",
@@ -3954,7 +3954,7 @@ describe("routeClientMessage cancel handling", () => {
 
     // Plant a command ctx whose ui GETTER throws (real SDK stale-ctx behaviour).
     // The status handler assigns _lastCtx = ctx before touching ui.
-    const status = captureHandler("un-bien status");
+    const status = captureHandler("unbien status");
     const staleCtx = {
       cwd: "/tmp/unbien-stale-ui",
       get ui() {
@@ -4235,7 +4235,7 @@ describe("rooms wiring", () => {
       _consumeCalls.push(token);
       return _tokenStatus;
     });
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx());
   });
 
@@ -4268,7 +4268,7 @@ describe("rooms wiring", () => {
     captureHandler("unbien");
     await _connectForTest(makeMockCtx("/tmp/unbien-A"));
 
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx());
 
     await _connectForTest(makeMockCtx("/tmp/unbien-B"));
@@ -4379,7 +4379,7 @@ describe("session sync", () => {
       _consumeCalls.push(token);
       return _tokenStatus;
     });
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx());
     _setMessageBufferForTest([]);
     _setSessionStartedAtForTest(null);
@@ -4876,7 +4876,7 @@ describe("bye on teardown", () => {
       _consumeCalls.push(token);
       return _tokenStatus;
     });
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx());
   });
 
@@ -4884,7 +4884,7 @@ describe("bye on teardown", () => {
     await _pairForTest("peer-bye-1");
     const sendsBefore = relayRef.current!.send.mock.calls.length;
 
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx());
 
     const sent = relayRef
@@ -4909,7 +4909,7 @@ describe("bye on teardown", () => {
     await _connectForTest(makeMockCtx());
     const relay = relayRef.current!;
     const staleProducer = selfRevokeHarness.options.at(-1)!;
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     const sendMessage = vi.fn();
     _setPiForTest({ sendMessage, sendUserMessage: () => undefined });
 
@@ -4980,7 +4980,7 @@ describe("bye on teardown", () => {
     expect(_getState()).toBe("started");
     const sendsBefore = relayRef.current!.send.mock.calls.length;
 
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx());
 
     const sent = relayRef
@@ -4998,7 +4998,7 @@ describe("bye on teardown", () => {
     await _pairForTest(ACTIVE);
     const sendsBefore = relayRef.current!.send.mock.calls.length;
 
-    const revoke = captureHandler("un-bien revoke");
+    const revoke = captureHandler("unbien revoke");
     await revoke(OWNER_STANDARD_FIXTURE.slice(0, 8), makeMockCtx());
 
     const sent = relayRef
@@ -5033,7 +5033,7 @@ describe("session_shutdown teardown", () => {
     relayInstances.length = 0;
     _defaultConnectImpl = async () => undefined;
     _setDisposedForTest(false); // shared module — clear the per-instance flag
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx());
   });
 
@@ -5241,7 +5241,7 @@ describe("session_shutdown teardown", () => {
       if (!firstSettled) firstConnect.resolve(undefined);
       await outgoingRoot?.catch(() => undefined);
       delete process.env["UNBIEN_DIRECT_CONFIG"];
-      const stop = captureHandler("un-bien stop");
+      const stop = captureHandler("unbien stop");
       await stop("", replacementCtx);
       _resetCwdLockForTest();
       _setAutoInitedForTest(false);
@@ -5296,7 +5296,7 @@ describe("session_shutdown teardown", () => {
       if (!firstSettled) firstConnect.resolve(undefined);
       await outgoingRoot?.catch(() => undefined);
       delete process.env["UNBIEN_DIRECT_CONFIG"];
-      const stop = captureHandler("un-bien stop");
+      const stop = captureHandler("unbien stop");
       await stop("", replacementCtx);
       _resetCwdLockForTest();
       _setAutoInitedForTest(false);
@@ -5356,7 +5356,7 @@ describe("session_shutdown teardown", () => {
       if (!firstSettled) firstJoin.resolve("session-mesh-success");
       await outgoingRoot?.catch(() => undefined);
       delete process.env["UNBIEN_DIRECT_CONFIG"];
-      const stop = captureHandler("un-bien stop");
+      const stop = captureHandler("unbien stop");
       await stop("", replacementCtx);
       _resetCwdLockForTest();
       _setAutoInitedForTest(false);
@@ -5422,7 +5422,7 @@ describe("session_shutdown teardown", () => {
       if (!firstSettled) firstJoin.resolve("session-mesh-reject");
       await outgoingRoot?.catch(() => undefined);
       delete process.env["UNBIEN_DIRECT_CONFIG"];
-      const stop = captureHandler("un-bien stop");
+      const stop = captureHandler("unbien stop");
       await stop("", replacementCtx);
       _resetCwdLockForTest();
       _setAutoInitedForTest(false);
@@ -5496,7 +5496,7 @@ describe("session_shutdown teardown", () => {
       if (!firstLockSettled) firstLockGate.reject(outgoingFailure);
       await observedOutgoing?.catch(() => undefined);
       delete process.env["UNBIEN_DIRECT_CONFIG"];
-      const stop = captureHandler("un-bien stop");
+      const stop = captureHandler("unbien stop");
       await stop("", replacementCtx);
       _resetCwdLockForTest();
       _setAutoInitedForTest(false);
@@ -5528,7 +5528,7 @@ describe("session_shutdown teardown", () => {
       void sessionStart({ type: "session_start" }, replacementCtx);
       await vi.waitFor(() => expect(acquireSpy).toHaveBeenCalledTimes(1));
 
-      const stop = captureHandler("un-bien stop");
+      const stop = captureHandler("unbien stop");
       await stop("", replacementCtx);
 
       lockSettled = true;
@@ -5544,7 +5544,7 @@ describe("session_shutdown teardown", () => {
       if (!lockSettled)
         lockGate.resolve({ ok: true, release: releaseAcquiredLock });
       delete process.env["UNBIEN_DIRECT_CONFIG"];
-      const stop = captureHandler("un-bien stop");
+      const stop = captureHandler("unbien stop");
       await stop("", replacementCtx);
       _resetCwdLockForTest();
       _setAutoInitedForTest(false);
@@ -5591,7 +5591,7 @@ describe("session_shutdown teardown", () => {
       if (!lockSettled)
         lockGate.resolve({ ok: true, release: releaseAcquiredLock });
       delete process.env["UNBIEN_DIRECT_CONFIG"];
-      const stop = captureHandler("un-bien stop");
+      const stop = captureHandler("unbien stop");
       await stop("", replacementCtx);
       _resetCwdLockForTest();
       _setAutoInitedForTest(false);
@@ -5653,7 +5653,7 @@ describe("session_shutdown teardown", () => {
         firstLockGate.resolve({ ok: true, release: releaseSupersededLock });
       }
       delete process.env["UNBIEN_DIRECT_CONFIG"];
-      const stop = captureHandler("un-bien stop");
+      const stop = captureHandler("unbien stop");
       await stop("", newestReplacementCtx);
       _resetCwdLockForTest();
       _setAutoInitedForTest(false);
@@ -5685,7 +5685,7 @@ describe("un-bien:name-assigned event", () => {
     relayInstances.length = 0;
     _defaultConnectImpl = async () => undefined;
     _setDisposedForTest(false);
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx());
   });
 
@@ -5748,7 +5748,7 @@ describe("local config owns mesh name", () => {
     await root("", makeMockCtx(cwd));
 
     expect(_getLockedNameForTest()?.replace(/#\d+$/, "")).toBe("crow");
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx(cwd));
     _resetCwdLockForTest();
   });
@@ -5794,7 +5794,7 @@ describe("relay control channel + relay-state event", () => {
     relayInstances.length = 0;
     _defaultConnectImpl = async () => undefined;
     _setDisposedForTest(false);
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx());
   });
 
@@ -5902,7 +5902,7 @@ describe("relay control channel + relay-state event", () => {
     // Clean up: rename churns the real UDS broker (leave+rejoin) and leaves the
     // mesh/relay live — tear down so it can't leak into later tests (an orphaned
     // broker socket makes a subsequent bind flaky).
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx());
     _resetCwdLockForTest();
   });
@@ -5929,7 +5929,7 @@ describe("same-folder same-name → #N suffix (no refusal)", () => {
     _defaultConnectImpl = async () => undefined;
     _setDisposedForTest(false);
     _resetCwdLockForTest();
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx());
   });
 
@@ -6022,7 +6022,7 @@ describe("session_start auto-init skips relay in print/-p mode (#44)", () => {
     _setDisposedForTest(false);
     _resetAutoInitedForTest();
     _resetCwdLockForTest();
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx());
     _resetAutoInitedForTest();
   });
@@ -6094,7 +6094,7 @@ describe("relay reconnect", () => {
       _consumeCalls.push(token);
       return _tokenStatus;
     });
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx());
   });
 
@@ -6127,7 +6127,7 @@ describe("relay reconnect", () => {
       expect(_hasMeshNodeForTest()).toBe(false);
       expect(_getState()).toBe("idle");
 
-      const stop = captureHandler("un-bien stop");
+      const stop = captureHandler("unbien stop");
       await stop("", makeMockCtx(cwd));
 
       joinReleased = true;
@@ -6143,7 +6143,7 @@ describe("relay reconnect", () => {
       if (!joinReleased) joinGate.resolve("join-cancel");
       await rootPromise?.catch(() => undefined);
       delete process.env["UNBIEN_DIRECT_CONFIG"];
-      const stop = captureHandler("un-bien stop");
+      const stop = captureHandler("unbien stop");
       await stop("", makeMockCtx(cwd));
       _resetCwdLockForTest();
       candidateCloseSpy?.mockRestore();
@@ -6171,7 +6171,7 @@ describe("relay reconnect", () => {
       starting = _startRelayForTest(ctx);
       await vi.waitFor(() => expect(getKeypair).toHaveBeenCalledTimes(1));
 
-      const stop = captureHandler("un-bien stop");
+      const stop = captureHandler("unbien stop");
       await stop("", ctx);
 
       settled = true;
@@ -6189,7 +6189,7 @@ describe("relay reconnect", () => {
     } finally {
       if (!settled) keypairGate.resolve(staleKeypair);
       await starting?.catch(() => undefined);
-      const stop = captureHandler("un-bien stop");
+      const stop = captureHandler("unbien stop");
       await stop("", ctx);
     }
   });
@@ -6212,7 +6212,7 @@ describe("relay reconnect", () => {
       starting = _startRelayForTest(ctx);
       await vi.waitFor(() => expect(getKeypair).toHaveBeenCalledTimes(1));
 
-      const stop = captureHandler("un-bien stop");
+      const stop = captureHandler("unbien stop");
       await stop("", ctx);
 
       settled = true;
@@ -6230,7 +6230,7 @@ describe("relay reconnect", () => {
     } finally {
       if (!settled) keypairGate.reject(staleFailure);
       await starting?.catch(() => undefined);
-      const stop = captureHandler("un-bien stop");
+      const stop = captureHandler("unbien stop");
       await stop("", ctx);
     }
   });
@@ -6291,7 +6291,7 @@ describe("relay reconnect", () => {
       if (!settled) keypairGate.resolve(staleKeypair);
       await outgoingRoot?.catch(() => undefined);
       delete process.env["UNBIEN_DIRECT_CONFIG"];
-      const stop = captureHandler("un-bien stop");
+      const stop = captureHandler("unbien stop");
       await stop("", replacementCtx);
       _resetCwdLockForTest();
       _setAutoInitedForTest(false);
@@ -6355,7 +6355,7 @@ describe("relay reconnect", () => {
       if (!settled) keypairGate.reject(staleFailure);
       await observedOutgoing?.catch(() => undefined);
       delete process.env["UNBIEN_DIRECT_CONFIG"];
-      const stop = captureHandler("un-bien stop");
+      const stop = captureHandler("unbien stop");
       await stop("", replacementCtx);
       _resetCwdLockForTest();
       _setAutoInitedForTest(false);
@@ -6421,7 +6421,7 @@ describe("relay reconnect", () => {
       relayInstances[0]!.emit("close");
       expect(_hasPendingReconnect()).toBe(true);
 
-      const stop = captureHandler("un-bien stop");
+      const stop = captureHandler("unbien stop");
       await stop("", makeMockCtx());
       expect(_hasPendingReconnect()).toBe(false);
       expect(_getState()).toBe("idle");
@@ -6470,7 +6470,7 @@ describe("relay reconnect", () => {
       expect(staleRelay.connect).toHaveBeenCalledTimes(1);
       vi.useRealTimers();
 
-      const stop = captureHandler("un-bien stop");
+      const stop = captureHandler("unbien stop");
       await stop("", makeMockCtx());
       expect(_getState()).toBe("idle");
 
@@ -6538,7 +6538,7 @@ describe("relay reconnect", () => {
       await staleConnect.promise;
       await Promise.resolve();
       if (!cleanedUp) {
-        const stop = captureHandler("un-bien stop");
+        const stop = captureHandler("unbien stop");
         await stop("", makeMockCtx());
       }
       attachBridgeSpy.mockRestore();
@@ -6581,7 +6581,7 @@ describe("relay reconnect", () => {
       expect(staleRelay.connect).toHaveBeenCalledTimes(1);
       vi.useRealTimers();
 
-      const stop = captureHandler("un-bien stop");
+      const stop = captureHandler("unbien stop");
       await stop("", makeMockCtx());
       await _connectForTest(makeMockCtx());
       expect(relayInstances).toHaveLength(3);
@@ -6619,7 +6619,7 @@ describe("relay reconnect", () => {
       if (!staleSettled) staleConnect.reject(new Error("test cleanup"));
       await staleConnect.promise.catch(() => undefined);
       if (!cleanedUp) {
-        const stop = captureHandler("un-bien stop");
+        const stop = captureHandler("unbien stop");
         await stop("", makeMockCtx());
       }
       attachBridgeSpy.mockRestore();
@@ -6644,7 +6644,7 @@ describe("relay reconnect", () => {
       expect(candidateRelay.connect).toHaveBeenCalledTimes(1);
       expect(_getState()).toBe("idle");
 
-      const stop = captureHandler("un-bien stop");
+      const stop = captureHandler("unbien stop");
       await stop("", makeMockCtx());
       expect(_getState()).toBe("idle");
 
@@ -6658,7 +6658,7 @@ describe("relay reconnect", () => {
     } finally {
       if (!connectReleased) connectGate.resolve(undefined);
       await connecting?.catch(() => undefined);
-      const stop = captureHandler("un-bien stop");
+      const stop = captureHandler("unbien stop");
       await stop("", makeMockCtx());
       attachBridgeSpy.mockRestore();
     }
@@ -6704,7 +6704,7 @@ describe("relay reconnect", () => {
       if (!connectReleased) connectGate.resolve(undefined);
       await starting?.catch(() => undefined);
       delete process.env["UNBIEN_DIRECT_CONFIG"];
-      const stop = captureHandler("un-bien stop");
+      const stop = captureHandler("unbien stop");
       await stop("", makeMockCtx(cwd));
       _resetCwdLockForTest();
       attachBridgeSpy.mockRestore();
@@ -6798,7 +6798,7 @@ describe("cumulative buffer", () => {
       _consumeCalls.push(token);
       return _tokenStatus;
     });
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx());
     _setMessageBufferForTest([]);
     _setSessionStartedAtForTest(null);
@@ -7062,7 +7062,7 @@ describe("cumulative buffer", () => {
     });
     expect(_getMessageBufferForTest()).toHaveLength(2);
 
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx());
     expect(_getState()).toBe("idle");
     expect(_getMessageBufferForTest()).toHaveLength(2); // PRESERVED across stop
@@ -7146,7 +7146,7 @@ describe("model meta", () => {
       _consumeCalls.push(token);
       return _tokenStatus;
     });
-    const stop = captureHandler("un-bien stop");
+    const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx());
   });
 

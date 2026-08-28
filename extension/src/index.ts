@@ -1278,7 +1278,7 @@ export function _resetCwdLockForTest(): void {
 
 /**
  * Test-only: relay-only startup, no UDS mesh join. Replaces the old
- * `un-bien relay start` handler that some tests captured to bring up
+ * `unbien relay start` handler that some tests captured to bring up
  * the relay in isolation (e.g. ping/pong tests that don't care about the
  * agent-network broker).
  */
@@ -3421,28 +3421,28 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // Nested registrations (one entry per public action). The flat handler
   // above already routes `/unbien <sub>` — these exist for the SDK's
   // command palette and slash-autocomplete in some UI modes.
-  pi.registerCommand("un-bien setup", {
+  pi.registerCommand("unbien setup", {
     description: "Run the setup wizard and update local config",
     handler: async (_, ctx) => {
       _lastCtx = ctx;
       await _cmdSetup(ctx);
     },
   });
-  pi.registerCommand("un-bien status", {
+  pi.registerCommand("unbien status", {
     description: "Show local mesh + relay status",
     handler: async (_, ctx) => {
       _lastCtx = ctx;
       _cmdStatus(ctx);
     },
   });
-  pi.registerCommand("un-bien stop", {
+  pi.registerCommand("unbien stop", {
     description: "Stop everything (leave local mesh + disconnect relay)",
     handler: async (_, ctx) => {
       _lastCtx = ctx;
       await _cmdStop(ctx);
     },
   });
-  pi.registerCommand("un-bien pair", {
+  pi.registerCommand("unbien pair", {
     description:
       "Show a QR code to pair a new mobile device (optional: --ttl <seconds>)",
     handler: async (args, ctx) => {
@@ -3450,14 +3450,14 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       await _cmdPair(ctx, args.trim());
     },
   });
-  pi.registerCommand("un-bien devices", {
+  pi.registerCommand("unbien devices", {
     description: "List paired mobile devices",
     handler: async (_, ctx) => {
       _lastCtx = ctx;
       await _cmdList(ctx);
     },
   });
-  pi.registerCommand("un-bien rename", {
+  pi.registerCommand("unbien rename", {
     description:
       "Rename this agent in the current session (updates mesh + relay room)",
     handler: async (args, ctx) => {
@@ -3465,7 +3465,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       await _renameAgent(args.trim());
     },
   });
-  pi.registerCommand("un-bien revoke", {
+  pi.registerCommand("unbien revoke", {
     description: "Revoke a paired device by its shortid",
     getArgumentCompletions: async (prefix) => _shortidCompletions(prefix),
     handler: async (args, ctx) => {
@@ -3473,21 +3473,21 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       await _cmdRevoke(args.trim(), ctx);
     },
   });
-  pi.registerCommand("un-bien set-relay", {
+  pi.registerCommand("unbien set-relay", {
     description: "Persist a new relay URL to user config",
     handler: async (args, ctx) => {
       _lastCtx = ctx;
       _cmdSetRelay(args.trim(), ctx);
     },
   });
-  pi.registerCommand("un-bien config", {
+  pi.registerCommand("unbien config", {
     description: "Show the effective relay URL and where it came from",
     handler: async (_, ctx) => {
       _lastCtx = ctx;
       _cmdConfig(ctx);
     },
   });
-  pi.registerCommand("un-bien relay", {
+  pi.registerCommand("unbien relay", {
     description:
       "Relay control: start | stop | status | url <http(s) url> (no arg toggles)",
     handler: async (args, ctx) => {
@@ -3497,7 +3497,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   });
 
   // Plan/25 Wave D
-  pi.registerCommand("un-bien peers", {
+  pi.registerCommand("unbien peers", {
     description: "List local + cross-PC mesh peers, grouped by PC label",
     handler: async (_, ctx) => {
       _lastCtx = ctx;
@@ -3507,7 +3507,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
 
   // Daemon registry (plan/26 Wave 1) — create + remove. start/stop/send/
   // status/install/uninstall come in later waves with the supervisor.
-  pi.registerCommand("un-bien create", {
+  pi.registerCommand("unbien create", {
     description:
       "Register a folder as a daemon and start it (when the supervisor is running)",
     handler: async (args, ctx) => {
@@ -3515,7 +3515,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       await _cmdCreate(args.trim(), ctx);
     },
   });
-  pi.registerCommand("un-bien remove", {
+  pi.registerCommand("unbien remove", {
     description: "Stop + unregister a daemon by id (local config is preserved)",
     handler: async (args, ctx) => {
       _lastCtx = ctx;
@@ -3525,49 +3525,49 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
 
   // Fleet ops via the supervisor (plan/26 W2). `/unbien stop` stays as
   // local stop — fleet stop is `/unbien daemon stop`.
-  pi.registerCommand("un-bien daemons", {
+  pi.registerCommand("unbien daemons", {
     description: "List registered daemons + state",
     handler: async (_, ctx) => {
       _lastCtx = ctx;
       await _cmdDaemonsList(ctx);
     },
   });
-  pi.registerCommand("un-bien daemon start", {
+  pi.registerCommand("unbien daemon start", {
     description: "Start daemons: all, or one by id (`daemon start <id>`)",
     handler: async (args, ctx) => {
       _lastCtx = ctx;
       await _cmdDaemonStart(ctx, args.trim() || undefined);
     },
   });
-  pi.registerCommand("un-bien daemon stop", {
+  pi.registerCommand("unbien daemon stop", {
     description: "Stop daemons: all, or one by id (`daemon stop <id>`)",
     handler: async (args, ctx) => {
       _lastCtx = ctx;
       await _cmdDaemonStop(ctx, args.trim() || undefined);
     },
   });
-  pi.registerCommand("un-bien daemon restart", {
+  pi.registerCommand("unbien daemon restart", {
     description: "Restart daemons: all, or one by id (`daemon restart <id>`)",
     handler: async (args, ctx) => {
       _lastCtx = ctx;
       await _cmdDaemonRestart(ctx, args.trim() || undefined);
     },
   });
-  pi.registerCommand("un-bien daemon status", {
+  pi.registerCommand("unbien daemon status", {
     description: "Show fleet runtime status (pid, uptime, restarts)",
     handler: async (_, ctx) => {
       _lastCtx = ctx;
       await _cmdDaemonStatus(ctx);
     },
   });
-  pi.registerCommand("un-bien daemon send", {
+  pi.registerCommand("unbien daemon send", {
     description: 'Send a prompt to a daemon: `daemon send <id> "<text>"`',
     handler: async (args, ctx) => {
       _lastCtx = ctx;
       await _cmdDaemonSend(args.trim(), ctx);
     },
   });
-  pi.registerCommand("un-bien cron", {
+  pi.registerCommand("unbien cron", {
     description:
       "Schedule recurring prompts to daemons: `cron <add|list|remove|enable|disable|run|log>`",
     handler: async (args, ctx) => {
@@ -3577,7 +3577,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   });
 
   // Service install / uninstall (plan/26 W3)
-  pi.registerCommand("un-bien install", {
+  pi.registerCommand("unbien install", {
     description:
       "Install pi-supervisord as a system service + link the un-bien CLI (systemd/launchd/Task Scheduler; Windows prompts for admin)",
     handler: async (_, ctx) => {
@@ -3585,7 +3585,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       _cmdInstall(ctx, { linkCli: true });
     },
   });
-  pi.registerCommand("un-bien uninstall", {
+  pi.registerCommand("unbien uninstall", {
     description:
       "Remove the pi-supervisord system service + the CLI shims (daemons registry preserved; Windows prompts for admin)",
     handler: async (_, ctx) => {
@@ -4597,7 +4597,7 @@ async function _cmdCreate(
     if (err instanceof SupervisorOfflineError) {
       ctx.ui.notify(
         `[un-bien] Registered, but the supervisor is offline — not running yet. ` +
-          `Run \`un-bien install\` (or start \`pi-supervisord\`); it auto-starts on the next supervisor boot.`,
+          `Run \`unbien install\` (or start \`pi-supervisord\`); it auto-starts on the next supervisor boot.`,
         "warning",
       );
       return;
@@ -4977,7 +4977,7 @@ async function _cmdCron(
   } catch (err) {
     if (err instanceof SupervisorOfflineError) {
       ctx.ui.notify(
-        "[un-bien] Cron needs the supervisor running. Run `un-bien install` " +
+        "[un-bien] Cron needs the supervisor running. Run `unbien install` " +
           "(or start `pi-supervisord`).",
         "warning",
       );
@@ -5134,7 +5134,7 @@ async function _cronLog(
 // Installs `pi-supervisord` as a user-level system service (systemd
 // `--user` unit on Linux, launchd LaunchAgent on macOS). Once installed:
 //   - Supervisor starts at login + survives reboots.
-//   - `un-bien daemon start/stop/send/...` work without manually
+//   - `unbien daemon start/stop/send/...` work without manually
 //     spawning the supervisor.
 // Uninstall is the inverse — leaves the registry (`daemons.json`) intact,
 // so re-installing later picks up where you left off.
@@ -5175,13 +5175,13 @@ function _cmdInstall(
         if (process.platform === "win32") {
           sections.push(
             `  ⚠ ${link.binDir} was just added to your user PATH (it wasn't there yet).`,
-            `    Open a NEW terminal and run \`un-bien daemons\` to verify.`,
+            `    Open a NEW terminal and run \`unbien daemons\` to verify.`,
           );
         } else {
           sections.push(
             `  ⚠ ${link.binDir} is not on $PATH yet. Add this line to ~/.zshrc / ~/.bashrc:`,
             `      export PATH="$HOME/.local/bin:$PATH"`,
-            `    Then open a new terminal and run \`un-bien daemons\` to verify.`,
+            `    Then open a new terminal and run \`unbien daemons\` to verify.`,
           );
         }
       }
@@ -6443,7 +6443,7 @@ export function _mapAgentMessagesToEvents(
 // ── Standalone CLI ────────────────────────────────────────────────────────────
 
 /**
- * `un-bien restart-supervisor` — restarts the `pi-supervisord` PROCESS
+ * `unbien restart-supervisor` — restarts the `pi-supervisord` PROCESS
  * (not the daemons). The supervisor is a long-running Node process with no
  * hot-reload, so after a `dist` rebuild the old code keeps running until the
  * process is restarted. The Cockpit "Restart supervisor" button shells out to
@@ -6506,7 +6506,7 @@ function _restartSupervisor(): void {
     if (r.error) {
       if (step.ignoreFailure) continue;
       console.error(
-        `[un-bien] restart-supervisor failed: ${step.cmd} not runnable (${r.error.message}). Is the service installed? Run \`un-bien install\`.`,
+        `[un-bien] restart-supervisor failed: ${step.cmd} not runnable (${r.error.message}). Is the service installed? Run \`unbien install\`.`,
       );
       process.exit(1);
     }
@@ -6533,7 +6533,7 @@ function _isDirectRun(): boolean {
 
 /**
  * Read-only probe of the local UDS broker for the mesh roster, backing
- * `un-bien peers`. Opens a raw connection to `sockPath`, sends a single
+ * `unbien peers`. Opens a raw connection to `sockPath`, sends a single
  * unregistered `list_peers` request, and resolves with the peer names from the
  * broker's reply (local UDS peers + cross-PC `<pc>:<peer>` entries).
  *
@@ -6655,7 +6655,7 @@ if (_isDirectRun()) {
       console.log(`Invalid URL: ${raw}. Must start with http:// or https://`);
     }
   } else if (subcmd === "create") {
-    // Standalone: `un-bien create <cwd> [--name "X"]`. The shell already
+    // Standalone: `unbien create <cwd> [--name "X"]`. The shell already
     // split the args and stripped the outer quotes, so an arg like
     // `Tmp Agent` arrives as a single element with embedded space. Re-add
     // quotes around any arg containing whitespace so the regex-based
@@ -6684,7 +6684,7 @@ if (_isDirectRun()) {
     };
     await _cmdDaemonsList(stubCtx);
   } else if (subcmd === "daemon") {
-    // `un-bien daemon <op> [args]`. Reuse the fleet-ops handlers — they
+    // `unbien daemon <op> [args]`. Reuse the fleet-ops handlers — they
     // already accept a minimal ctx with `notify`.
     const op = cliArgs[0] ?? "";
     const rest = cliArgs
@@ -6708,11 +6708,11 @@ if (_isDirectRun()) {
       await _cmdDaemonSend(rest, stubCtx);
     } else {
       console.log(
-        'Usage: un-bien daemon <start|stop|restart [<id>]|status|send <id> "<text>">',
+        'Usage: unbien daemon <start|stop|restart [<id>]|status|send <id> "<text>">',
       );
     }
   } else if (subcmd === "cron") {
-    // `un-bien cron <op> [args]`. Re-quote args with spaces so the shared
+    // `unbien cron <op> [args]`. Re-quote args with spaces so the shared
     // parser sees the same shape as a Pi slash prompt.
     const joined = cliArgs.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ");
     const stubCtx = {
@@ -6805,7 +6805,7 @@ if (_isDirectRun()) {
   }
 }
 
-// ── `un-bien claude` — launch Claude Code connected to the mesh ─────────────
+// ── `unbien claude` — launch Claude Code connected to the mesh ─────────────
 
 /**
  * Resolve the packaged agent-network skill path
@@ -6822,7 +6822,7 @@ function _agentNetworkSkillPath(): string | null {
 }
 
 async function _cmdClaudeCli(args: string[]): Promise<void> {
-  // Contract: `un-bien claude [cwd] [claude-flags...]`. The optional cwd is
+  // Contract: `unbien claude [cwd] [claude-flags...]`. The optional cwd is
   // ONLY the leading positional (first token, not a flag); everything after it
   // is forwarded verbatim to the `claude` binary (e.g. `--resume`, `-c`,
   // `-p "prompt"`). Restricting cwd to the leading token avoids mistaking a
@@ -6870,7 +6870,7 @@ async function _cmdClaudeCli(args: string[]): Promise<void> {
   const absCwd = resolve(targetCwd);
   const SERVER_NAME = "un-bien-mesh";
 
-  // The mesh MCP must be visible ONLY inside a `un-bien claude` session — a
+  // The mesh MCP must be visible ONLY inside a `unbien claude` session — a
   // plain `claude` in the same repo must NOT inherit it (otherwise every
   // ordinary session silently joins the mesh as a stray agent).
   //
@@ -6898,7 +6898,7 @@ async function _cmdClaudeCli(args: string[]): Promise<void> {
   // empirically — NOT the git root, NOT CLAUDE_PROJECT_DIR). We spawn claude
   // with `cwd: absCwd`, the MCP child inherits it, so the server self-identifies
   // as the right agent without leaking that path to any other session.
-  // Unique per pid so concurrent `un-bien claude` launches don't collide.
+  // Unique per pid so concurrent `unbien claude` launches don't collide.
   const mcpConfigPath = join(tmpdir(), `un-bien-mesh-mcp-${process.pid}.json`);
   writeFileSync(
     mcpConfigPath,
@@ -6910,7 +6910,7 @@ async function _cmdClaudeCli(args: string[]): Promise<void> {
   );
 
   // Inject the agent-network protocol as a system prompt instead of deploying a
-  // skill file into ~/.claude. Anyone running `un-bien claude` is here to use
+  // skill file into ~/.claude. Anyone running `unbien claude` is here to use
   // the mesh, so load the protocol unconditionally — no lazy skill gating, no
   // global skills-dir pollution, and the packaged file is the single source of
   // truth shared with the Pi runtime. Skipped only if the file is missing.

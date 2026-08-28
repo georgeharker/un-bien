@@ -93,7 +93,7 @@ export function findRemotePiScript(): string {
 export function findNodeBinary(): string {
   // `process.execPath` is always absolute and points at the current Node
   // binary. Embedding it in the service unit means the user gets the
-  // exact same Node version they invoked `un-bien install` with — no
+  // exact same Node version they invoked `unbien install` with — no
   // PATH ambiguity at boot time.
   return process.execPath;
 }
@@ -312,7 +312,7 @@ export function installService(
     // Only `schtasks /Create` modifies the root task store → that single op
     // needs admin (elevate it via UAC). `/End` (stop a prior instance) and
     // `/Run` (start it) act on a task we already own and work un-elevated — the
-    // very ops `un-bien restart-supervisor` runs without elevation. Keeping
+    // very ops `unbien restart-supervisor` runs without elevation. Keeping
     // them un-elevated narrows the admin surface to the one operation that
     // truly requires it.
     _tryExec("schtasks", ["/End", "/TN", WINDOWS_TASK_NAME], log);
@@ -543,7 +543,7 @@ function _execElevatedWindows(lines: string[], log: string[]): void {
 // When the user installs Remote Pi through Pi (`pi install npm:un-bien`),
 // the extension's `bin` entries in package.json never reach `$PATH` — Pi's
 // installer ignores them. Without `npm install -g un-bien` a second time,
-// the user can't run `un-bien daemon …` from a shell.
+// the user can't run `unbien daemon …` from a shell.
 //
 // `linkCliBinaries` writes two symlinks into `~/.local/bin/`:
 //   - `un-bien`     → `<extensionRoot>/dist/index.js`
@@ -555,7 +555,7 @@ function _execElevatedWindows(lines: string[], log: string[]): void {
 //
 // This step is opt-in and runs ONLY when the slash-command path triggers
 // `_cmdInstall` — i.e., the user is inside Pi's TUI. The CLI-mode path
-// (`un-bien install` invoked from a shell because the user did
+// (`unbien install` invoked from a shell because the user did
 // `npm install -g un-bien`) MUST NOT symlink — the user already has
 // working bins from npm-global, and stomping them with our symlinks
 // would point them at the *Pi-extension copy* instead of the npm-global
@@ -624,7 +624,7 @@ export function linkCliBinaries(
   const supervisord = paths.supervisord ?? findSupervisorScript();
   if (!existsSync(remotePi)) {
     throw new Error(
-      `un-bien script not found at ${remotePi}. ` +
+      `unbien script not found at ${remotePi}. ` +
         "Run `pnpm build` (dev) or reinstall the extension.",
     );
   }
@@ -696,7 +696,7 @@ function _linkCliBinariesWindows(
   const supervisord = paths.supervisord ?? findSupervisorScript();
   if (!existsSync(remotePi)) {
     throw new Error(
-      `un-bien script not found at ${remotePi}. ` +
+      `unbien script not found at ${remotePi}. ` +
         "Run `pnpm build` (dev) or reinstall the extension.",
     );
   }

@@ -14,7 +14,7 @@
  *   - Listens on `~/.pi/un-bien/supervisor.sock` for CLI control requests
  *   - Restarts crashed children with exponential backoff
  *
- * Exits cleanly on SIGTERM/SIGINT (used by `un-bien uninstall`).
+ * Exits cleanly on SIGTERM/SIGINT (used by `unbien uninstall`).
  */
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -32,9 +32,9 @@ Runs the long-lived supervisor: reads ~/.pi/un-bien/daemons.json, spawns one
 for control requests from the \`un-bien\` CLI.
 
 This binary takes NO arguments — it is normally launched by systemd/launchd
-(via \`un-bien install\`), not by hand. Manage the fleet with:
-  un-bien daemon start | stop | restart | status
-  un-bien daemons
+(via \`unbien install\`), not by hand. Manage the fleet with:
+  unbien daemon start | stop | restart | status
+  unbien daemons
 
 Options:
   -h, --help      Show this help and exit
