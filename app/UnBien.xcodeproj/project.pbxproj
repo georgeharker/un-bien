@@ -19,7 +19,7 @@
 		105D6ECB55459B12DC4E7F91 /* UnBienApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnBienApp.swift; sourceTree = "<group>"; };
 		1D913B5BB0A3D0C3C487F6F1 /* UnBien-macOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "UnBien-macOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		363F503535BEAFD31CBD4424 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		7A34C497832570683B1E6030 /* UnBien-iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "UnBien-iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		7A34C497832570683B1E6030 /* UnBien-iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "UnBien-iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		B590CD84FB480AC9F416CD86 /* app */ = {isa = PBXFileReference; lastKnownFileType = folder; name = app; path = .; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
@@ -137,6 +137,16 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					12D68B4C94A4328EFECB2B7F = {
+						DevelopmentTeam = B8V3694RNX;
+						ProvisioningStyle = Automatic;
+					};
+					B1A9D933CD78586D168C5963 = {
+						DevelopmentTeam = B8V3694RNX;
+						ProvisioningStyle = Automatic;
+					};
+				};
 			};
 			buildConfigurationList = FBB28AED50A7BE60C9F837F1 /* Build configuration list for PBXProject "UnBien" */;
 			developmentRegion = en;
@@ -323,7 +333,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "App/macOS/un-bien.entitlements";
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = B8V3694RNX;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = App/macOS/Info.plist;
@@ -341,7 +354,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "App/macOS/un-bien.entitlements";
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = B8V3694RNX;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = App/macOS/Info.plist;
@@ -359,7 +375,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "App/iOS/un-bien.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = B8V3694RNX;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = App/iOS/Info.plist;
@@ -378,7 +396,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "App/iOS/un-bien.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = B8V3694RNX;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = App/iOS/Info.plist;

@@ -37,6 +37,12 @@ public struct RootView: View {
         .environmentObject(fonts)
         .environment(\.appTheme, model.theme)
         .environment(\.typography, model.typography)
+        .onOpenURL { model.handleOpenURL($0) }
+        .sheet(item: $model.pendingPairing) { pending in
+            ChooseRelayPairSheet(invite: pending.invite)
+                .environmentObject(model)
+                .environmentObject(fonts)
+        }
         .task {
             fonts.registerAll()
             #if DEBUG

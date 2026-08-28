@@ -31,6 +31,15 @@ public struct PanelState: Identifiable, Equatable, Sendable {
     public var id: String { key }
 }
 
+/// A pairing invite that arrived via the `unbien://` URL scheme (system Camera
+/// or an external link) and is awaiting a relay choice. The QR carries no relay
+/// (DESIGN: `r` dropped), so the deep-link flow must pick one.
+public struct PendingPairing: Identifiable {
+    public let id = UUID()
+    public let invite: PairingInvite
+    public init(invite: PairingInvite) { self.invite = invite }
+}
+
 /// Top-level app orchestrator: Owner-key custody, per-relay connections,
 /// pairing, live session discovery, and per-session transcript reducers.
 @MainActor
@@ -62,6 +71,9 @@ public final class AppModel: ObservableObject {
     @Published public var thinkingLevel: [String: ThinkingLevel] = [:]
     /// Capabilities advertised by the paired pi per session (handshake).
     @Published public var capabilities: [String: Set<String>] = [:]
+    /// A pairing invite opened via the `unbien://` scheme, awaiting a relay
+    /// choice. Drives the deep-link relay chooser sheet.
+    @Published public var pendingPairing: PendingPairing?
 
     // MARK: - Preferences (persisted)
 
@@ -148,6 +160,14 @@ public final class AppModel: ObservableObject {
         let relay = RelayConfig(name: name, url: url)
         mesh.addRelay(relay)
         await connect(relay)
+    }
+
+    /// Parse an `unbien://pair?…` deep link (system Camera / pasted link) into a
+    /// pending invite. The relay is NOT in the URL (the QR carries no `r`), so
+    /// the UI then presents a relay chooser. Non-pairing URLs are ignored.
+    public func handleOpenURL(_ url: URL) {
+        guard let invite = try? PairingURI.parse(url.absoluteString) else { return }
+        pendingPairing = PendingPairing(invite: invite)
     }
 
     public func removeRelay(id: UUID) {

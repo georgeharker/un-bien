@@ -1,9 +1,9 @@
 import SwiftUI
 import UnBienCore
 
-/// Pairing — paste the `unbien://pair?…` code (cross-platform). QR camera
-/// scanning is an iOS-only enhancement layered on later; the paste fallback is
-/// the parity floor (DESIGN §12) and the only path that also works on macOS.
+/// Pairing — scan the `unbien://pair?…` QR with the camera (iOS) or paste the
+/// code (cross-platform). The paste fallback is the parity floor (DESIGN §12)
+/// and the only path that also works on macOS.
 struct PairSheet: View {
     let relay: RelayConfig
     @EnvironmentObject var model: AppModel
@@ -12,6 +12,9 @@ struct PairSheet: View {
     @State private var pasted = ""
     @State private var deviceName = PairSheet.defaultDeviceName
     @State private var status: Status = .idle
+    #if os(iOS)
+    @State private var showScanner = false
+    #endif
 
     enum Status: Equatable {
         case idle, pairing, paired(String), error(String)
@@ -27,6 +30,13 @@ struct PairSheet: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         #endif
+                    #if os(iOS)
+                    Button {
+                        showScanner = true
+                    } label: {
+                        Label("Scan QR code", systemImage: "qrcode.viewfinder")
+                    }
+                    #endif
                     TextField("This device's name", text: $deviceName)
                 }
                 switch status {
@@ -44,6 +54,14 @@ struct PairSheet: View {
                 }
             }
             .navigationTitle("Pair — \(relay.name)")
+            #if os(iOS)
+            .sheet(isPresented: $showScanner) {
+                QRScannerSheet { code in
+                    pasted = code
+                    pair(with: code)
+                }
+            }
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -56,8 +74,10 @@ struct PairSheet: View {
         }
     }
 
-    private func pair() {
-        guard let invite = try? PairingURI.parse(pasted) else {
+    private func pair() { pair(with: pasted) }
+
+    private func pair(with raw: String) {
+        guard let invite = try? PairingURI.parse(raw) else {
             status = .error("That doesn't look like a valid pairing code.")
             return
         }
@@ -74,32 +94,5 @@ struct PairSheet: View {
         }
     }
 
-    private func pairFailureMessage(_ error: Error) -> String {
-        switch error {
-        case let RelayConnection.PairingError.failed(code, message):
-            return "\(code.rawValue): \(message)"
-        case let RelayConnection.PairingError.unexpected(message):
-            return message
-        case let RelayConnection.ConnectionError.rejected(code, message):
-            return "Relay rejected the connection (\(code ?? "?"): \(message ?? ""))"
-        case RelayConnection.ConnectionError.handshakeTimeout:
-            return "Couldn't reach the relay (handshake timed out). "
-                + "Check the relay is reachable from this device — a Tailscale "
-                + "*.ts.net address may not resolve here."
-        case let urlError as URLError:
-            return "Network error reaching the relay: \(urlError.localizedDescription) "
-                + "(\(urlError.code.rawValue)). If the relay is on Tailscale, the "
-                + "simulator may not resolve its *.ts.net name."
-        default:
-            return "Pairing failed: \(error.localizedDescription)"
-        }
-    }
-
-    private static var defaultDeviceName: String {
-        #if os(iOS)
-        return UIDevice.current.name
-        #else
-        return Host.current().localizedName ?? "Mac"
-        #endif
-    }
+    private static var defaultDeviceName: String { defaultPairingDeviceName }
 }
