@@ -129,6 +129,11 @@ ported `toJsonEvent` (see `rpc-on-event-map.md`): `message_start/update/end`,
 `compaction_end` (remapped from `session_compact`). Folded by
 `SessionState.applyRPC`.
 
+One fork-synthesized frame rides the same plane and is NOT a pi event:
+`session_sync_end` (below) — the terminator that closes a `session_sync` replay
+and carries its metadata. `applyRPC` handles it like any other frame; older app
+builds ignore it (unknown type → `default: break`).
+
 ### Command surface (app → fork, `{rpc}`)
 
 Each carries an optional `id`; the fork replies `{rpc:{type:"response",command,
@@ -149,11 +154,29 @@ success,data?,error?,id}}` to the **sender**, correlated by `id`.
 ### Reconstruction / resume
 
 Request-driven and envelope-native. App `openSession` sends
-`{rpc:{type:"session_sync", limit}}`. The fork replays the last `limit` history
-events as a sequence of `{rpc}` **live frames** (`message_end` for user/assistant,
-`tool_execution_start/end` for tool cards, `compaction_end`), which the app folds
-via the SAME `applyRPC` as the live stream — so no separate history reducer, and
-tool cards survive. There is no stock `session_history` on this wire.
+`{rpc:{type:"session_sync", id, limit?}}`. The fork answers, **to that sender
+only**, with this ordered sequence:
+
+1. **Queued-message state** — `_sendQueuedState`, the app's editable queue.
+2. **Transcript replay** — the last-N history events as `{rpc}` **live frames**
+   (`message_end` for user/assistant, `tool_execution_start/end` for tool cards,
+   `compaction_end`), folded by the SAME `applyRPC` as the live stream. No
+   separate history reducer; tool cards survive.
+3. **Terminator** — `{rpc:{type:"session_sync_end", in_reply_to, session_started_at,
+   truncated}}`. Its ARRIVAL is the end-of-stream signal (no `eos` flag).
+   `session_started_at` is the session clock; `truncated` = older history exists
+   beyond the returned window. Always sent, even for empty history, so the app
+   reliably learns the clock on a fresh session.
+4. **Pending `extension_ui`** — any in-flight dialog awaiting an answer, so a
+   late-joining peer re-opens the modal over a synced chat.
+5. **Panels** — current plan/subagents side-panels replayed as
+   `{evt:{channel:"panel",...}}` (see below).
+
+**Limit is server-clamped:** the returned window is `min(client limit ?? server
+default, server default)` — a client can never pull more than `UNBIEN_SYNC_LIMIT`
+allows. `slice = events.slice(-limit)` (the newest N), recomputed on every sync,
+so a reconnect re-pulls the whole current window. There is no stock
+`session_history` on this wire.
 
 ### extension_ui (envelope-only, both directions)
 
@@ -166,10 +189,107 @@ contract 1:1 — `select`/`confirm`/`input`/`editor` dialogs +
 
 The plan/subagents bus, aggregated by the fork's panel bridge, is forwarded as
 `{evt:{channel:"panel", data:<panel_update>}}`. The app decodes `data` and folds
-it into its panel store.
+it into its panel store. Panels flow on **two** occasions: **live**, whenever the
+bus emits (`plan:snapshot`/`plan:update`/`subagents:*`), and on **`session_sync`**,
+where the bridge's `pendingPanels()` are replayed to the requesting peer — so a
+peer that attaches AFTER a panel was produced still sees it, instead of waiting
+for the next bus event. Both use the identical `{evt}` shape.
+
+### End-to-end flow (both sides)
+
+The lifecycle of one chat, naming the fork (`extension/src/index.ts`) and app
+(`UnBienCore`/`UnBienApp`) touchpoints:
+
+1. **App starts / opens a session.** After pairing (or on reconnect), the app
+   has an `(epk, roomId)` for the chat and calls `openSession` — it subscribes
+   on the relay and sends `{rpc:{type:"session_sync", id, limit?}}` addressed to
+   that `(epk, room)`. Nothing about history is assumed from the pairing frames.
+
+2. **Fork attaches and greets.** When a peer attaches (`_attachOwner`), the fork
+   sends the `hello` envelope FIRST — `caps` + the pi `sessionId` — before any
+   content, so the app turns on the envelope route and the capability-gated UI
+   (thinking/models/panels) immediately. Attach does NOT proactively dump
+   history; reconstruction is request-driven.
+
+3. **Connection gets history.** The fork's `_routeRpcCommandFrom` sees the
+   `{rpc}` `session_sync` and runs the reconstruction sequence above — queued
+   state, transcript replay frames, `session_sync_end` terminator, pending
+   `extension_ui`, panels — all `sendEnvelope`'d to the requesting channel ONLY
+   (per-sender; a sync from peer A never lands on peer B's wire). The app folds
+   every replay frame through `SessionState.applyRPC` (the same reducer as live),
+   and `session_sync_end` sets `sessionStartedAt`. A reconnect just re-issues
+   `session_sync` and re-pulls the current window.
+
+4. **Live streaming.** From then on the fork forwards pi events as `{rpc}`
+   frames as they happen; the app folds them with the same `applyRPC`. There is
+   no distinction in the app between "history" and "live" — both are the same
+   frames through the same reducer, which is why tool cards and interleaving
+   survive a resume.
+
+5. **Panels.** The fork's panel bridge subscribes to the plan/subagents bus and
+   emits `{evt:{channel:"panel", ...}}` live on every bus event. On a
+   `session_sync` it ALSO replays `pendingPanels()` to the joining peer. The app
+   routes any `{evt channel:"panel"}` — live or replayed, identical shape —
+   through its stock panel decoder into `PanelState`, so a late attach shows the
+   current plan/subagents without waiting for the next bus tick.
+
+6. **Commands / dialogs.** App→fork commands (`prompt`/`steer`/`abort`/
+   `set_model`/…) and `extension_ui_response` all ride `{rpc}` to `(epk, room)`;
+   the fork replies `{rpc:{type:"response", id, …}}` to the sender. Dialogs the
+   fork raises come as `extension_ui_request` and are replayed on sync if still
+   pending.
 
 ### Outer control (unchanged, mesh layer)
 
 Pairing/auth, relay routing, `room_meta` (model/thinking display),
 ping/liveness — these are the mesh/relay layer, not session content, and are
 out of scope for this envelope.
+
+## Room disambiguation, pairing, and content routing
+
+Two identities, deliberately **different**:
+
+- **Machine identity = the Pi's persisted Ed25519 pubkey (`epk`).** Resolved by
+  `getOrCreateEd25519Keypair()` from the OS keychain (or
+  `~/.pi/un-bien/identity.json`, `0o600`), so it is **stable across restarts**
+  and unique per machine. Pairing trust is recorded against it (`PairedMachine`
+  keyed by `epk`), and it is the relay's routing key.
+- **Chat-session identity = a room id derived from the Pi session id**
+  (`sessionManager.getSessionId()` → `roomIdForSession` = `base64url(sha256(id))[:12]`).
+  The session id is **durable across resume** (it lives in the session-file
+  header and is reused when the file is reopened; a fresh session mints a new
+  id), so the room is stable across reconnect and unique per chat. Two chats
+  with the **same name** are distinct (different session ids → different rooms).
+  The tile still **displays the session's title/name** (`room_meta.name`, which
+  may change freely) — identity is the key, not the label.
+
+The app keys **all** per-session state — transcript, capabilities, panels —
+under `relayID:peer:roomId`, where `roomId` is the session room learned live from
+`room_announced`. Identity is established from the announce, **never** re-keyed
+from a late-arriving frame.
+
+### Pairing: room-scoped handshake, machine-level trust
+
+The QR token is issued by ONE session (`qrSession` is per Pi process), so the
+handshake belongs to that session:
+
+- The QR carries `epk` and `rm` = the **issuing session's** room
+  (session-id-derived `_myRoomId`).
+- The app sends `pair_request` room-specifically to `(epk, rm)`; the relay
+  delivers it via `forward(peer, room)` to **exactly** that session. Only the
+  token-issuing session receives and answers (`qrSession.consumeToken` →
+  `pair_ok`) — no fan-out, no cross-session race.
+- **Trust lands on the machine:** `pair_ok` persists a `PairedMachine` keyed by
+  `epk`. The app then `subscribe`s to the peer and discovers **all** the
+  machine's chats via `room_announced`, grouping them under the one `epk`. So
+  "pair once, see every chat" holds **without** any app→machine broadcast.
+
+### Content is room-specific (anti-bleed)
+
+Every app→Pi frame — the `pair_request`, transcript `{rpc}`, panel `{evt}`,
+commands — is addressed to a specific `(epk, room)` and delivered by the relay's
+`forward(peer, room)` to that **exact** connection only. A frame for chat A can
+never surface in chat B. There is **no** app→Pi broadcast path: reaching "all of
+a machine's chats" is done by addressing each announced session room in turn, so
+the `epk` + `room_announced` discovery covers every case. Guarded by the relay
+test `forward_is_room_specific_no_bleed`. **Bleed or data loss is a hard no.**

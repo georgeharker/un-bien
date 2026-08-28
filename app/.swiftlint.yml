@@ -11,5 +11,15 @@ identifier_name:
 cyclomatic_complexity:
   ignores_case_statements: true
 
+# AppModel is the app's single orchestrator (relay/session/panel state); it's
+# intentionally large. Raise the body-length ceilings rather than fragment it.
+type_body_length:
+  warning: 500
+  error: 700
+
+function_body_length:
+  warning: 120
+  error: 240
+
 excluded:
   - .build

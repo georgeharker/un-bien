@@ -11,14 +11,30 @@ import { defaultAgentName } from "./session/local_config.js";
  * Format: first 12 chars of base64url(sha256(realpath)).
  */
 export function roomIdForCwd(cwd: string): string {
-  let target: string;
-  try {
-    target = realpathSync(cwd);
-  } catch {
-    // cwd doesn't exist (unlikely in production) — fallback to raw path.
-    target = cwd;
-  }
-  return createHash("sha256").update(target).digest("base64url").slice(0, 12);
+ let target: string;
+ try {
+  target = realpathSync(cwd);
+ } catch {
+  // cwd doesn't exist (unlikely in production) — fallback to raw path.
+  target = cwd;
+ }
+ return createHash("sha256").update(target).digest("base64url").slice(0, 12);
+}
+
+/**
+ * THE App<->Pi `room_id` basis: derived from the stable pi SESSION ID (which is
+ * durable across resume — it lives in the session file header and is reused when
+ * the file is reopened; a fresh session gets a new id). Keying the room on the
+ * session id makes it (a) stable across relay reconnects, so proactive frames
+ * can't drift onto a different room than the session announces, and (b) unique
+ * per chat session, so two same-NAME chats in one folder are distinct. The
+ * display label stays the session's title/name; this is the routing key only.
+ *
+ * 12-char `base64url(sha256(sessionId))` — same shape as `roomIdForCwd`, and it
+ * keeps the raw session id off the wire.
+ */
+export function roomIdForSession(sessionId: string): string {
+ return createHash("sha256").update(sessionId).digest("base64url").slice(0, 12);
 }
 
 /**
@@ -41,15 +57,18 @@ export function roomIdForCwd(cwd: string): string {
  * Pi never announces.
  */
 export function roomIdFor(cwd: string, name?: string): string {
-  if (!name || name === defaultAgentName(cwd)) return roomIdForCwd(cwd);
-  let target: string;
-  try {
-    target = realpathSync(cwd);
-  } catch {
-    target = cwd;
-  }
-  // NUL separator (U+0000): impossible in a POSIX path and stripped from any
-  // sanitized name, so the cwd/name boundary is unambiguous.
-  const sep = String.fromCharCode(0);
-  return createHash("sha256").update(target + sep + name).digest("base64url").slice(0, 12);
+ if (!name || name === defaultAgentName(cwd)) return roomIdForCwd(cwd);
+ let target: string;
+ try {
+  target = realpathSync(cwd);
+ } catch {
+  target = cwd;
+ }
+ // NUL separator (U+0000): impossible in a POSIX path and stripped from any
+ // sanitized name, so the cwd/name boundary is unambiguous.
+ const sep = String.fromCharCode(0);
+ return createHash("sha256")
+  .update(target + sep + name)
+  .digest("base64url")
+  .slice(0, 12);
 }

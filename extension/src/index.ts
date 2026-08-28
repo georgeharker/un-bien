@@ -84,6 +84,7 @@ import {
 import { createPanelBridge, type PanelBridge } from "./panel_bridge.js";
 import {
   createRpcEnvelope,
+  ENVELOPE_KIND,
   helloEnvelope,
   type EnvelopeMessage,
 } from "./session/rpc_envelope.js";
@@ -92,7 +93,7 @@ import {
   type RpcCommandHandlers,
 } from "./session/rpc_inbound.js";
 import { envLog } from "./session/debug_log.js";
-import { roomIdFor } from "./rooms.js";
+import { roomIdFor, roomIdForSession } from "./rooms.js";
 import { registerAgentTools } from "./session/tools.js";
 import { formatPeerInventory } from "./session/peer_inventory.js";
 import { MeshNode } from "./session/mesh_node.js";
@@ -264,7 +265,17 @@ function _isStrictBase64(data: string): boolean {
   return true;
 }
 
-let _myRoomId: string | null = null; // this Pi's room id (derived from cwd)
+let _myRoomId: string | null = null; // this Pi's room id (derived from the session id)
+
+/** THE App<->Pi room id for the current chat session. Prefers the STABLE pi
+ *  session id (durable across resume) so the room can't drift when the assigned
+ *  name changes on reconnect; falls back to the legacy (cwd, name) derivation
+ *  only when no session id is available yet (pre-sessionManager edge). */
+function _deriveRoomId(cwd: string, name: string): string {
+  const sid = _sessionManager?.getSessionId();
+  return sid ? roomIdForSession(sid) : roomIdFor(cwd, name);
+}
+
 // Plan/28 Wave D.1: `thinking` published alongside `model` so the app's
 // Quick Actions sheet hydrates the thinking segmented control on first
 // open instead of starting null. The SDK fires `thinking_level_select`
@@ -394,13 +405,17 @@ function _imageCacheRootDir(): string {
     } catch {}
     try {
       chmodSync(_imageCacheDir, 0o700);
-    } catch {}
+    } catch {
+      /* best-effort permission hardening */
+    }
     return _imageCacheDir;
   }
   const dir = mkdtempSync(join(tmpdir(), IMAGE_CACHE_PREFIX));
   try {
     chmodSync(dir, 0o700);
-  } catch {}
+  } catch {
+    /* best-effort permission hardening */
+  }
   _imageCacheDir = dir;
   return dir;
 }
@@ -468,7 +483,9 @@ async function _renderablePngPathFromImage(
       writeFileSync(previewPath, previewBytes, { mode: 0o600 });
       try {
         chmodSync(previewPath, 0o600);
-      } catch {}
+      } catch {
+        /* best-effort permission hardening */
+      }
       return previewPath;
     } catch {
       _cleanupPreviewFile(previewPath);
@@ -610,7 +627,9 @@ async function _collectReceivedImagePreviews(
       writeFileSync(path, decoded.decoded, { mode: 0o600 });
       try {
         chmodSync(path, 0o600);
-      } catch {}
+      } catch {
+        /* best-effort permission hardening */
+      }
 
       const previewPath =
         image.mime === IMAGE_PREVIEW_MIME
@@ -1525,15 +1544,48 @@ function _routeRpcCommandFrom(
   // applyRPC (replaces the stock session_sync -> session_history round-trip).
   if ((frame as Record<string, unknown>).type === "session_sync") {
     const f = frame as Record<string, unknown>;
-    const limit = typeof f.limit === "number" ? f.limit : _getSyncLimit();
+    // Full per-peer sync on the envelope wire: queued-message state, in-flight
+    // ask_user (extension_ui) flows, the transcript, and panels. (The retired
+    // stock session_sync handler used to own queued/extension_ui/panels; they
+    // all replay here now.)
+    _sendQueuedState(sender);
+    // Server clamps the client's requested limit to its own cap (the envelope
+    // wire MUST keep the stock guarantee — a client can't pull more than the
+    // server allows). `truncated` says older history exists beyond the slice.
+    const serverLimit = _getSyncLimit();
+    const requested = typeof f.limit === "number" ? f.limit : serverLimit;
+    const limit = Math.min(requested, serverLimit);
     const msgs = _sessionHistoryMessages();
     const events = _mapAgentMessagesToEvents(msgs);
     const slice = limit > 0 ? events.slice(-limit) : [];
+    const truncated = events.length > slice.length;
     const replayFrames = _historyReplayEnvelopes(slice);
     envLog(
-      `session_sync(env): msgs=${msgs.length} (buffer=${_messageBuffer.length}, sm=${_sessionManager ? "y" : "n"}) events=${events.length} replay=${replayFrames.length}`,
+      `session_sync(env): msgs=${msgs.length} (buffer=${_messageBuffer.length}, sm=${_sessionManager ? "y" : "n"}) events=${events.length} replay=${replayFrames.length} limit=${limit} truncated=${truncated}`,
     );
     for (const replay of replayFrames) sender.sendEnvelope(replay);
+    // Envelope-native terminator: carries the sync metadata stock used to bundle
+    // on `session_history` (session_started_at + truncated), keyed by the
+    // request id. Its arrival IS the `eos` — no separate flag. Always sent, even
+    // for empty history, so the app reliably learns the session clock.
+    sender.sendEnvelope({
+      rpc: {
+        type: "session_sync_end",
+        in_reply_to: f.id,
+        session_started_at: _sessionStartedAt ?? 0,
+        truncated,
+      },
+    });
+    for (const req of _extensionUiBridge?.pendingRequests() ?? [])
+      sender.send(req);
+    // Replay current side-panels to THIS peer too. Until this consolidation the
+    // envelope session_sync replayed ONLY the transcript, so plan/subagents
+    // panels (emitted before/independent of this peer's attach) never reached
+    // envelope clients. Panels are {evt channel:"panel"}, same shape as live.
+    for (const panel of _panelBridge?.pendingPanels() ?? []) {
+      sender.sendEnvelope({ evt: { channel: "panel", data: panel } });
+      envLog(`session_sync(env): replayed panel`);
+    }
     return;
   }
   const handlers: RpcCommandHandlers = {
@@ -2360,7 +2412,8 @@ function _attachOwner(
     `attach: peer=${appPeerId.slice(0, 8)} hello sent (caps + sessionId=${_sid ?? "?"}); active=${_activePeers.size}`,
   );
   // Transcript reconstruction is request-driven (app sends session_sync on open)
-  // — see _handleSessionSync; nothing to replay proactively here.
+  // — see the envelope session_sync handler in _routeRpcCommandFrom; nothing to
+  // replay proactively here.
   _refreshFooter();
 
   _safeNotify(
@@ -2442,15 +2495,27 @@ function _installAutoListener(relay: RelayClient): () => void {
     if (!hasListenerAuthority()) return;
     if (known) {
       const channel = _attachOwner(relay, appPeerId, known.name);
-      // The PlainPeerChannel listener for this owner won't have seen the
-      // line that triggered the attach (we already consumed it); route
-      // it explicitly via the new channel so the sender gets a reply.
-      // Use _liveCtx (session_start-fresh) — not bare _lastCtx (#55).
-      _routeClientMessageFrom(
-        channel,
-        inner,
-        (_liveCtx() as typeof _noopCtx) ?? _noopCtx,
-      );
+      // The channel listener didn't see the line that triggered the attach, so
+      // route it explicitly — MIRRORING the channel's own dispatch (peer_channel
+      // _onLine): an envelope ({type:"env"} / rpc / evt) goes to the rpc
+      // dispatcher, a stock ClientMessage to the stock switch. Everything is on
+      // the envelope proto now, so the first message is normally the {rpc}
+      // session_sync — routing that through the stock switch dropped it (the
+      // un-migrated attach path). Use _liveCtx (session_start-fresh), not #55.
+      const innerObj = inner as unknown as Record<string, unknown>;
+      if (
+        innerObj.type === ENVELOPE_KIND ||
+        innerObj.rpc !== undefined ||
+        innerObj.evt !== undefined
+      ) {
+        _routeRpcCommandFrom(channel, inner as unknown as EnvelopeMessage);
+      } else {
+        _routeClientMessageFrom(
+          channel,
+          inner,
+          (_liveCtx() as typeof _noopCtx) ?? _noopCtx,
+        );
+      }
       return;
     }
 
@@ -2656,7 +2721,7 @@ async function _handlePairRequest(
     // to roomIdFor(cwd, name) covers the edge case where pair_request lands
     // before _cmdStart could set _myRoomId (shouldn't happen in practice) —
     // and stays plan/41-consistent (same (cwd, name) derivation as the announce).
-    room_id: _myRoomId ?? roomIdFor(cwd, sessionName),
+    room_id: _myRoomId ?? _deriveRoomId(cwd, sessionName),
     // Plan/27 Wave A — surface the host coding-agent identity + machine
     // hostname so the app can render a meaningful device row (and tell
     // two PCs apart even when nicknames collide).
@@ -3030,7 +3095,9 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // room_meta over the relay (plan/32) below — that's independent of the
   // broker and drives the app's working indicator.
   pi.on("turn_start", (_event, ctx) => {
-    _sessionManager = ctx.sessionManager;
+    // Only adopt a real manager — a ctx without one must NOT clobber a good
+    // reference with undefined (also keeps the handler robust to a bare ctx).
+    if (ctx?.sessionManager) _sessionManager = ctx.sessionManager;
     // Late model hydration: if the model was still unknown at connect (resolved
     // lazily by the SDK), grab it on the first turn and fan it out — so a daemon
     // whose model only materialises at turn 1 still reports it to the app.
@@ -3939,7 +4006,7 @@ async function _cmdStart(
   // default/unnamed case preserves the legacy cwd-only id (no re-keying). Uses
   // the SAME name as room_meta.name / pair_ok below — the invariant that the
   // app pairs on the room the Pi actually announces.
-  const roomId = roomIdFor(cwd, sessionName);
+  const roomId = _deriveRoomId(cwd, sessionName);
 
   // Seed the current model from the SDK's resolved selection so room_meta
   // carries it on connect. `model_select` only fires on an explicit set/cycle
@@ -4211,7 +4278,12 @@ async function _cmdPair(
     ? clampPairTtlMs(Number(ttlMatch[1]) * 1000)
     : TOKEN_TTL_MS;
   const { token, expiresAt } = qrSession.issueToken(ttlMs);
-  const roomId = _myRoomId ?? roomIdFor(cwd, sessionName);
+  // The QR room is the ISSUING session's room (session-id-derived `_myRoomId`).
+  // Pairing is room-scoped to this session (it owns the QR token), so only this
+  // session answers the pair_request — no fan-out race. Trust still lands on the
+  // MACHINE: pair_ok persists a PairedMachine keyed by epk, and the app then
+  // discovers all the machine's sessions via room_announced.
+  const roomId = _myRoomId ?? _deriveRoomId(cwd, sessionName);
   const qrUri = buildQRUri(token, edKp.publicKey, sessionName, roomId);
   // Render both the QR ASCII and the copy-paste URI inside the Pi TUI's
   // chat panel via `pi.sendMessage` — the same channel the SDK uses for
@@ -5663,12 +5735,6 @@ export function _routeClientMessageFrom(
   msg: ClientMessage,
   ctx: Pick<ExtensionContext, "abort">,
 ): void {
-  // session_sync has its own internal guards — handle before the strict
-  // pi-binding guard so a missing _pi doesn't drop the reply.
-  if (msg.type === "session_sync") {
-    _handleSessionSync(sender, msg);
-    return;
-  }
   if (msg.type === "cancel") {
     try {
       const aborted = _abortCurrentTurn(ctx);
@@ -5973,71 +6039,6 @@ export function routeClientMessage(
  * also dump history to owner B's wire — duplicate traffic + the wrong
  * `in_reply_to`.
  */
-function _handleSessionSync(
-  sender: PlainPeerChannel,
-  msg: Extract<ClientMessage, { type: "session_sync" }>,
-): void {
-  _sendQueuedState(sender);
-  if (_sessionStartedAt === null) {
-    sender.send({
-      type: "session_history",
-      in_reply_to: msg.id,
-      session_started_at: 0,
-      events: [],
-      eos: true,
-      truncated: false,
-      protocol_version: PROTOCOL_VERSION,
-      capabilities: _capabilities(),
-    });
-    return;
-  }
-
-  // Mirror semantics: always return the last N events. App SUBSTITUTES its
-  // local cache with this response — no delta/since_ts logic.
-  const serverLimit = _getSyncLimit();
-  const requested = msg.limit ?? serverLimit;
-  const effectiveLimit = Math.min(requested, serverLimit); // server clamps
-
-  const allEvents = _mapAgentMessagesToEvents(_messageBuffer);
-  const slice = effectiveLimit > 0 ? allEvents.slice(-effectiveLimit) : [];
-  const truncated = allEvents.length > effectiveLimit;
-
-  sender.send({
-    type: "session_history",
-    in_reply_to: msg.id,
-    session_started_at: _sessionStartedAt,
-    events: slice,
-    eos: true,
-    truncated,
-    protocol_version: PROTOCOL_VERSION,
-    capabilities: _capabilities(),
-  });
-
-  // Envelope-native reconstruction: replay the same sliced history as {rpc}
-  // frames the app folds via applyRPC (the app ignores the stock session_history
-  // above). Request-driven, so it lands after the app has opened the session.
-  for (const frame of _historyReplayEnvelopes(slice))
-    sender.sendEnvelope(frame);
-
-  // Plan/57 — replay ask_user flows still awaiting an answer. The bridge
-  // broadcasts `started` once; a peer that connects afterwards would otherwise
-  // see the tool call as plain history text while the desktop stays blocked on
-  // the TUI dialog (reproduced: close the app, fire ask_user, reopen → no
-  // sheet). Sent AFTER the history so the modal opens over a synced chat, and
-  // per-sender like the rest of this handler — a sync from owner A must not
-  // pop a modal on owner B. Flows past FLOW_TTL_MS are already gone from the
-  // bridge, so an abandoned flow is never resurrected.
-  for (const req of _extensionUiBridge?.pendingRequests() ?? []) {
-    sender.send(req);
-  }
-
-  // Replay current side-panels (plan / subagents) so a late-joining peer sees
-  // them without waiting for the next bus event. Per-sender, like the rest of
-  // this handler.
-  for (const panel of _panelBridge?.pendingPanels() ?? []) {
-    sender.send(panel);
-  }
-}
 
 /**
  * Resets the Pi-side session view after a SUCCESSFUL `session_new`. The app's
@@ -6045,9 +6046,8 @@ function _handleSessionSync(
  * durable: `_messageBuffer` (which answers `session_sync`) is append-only and
  * `_sessionStartedAt` is stamped once, so a later reconnect/restart would
  * replay the OLD history. We clear the buffer, restamp the clock, and
- * broadcast an EMPTY `session_history` — the exact shape `_handleSessionSync`
- * sends, just with `events: []` — so every attached owner drops the stale
- * conversation. The app's `_applyHistory` substitutes its cache wholesale, so
+ * broadcast an EMPTY `session_history` (`events: []`) so every attached owner
+ * drops the stale conversation. The app's `_applyHistory` substitutes its cache wholesale, so
  * no new app-side code is needed.
  *
  * Unlike a per-request session_history reply (which must go to the sender
@@ -6349,8 +6349,10 @@ export function _mapAgentMessagesToEvents(
 ): SessionHistoryEvent[] {
   const events: SessionHistoryEvent[] = [];
   let lastUserId: string | null = null;
+  let msgIdx = -1;
 
   for (const m of messages) {
+    msgIdx += 1;
     const ts = typeof m.timestamp === "number" ? m.timestamp : 0;
 
     if (m.role === "compaction") {
@@ -6362,7 +6364,10 @@ export function _mapAgentMessagesToEvents(
         tokens_before: typeof m.tokensBefore === "number" ? m.tokensBefore : 0,
       });
     } else if (m.role === "user") {
-      const id = `sync_${ts}`;
+      // Include the buffer position so two user inputs sharing a timestamp (or a
+      // missing ts → 0) still get DISTINCT, stable ids. The app dedups by id, so
+      // a non-unique id would silently DROP a real message.
+      const id = `sync_${ts}_${msgIdx}`;
       lastUserId = id;
       // Plan/30: keep any image blocks so a re-sync rebuilds the bubble. The
       // bytes are already in _messageBuffer; only attach `images` when present
@@ -6404,7 +6409,7 @@ export function _mapAgentMessagesToEvents(
           const ev: SessionHistoryEvent = {
             ts,
             type: "agent_message",
-            in_reply_to: lastUserId ?? `sync_${ts}`,
+            in_reply_to: lastUserId ?? `sync_${ts}_${msgIdx}`,
             text,
             ...(usage ? { usage } : {}),
             ...(images.length > 0 && !imagesAttached ? { images } : {}),
@@ -6426,7 +6431,7 @@ export function _mapAgentMessagesToEvents(
         events.push({
           ts,
           type: "agent_message",
-          in_reply_to: lastUserId ?? `sync_${ts}`,
+          in_reply_to: lastUserId ?? `sync_${ts}_${msgIdx}`,
           text: "",
           ...(usage ? { usage } : {}),
           images,

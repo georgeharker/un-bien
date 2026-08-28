@@ -35,7 +35,7 @@ public struct AppTheme: Sendable {
         toolAccent: Color(hex: 0xBB9AF7),
         error: Color(hex: 0xF7768E),
         success: Color(hex: 0x9ECE6A),
-        codeHighlightStyle: "tomorrow-night",
+        codeHighlightStyle: "tokyo-night-dark",
         isDark: true
     )
 

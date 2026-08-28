@@ -440,6 +440,27 @@ mod tests {
         let _ = rx_main.try_recv();
     }
 
+    // ── Content isolation (room-specific forward) ─────────────────────────
+
+    /// A room-specific frame reaches ONLY its room. Content addressed to roomA
+    /// must NEVER surface at a sibling room of the same peer. This is the
+    /// no-bleed guarantee for the content path.
+    #[tokio::test]
+    async fn forward_is_room_specific_no_bleed() {
+        let reg = make_registry();
+        let peer = "peer_a".to_string();
+        let (tx_a, mut rx_a) = mpsc::unbounded_channel::<Message>();
+        let (tx_b, mut rx_b) = mpsc::unbounded_channel::<Message>();
+        reg.register(peer.clone(), make_meta("roomA"), tx_a).await;
+        reg.register(peer.clone(), make_meta("roomB"), tx_b).await;
+
+        // no-loss: delivered to the addressed room.
+        assert!(reg.forward(&peer, "roomA", Message::Text("for_A".into()), EXTERNAL));
+        assert_eq!(rx_a.try_recv().unwrap().to_text().unwrap(), "for_A");
+        // no-bleed: the sibling room got nothing.
+        assert!(rx_b.try_recv().is_err(), "content bled into a sibling room");
+    }
+
     /// Two conns at the same (peer, room) now coexist. `forward` with the first
     /// conn's id as `from_conn_id` delivers only to the second (skip-sender).
     #[tokio::test]

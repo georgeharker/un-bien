@@ -52,13 +52,19 @@ describe("isWebSocketScheme", () => {
 
 describe("toWebSocketUrl (http(s):// → ws(s)://)", () => {
   test("https:// → wss://", () => {
-    expect(toWebSocketUrl("https://relay.example.tld")).toBe("wss://relay.example.tld");
+    expect(toWebSocketUrl("https://relay.example.tld")).toBe(
+      "wss://relay.example.tld",
+    );
     expect(toWebSocketUrl("https://foo:3000/path")).toBe("wss://foo:3000/path");
   });
 
   test("http:// → ws://", () => {
-    expect(toWebSocketUrl("http://relay.example.tld")).toBe("ws://relay.example.tld");
-    expect(toWebSocketUrl("http://192.168.1.10:3000")).toBe("ws://192.168.1.10:3000");
+    expect(toWebSocketUrl("http://relay.example.tld")).toBe(
+      "ws://relay.example.tld",
+    );
+    expect(toWebSocketUrl("http://192.168.1.10:3000")).toBe(
+      "ws://192.168.1.10:3000",
+    );
   });
 
   test("ws(s):// pass through (defensive — env override may bypass validation)", () => {
@@ -74,11 +80,15 @@ describe("toWebSocketUrl (http(s):// → ws(s)://)", () => {
 
 describe("toHttpUrl (ws(s):// → http(s)://)", () => {
   test("wss:// → https://", () => {
-    expect(toHttpUrl("wss://relay.example.tld")).toBe("https://relay.example.tld");
+    expect(toHttpUrl("wss://relay.example.tld")).toBe(
+      "https://relay.example.tld",
+    );
   });
 
   test("ws:// → http://", () => {
-    expect(toHttpUrl("ws://192.168.1.10:3000")).toBe("http://192.168.1.10:3000");
+    expect(toHttpUrl("ws://192.168.1.10:3000")).toBe(
+      "http://192.168.1.10:3000",
+    );
   });
 
   test("http(s):// pass through", () => {
@@ -86,4 +96,3 @@ describe("toHttpUrl (ws(s):// → http(s)://)", () => {
     expect(toHttpUrl("http://foo:3000")).toBe("http://foo:3000");
   });
 });
-

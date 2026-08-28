@@ -1,5 +1,5 @@
-import { describe, expect, test, vi } from "vitest";
-import { mkdtempSync, existsSync, readFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { mkdtempSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runSetupWizard, type WizardUI } from "./setup_wizard.js";
@@ -17,6 +17,25 @@ const NO = "No";
 function tmpCwd(): string {
   return mkdtempSync(join(tmpdir(), "pi-wiz-"));
 }
+
+// Isolate the GLOBAL config home so the wizard never reads the developer's real
+// extension config (`<PI_CODING_AGENT_DIR|~/.pi>/extensions/un-bien.json`) — its
+// `defaults` block would leak (e.g. auto_start_relay:true). `PI_CODING_AGENT_DIR`
+// repoints `unbienConfigHome()`; `UNBIEN_HOME` isolates the state dir.
+let _globalHome: string;
+let _prevAgentDir: string | undefined;
+beforeEach(() => {
+  _globalHome = mkdtempSync(join(tmpdir(), "pi-wiz-cfghome-"));
+  _prevAgentDir = process.env["PI_CODING_AGENT_DIR"];
+  process.env["PI_CODING_AGENT_DIR"] = _globalHome;
+  process.env["UNBIEN_HOME"] = _globalHome;
+});
+afterEach(() => {
+  if (_prevAgentDir === undefined) delete process.env["PI_CODING_AGENT_DIR"];
+  else process.env["PI_CODING_AGENT_DIR"] = _prevAgentDir;
+  delete process.env["UNBIEN_HOME"];
+  rmSync(_globalHome, { recursive: true, force: true });
+});
 
 /** Sequencing helper: returns a UI mock that replays canned answers in order. */
 function makeUI(answers: Array<string | undefined>): WizardUI & {

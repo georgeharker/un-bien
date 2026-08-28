@@ -23,6 +23,9 @@ public extension RelayConnection {
               requestID: String = UUID().uuidString) async throws -> PairResult {
         let request = ClientMessage.pairRequest(
             id: requestID, token: invite.token, deviceName: deviceName)
+        // Room-scoped handshake: routes to the issuing session's room (invite.roomID),
+        // so only the session that owns the QR token answers. Trust still lands on the
+        // machine (pair_ok → PairedMachine keyed by epk).
         try await send(request, toPeer: invite.epk, room: invite.roomID)
 
         while true {

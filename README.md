@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="app/icons/un-bien-macos-1024.png" alt="un-bien" width="128" />
+</p>
+
 # un-bien
 
 Mobile remote control and local agent mesh for the [Pi coding agent](https://github.com/earendil-works/pi):

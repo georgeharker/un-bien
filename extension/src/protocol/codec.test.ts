@@ -4,7 +4,7 @@ import { describe, expect, test } from "vitest";
 import { DecodeError, decodeServer, encodeClient } from "./codec.js";
 
 const fixtureDir = fileURLToPath(
-  new URL("../../../.orchestration/contracts/fixtures", import.meta.url),
+  new URL("../../../app/Tests/UnBienCoreTests/Fixtures", import.meta.url),
 );
 
 const SERVER_TYPE_FILES = new Set([
@@ -101,7 +101,11 @@ describe("encodeClient roundtrip", () => {
   });
 
   test("user_message", () => {
-    const msg = { type: "user_message" as const, id: "018f9c2a", text: "hello" };
+    const msg = {
+      type: "user_message" as const,
+      id: "018f9c2a",
+      text: "hello",
+    };
     expect(JSON.parse(encodeClient(msg).trim())).toEqual(msg);
   });
 

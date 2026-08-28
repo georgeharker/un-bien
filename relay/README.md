@@ -42,6 +42,21 @@ Every device authenticates with an Ed25519 keypair during the WebSocket handshak
   60 seconds. Negative sender misses are cached for 1 second, and the cache is
   bounded.
 
+### App↔Pi routing: rooms
+
+App↔Pi frames are outer envelopes `{ peer, room, ct }` (`ct` opaque).
+Connections are registered by `(peer_id, room_id)`, and delivery is **always
+room-specific**: `forward(peer, room)` reaches only the exact `(peer, room)`
+connection(s). This is the whole App↔Pi path — transcript, panels, commands, and
+the pairing handshake — so a frame for one chat can never reach another. There
+is **no** App→Pi broadcast: to reach every chat of a machine, the app addresses
+each session room it learned from `room_announced`. Content isolation is guarded
+by the registry test `forward_is_room_specific_no_bleed`; bleed or data loss
+across chats is a hard failure, not a tuning knob.
+
+(`forward_to_peer`, a pubkey fan-out, exists only for the internal Pi↔Pi mesh
+plane — it is never used for App↔Pi frames.)
+
 ---
 
 ## Public relay
@@ -120,7 +135,7 @@ state at the next mutation.
 | --- | --- | --- |
 | `UNBIEN_RELAY_PORT` | `3000` | TCP port that serves the WebSocket upgrade, `/health`, and `/mesh/*` (all on the same port) |
 | `UNBIEN_MESH_DB_PATH` | `/data/mesh.db` in Docker · `data/mesh.db` (cwd-relative) for bare-metal builds | Path to the SQLite database that stores signed membership versions. The parent directory is created automatically on first boot. The Docker image presets this to `/data/mesh.db` and declares `/data` as a volume — see the volume note above |
-| `RUST_LOG` | _(none)_ | Log level filter — e.g. `info`, `debug`, `warn` |
+| `RUST_LOG` | *(none)* | Log level filter — e.g. `info`, `debug`, `warn` |
 
 Example with a custom port and logging (volume mount is the same):
 

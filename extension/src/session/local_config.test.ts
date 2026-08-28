@@ -22,6 +22,27 @@ function writeFileConfig(cwd: string, obj: unknown): void {
   writeFileSync(join(dir, "config.json"), JSON.stringify(obj));
 }
 
+// Isolate the GLOBAL config home for EVERY test in this file, so a load never
+// reads the developer's real extension config
+// (`<PI_CODING_AGENT_DIR|~/.pi>/extensions/un-bien.json`) — its `defaults` block
+// (e.g. auto_start_relay:true) would otherwise leak in and break the "blank"
+// expectations. `PI_CODING_AGENT_DIR` repoints `unbienConfigHome()` at a fresh
+// dir; `UNBIEN_HOME` isolates the state dir alongside it.
+let _globalHome: string;
+let _prevAgentDir: string | undefined;
+beforeEach(() => {
+  _globalHome = mkdtempSync(join(tmpdir(), "rp-cfghome-"));
+  _prevAgentDir = process.env["PI_CODING_AGENT_DIR"];
+  process.env["PI_CODING_AGENT_DIR"] = _globalHome;
+  process.env["UNBIEN_HOME"] = _globalHome;
+});
+afterEach(() => {
+  if (_prevAgentDir === undefined) delete process.env["PI_CODING_AGENT_DIR"];
+  else process.env["PI_CODING_AGENT_DIR"] = _prevAgentDir;
+  delete process.env["UNBIEN_HOME"];
+  rmSync(_globalHome, { recursive: true, force: true });
+});
+
 describe("loadLocalConfig — file vs UNBIEN_DIRECT_CONFIG", () => {
   let cwd: string;
 

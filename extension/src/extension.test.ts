@@ -372,6 +372,67 @@ function decodeSentCt(raw: string): {
   return { peer: outer.peer, inner };
 }
 
+// ── Envelope session_sync helpers (stock protocol retired) ──────────────────
+// The app now requests reconstruction as {rpc:{type:"session_sync",...}}. A bare
+// stock session_sync falls through the retired switch, so tests drive the real
+// channel path: emit an envelope frame for the paired peer and let onRpc route
+// it to _routeRpcCommandFrom.
+function emitEnvelopeSync(
+  peer: string,
+  id: string,
+  limit?: number,
+): Promise<void> {
+  relayRef.current!.emit(
+    "message",
+    JSON.stringify({
+      peer,
+      ct: Buffer.from(
+        JSON.stringify({
+          rpc: {
+            type: "session_sync",
+            id,
+            ...(limit == null ? {} : { limit }),
+          },
+        }),
+      ).toString("base64"),
+    }),
+  );
+  return new Promise<void>((r) => setImmediate(r));
+}
+
+/** Decoded `{rpc}` frames from a slice of relay sends, in order. */
+function rpcFramesFrom(raws: string[]): Array<Record<string, unknown>> {
+  return raws
+    .map(decodeSentCt)
+    .map((d) => d.inner["rpc"])
+    .filter((r): r is Record<string, unknown> => !!r && typeof r === "object");
+}
+
+/** The `message_end` replay frames (transcript rows) from a slice of sends. */
+function replayMessageEnds(raws: string[]): Array<{
+  role: string;
+  text: string;
+  id?: string;
+}> {
+  return rpcFramesFrom(raws)
+    .filter((f) => f["type"] === "message_end")
+    .map((f) => {
+      const m = (f["message"] ?? {}) as Record<string, unknown>;
+      const content = (m["content"] ?? []) as Array<Record<string, unknown>>;
+      const textBlock = content.find((c) => c["type"] === "text");
+      return {
+        role: String(m["role"] ?? ""),
+        text: String(textBlock?.["text"] ?? ""),
+        ...(m["id"] == null ? {} : { id: String(m["id"]) }),
+      };
+    });
+}
+
+/** The single `session_sync_end` terminator frame from a slice of sends. */
+function syncEndFrame(raws: string[]): Record<string, unknown> | undefined {
+  return rpcFramesFrom(raws).find((f) => f["type"] === "session_sync_end");
+}
+
 const OWNER_PUBLIC_FIXTURE = Buffer.from(
   "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
   "hex",
@@ -875,7 +936,7 @@ describe("state machine + pair_request flow", () => {
 
 describe("contract fixtures: pair_*", () => {
   const fixtureDir = fileURLToPath(
-    new URL("../../.orchestration/contracts/fixtures", import.meta.url),
+    new URL("../../app/Tests/UnBienCoreTests/Fixtures", import.meta.url),
   );
 
   test("pair_request.jsonl parses into ClientMessage shape", () => {
@@ -1656,7 +1717,7 @@ describe("multi-channel broadcast (W2D)", () => {
     );
   });
 
-  test("session_sync from owner A → session_history reply only to A", async () => {
+  test("session_sync from owner A → sync reply (terminator) only to A", async () => {
     await _pairForTest("ownerA__1234567890");
     await _pairAdditionalForTest("ownerB__abcdefghij", "Android");
     const sendsBefore = relayRef.current!.send.mock.calls.length;
@@ -1668,9 +1729,7 @@ describe("multi-channel broadcast (W2D)", () => {
         peer: "ownerA__1234567890",
         ct: Buffer.from(
           JSON.stringify({
-            type: "session_sync",
-            id: "sync-1",
-            limit: 50,
+            rpc: { type: "session_sync", id: "sync-1", limit: 50 },
           }),
         ).toString("base64"),
       }),
@@ -1682,18 +1741,15 @@ describe("multi-channel broadcast (W2D)", () => {
       .current!.send.mock.calls.slice(sendsBefore)
       .map((c) => c[0] as string)
       .map(decodeSentCt);
-    const histories = sent.filter((d) => d.inner.type === "session_history");
-    expect(histories).toHaveLength(1);
-    expect(histories[0]!.peer).toBe("ownerA__1234567890");
-    // un-bien capability handshake rides on the session_history reply.
-    const hist = histories[0]!.inner as {
-      protocol_version?: number;
-      capabilities?: string[];
-    };
-    expect(hist.protocol_version).toBe(1);
-    expect(hist.capabilities).toEqual(
-      expect.arrayContaining(["thinking", "models", "cancel", "panels"]),
+    // The sync reply is per-sender: the terminator lands on A's wire only.
+    // (Caps now ride the `hello` handshake, not the sync reply.)
+    const ends = sent.filter(
+      (d) =>
+        (d.inner["rpc"] as Record<string, unknown> | undefined)?.["type"] ===
+        "session_sync_end",
     );
+    expect(ends).toHaveLength(1);
+    expect(ends[0]!.peer).toBe("ownerA__1234567890");
   });
 
   test("revoke of owner A → A's channel closed, B keeps running", async () => {
@@ -1812,7 +1868,9 @@ describe("multi-channel broadcast (W2D)", () => {
       JSON.stringify({
         peer: "ownerA__1234567890",
         ct: Buffer.from(
-          JSON.stringify({ type: "session_sync", id: "sync-q", limit: 50 }),
+          JSON.stringify({
+            rpc: { type: "session_sync", id: "sync-q", limit: 50 },
+          }),
         ).toString("base64"),
       }),
     );
@@ -1822,7 +1880,9 @@ describe("multi-channel broadcast (W2D)", () => {
       .map((c) => c[0] as string)
       .map(decodeSentCt);
     expect(sent[0]?.inner.type).toBe("queued_message_state");
-    expect(sent[1]?.inner.type).toBe("session_history");
+    expect(
+      (sent[1]?.inner["rpc"] as Record<string, unknown> | undefined)?.["type"],
+    ).toBe("session_sync_end");
 
     const clearBefore = relayRef.current!.send.mock.calls.length;
     relayRef.current!.emit(
@@ -3122,9 +3182,7 @@ describe("multi-channel broadcast (W2D)", () => {
         peer: "ownerA__1234567890",
         ct: Buffer.from(
           JSON.stringify({
-            type: "session_sync",
-            id: "sync-buffer-1",
-            limit: 50,
+            rpc: { type: "session_sync", id: "sync-buffer-1", limit: 50 },
           }),
         ).toString("base64"),
       }),
@@ -3133,17 +3191,10 @@ describe("multi-channel broadcast (W2D)", () => {
 
     const sent = relayRef
       .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt);
-    const histories = sent.filter((d) => d.inner.type === "session_history");
-    expect(histories).toHaveLength(1);
-    const events = (histories[0]!.inner as unknown as { events: unknown[] })
-      .events;
-    expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "user_input", text: "oi" }),
-      ]),
-    );
+      .map((c) => c[0] as string);
+    // The buffered user turn replays as a message_end(role:user) frame.
+    const ends = replayMessageEnds(sent);
+    expect(ends.some((e) => e.role === "user" && e.text === "oi")).toBe(true);
   });
 });
 
@@ -4390,23 +4441,17 @@ describe("session sync", () => {
     _setSessionStartedAtForTest(null); // simulate edge: paired but no session
 
     const sendsBefore = relayRef.current!.send.mock.calls.length;
-    routeClientMessage(
-      { type: "session_sync", id: "req-1" },
-      { abort: () => undefined },
-    );
+    await emitEnvelopeSync("peer-ss-1", "req-1");
 
     const sent = relayRef
       .current!.send.mock.calls.slice(sendsBefore)
       .map((c) => c[0] as string);
-    const histories = sent
-      .map(decodeSentCt)
-      .filter((d) => d.inner.type === "session_history");
-    expect(histories).toHaveLength(1);
-    expect(histories[0]!.inner).toMatchObject({
-      type: "session_history",
+    // Empty history → no message_end replays, but the terminator always lands.
+    expect(replayMessageEnds(sent)).toHaveLength(0);
+    expect(syncEndFrame(sent)).toMatchObject({
+      type: "session_sync_end",
       in_reply_to: "req-1",
-      events: [],
-      eos: true,
+      session_started_at: 0,
       truncated: false,
     });
   });
@@ -4435,21 +4480,13 @@ describe("session sync", () => {
     ]);
 
     const sendsBefore = relayRef.current!.send.mock.calls.length;
-    routeClientMessage(
-      { type: "session_sync", id: "req-2" },
-      { abort: () => undefined },
-    );
+    await emitEnvelopeSync("peer-ss-mirror-1", "req-2");
 
     const sent = relayRef
       .current!.send.mock.calls.slice(sendsBefore)
       .map((c) => c[0] as string);
-    const h = sent
-      .map(decodeSentCt)
-      .find((d) => d.inner.type === "session_history")!;
-    const events = h.inner["events"] as unknown[];
-    expect(events.length).toBe(5);
-    expect(h.inner["truncated"]).toBe(false);
-    expect(h.inner["eos"]).toBe(true);
+    expect(replayMessageEnds(sent)).toHaveLength(5);
+    expect(syncEndFrame(sent)).toMatchObject({ truncated: false });
   });
 
   test("client limit < env → server respects client limit + truncated true if overflow", async () => {
@@ -4471,23 +4508,16 @@ describe("session sync", () => {
     _setMessageBufferForTest(messages);
 
     const sendsBefore = relayRef.current!.send.mock.calls.length;
-    routeClientMessage(
-      { type: "session_sync", id: "req-3", limit: 3 },
-      { abort: () => undefined },
-    );
+    await emitEnvelopeSync("peer-ss-mirror-2", "req-3", 3);
 
     const sent = relayRef
       .current!.send.mock.calls.slice(sendsBefore)
       .map((c) => c[0] as string);
-    const h = sent
-      .map(decodeSentCt)
-      .find((d) => d.inner.type === "session_history")!;
-    const events = h.inner["events"] as Array<{ ts: number }>;
-    expect(events.length).toBe(3);
-    // Last 3 (latest ts)
-    expect(events[0]!.ts).toBe(ts + 7);
-    expect(events[2]!.ts).toBe(ts + 9);
-    expect(h.inner["truncated"]).toBe(true);
+    const ends = replayMessageEnds(sent);
+    expect(ends).toHaveLength(3);
+    // Last 3 (newest), in order.
+    expect(ends.map((e) => e.text)).toEqual(["m7", "m8", "m9"]);
+    expect(syncEndFrame(sent)).toMatchObject({ truncated: true });
   });
 
   test("client limit > env → server clamps to env", async () => {
@@ -4509,22 +4539,15 @@ describe("session sync", () => {
     _setMessageBufferForTest(messages);
 
     const sendsBefore = relayRef.current!.send.mock.calls.length;
-    routeClientMessage(
-      { type: "session_sync", id: "req-4", limit: 100 },
-      { abort: () => undefined },
-    );
+    await emitEnvelopeSync("peer-ss-mirror-3", "req-4", 100);
 
     const sent = relayRef
       .current!.send.mock.calls.slice(sendsBefore)
       .map((c) => c[0] as string);
-    const h = sent
-      .map(decodeSentCt)
-      .find((d) => d.inner.type === "session_history")!;
-    const events = h.inner["events"] as Array<{ ts: number }>;
-    expect(events.length).toBe(5);
-    expect(events[0]!.ts).toBe(ts + 5); // last 5 of 10
-    expect(events[4]!.ts).toBe(ts + 9);
-    expect(h.inner["truncated"]).toBe(true);
+    const ends = replayMessageEnds(sent);
+    // Client asked 100 but server cap is 5 → clamped to the last 5 of 10.
+    expect(ends.map((e) => e.text)).toEqual(["m5", "m6", "m7", "m8", "m9"]);
+    expect(syncEndFrame(sent)).toMatchObject({ truncated: true });
 
     delete process.env["UNBIEN_SYNC_LIMIT"];
   });
@@ -4548,18 +4571,13 @@ describe("session sync", () => {
     );
 
     const sendsBefore = relayRef.current!.send.mock.calls.length;
-    routeClientMessage(
-      { type: "session_sync", id: "req-5" },
-      { abort: () => undefined },
-    );
+    await emitEnvelopeSync("peer-ss-mirror-4", "req-5");
 
-    const h = relayRef
+    const sent = relayRef
       .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt)
-      .find((d) => d.inner.type === "session_history")!;
-    expect((h.inner["events"] as unknown[]).length).toBe(5);
-    expect(h.inner["truncated"]).toBe(false);
+      .map((c) => c[0] as string);
+    expect(replayMessageEnds(sent)).toHaveLength(5);
+    expect(syncEndFrame(sent)).toMatchObject({ truncated: false });
   });
 
   test("buffer with 50 events + env=30 → returns 30, truncated:true", async () => {
@@ -4581,21 +4599,16 @@ describe("session sync", () => {
     );
 
     const sendsBefore = relayRef.current!.send.mock.calls.length;
-    routeClientMessage(
-      { type: "session_sync", id: "req-6" },
-      { abort: () => undefined },
-    );
+    await emitEnvelopeSync("peer-ss-mirror-5", "req-6");
 
-    const h = relayRef
+    const sent = relayRef
       .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt)
-      .find((d) => d.inner.type === "session_history")!;
-    const events = h.inner["events"] as Array<{ ts: number }>;
-    expect(events.length).toBe(30);
-    expect(events[0]!.ts).toBe(ts + 20); // last 30 of 50 (indices 20..49)
-    expect(events[29]!.ts).toBe(ts + 49);
-    expect(h.inner["truncated"]).toBe(true);
+      .map((c) => c[0] as string);
+    const ends = replayMessageEnds(sent);
+    expect(ends).toHaveLength(30); // last 30 of 50 (indices 20..49)
+    expect(ends[0]!.text).toBe("m20");
+    expect(ends[29]!.text).toBe("m49");
+    expect(syncEndFrame(sent)).toMatchObject({ truncated: true });
   });
 
   test("UNBIEN_SYNC_LIMIT=10 → server respects env override", async () => {
@@ -4617,18 +4630,13 @@ describe("session sync", () => {
     );
 
     const sendsBefore = relayRef.current!.send.mock.calls.length;
-    routeClientMessage(
-      { type: "session_sync", id: "req-7" },
-      { abort: () => undefined },
-    );
+    await emitEnvelopeSync("peer-ss-mirror-6", "req-7");
 
-    const h = relayRef
+    const sent = relayRef
       .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt)
-      .find((d) => d.inner.type === "session_history")!;
-    expect((h.inner["events"] as unknown[]).length).toBe(10);
-    expect(h.inner["truncated"]).toBe(true);
+      .map((c) => c[0] as string);
+    expect(replayMessageEnds(sent)).toHaveLength(10);
+    expect(syncEndFrame(sent)).toMatchObject({ truncated: true });
 
     delete process.env["UNBIEN_SYNC_LIMIT"];
   });
@@ -4674,8 +4682,9 @@ describe("session sync", () => {
       args: { command: "ls" },
     });
     // agent_message in_reply_to should point at the prior user_input id
+    // (now buffer-position-suffixed so same-ts inputs stay distinct).
     expect((events[1] as { in_reply_to: string }).in_reply_to).toBe(
-      `sync_${ts}`,
+      `sync_${ts}_0`,
     );
   });
 
@@ -6834,34 +6843,24 @@ describe("cumulative buffer", () => {
     const sessionTs = baseTs;
     _setSessionStartedAtForTest(sessionTs);
     const sendsBefore = relayRef.current!.send.mock.calls.length;
-    routeClientMessage(
-      { type: "session_sync", id: "mt-1" },
-      { abort: () => undefined },
-    );
+    await emitEnvelopeSync("peer-mt", "mt-1");
 
     const sent = relayRef
       .current!.send.mock.calls.slice(sendsBefore)
       .map((c) => c[0] as string);
-    const histories = sent
-      .map(decodeSentCt)
-      .filter((d) => d.inner.type === "session_history");
-    expect(histories).toHaveLength(1);
-    const events = histories[0]!.inner["events"] as Array<{
-      type: string;
-      text?: string;
-    }>;
-    expect(events).toHaveLength(6);
-    expect(events.map((e) => e.type)).toEqual([
-      "user_input",
-      "agent_message",
-      "user_input",
-      "agent_message",
-      "user_input",
-      "agent_message",
+    const ends = replayMessageEnds(sent);
+    expect(ends).toHaveLength(6);
+    expect(ends.map((e) => e.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+      "user",
+      "assistant",
     ]);
-    expect(events[0]!.text).toBe("prompt 1");
-    expect(events[2]!.text).toBe("prompt 2");
-    expect(events[4]!.text).toBe("prompt 3");
+    expect(ends[0]!.text).toBe("prompt 1");
+    expect(ends[2]!.text).toBe("prompt 2");
+    expect(ends[4]!.text).toBe("prompt 3");
   });
 
   test("mixed sources (extension + interactive) all land in buffer ordered by ts", async () => {
@@ -6927,30 +6926,15 @@ describe("cumulative buffer", () => {
 
     _setSessionStartedAtForTest(baseTs);
     const sendsBefore = relayRef.current!.send.mock.calls.length;
-    routeClientMessage(
-      { type: "session_sync", id: "mix-1" },
-      { abort: () => undefined },
-    );
+    await emitEnvelopeSync("peer-mix", "mix-1");
 
     const sent = relayRef
       .current!.send.mock.calls.slice(sendsBefore)
       .map((c) => c[0] as string);
-    const histories = sent
-      .map(decodeSentCt)
-      .filter((d) => d.inner.type === "session_history");
-    const events = histories[0]!.inner["events"] as Array<{
-      ts: number;
-      type: string;
-      text?: string;
-    }>;
-    expect(events).toHaveLength(6);
-    // Strictly ascending ts
-    for (let i = 1; i < events.length; i++) {
-      expect(events[i]!.ts).toBeGreaterThan(events[i - 1]!.ts);
-    }
-    const userTexts = events
-      .filter((e) => e.type === "user_input")
-      .map((e) => e.text);
+    const ends = replayMessageEnds(sent);
+    expect(ends).toHaveLength(6);
+    // Buffer is ts-ordered; replay preserves that order (frames carry no ts).
+    const userTexts = ends.filter((e) => e.role === "user").map((e) => e.text);
     expect(userTexts).toEqual(["from app", "from term 1", "from term 2"]);
   });
 
@@ -6998,28 +6982,22 @@ describe("cumulative buffer", () => {
 
     _setSessionStartedAtForTest(ts);
     const sendsBefore = relayRef.current!.send.mock.calls.length;
-    routeClientMessage(
-      { type: "session_sync", id: "t-1" },
-      { abort: () => undefined },
-    );
+    await emitEnvelopeSync("peer-tools", "t-1");
 
     const sent = relayRef
       .current!.send.mock.calls.slice(sendsBefore)
       .map((c) => c[0] as string);
-    const events = sent
-      .map(decodeSentCt)
-      .find((d) => d.inner.type === "session_history")!.inner[
-      "events"
-    ] as Array<{ type: string; tool_call_id?: string }>;
-    const types = events.map((e) => e.type);
-    expect(types).toEqual([
-      "user_input",
-      "agent_message",
-      "tool_request",
-      "tool_result",
+    const frames = rpcFramesFrom(sent).filter(
+      (f) => f["type"] !== "session_sync_end",
+    );
+    expect(frames.map((f) => f["type"])).toEqual([
+      "message_end",
+      "message_end",
+      "tool_execution_start",
+      "tool_execution_end",
     ]);
-    expect(events[2]!.tool_call_id).toBe("tc_1");
-    expect(events[3]!.tool_call_id).toBe("tc_1");
+    expect(frames[2]!["toolCallId"]).toBe("tc_1");
+    expect(frames[3]!["toolCallId"]).toBe("tc_1");
   });
 
   test("_cmdStart preserves buffer across stop/start cycle (Pi session outlives relay)", async () => {

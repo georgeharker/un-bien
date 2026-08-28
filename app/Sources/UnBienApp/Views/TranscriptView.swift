@@ -43,6 +43,10 @@ struct TranscriptView: View {
                 .onChange(of: items.count) { _, _ in
                     if let last = items.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
                 }
+                #if os(iOS)
+                // Swipe the transcript down to dismiss the composer keyboard.
+                .scrollDismissesKeyboard(.interactively)
+                #endif
             }
             queuedChips
             inputBar
@@ -328,6 +332,16 @@ private struct TranscriptRow: View, Equatable {
                         style: theme.codeHighlightStyle,
                         font: typography.monoPlatformFont()))
                     .markdownTextStyle { ForegroundColor(theme.text); FontSize(typography.bodySize) }
+                    .markdownBlockStyle(\.codeBlock) { configuration in
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            configuration.label
+                                .fixedSize(horizontal: false, vertical: true)
+                                .font(typography.monoFont())
+                                .padding(12)
+                        }
+                        .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
+                        .markdownMargin(top: 8, bottom: 8)
+                    }
             }
             ForEach(Array(bubble.images.enumerated()), id: \.offset) { _, image in
                 WireImageView(image: image, theme: theme)

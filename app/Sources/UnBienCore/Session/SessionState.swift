@@ -10,6 +10,10 @@ import Foundation
 /// Not thread-safe by itself; drive it from a single actor/`@MainActor` owner.
 public struct SessionState: Equatable, Sendable {
     public private(set) var items: [TranscriptItem] = []
+    /// Ids already appended. A re-applied replay/history item (same id) must not
+    /// create a duplicate — SwiftUI `ForEach` requires unique ids, and a dupe
+    /// gives "undefined results" (wrong/dropped/duplicated bubbles).
+    private var appendedIDs: Set<String> = []
     public private(set) var sessionStartedAt: Int?
 
     /// `in_reply_to` of the turn currently streaming (chunks or reasoning),
@@ -126,6 +130,7 @@ public struct SessionState: Equatable, Sendable {
     /// Append a non-chunk row. Closes the open streaming bubble first, so the
     /// next chunk starts a new bubble AFTER this row (mid-turn interleaving).
     private mutating func append(_ item: TranscriptItem) {
+        guard appendedIDs.insert(item.id).inserted else { return }
         closeOpenAssistant()
         items.append(item)
     }
@@ -265,6 +270,13 @@ public struct SessionState: Equatable, Sendable {
         case "agent_settled":
             if let turn = rpcTurn, activeTurnID == turn { activeTurnID = nil }
             closeOpenAssistant()
+        case "session_sync_end":
+            // Envelope-native terminator for a session_sync replay: carries the
+            // session clock (stock bundled it on `session_history`). `truncated`
+            // rides along but, as in the stock path, the reducer doesn't consume it.
+            if let started = frame["session_started_at"]?.intValue, started > 0 {
+                sessionStartedAt = started
+            }
         default:
             break
         }

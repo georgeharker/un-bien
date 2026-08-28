@@ -252,7 +252,15 @@ public final class AppModel: ObservableObject {
                 // from stock session_history) so the {rpc|evt} route + stock
                 // suppression turn on before any session content arrives.
                 if env.type == "hello" {
-                    capabilities[key] = Set(env.caps ?? [])
+                    // Last NON-EMPTY wins: re-hellos (session_sync/attach, N clients)
+                    // carry the pi's current caps; a legit change is still a
+                    // non-empty set. But an empty/degraded hello must NOT clobber a
+                    // good set — that silently gates off thinking/models/panels.
+                    if let caps = env.caps, !caps.isEmpty {
+                        capabilities[key] = Set(caps)
+                    } else if capabilities[key] == nil {
+                        capabilities[key] = []
+                    }
                     // Session replacement detection: the room (cwd) is stable, but a
                     // new pi sessionId here means a different session reused it. Reset
                     // so the prior transcript/panels/prompt don't leak in; a fresh
@@ -296,13 +304,9 @@ public final class AppModel: ObservableObject {
             }
             do {
                 let message = try envelope.decodeServer()
-                print("[un-bien] routed peer=\(envelope.peer.suffix(6)) room=\(envelope.room) msg=\(message.debugTag)")
                 route(message, relayID: relayID, peer: envelope.peer, room: envelope.room)
-            } catch {
-                print("[un-bien] routed DECODE FAIL: \(error) ct-line=\(envelope.ct.prefix(24))…")
-            }
+            } catch {}
         case let .control(event):
-            print("[un-bien] control \(event)")
             handle(control: event, relayID: relayID)
         }
     }
@@ -375,10 +379,8 @@ public final class AppModel: ObservableObject {
 
     public func openSession(_ session: LiveSession, limit: Int = 100) async {
         guard let connection = connections[session.relayID] else {
-            print("[un-bien] openSession NO CONNECTION for relay \(session.relayID)")
             return
         }
-        print("[un-bien] openSession key=\(session.id) sending session_sync to peer=\(session.peerEPK.suffix(6)) room=\(session.roomID)")
         // Envelope-native resume request (was stock session_sync): the fork
         // replies with a {rpc} history replay folded via applyRPC. Reuse the
         // stock encoder to build the frame, then send it inside an envelope.
