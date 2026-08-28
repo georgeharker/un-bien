@@ -159,7 +159,6 @@ import { createInterface } from "node:readline";
 import { spawn, spawnSync } from "node:child_process";
 import { hostname, tmpdir } from "node:os";
 import {
-  kDefaultRelayUrl,
   resolveRelayUrl,
   saveConfig,
   isValidRelayUrl,
@@ -3615,7 +3614,7 @@ export default extension;
  * visually consistent.
  */
 function _cmdStatus(ctx: Pick<ExtensionContext, "ui">): void {
-  const relayUrl = _relayUrl ?? resolveRelayUrl().url;
+  const relayUrl = _relayUrl ?? resolveRelayUrl().url ?? "not configured";
 
   // Mesh line
   let meshLine: string;
@@ -3919,6 +3918,15 @@ async function _cmdStart(
   _cachedEd25519 = edKp;
 
   const { url: relayUrl, source } = resolveRelayUrl();
+  if (relayUrl === null) {
+    ctx.ui.notify(
+      "[un-bien] No relay configured — staying on the local mesh only. Set one " +
+        "with `/unbien set-relay <url>` (or the UNBIEN_RELAY env var) to connect " +
+        "the phone app.",
+      "warning",
+    );
+    return;
+  }
   const myShort = Buffer.from(edKp.publicKey).toString("base64").slice(0, 8);
 
   const cwd =
@@ -4453,14 +4461,14 @@ function _cmdConfig(ctx: Pick<ExtensionContext, "ui">): void {
     source === "env"
       ? "UNBIEN_RELAY environment variable"
       : source === "config"
-        ? "~/.pi/un-bien/config.json (set via /unbien set-relay)"
-        : "built-in default";
+        ? "extensions/un-bien.json (set via /unbien set-relay)"
+        : "not set — run /unbien set-relay <url> or set UNBIEN_RELAY";
   const live =
     _relayUrl && _relayUrl !== url
       ? `\n  ⚠ Live connection still on ${_relayUrl} — run /unbien relay stop then /unbien relay start to apply.`
       : "";
   ctx.ui.notify(
-    `[un-bien]\n  Relay URL: ${url}\n  Source: ${source} — ${origin}${live}`,
+    `[un-bien]\n  Relay URL: ${url ?? "(none)"}\n  Source: ${source} — ${origin}${live}`,
     "info",
   );
 }
@@ -6643,7 +6651,7 @@ if (_isDirectRun()) {
   } else if (subcmd === "set-relay") {
     const raw = (cliArgs[0] ?? "").trim();
     if (!raw) {
-      console.log(`Usage: set-relay <url> (default: ${kDefaultRelayUrl})`);
+      console.log(`Usage: set-relay <url>`);
     } else if (isWebSocketScheme(raw)) {
       console.log(
         `Use http:// or https://. The extension converts to WebSocket automatically.`,

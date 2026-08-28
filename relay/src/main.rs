@@ -9,7 +9,7 @@ use tracing::info;
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
-    let port: u16 = std::env::var("REMOTEPI_RELAY_PORT")
+    let port: u16 = std::env::var("UNBIEN_RELAY_PORT")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(3000);
@@ -22,7 +22,7 @@ async fn main() -> anyhow::Result<()> {
     // Default puts the SQLite file (and any transient -journal) under data/,
     // so bare-metal `cargo run` doesn't litter the project root.
     let db_path =
-        std::env::var("REMOTEPI_MESH_DB_PATH").unwrap_or_else(|_| "data/mesh.db".to_string());
+        std::env::var("UNBIEN_MESH_DB_PATH").unwrap_or_else(|_| "data/mesh.db".to_string());
 
     let mesh = Arc::new(
         relay::MeshStore::open(&db_path)

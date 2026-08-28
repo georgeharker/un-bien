@@ -4,7 +4,6 @@ import {
   isWebSocketScheme,
   toWebSocketUrl,
   toHttpUrl,
-  kDefaultRelayUrl,
 } from "./config.js";
 
 describe("isValidRelayUrl (strict http(s):// only)", () => {
@@ -88,9 +87,3 @@ describe("toHttpUrl (ws(s):// → http(s)://)", () => {
   });
 });
 
-describe("kDefaultRelayUrl", () => {
-  test("is canonical https:// form (no scheme conversion needed at resolve time)", () => {
-    expect(kDefaultRelayUrl).toMatch(/^https:\/\//);
-    expect(kDefaultRelayUrl).toBe("https://relay-rp1.jacobmoura.work");
-  });
-});

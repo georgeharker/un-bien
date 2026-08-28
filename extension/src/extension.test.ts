@@ -163,7 +163,7 @@ vi.mock("./pairing/storage.js", async (importOriginal) => {
 
 // ── Mock config (no real fs writes) ───────────────────────────────────────────
 
-let _savedRelayUrl: string | null = null;
+let _savedRelayUrl: string | null = "https://relay.test";
 const _setRelayCalls: string[] = [];
 
 vi.mock("./config.js", async (importOriginal) => {
@@ -187,12 +187,9 @@ vi.mock("./config.js", async (importOriginal) => {
           source: "config" as const,
         };
       }
-      return {
-        url: orig.toHttpUrl(orig.kDefaultRelayUrl),
-        source: "default" as const,
-      };
+      return { url: null, source: "unset" as const };
     }),
-    // isValidRelayUrl + isWebSocketScheme + kDefaultRelayUrl + toHttpUrl
+    // isValidRelayUrl + isWebSocketScheme + toHttpUrl
     // + toWebSocketUrl come from orig (...spread).
   };
 });
@@ -1573,7 +1570,7 @@ describe("multi-channel broadcast (W2D)", () => {
     _removedPeers.length = 0;
     _consumeCalls.length = 0;
     _setRelayCalls.length = 0;
-    _savedRelayUrl = null;
+    _savedRelayUrl = "https://relay.test";
     _tokenStatus = "ok";
     relayRef.current = null;
     relayInstances.length = 0;
@@ -3158,7 +3155,7 @@ describe("user_input mirroring", () => {
     _removedPeers.length = 0;
     _consumeCalls.length = 0;
     _setRelayCalls.length = 0;
-    _savedRelayUrl = null;
+    _savedRelayUrl = "https://relay.test";
     _tokenStatus = "ok";
     relayRef.current = null;
     const qr = await import("./pairing/qr.js");
@@ -3284,7 +3281,7 @@ describe("tool visibility", () => {
     _removedPeers.length = 0;
     _consumeCalls.length = 0;
     _setRelayCalls.length = 0;
-    _savedRelayUrl = null;
+    _savedRelayUrl = "https://relay.test";
     _tokenStatus = "ok";
     relayRef.current = null;
     const qr = await import("./pairing/qr.js");
@@ -3771,14 +3768,14 @@ describe("/unbien set-relay + config", () => {
     );
   });
 
-  test("resolveRelayUrl: env > config > default (all canonicalized to http(s)://)", async () => {
+  test("resolveRelayUrl: env > config > unset (all canonicalized to http(s)://)", async () => {
     const cfg = await import("./config.js");
-    const { resolveRelayUrl, kDefaultRelayUrl, toHttpUrl } = cfg;
+    const { resolveRelayUrl } = cfg;
 
-    // 1) Nothing set → default (canonical form is http(s)://)
+    // 1) Nothing set → unset (no built-in default)
     expect(resolveRelayUrl()).toEqual({
-      url: toHttpUrl(kDefaultRelayUrl),
-      source: "default",
+      url: null,
+      source: "unset",
     });
 
     // 2) Config set, no env → config. Legacy ws:// in config gets coerced
@@ -3810,13 +3807,15 @@ describe("/unbien set-relay + config", () => {
     expect(text).toContain("http://10.0.0.5:4000");
   });
 
-  test("/unbien status shows the default URL when nothing set", async () => {
+  test("/unbien status shows 'not configured' when nothing set (no built-in default)", async () => {
+    _savedRelayUrl = null;
     const status = captureHandler("unbien status");
     const ctx = makeMockCtx();
     await status("", ctx);
 
     const text = ctx.ui.notify.mock.calls[0]![0] as string;
-    expect(text).toContain("https://relay-rp1.jacobmoura.work");
+    expect(text).toContain("not configured");
+    expect(text).not.toContain("relay-rp1.jacobmoura.work");
   });
 
   test("/unbien status reflects env override (canonicalized to https://)", async () => {
@@ -3861,7 +3860,7 @@ describe("routeClientMessage cancel handling", () => {
     _removedPeers.length = 0;
     _consumeCalls.length = 0;
     _setRelayCalls.length = 0;
-    _savedRelayUrl = null;
+    _savedRelayUrl = "https://relay.test";
     _tokenStatus = "ok";
     relayRef.current = null;
     relayInstances.length = 0;
@@ -4222,7 +4221,7 @@ describe("rooms wiring", () => {
     _removedPeers.length = 0;
     _consumeCalls.length = 0;
     _setRelayCalls.length = 0;
-    _savedRelayUrl = null;
+    _savedRelayUrl = "https://relay.test";
     _tokenStatus = "ok";
     relayRef.current = null;
     relayInstances.length = 0;
@@ -4369,7 +4368,7 @@ describe("session sync", () => {
     _removedPeers.length = 0;
     _consumeCalls.length = 0;
     _setRelayCalls.length = 0;
-    _savedRelayUrl = null;
+    _savedRelayUrl = "https://relay.test";
     _tokenStatus = "ok";
     relayRef.current = null;
     const qr = await import("./pairing/qr.js");
@@ -4866,7 +4865,7 @@ describe("bye on teardown", () => {
     _removedPeers.length = 0;
     _consumeCalls.length = 0;
     _setRelayCalls.length = 0;
-    _savedRelayUrl = null;
+    _savedRelayUrl = "https://relay.test";
     _tokenStatus = "ok";
     relayRef.current = null;
     const qr = await import("./pairing/qr.js");
@@ -5027,7 +5026,7 @@ describe("session_shutdown teardown", () => {
     _removedPeers.length = 0;
     _consumeCalls.length = 0;
     _setRelayCalls.length = 0;
-    _savedRelayUrl = null;
+    _savedRelayUrl = "https://relay.test";
     _tokenStatus = "ok";
     relayRef.current = null;
     relayInstances.length = 0;
@@ -5679,7 +5678,7 @@ describe("un-bien:name-assigned event", () => {
     _removedPeers.length = 0;
     _consumeCalls.length = 0;
     _setRelayCalls.length = 0;
-    _savedRelayUrl = null;
+    _savedRelayUrl = "https://relay.test";
     _tokenStatus = "ok";
     relayRef.current = null;
     relayInstances.length = 0;
@@ -5788,7 +5787,7 @@ describe("relay control channel + relay-state event", () => {
     _knownPeers.length = 0;
     _consumeCalls.length = 0;
     _setRelayCalls.length = 0;
-    _savedRelayUrl = null;
+    _savedRelayUrl = "https://relay.test";
     _tokenStatus = "ok";
     relayRef.current = null;
     relayInstances.length = 0;
@@ -5922,7 +5921,7 @@ describe("same-folder same-name → #N suffix (no refusal)", () => {
     _knownPeers.length = 0;
     _consumeCalls.length = 0;
     _setRelayCalls.length = 0;
-    _savedRelayUrl = null;
+    _savedRelayUrl = "https://relay.test";
     _tokenStatus = "ok";
     relayRef.current = null;
     relayInstances.length = 0;
@@ -6082,7 +6081,7 @@ describe("relay reconnect", () => {
     _removedPeers.length = 0;
     _consumeCalls.length = 0;
     _setRelayCalls.length = 0;
-    _savedRelayUrl = null;
+    _savedRelayUrl = "https://relay.test";
     _tokenStatus = "ok";
     relayRef.current = null;
     relayInstances.length = 0;
@@ -6786,7 +6785,7 @@ describe("cumulative buffer", () => {
     _removedPeers.length = 0;
     _consumeCalls.length = 0;
     _setRelayCalls.length = 0;
-    _savedRelayUrl = null;
+    _savedRelayUrl = "https://relay.test";
     _tokenStatus = "ok";
     relayRef.current = null;
     relayInstances.length = 0;
@@ -7132,7 +7131,7 @@ describe("model meta", () => {
     _removedPeers.length = 0;
     _consumeCalls.length = 0;
     _setRelayCalls.length = 0;
-    _savedRelayUrl = null;
+    _savedRelayUrl = "https://relay.test";
     _tokenStatus = "ok";
     relayRef.current = null;
     relayInstances.length = 0;

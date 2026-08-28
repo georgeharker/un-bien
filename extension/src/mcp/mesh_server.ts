@@ -119,7 +119,7 @@ const mesh = new MeshNode({
   // Own Pi-key cross-PC bridge — active only when this node leads (no Pi /
   // daemon already hosting the broker for this cwd). As a follower the
   // bridge stays dormant and cross-PC rides the existing leader.
-  ...(_bridgeEnabled ? { bridge: { relayUrl, cwd: _cwd } } : {}),
+  ...(_bridgeEnabled && relayUrl !== null ? { bridge: { relayUrl, cwd: _cwd } } : {}),
   // Silent: stdout is the MCP JSON-RPC channel and stderr noise isn't wanted.
   // Real failures still surface via the global handlers / fail-loud below.
   log: () => {

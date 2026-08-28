@@ -15,3 +15,6 @@ target/
 # + commit after editing it). Only the per-user bits inside it are ignored.
 **/xcuserdata/
 **/*.xcuserdatad/
+
+# relay runtime DB (UNBIEN_MESH_DB_PATH default: data/mesh.db)
+data/

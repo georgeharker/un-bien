@@ -8,15 +8,6 @@ import { unbienConfigHome } from "./paths.js";
 const configDir = (): string => unbienConfigHome();
 const configFile = (): string => path.join(unbienConfigHome(), "un-bien.json");
 
-/**
- * Default community relay. Stored in canonical http(s):// form — conversion
- * to ws(s):// happens at the transport layer (see `toWebSocketUrl`). The
- * community relay's reverse proxy maps `:443 → :3000` (the WS port), so the
- * URL has no explicit port and the WebSocket upgrade rides on the same TLS
- * connection as the HTTPS endpoints used by the mesh client.
- */
-export const kDefaultRelayUrl = "https://relay-rp1.jacobmoura.work";
-
 export type UnBienConfig = {
  relay?: string;
  /**
@@ -56,18 +47,22 @@ export function saveConfig(patch: Partial<UnBienConfig>): void {
  fs.writeFileSync(configFile(), JSON.stringify(next, null, 2));
 }
 
-export type RelayResolution = {
- url: string;
- source: "env" | "config" | "default";
-};
+export type RelayResolution =
+ | { url: string; source: "env" | "config" }
+ | { url: null; source: "unset" };
 
 /**
  * Resolves the effective relay URL in **canonical http(s):// form**.
  *
  * Precedence:
  *   1. `UNBIEN_RELAY` env var (ops/CI escape hatch)
- *   2. `~/.pi/un-bien/config.json` `relay` field (set via /unbien set-relay)
- *   3. `kDefaultRelayUrl` (community default)
+ *   2. `relay` field in the global config
+ *      (`<PI_CODING_AGENT_DIR|~/.pi>/extensions/un-bien.json`, set via
+ *      `/unbien set-relay`)
+ *
+ * There is NO built-in default. When neither is set, `url` is null and
+ * `source` is `"unset"` — callers MUST refuse to connect and prompt the user
+ * to configure a relay (un-bien ships pointing at nobody's infrastructure).
  *
  * Any ws(s):// values found (legacy configs or env overrides) are coerced
  * to http(s):// defensively — the canonical form across the codebase is
@@ -79,7 +74,7 @@ export function resolveRelayUrl(): RelayResolution {
  const cfg = loadConfig();
  if (cfg.relay && cfg.relay.length > 0)
   return { url: toHttpUrl(cfg.relay), source: "config" };
- return { url: toHttpUrl(kDefaultRelayUrl), source: "default" };
+ return { url: null, source: "unset" };
 }
 
 /**
