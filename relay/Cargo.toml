@@ -6,7 +6,10 @@ rust-version = "1.85"
 description = "un-bien relay: owner-signed mesh/session relay (WebSocket + SQLite membership authorization)."
 license = "MIT"
 repository = "https://github.com/georgeharker/un-bien"
+homepage = "https://docs.georgeharker.com/un-bien"
 readme = "README.md"
+keywords = ["relay", "websocket", "mesh", "agent", "authentication"]
+categories = ["network-programming", "web-programming::websocket", "authentication"]
 
 # Keep the internal crate/lib name `relay` (main.rs + tests use `relay::…`) while
 # the published package is `un-bien-relay`.
