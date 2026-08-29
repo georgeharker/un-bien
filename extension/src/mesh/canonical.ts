@@ -38,13 +38,19 @@ export function canonicalize(value: unknown): string {
   if (typeof value === "string") return JSON.stringify(value);
   if (Array.isArray(value)) {
     // Inside arrays, undefined → null (mirrors JSON.stringify).
-    const items = value.map((v) => (v === undefined ? "null" : canonicalize(v)));
+    const items = value.map((v) =>
+      v === undefined ? "null" : canonicalize(v),
+    );
     return "[" + items.join(",") + "]";
   }
   if (typeof value === "object") {
     const obj = value as Record<string, unknown>;
-    const keys = Object.keys(obj).filter((k) => obj[k] !== undefined).sort();
-    const pairs = keys.map((k) => JSON.stringify(k) + ":" + canonicalize(obj[k]));
+    const keys = Object.keys(obj)
+      .filter((k) => obj[k] !== undefined)
+      .sort();
+    const pairs = keys.map(
+      (k) => JSON.stringify(k) + ":" + canonicalize(obj[k]),
+    );
     return "{" + pairs.join(",") + "}";
   }
   // undefined / functions / symbols at the root → JSON.stringify returns

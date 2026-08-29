@@ -2,9 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import * as ed from "@noble/ed25519";
 
 // Configure @noble/ed25519 v3 to use Node.js built-in SHA-512
-(ed.hashes as Record<string, unknown>)["sha512"] = (
-  ...msgs: Uint8Array[]
-) => {
+(ed.hashes as Record<string, unknown>)["sha512"] = (...msgs: Uint8Array[]) => {
   const h = createHash("sha512");
   for (const m of msgs) h.update(m);
   return Uint8Array.from(h.digest());

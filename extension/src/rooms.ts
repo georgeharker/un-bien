@@ -11,14 +11,14 @@ import { defaultAgentName } from "./session/local_config.js";
  * Format: first 12 chars of base64url(sha256(realpath)).
  */
 export function roomIdForCwd(cwd: string): string {
- let target: string;
- try {
-  target = realpathSync(cwd);
- } catch {
-  // cwd doesn't exist (unlikely in production) — fallback to raw path.
-  target = cwd;
- }
- return createHash("sha256").update(target).digest("base64url").slice(0, 12);
+  let target: string;
+  try {
+    target = realpathSync(cwd);
+  } catch {
+    // cwd doesn't exist (unlikely in production) — fallback to raw path.
+    target = cwd;
+  }
+  return createHash("sha256").update(target).digest("base64url").slice(0, 12);
 }
 
 /**
@@ -34,7 +34,10 @@ export function roomIdForCwd(cwd: string): string {
  * keeps the raw session id off the wire.
  */
 export function roomIdForSession(sessionId: string): string {
- return createHash("sha256").update(sessionId).digest("base64url").slice(0, 12);
+  return createHash("sha256")
+    .update(sessionId)
+    .digest("base64url")
+    .slice(0, 12);
 }
 
 /**
@@ -57,18 +60,18 @@ export function roomIdForSession(sessionId: string): string {
  * Pi never announces.
  */
 export function roomIdFor(cwd: string, name?: string): string {
- if (!name || name === defaultAgentName(cwd)) return roomIdForCwd(cwd);
- let target: string;
- try {
-  target = realpathSync(cwd);
- } catch {
-  target = cwd;
- }
- // NUL separator (U+0000): impossible in a POSIX path and stripped from any
- // sanitized name, so the cwd/name boundary is unambiguous.
- const sep = String.fromCharCode(0);
- return createHash("sha256")
-  .update(target + sep + name)
-  .digest("base64url")
-  .slice(0, 12);
+  if (!name || name === defaultAgentName(cwd)) return roomIdForCwd(cwd);
+  let target: string;
+  try {
+    target = realpathSync(cwd);
+  } catch {
+    target = cwd;
+  }
+  // NUL separator (U+0000): impossible in a POSIX path and stripped from any
+  // sanitized name, so the cwd/name boundary is unambiguous.
+  const sep = String.fromCharCode(0);
+  return createHash("sha256")
+    .update(target + sep + name)
+    .digest("base64url")
+    .slice(0, 12);
 }

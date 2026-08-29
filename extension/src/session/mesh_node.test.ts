@@ -62,7 +62,10 @@ const peerHarness = vi.hoisted(() => {
     readonly reconnectHandlers = new Set<() => void>();
     readonly start = vi.fn(async () => this.assignedName);
     readonly send = vi.fn(async () => undefined);
-    readonly sendWithAck = vi.fn(async () => ({ status: "received", id: "ack" }));
+    readonly sendWithAck = vi.fn(async () => ({
+      status: "received",
+      id: "ack",
+    }));
     readonly request = vi.fn(async () => ({ body: { peers: [] } }));
     readonly onMessage = vi.fn(() => () => undefined);
     readonly leave = vi.fn(async () => undefined);
@@ -79,10 +82,18 @@ const peerHarness = vi.hoisted(() => {
       instances.push(this);
     }
 
-    currentRole(): "leader" | "follower" { return this.role; }
-    localBroker(): object | null { return this.broker; }
-    name(): string { return this.assignedName; }
-    address(): string { return this.assignedName; }
+    currentRole(): "leader" | "follower" {
+      return this.role;
+    }
+    localBroker(): object | null {
+      return this.broker;
+    }
+    name(): string {
+      return this.assignedName;
+    }
+    address(): string {
+      return this.assignedName;
+    }
     onReconnect(handler: () => void): () => void {
       this.reconnectHandlers.add(handler);
       return () => this.reconnectHandlers.delete(handler);
@@ -104,8 +115,13 @@ const relayHarness = vi.hoisted(() => {
     readonly send = vi.fn();
     readonly sendControl = vi.fn();
     readonly connect = vi.fn(async () => undefined);
-    readonly close = vi.fn(() => { this.readyState = 3; });
-    private readonly listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+    readonly close = vi.fn(() => {
+      this.readyState = 3;
+    });
+    private readonly listeners = new Map<
+      string,
+      Set<(...args: unknown[]) => void>
+    >();
 
     constructor(
       readonly url = "wss://relay.test",
@@ -255,10 +271,12 @@ describe("MeshNode retained topology", () => {
     peer.triggerReconnect();
     await vi.waitFor(() => expect(attachSpy).toHaveBeenCalledTimes(1));
 
-    expect(attachSpy).toHaveBeenCalledWith(expect.objectContaining({
-      broker: peer.broker,
-      topology: retained,
-    }));
+    expect(attachSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        broker: peer.broker,
+        topology: retained,
+      }),
+    );
     expect(attached.activate).toHaveBeenCalledTimes(1);
   });
 
@@ -275,14 +293,21 @@ describe("MeshNode retained topology", () => {
       keypair: KEYPAIR,
     });
 
-    expect(attachSpy).toHaveBeenCalledWith(expect.objectContaining({
-      topology: retained,
-    }));
+    expect(attachSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        topology: retained,
+      }),
+    );
   });
 
   test("retains and forwards a wire-label-only topology change", async () => {
     const first = topology("self", "sibling", "self-wire", "sibling-wire");
-    const updated = topology("self", "sibling", "self-wire-next", "sibling-wire");
+    const updated = topology(
+      "self",
+      "sibling",
+      "self-wire-next",
+      "sibling-wire",
+    );
     const attached = bridge(first);
     attachSpy.mockResolvedValue(attached as never);
     const { node } = testNode();
@@ -301,7 +326,9 @@ describe("MeshNode retained topology", () => {
   test("failover uses the latest retained topology", async () => {
     const first = bridge(topology("first-self", "first-sibling"));
     const second = bridge(topology("latest-self", "latest-sibling"));
-    attachSpy.mockResolvedValueOnce(first as never).mockResolvedValueOnce(second as never);
+    attachSpy
+      .mockResolvedValueOnce(first as never)
+      .mockResolvedValueOnce(second as never);
     const { node, peer } = testNode();
 
     node.setTopology(first.topology);
@@ -336,7 +363,9 @@ describe("cross-PC bridge discovery boundary", () => {
 
   test("supplied topology bypasses discovery", async () => {
     const supplied = topology();
-    storageHarness.listOwnerPubkeys.mockResolvedValue([standardKey(OWNER_PUBLIC)]);
+    storageHarness.listOwnerPubkeys.mockResolvedValue([
+      standardKey(OWNER_PUBLIC),
+    ]);
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const broker = { setRemoteRouter: vi.fn(), clearRemoteRouter: vi.fn() };
@@ -361,12 +390,15 @@ describe("cross-PC bridge discovery boundary", () => {
 
   test("discovery falls back after finite header and body deadlines", async () => {
     vi.useFakeTimers();
-    storageHarness.listOwnerPubkeys.mockResolvedValue([standardKey(OWNER_PUBLIC)]);
+    storageHarness.listOwnerPubkeys.mockResolvedValue([
+      standardKey(OWNER_PUBLIC),
+    ]);
     const broker = { setRemoteRouter: vi.fn(), clearRemoteRouter: vi.fn() };
 
     for (const phase of ["headers", "body"] as const) {
       const fetchMock = vi.fn(async () => {
-        if (phase === "headers") return await new Promise<Response>(() => undefined);
+        if (phase === "headers")
+          return await new Promise<Response>(() => undefined);
         return {
           status: 200,
           json: () => new Promise<unknown>(() => undefined),

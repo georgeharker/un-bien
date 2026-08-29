@@ -75,7 +75,9 @@ function ownTopology(
     "self public key",
   );
   if (selfPubkey !== expectedSelfPubkey) {
-    throw new Error("mesh: topology self public key does not match relay identity");
+    throw new Error(
+      "mesh: topology self public key does not match relay identity",
+    );
   }
   const selfLabel = validateAlias(snapshot.self.pcLabel, "self.pcLabel");
   const selfLegacyPcLabel = validateLegacyPcLabel(
@@ -89,18 +91,23 @@ function ownTopology(
   });
   const siblingKeys = new Set<string>();
   const siblingAliases = new Set<string>();
-  const normalizedSiblings: Array<Readonly<{
-    pcLabel: string;
-    pcPubkey: string;
-    legacyPcLabel: string;
-  }>> = [];
+  const normalizedSiblings: Array<
+    Readonly<{
+      pcLabel: string;
+      pcPubkey: string;
+      legacyPcLabel: string;
+    }>
+  > = [];
   for (const [index, sibling] of snapshot.siblings.entries()) {
     const pcPubkey = canonicalizeEd25519PublicKey(
       sibling.pcPubkey,
       `siblings[${index}].pcPubkey`,
     );
     if (pcPubkey === selfPubkey) continue;
-    const pcLabel = validateAlias(sibling.pcLabel, `siblings[${index}].pcLabel`);
+    const pcLabel = validateAlias(
+      sibling.pcLabel,
+      `siblings[${index}].pcLabel`,
+    );
     const legacyPcLabel = validateLegacyPcLabel(
       sibling.legacyPcLabel,
       `siblings[${index}].legacyPcLabel`,
@@ -113,23 +120,31 @@ function ownTopology(
     }
     siblingAliases.add(pcLabel);
     siblingKeys.add(pcPubkey);
-    normalizedSiblings.push(Object.freeze({ pcLabel, pcPubkey, legacyPcLabel }));
+    normalizedSiblings.push(
+      Object.freeze({ pcLabel, pcPubkey, legacyPcLabel }),
+    );
   }
-  normalizedSiblings.sort((left, right) => compareAscii(left.pcPubkey, right.pcPubkey));
+  normalizedSiblings.sort((left, right) =>
+    compareAscii(left.pcPubkey, right.pcPubkey),
+  );
   return Object.freeze({ self, siblings: Object.freeze(normalizedSiblings) });
 }
 
 async function discoverStandaloneTopology(
   opts: AttachBridgeOptions,
 ): Promise<MeshTopologySnapshot> {
-  const silent = { warn: (_message: string): void => { /* metadata stays silent in TUI */ } };
+  const silent = {
+    warn: (_message: string): void => {
+      /* metadata stays silent in TUI */
+    },
+  };
   try {
     const owners = await listOwnerPubkeys();
     return await discoverTopology({
       client: new MeshClient(opts.relayUrl, {
-        ...(opts.meshRequestTimeoutMs !== undefined
-          ? { requestTimeoutMs: opts.meshRequestTimeoutMs }
-          : {}),
+        ...(opts.meshRequestTimeoutMs === undefined
+          ? {}
+          : { requestTimeoutMs: opts.meshRequestTimeoutMs }),
       }),
       ownerEpks: owners,
       myPubkey: opts.keypair.publicKey,
@@ -148,7 +163,7 @@ export async function attachCrossPcBridge(
     "relay public key",
   );
   const topology = ownTopology(
-    opts.topology ?? await discoverStandaloneTopology(opts),
+    opts.topology ?? (await discoverStandaloneTopology(opts)),
     expectedSelfPubkey,
   );
 

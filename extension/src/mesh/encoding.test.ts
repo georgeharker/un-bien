@@ -18,14 +18,20 @@ const TECHNICAL_KEY_BYTES = Uint8Array.from(
 );
 const STANDARD_PADDED = "CxwtPk9gcYKTpLXG1+j5ChssPU5fcIGSo7TF1uf4CRo=";
 const STANDARD_UNPADDED = STANDARD_PADDED.slice(0, -1);
-const URL_SAFE_PADDED = STANDARD_PADDED.replaceAll("+", "-").replaceAll("/", "_");
+const URL_SAFE_PADDED = STANDARD_PADDED.replaceAll("+", "-").replaceAll(
+  "/",
+  "_",
+);
 const URL_SAFE_UNPADDED = URL_SAFE_PADDED.slice(0, -1);
 const SPECIAL_ALPHABET_BYTES = Uint8Array.from(
   { length: 32 },
   (_, index) => [0xfb, 0xff, 0xfe][index % 3],
 );
 const SPECIAL_STANDARD = Buffer.from(SPECIAL_ALPHABET_BYTES).toString("base64");
-const SPECIAL_URL_SAFE = SPECIAL_STANDARD.replaceAll("+", "-").replaceAll("/", "_");
+const SPECIAL_URL_SAFE = SPECIAL_STANDARD.replaceAll("+", "-").replaceAll(
+  "/",
+  "_",
+);
 
 describe("strict Ed25519 public-key encoding", () => {
   test.each([
@@ -122,9 +128,7 @@ describe("routing aliases", () => {
   const sharedPrefixUrlB = toBase64UrlNoPad(sharedPrefixBytesB);
 
   test("percent-encodes every unsafe UTF-8 byte with uppercase hex", () => {
-    expect(encodeRoutingAlias("A:B%~ é")).toBe(
-      "A%3AB%25%7E%20%C3%A9",
-    );
+    expect(encodeRoutingAlias("A:B%~ é")).toBe("A%3AB%25%7E%20%C3%A9");
     expect(encodeRoutingAlias("AZaz09._-")).toBe("AZaz09._-");
     expect(encodeRoutingAlias("\u0000\n")).toBe("%00%0A");
   });
@@ -148,9 +152,7 @@ describe("routing aliases", () => {
 
   test("suffixes every member of a colliding group and expands through all 43 key characters", () => {
     expect(sharedPrefixUrlA).toHaveLength(43);
-    expect(sharedPrefixUrlA.slice(0, 42)).toBe(
-      sharedPrefixUrlB.slice(0, 42),
-    );
+    expect(sharedPrefixUrlA.slice(0, 42)).toBe(sharedPrefixUrlB.slice(0, 42));
 
     const allocated = allocateRoutingAliases([
       { pcPubkey: sharedPrefixKeyB, nickname: "Mac" },

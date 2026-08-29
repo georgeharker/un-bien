@@ -25,11 +25,11 @@ import { realpathSync } from "node:fs";
  * needs the name to disambiguate. Decision: leave `daemonIdForCwd` cwd-only.
  */
 export function daemonIdForCwd(cwd: string): string {
- let target: string;
- try {
-  target = realpathSync(cwd);
- } catch {
-  target = cwd;
- }
- return createHash("sha256").update(target).digest("hex").slice(0, 8);
+  let target: string;
+  try {
+    target = realpathSync(cwd);
+  } catch {
+    target = cwd;
+  }
+  return createHash("sha256").update(target).digest("hex").slice(0, 8);
 }

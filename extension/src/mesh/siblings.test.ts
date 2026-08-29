@@ -41,7 +41,10 @@ function rawFingerprint(raw: string): string {
 // Fixed 32-byte key: standard Base64 starts `+///AAAA`, while Base64url
 // starts `-___AAAA`. This keeps legacy-prefix coverage deterministic.
 const DETERMINISTIC_FALLBACK_PUBLIC_KEY = Uint8Array.from([
-  0xfb, 0xff, 0xff, ...Array.from({ length: 29 }, (_, index) => index),
+  0xfb,
+  0xff,
+  0xff,
+  ...Array.from({ length: 29 }, (_, index) => index),
 ]);
 
 function makeEnvelope(
@@ -62,9 +65,7 @@ function makeEnvelope(
       remote_epk: member.remoteEpk,
       relay_url: "wss://relay.test",
       paired_at: `2026-05-22T0${index}:00:00Z`,
-      ...(member.nickname !== undefined
-        ? { nickname: member.nickname }
-        : {}),
+      ...(member.nickname === undefined ? {} : { nickname: member.nickname }),
     })),
   });
   return { blob, sig: ed25519Sign(signingOwner.secretKey, blob) };
@@ -85,9 +86,7 @@ function membership(
     ownerPubkey: standardKey(owner),
     members: members.map((member) => ({
       pcPubkey: member.remoteEpk,
-      ...(member.nickname !== undefined
-        ? { nickname: member.nickname }
-        : {}),
+      ...(member.nickname === undefined ? {} : { nickname: member.nickname }),
     })),
   };
 }
@@ -109,17 +108,30 @@ describe("buildTopologySnapshot", () => {
       { remoteEpk: standardKey(transitiveOnly), nickname: "Transitive" },
     ]);
 
-    const snapshot = buildTopologySnapshot(self.publicKey, [historical, direct]);
+    const snapshot = buildTopologySnapshot(self.publicKey, [
+      historical,
+      direct,
+    ]);
 
     expect(snapshot).toEqual({
-      self: { pcPubkey: standardKey(self), pcLabel: "Self", legacyPcLabel: "Self" },
+      self: {
+        pcPubkey: standardKey(self),
+        pcLabel: "Self",
+        legacyPcLabel: "Self",
+      },
       siblings: [
-        { pcPubkey: standardKey(sibling), pcLabel: "Sibling", legacyPcLabel: "Sibling" },
+        {
+          pcPubkey: standardKey(sibling),
+          pcLabel: "Sibling",
+          legacyPcLabel: "Sibling",
+        },
       ],
     });
-    expect(snapshot.siblings.some(
-      (identity) => identity.pcPubkey === standardKey(transitiveOnly),
-    )).toBe(false);
+    expect(
+      snapshot.siblings.some(
+        (identity) => identity.pcPubkey === standardKey(transitiveOnly),
+      ),
+    ).toBe(false);
     expect(Object.isFrozen(snapshot)).toBe(true);
     expect(Object.isFrozen(snapshot.self)).toBe(true);
     expect(Object.isFrozen(snapshot.siblings)).toBe(true);
@@ -164,9 +176,16 @@ describe("buildTopologySnapshot", () => {
   });
 
   test("uses canonical standard-padded key fallback for the legacy wire label", () => {
-    const canonical = Buffer.from(DETERMINISTIC_FALLBACK_PUBLIC_KEY).toString("base64");
-    const urlSafe = Buffer.from(DETERMINISTIC_FALLBACK_PUBLIC_KEY).toString("base64url");
-    const snapshot = buildTopologySnapshot(DETERMINISTIC_FALLBACK_PUBLIC_KEY, []);
+    const canonical = Buffer.from(DETERMINISTIC_FALLBACK_PUBLIC_KEY).toString(
+      "base64",
+    );
+    const urlSafe = Buffer.from(DETERMINISTIC_FALLBACK_PUBLIC_KEY).toString(
+      "base64url",
+    );
+    const snapshot = buildTopologySnapshot(
+      DETERMINISTIC_FALLBACK_PUBLIC_KEY,
+      [],
+    );
 
     expect(canonical.slice(0, 8)).toMatch(/[+/]/);
     expect(canonical.slice(0, 8)).not.toBe(urlSafe.slice(0, 8));
@@ -270,7 +289,11 @@ describe("discoverTopology", () => {
     expect(get).toHaveBeenCalledTimes(1);
     expect(get).toHaveBeenCalledWith(sha256Hex(owner.publicKey));
     expect(snapshot.siblings).toEqual([
-      { pcPubkey: standardKey(sibling), pcLabel: "Sibling", legacyPcLabel: "Sibling" },
+      {
+        pcPubkey: standardKey(sibling),
+        pcLabel: "Sibling",
+        legacyPcLabel: "Sibling",
+      },
     ]);
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining(rawFingerprint(invalidRawOwner)),
@@ -303,7 +326,11 @@ describe("discoverTopology", () => {
 
     expect(get).toHaveBeenCalledTimes(1);
     expect(snapshot.siblings).toEqual([
-      { pcPubkey: standardKey(sibling), pcLabel: "Sibling", legacyPcLabel: "Sibling" },
+      {
+        pcPubkey: standardKey(sibling),
+        pcLabel: "Sibling",
+        legacyPcLabel: "Sibling",
+      },
     ]);
     expect(log.warn).toHaveBeenCalledTimes(2);
     for (const [message] of log.warn.mock.calls) {
@@ -354,7 +381,10 @@ describe("discoverTopology", () => {
       { remoteEpk: standardKey(transitiveOnly), nickname: "Transitive" },
     ];
     const envelopeMap = new Map([
-      [sha256Hex(directOwner.publicKey), makeEnvelope(directOwner, directMembers)],
+      [
+        sha256Hex(directOwner.publicKey),
+        makeEnvelope(directOwner, directMembers),
+      ],
       [
         sha256Hex(historicalOwner.publicKey),
         makeEnvelope(historicalOwner, historicalMembers),
@@ -417,7 +447,11 @@ describe("discoverTopology", () => {
     });
 
     expect(snapshot.siblings).toEqual([
-      { pcPubkey: standardKey(sibling), pcLabel: "Sibling", legacyPcLabel: "Sibling" },
+      {
+        pcPubkey: standardKey(sibling),
+        pcLabel: "Sibling",
+        legacyPcLabel: "Sibling",
+      },
     ]);
     expect(log.warn).toHaveBeenCalledTimes(1);
   });

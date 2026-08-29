@@ -1924,8 +1924,7 @@ describe("multi-channel broadcast (W2D)", () => {
       return current.customType === "un-bien:received-image";
     });
     const preview = previewCall?.[0] as
-      | { details?: { path?: string; previewPath?: string } }
-      | undefined;
+      { details?: { path?: string; previewPath?: string } } | undefined;
     const previewPath = preview?.details?.previewPath;
     expect(preview?.details?.path).toContain("jpeg-msg-0.jpg");
     expect(previewPath).toContain("jpeg-msg-0.preview.png");
@@ -1975,8 +1974,7 @@ describe("multi-channel broadcast (W2D)", () => {
       return current.customType === "un-bien:received-image";
     });
     const preview = previewCall?.[0] as
-      | { details?: { path?: string; previewPath?: string } }
-      | undefined;
+      { details?: { path?: string; previewPath?: string } } | undefined;
     expect(preview?.details?.path).toContain("jpeg-big-preview-0.jpg");
     expect(preview?.details?.previewPath).toBeUndefined();
   });
@@ -2029,8 +2027,7 @@ describe("multi-channel broadcast (W2D)", () => {
 
   test("slow idle JPEG conversion defers preview if another turn starts first", async () => {
     let resolveConversion:
-      | ((value: { data: string; mimeType: string }) => void)
-      | undefined;
+      ((value: { data: string; mimeType: string }) => void) | undefined;
     _convertToPngMock.mockReturnValueOnce(
       new Promise((resolve) => {
         resolveConversion = resolve;

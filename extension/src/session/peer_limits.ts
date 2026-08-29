@@ -9,20 +9,28 @@ export const MAX_ADDRESS_LENGTH = 4352;
 export function isBoundedPeerInfo(value: unknown): value is PeerInfo {
   if (!value || typeof value !== "object") return false;
   const { cwd, name, address } = value as PeerInfo;
-  return typeof cwd === "string" && cwd.length <= MAX_CWD_LENGTH &&
-    typeof name === "string" && name.length <= MAX_NAME_LENGTH &&
-    typeof address === "string" && address.length <= MAX_ADDRESS_LENGTH;
+  return (
+    typeof cwd === "string" &&
+    cwd.length <= MAX_CWD_LENGTH &&
+    typeof name === "string" &&
+    name.length <= MAX_NAME_LENGTH &&
+    typeof address === "string" &&
+    address.length <= MAX_ADDRESS_LENGTH
+  );
 }
 
-export function isBoundedPeerRoster(
-  infos: readonly PeerInfo[],
-): boolean {
-  return infos.length <= MAX_PEERS_UPDATE_ENTRIES && infos.every(isBoundedPeerInfo);
+export function isBoundedPeerRoster(infos: readonly PeerInfo[]): boolean {
+  return (
+    infos.length <= MAX_PEERS_UPDATE_ENTRIES && infos.every(isBoundedPeerInfo)
+  );
 }
 
 export function isBoundedPeerAddresses(addresses: readonly unknown[]): boolean {
-  return addresses.length <= MAX_PEERS_UPDATE_ENTRIES &&
-    addresses.every((address) =>
-      typeof address === "string" && address.length <= MAX_ADDRESS_LENGTH
-    );
+  return (
+    addresses.length <= MAX_PEERS_UPDATE_ENTRIES &&
+    addresses.every(
+      (address) =>
+        typeof address === "string" && address.length <= MAX_ADDRESS_LENGTH,
+    )
+  );
 }

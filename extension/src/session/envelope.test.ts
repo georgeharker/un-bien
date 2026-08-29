@@ -16,17 +16,23 @@ import {
 describe("uuidv7", () => {
   test("returns valid UUID format", () => {
     const id = uuidv7();
-    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
   });
 
   test("3 sequential IDs are time-ordered", () => {
     const a = uuidv7();
     // Small delay to ensure different ms timestamp.
     const wait = Date.now() + 2;
-    while (Date.now() < wait) { /* spin */ }
+    while (Date.now() < wait) {
+      /* spin */
+    }
     const b = uuidv7();
     const wait2 = Date.now() + 2;
-    while (Date.now() < wait2) { /* spin */ }
+    while (Date.now() < wait2) {
+      /* spin */
+    }
     const c = uuidv7();
     expect(a < b).toBe(true);
     expect(b < c).toBe(true);
@@ -34,11 +40,7 @@ describe("uuidv7", () => {
 });
 
 describe("shared UUID and transport-error grammar", () => {
-  const CLOSED_REASONS = [
-    "offline",
-    "not_authorized",
-    "bad_envelope",
-  ] as const;
+  const CLOSED_REASONS = ["offline", "not_authorized", "bad_envelope"] as const;
 
   test("accepts canonical hyphenated UUIDs without tightening the parser to v7", () => {
     expect(isUuid("550e8400-e29b-41d4-a716-446655440000")).toBe(true);
@@ -48,16 +50,17 @@ describe("shared UUID and transport-error grammar", () => {
     expect(isUuid(null)).toBe(false);
   });
 
-
   test.each(CLOSED_REASONS)(
     "normalizes the privileged %s body to its two protocol fields",
     (reason) => {
       const expected: TransportErrorBody = { type: "transport_error", reason };
-      expect(asTransportErrorBody({
-        type: "transport_error",
-        reason,
-        ignored: "must-not-cross-the-boundary",
-      })).toEqual(expected);
+      expect(
+        asTransportErrorBody({
+          type: "transport_error",
+          reason,
+          ignored: "must-not-cross-the-boundary",
+        }),
+      ).toEqual(expected);
     },
   );
 
@@ -75,14 +78,16 @@ describe("shared UUID and transport-error grammar", () => {
   });
 
   test("reserves any raw object with the exact transport_error type", () => {
-    expect(hasTransportErrorType({ type: "transport_error", reason: "unknown" })).toBe(true);
+    expect(
+      hasTransportErrorType({ type: "transport_error", reason: "unknown" }),
+    ).toBe(true);
     expect(hasTransportErrorType({ type: "transport_error" })).toBe(true);
-    expect(hasTransportErrorType({ type: "TRANSPORT_ERROR", reason: "offline" })).toBe(false);
+    expect(
+      hasTransportErrorType({ type: "TRANSPORT_ERROR", reason: "offline" }),
+    ).toBe(false);
     expect(hasTransportErrorType("transport_error")).toBe(false);
     expect(hasTransportErrorType(null)).toBe(false);
   });
-
-
 });
 
 describe("serialize/parse roundtrip", () => {
@@ -119,33 +124,87 @@ describe("parse rejects malformed envelopes", () => {
     expect(() => parse("not json {")).toThrow(EnvelopeError);
   });
   test("missing from", () => {
-    expect(() => parse(JSON.stringify({ to: "x", id: uuidv7(), re: null, body: 1 }))).toThrow(/from/);
+    expect(() =>
+      parse(JSON.stringify({ to: "x", id: uuidv7(), re: null, body: 1 })),
+    ).toThrow(/from/);
   });
   test("empty to", () => {
-    expect(() => parse(JSON.stringify({ from: "a", to: "", id: uuidv7(), re: null, body: 1 }))).toThrow(/to/);
+    expect(() =>
+      parse(
+        JSON.stringify({ from: "a", to: "", id: uuidv7(), re: null, body: 1 }),
+      ),
+    ).toThrow(/to/);
   });
   test("empty to[] array", () => {
-    expect(() => parse(JSON.stringify({ from: "a", to: [], id: uuidv7(), re: null, body: 1 }))).toThrow(/to/);
+    expect(() =>
+      parse(
+        JSON.stringify({ from: "a", to: [], id: uuidv7(), re: null, body: 1 }),
+      ),
+    ).toThrow(/to/);
   });
   test("id not UUID", () => {
-    expect(() => parse(JSON.stringify({ from: "a", to: "b", id: "not-uuid", re: null, body: 1 }))).toThrow(/id/);
+    expect(() =>
+      parse(
+        JSON.stringify({
+          from: "a",
+          to: "b",
+          id: "not-uuid",
+          re: null,
+          body: 1,
+        }),
+      ),
+    ).toThrow(/id/);
   });
   test("re not UUID and not null", () => {
-    expect(() => parse(JSON.stringify({ from: "a", to: "b", id: uuidv7(), re: "junk", body: 1 }))).toThrow(/re/);
+    expect(() =>
+      parse(
+        JSON.stringify({
+          from: "a",
+          to: "b",
+          id: uuidv7(),
+          re: "junk",
+          body: 1,
+        }),
+      ),
+    ).toThrow(/re/);
   });
   test("legacy 32-hex Relay id and correlation", () => {
     const legacyId = "01976000000070008000000000000000";
-    expect(() => parse(JSON.stringify({ from: "a", to: "b", id: legacyId, re: null, body: 1 }))).toThrow(/id/);
-    expect(() => parse(JSON.stringify({ from: "a", to: "b", id: uuidv7(), re: legacyId, body: 1 }))).toThrow(/re/);
+    expect(() =>
+      parse(
+        JSON.stringify({ from: "a", to: "b", id: legacyId, re: null, body: 1 }),
+      ),
+    ).toThrow(/id/);
+    expect(() =>
+      parse(
+        JSON.stringify({
+          from: "a",
+          to: "b",
+          id: uuidv7(),
+          re: legacyId,
+          body: 1,
+        }),
+      ),
+    ).toThrow(/re/);
   });
   test("keeps an opaque reserved body and null correlation parse-compatible", () => {
-    const body = { type: "transport_error", reason: "future_reason", detail: { opaque: true } };
-    expect(parse(JSON.stringify({ from: "a", to: "b", id: uuidv7(), re: null, body }))).toMatchObject({
+    const body = {
+      type: "transport_error",
+      reason: "future_reason",
+      detail: { opaque: true },
+    };
+    expect(
+      parse(
+        JSON.stringify({ from: "a", to: "b", id: uuidv7(), re: null, body }),
+      ),
+    ).toMatchObject({
       re: null,
       body,
     });
   });
   test("missing body", () => {
-    expect(() => parse(JSON.stringify({ from: "a", to: "b", id: uuidv7(), re: null }))).toThrow(/body/);
+    expect(() =>
+      parse(JSON.stringify({ from: "a", to: "b", id: uuidv7(), re: null })),
+    ).toThrow(/body/);
   });
 });

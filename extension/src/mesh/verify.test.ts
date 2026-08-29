@@ -219,7 +219,9 @@ describe("verifyEnvelope", () => {
       kp.secretKey,
     );
 
-    await expect(verifyEnvelope(env)).rejects.toThrow(/members\[1\]\.remote_epk/);
+    await expect(verifyEnvelope(env)).rejects.toThrow(
+      /members\[1\]\.remote_epk/,
+    );
   });
 
   test("rejects invalid signature (sig flipped)", async () => {
@@ -235,7 +237,9 @@ describe("verifyEnvelope", () => {
     );
     // Flip one byte of the signature.
     env.sig[0] = env.sig[0] ^ 0xff;
-    await expect(verifyEnvelope(env)).rejects.toThrow(/signature verification failed/);
+    await expect(verifyEnvelope(env)).rejects.toThrow(
+      /signature verification failed/,
+    );
   });
 
   test("rejects corrupted blob (signed bytes mutated after sign)", async () => {
@@ -269,7 +273,9 @@ describe("verifyEnvelope", () => {
       },
       kpAttacker.secretKey,
     );
-    await expect(verifyEnvelope(env)).rejects.toThrow(/signature verification failed/);
+    await expect(verifyEnvelope(env)).rejects.toThrow(
+      /signature verification failed/,
+    );
   });
 
   test("rejects malformed JSON blob without echoing raw technical keys", async () => {

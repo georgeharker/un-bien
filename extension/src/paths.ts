@@ -23,9 +23,9 @@ import { join } from "node:path";
  *   3. `os.homedir()`   — the default, `~/.pi/un-bien`.
  */
 export function unbienStateHome(): string {
- const dir = process.env["UNBIEN_DIR"];
- if (dir && dir.length > 0) return dir;
- return join(process.env["UNBIEN_HOME"] || homedir(), ".pi", "un-bien");
+  const dir = process.env["UNBIEN_DIR"];
+  if (dir && dir.length > 0) return dir;
+  return join(process.env["UNBIEN_HOME"] || homedir(), ".pi", "un-bien");
 }
 
 /**
@@ -45,8 +45,8 @@ export function unbienStateHome(): string {
  * the global config honours `PI_CODING_AGENT_DIR` this way.
  */
 export function unbienConfigHome(): string {
- const agentDir = process.env["PI_CODING_AGENT_DIR"];
- const base =
-  agentDir && agentDir.length > 0 ? agentDir : join(homedir(), ".pi");
- return join(base, "extensions");
+  const agentDir = process.env["PI_CODING_AGENT_DIR"];
+  const base =
+    agentDir && agentDir.length > 0 ? agentDir : join(homedir(), ".pi");
+  return join(base, "extensions");
 }

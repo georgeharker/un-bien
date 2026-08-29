@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import WebSocket from "ws";
 import { ed25519Sign } from "../pairing/crypto.js";
 import type { Ed25519Keypair } from "../pairing/crypto.js";
+import type { ThinkingLevel } from "../protocol/types.js";
 
 const AUTH_TIMEOUT_MS = 5_000;
 
@@ -14,7 +15,7 @@ const AUTH_TIMEOUT_MS = 5_000;
  * triggers and a background daemon sits "online" but dead after a few idle
  * hours. We force-close on timeout so `close` drives the caller's reconnect.
  */
-const LIVENESS_TIMEOUT_MS = 70_000;  // ~2.8 missed relay pings → confidently dead
+const LIVENESS_TIMEOUT_MS = 70_000; // ~2.8 missed relay pings → confidently dead
 const LIVENESS_CHECK_MS = 20_000;
 
 /** Relay control messages (sent/received during auth). */
@@ -24,8 +25,14 @@ interface HelloMsg {
   room_id?: string;
   room_meta?: RoomMeta;
 }
-interface ChallengeMsg { type: "challenge"; nonce: string }
-interface AuthMsg { type: "auth"; sig: string }
+interface ChallengeMsg {
+  type: "challenge";
+  nonce: string;
+}
+interface AuthMsg {
+  type: "auth";
+  sig: string;
+}
 
 export interface RoomMeta {
   name: string;
@@ -35,11 +42,13 @@ export interface RoomMeta {
   model?: string;
 }
 
-/** Control frame sent to relay (not routed to app peer). */
+/** Control frame sent to relay (not routed to app peer). Each publish carries
+ *  ONE changed field (model / working / thinking); the relay merges them into
+ *  the room's meta and fans a `room_meta_updated` to the app. */
 export interface RoomMetaUpdateFrame {
   type: "room_meta_update";
   room_id: string;
-  meta: { model?: string };
+  meta: { model?: string; working?: boolean; thinking?: ThinkingLevel };
 }
 
 export interface ConnectOptions {
@@ -136,8 +145,12 @@ export class RelayClient extends EventEmitter {
           // relay's view of us alive). The relay ignores client pings rather
           // than ponging, so these inbound pings — not a ping/pong we initiate
           // — are our liveness signal.
-          ws.on("ping", () => { this.lastActivityAt = Date.now(); });
-          ws.on("pong", () => { this.lastActivityAt = Date.now(); });
+          ws.on("ping", () => {
+            this.lastActivityAt = Date.now();
+          });
+          ws.on("pong", () => {
+            this.lastActivityAt = Date.now();
+          });
 
           ws.on("close", () => {
             this._stopLiveness();
@@ -172,7 +185,7 @@ export class RelayClient extends EventEmitter {
    * the WS isn't open (best-effort: control frames are observational; we
    * don't want them throwing inside SDK event callbacks).
    */
-  sendControl(frame: object): void {
+  sendControl(frame: RoomMetaUpdateFrame): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(JSON.stringify(frame));
   }
@@ -207,7 +220,10 @@ export class RelayClient extends EventEmitter {
 
   // ── Auth ────────────────────────────────────────────────────────────────────
 
-  private async _authenticate(ws: WebSocket, opts: ConnectOptions): Promise<void> {
+  private async _authenticate(
+    ws: WebSocket,
+    opts: ConnectOptions,
+  ): Promise<void> {
     const pubkeyB64 = Buffer.from(this.keypair.publicKey).toString("base64");
     const hello: HelloMsg = { type: "hello", pubkey: pubkeyB64 };
     if (opts.roomId) hello.room_id = opts.roomId;
@@ -215,7 +231,8 @@ export class RelayClient extends EventEmitter {
     this._rawSend(ws, JSON.stringify(hello));
 
     const challengeRaw = await this._nextMsg(ws);
-    let challenge: ChallengeMsg | { type: "error"; code?: string; message?: string };
+    let challenge:
+      ChallengeMsg | { type: "error"; code?: string; message?: string };
     try {
       challenge = JSON.parse(challengeRaw) as typeof challenge;
     } catch {
@@ -226,10 +243,14 @@ export class RelayClient extends EventEmitter {
       if (code === "room_already_open") {
         throw new RoomAlreadyOpenError(opts.roomId);
       }
-      throw new Error(`relay rejected hello: ${code || (challenge as { message?: string }).message || "unknown"}`);
+      throw new Error(
+        `relay rejected hello: ${code || (challenge as { message?: string }).message || "unknown"}`,
+      );
     }
     if (challenge.type !== "challenge" || !(challenge as ChallengeMsg).nonce) {
-      throw new Error(`relay auth_failed: expected challenge, got ${challengeRaw}`);
+      throw new Error(
+        `relay auth_failed: expected challenge, got ${challengeRaw}`,
+      );
     }
 
     const nonce = Buffer.from((challenge as ChallengeMsg).nonce, "base64");

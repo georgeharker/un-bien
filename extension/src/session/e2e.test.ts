@@ -628,8 +628,7 @@ describe("ACK protocol (plan/25 Wave 0)", () => {
         try {
           vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
           let result:
-            | Awaited<ReturnType<SessionPeer["sendWithAck"]>>
-            | undefined;
+            Awaited<ReturnType<SessionPeer["sendWithAck"]>> | undefined;
           const pending = peer
             .sendWithAck(
               "trab:agent-1",

@@ -78,10 +78,12 @@ interface AckBody {
 }
 
 function hasExactAckType(body: unknown): body is { type: "ack" } {
-  return typeof body === "object"
-    && body !== null
-    && Object.prototype.hasOwnProperty.call(body, "type")
-    && (body as { type: unknown }).type === "ack";
+  return (
+    typeof body === "object" &&
+    body !== null &&
+    Object.hasOwn(body, "type") &&
+    (body as { type: unknown }).type === "ack"
+  );
 }
 
 function expectedAckSender(destination: string): string {
@@ -100,9 +102,11 @@ function expectedAckSender(destination: string): string {
 }
 
 function asAckBody(body: unknown): AckBody | null {
-  if (!hasExactAckType(body)
-    || !Object.prototype.hasOwnProperty.call(body, "status")
-    || !Object.prototype.hasOwnProperty.call(body, "target")) {
+  if (
+    !hasExactAckType(body) ||
+    !Object.hasOwn(body, "status") ||
+    !Object.hasOwn(body, "target")
+  ) {
     return null;
   }
 
@@ -111,8 +115,10 @@ function asAckBody(body: unknown): AckBody | null {
     status: unknown;
     target: unknown;
   };
-  if ((status !== "received" && status !== "busy" && status !== "denied")
-    || typeof target !== "string") {
+  if (
+    (status !== "received" && status !== "busy" && status !== "denied") ||
+    typeof target !== "string"
+  ) {
     return null;
   }
 
@@ -133,17 +139,23 @@ export class SessionPeer {
   private socket: Socket | null = null;
   private buf = "";
   /** Map of in-flight request ids → resolver. Used by `request()`. */
-  private readonly pending = new Map<string, {
-    resolve: (env: Envelope) => void;
-    reject: (err: Error) => void;
-    timer: ReturnType<typeof setTimeout>;
-  }>();
+  private readonly pending = new Map<
+    string,
+    {
+      resolve: (env: Envelope) => void;
+      reject: (err: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
   /** Map of in-flight send ids → ACK resolver. Used by `sendWithAck()`. */
-  private readonly ackPending = new Map<string, {
-    expectedFrom: string;
-    resolve: (result: AckResult) => void;
-    timer: ReturnType<typeof setTimeout>;
-  }>();
+  private readonly ackPending = new Map<
+    string,
+    {
+      expectedFrom: string;
+      resolve: (result: AckResult) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
   private readonly handlers = new Set<MessageHandler>();
   private readonly reconnectHandlers = new Set<ReconnectHandler>();
   private leftFlag = false;
@@ -340,41 +352,64 @@ export class SessionPeer {
     sock.setEncoding("utf8");
     sock.on("data", (chunk: string) => this._onData(chunk));
     sock.on("close", () => this._onSocketClose(sock));
-    sock.on("error", () => { /* close will follow */ });
+    sock.on("error", () => {
+      /* close will follow */
+    });
   }
 
   private _registerOver(sock: Socket): Promise<string> {
     return new Promise<string>((resolve, reject) => {
       // The first inbound line MUST be the register_ack. Buffer-aware.
-      const wait = setTimeout(() => reject(new Error("register_ack timeout")), 5_000);
+      const wait = setTimeout(
+        () => reject(new Error("register_ack timeout")),
+        5_000,
+      );
       const onceListener = (raw: unknown) => {
         clearTimeout(wait);
         // plan/38: a new broker returns `address_assigned` (canonical key) +
         // `name_assigned` (clean leaf). Read both with cross-fallback so we work
         // against either a new broker OR a legacy one (only `name_assigned`,
         // where address == name).
-        const ack = raw as { type?: string; name_assigned?: string; address_assigned?: string };
-        const name = typeof ack?.name_assigned === "string" ? ack.name_assigned : ack?.address_assigned;
-        const address = typeof ack?.address_assigned === "string" ? ack.address_assigned : ack?.name_assigned;
-        if (ack && ack.type === "register_ack" && typeof name === "string" && typeof address === "string") {
+        const ack = raw as {
+          type?: string;
+          name_assigned?: string;
+          address_assigned?: string;
+        };
+        const name =
+          typeof ack?.name_assigned === "string"
+            ? ack.name_assigned
+            : ack?.address_assigned;
+        const address =
+          typeof ack?.address_assigned === "string"
+            ? ack.address_assigned
+            : ack?.name_assigned;
+        if (
+          ack &&
+          ack.type === "register_ack" &&
+          typeof name === "string" &&
+          typeof address === "string"
+        ) {
           this.assignedName = name;
           this.assignedAddress = address;
           this._preAckListener = null;
           resolve(name);
         } else {
-          reject(new Error(`expected register_ack, got: ${JSON.stringify(raw)}`));
+          reject(
+            new Error(`expected register_ack, got: ${JSON.stringify(raw)}`),
+          );
         }
       };
       this._preAckListener = onceListener;
-      const req = JSON.stringify({
-        type: "register",
-        name: this.opts.name,
-        // Only include cwd when set — keeps the wire identical to the legacy
-        // payload for callers that don't supply it (broker treats absent cwd
-        // as "no take-over", i.e. the old #N behavior).
-        ...(this.opts.cwd !== undefined ? { cwd: this.opts.cwd } : {}),
-        ...(this.opts.takeoverExisting === true ? { takeover: true } : {}),
-      }) + "\n";
+      const req =
+        JSON.stringify({
+          type: "register",
+          name: this.opts.name,
+          // Only include cwd when set — keeps the wire identical to the legacy
+          // payload for callers that don't supply it (broker treats absent cwd
+          // as "no take-over", i.e. the old #N behavior).
+          ...(this.opts.cwd === undefined ? {} : { cwd: this.opts.cwd }),
+          ...(this.opts.takeoverExisting === true ? { takeover: true } : {}),
+        }) + "\n";
       try {
         sock.write(req);
       } catch (e) {
@@ -422,9 +457,10 @@ export class SessionPeer {
     // correlate it. Only exact broker provenance plus a valid body may settle;
     // forged or invalid reserved frames remain ordinary handler messages.
     if (hasTransportErrorType(env.body)) {
-      const trusted = env.from === "broker" && env.re !== null
-        ? asTransportErrorBody(env.body)
-        : null;
+      const trusted =
+        env.from === "broker" && env.re !== null
+          ? asTransportErrorBody(env.body)
+          : null;
       if (trusted && env.re !== null) {
         this._consumeAckTransportError(env.re, trusted.reason);
         this._rejectRequestTransportError(env.re, trusted.reason);
@@ -445,7 +481,11 @@ export class SessionPeer {
         if (slot && slot.expectedFrom === env.from) {
           clearTimeout(slot.timer);
           this.ackPending.delete(env.re);
-          slot.resolve({ status: ackBody.status, id: env.re, target: ackBody.target });
+          slot.resolve({
+            status: ackBody.status,
+            id: env.re,
+            target: ackBody.target,
+          });
         }
       }
       return;
@@ -497,7 +537,11 @@ export class SessionPeer {
 
   private _dispatchToHandlers(env: Envelope): void {
     for (const h of this.handlers) {
-      try { h(env); } catch { /* handler errors don't break peer */ }
+      try {
+        h(env);
+      } catch {
+        /* handler errors don't break peer */
+      }
     }
   }
 
@@ -509,7 +553,7 @@ export class SessionPeer {
   }
 
   private async _onSocketClose(closedSock: Socket): Promise<void> {
-    if (this.leftFlag) return;  // intentional leave
+    if (this.leftFlag) return; // intentional leave
     // Only the CURRENT socket dying is a real failover. A close from a socket
     // we've already replaced — `rename()` (teardown + rejoin) or a prior
     // reconnect — must NOT trigger another `_joinOrLead`, or we'd double-
@@ -528,9 +572,15 @@ export class SessionPeer {
       // The new broker's peers map starts fresh — consumers must re-query
       // any cached state (peer count, etc.) that depended on the old broker.
       for (const h of this.reconnectHandlers) {
-        try { h(); } catch { /* handler errors don't break peer */ }
+        try {
+          h();
+        } catch {
+          /* handler errors don't break peer */
+        }
       }
-    } catch { /* election failed; peer stuck in disconnected state */ }
+    } catch {
+      /* election failed; peer stuck in disconnected state */
+    }
   }
 
   private async _teardownConn(): Promise<void> {
@@ -546,11 +596,19 @@ export class SessionPeer {
     }
 
     if (this.socket) {
-      try { this.socket.destroy(); } catch { /* ignored */ }
+      try {
+        this.socket.destroy();
+      } catch {
+        /* ignored */
+      }
       this.socket = null;
     }
     if (this.broker) {
-      try { await this.broker.close(); } catch { /* ignored */ }
+      try {
+        await this.broker.close();
+      } catch {
+        /* ignored */
+      }
       this.broker = null;
     }
   }

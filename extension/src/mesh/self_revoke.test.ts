@@ -56,9 +56,7 @@ function makeEnvelope(
       remote_epk: member.remoteEpk,
       relay_url: "wss://relay.test",
       paired_at: `2026-05-22T0${index}:00:00Z`,
-      ...(member.nickname !== undefined
-        ? { nickname: member.nickname }
-        : {}),
+      ...(member.nickname === undefined ? {} : { nickname: member.nickname }),
     })),
   });
   return { blob, sig: ed25519Sign(owner.secretKey, blob) };
@@ -80,12 +78,19 @@ function defaultLog() {
 
 function storage(
   listOwnerPubkeys: () => Promise<unknown[]>,
-  removePeer: (remoteEpk: string, canCommit?: () => boolean) => Promise<boolean> = vi.fn().mockResolvedValue(true),
+  removePeer: (
+    remoteEpk: string,
+    canCommit?: () => boolean,
+  ) => Promise<boolean> = vi.fn().mockResolvedValue(true),
 ): SelfRevokeStorage {
   return {
-    snapshotOwnerPubkeys: () => listOwnerPubkeys().then((rawOwners) => rawOwners.map(
-      (rawOwnerPubkey) => ({ rawOwnerPubkey, token: String(rawOwnerPubkey) }),
-    )),
+    snapshotOwnerPubkeys: () =>
+      listOwnerPubkeys().then((rawOwners) =>
+        rawOwners.map((rawOwnerPubkey) => ({
+          rawOwnerPubkey,
+          token: String(rawOwnerPubkey),
+        })),
+      ),
     conditionalRemovePeer: async (remoteEpk, _token, canCommit) => {
       const removed = await removePeer(remoteEpk, canCommit);
       return removed
@@ -137,7 +142,8 @@ describe("SelfRevoke canonical Owner state", () => {
     expect(get).toHaveBeenCalledWith(ownerHash(owner), undefined);
     expect(removePeer).not.toHaveBeenCalled();
     expect(onTopologyChanged).toHaveBeenCalledTimes(1);
-    const snapshot = onTopologyChanged.mock.calls[0]![0] as MeshTopologySnapshot;
+    const snapshot = onTopologyChanged.mock
+      .calls[0]![0] as MeshTopologySnapshot;
     expect(snapshot.self.pcPubkey).toBe(standardKey(self));
     expect(siblingKeys(snapshot)).toEqual([standardKey(sibling)]);
   });
@@ -152,9 +158,11 @@ describe("SelfRevoke canonical Owner state", () => {
     const onTopologyChanged = vi.fn();
     const revoker = new SelfRevoke({
       client: client(
-        vi.fn().mockResolvedValue(
-          makeEnvelope(owner, 2, [{ remoteEpk: standardKey(other) }]),
-        ),
+        vi
+          .fn()
+          .mockResolvedValue(
+            makeEnvelope(owner, 2, [{ remoteEpk: standardKey(other) }]),
+          ),
       ),
       storage: storage(vi.fn().mockResolvedValue(rawOwners), removePeer),
       myPubkey: self.publicKey,
@@ -174,7 +182,8 @@ describe("SelfRevoke canonical Owner state", () => {
       expect(rawOwners).toContain(rawOwner);
       expect(canonicalOwner).toBe(standardKey(owner));
     }
-    const snapshot = onTopologyChanged.mock.calls[0]![0] as MeshTopologySnapshot;
+    const snapshot = onTopologyChanged.mock
+      .calls[0]![0] as MeshTopologySnapshot;
     expect(snapshot.siblings).toEqual([]);
   });
 
@@ -182,17 +191,23 @@ describe("SelfRevoke canonical Owner state", () => {
     const owner = generateEd25519Keypair();
     const self = generateEd25519Keypair();
     const rawOwner = urlSafeKey(owner);
-    const snapshotOwnerPubkeys = vi.fn().mockResolvedValue([
-      { rawOwnerPubkey: rawOwner, token: "owner-v1" },
-    ]);
-    const conditionalRemovePeer = vi.fn().mockResolvedValue({ outcome: "not_found" });
+    const snapshotOwnerPubkeys = vi
+      .fn()
+      .mockResolvedValue([{ rawOwnerPubkey: rawOwner, token: "owner-v1" }]);
+    const conditionalRemovePeer = vi
+      .fn()
+      .mockResolvedValue({ outcome: "not_found" });
     const onRevoke = vi.fn();
-    const get = vi.fn()
+    const get = vi
+      .fn()
       .mockResolvedValueOnce(makeEnvelope(owner, 1, []))
       .mockResolvedValueOnce(null);
     const revoker = new SelfRevoke({
       client: client(get),
-      storage: { snapshotOwnerPubkeys, conditionalRemovePeer } as unknown as SelfRevokeStorage,
+      storage: {
+        snapshotOwnerPubkeys,
+        conditionalRemovePeer,
+      } as unknown as SelfRevokeStorage,
       myPubkey: self.publicKey,
       onRevoke,
       log: defaultLog(),
@@ -223,12 +238,14 @@ describe("SelfRevoke canonical Owner state", () => {
     const onTopologyChanged = vi.fn();
     const revoker = new SelfRevoke({
       client: client(
-        vi.fn().mockResolvedValue(
-          makeEnvelope(owner, 1, [
-            { remoteEpk: standardKey(self) },
-            { remoteEpk: standardKey(sibling) },
-          ]),
-        ),
+        vi
+          .fn()
+          .mockResolvedValue(
+            makeEnvelope(owner, 1, [
+              { remoteEpk: standardKey(self) },
+              { remoteEpk: standardKey(sibling) },
+            ]),
+          ),
       ),
       storage: storage(listOwnerPubkeys),
       myPubkey: self.publicKey,
@@ -391,9 +408,7 @@ describe("SelfRevoke retention and invalid-response transitions", () => {
     const onTopologyChanged = vi.fn();
     const revoker = new SelfRevoke({
       client: client(get),
-      storage: storage(
-        vi.fn().mockResolvedValue([standardKey(owner)]),
-      ),
+      storage: storage(vi.fn().mockResolvedValue([standardKey(owner)])),
       myPubkey: self.publicKey,
       onTopologyChanged,
       log: defaultLog(),
@@ -408,7 +423,6 @@ describe("SelfRevoke retention and invalid-response transitions", () => {
     expect(onTopologyChanged).toHaveBeenCalledTimes(2);
     expect(siblingKeys(onTopologyChanged.mock.calls[1]![0])).toEqual([]);
   });
-
 });
 
 describe("SelfRevoke anti-rollback", () => {
@@ -416,14 +430,17 @@ describe("SelfRevoke anti-rollback", () => {
     const owner = generateEd25519Keypair();
     const self = generateEd25519Keypair();
     const sibling = generateEd25519Keypair();
-    const get = vi.fn()
-      .mockResolvedValueOnce(makeEnvelope(owner, 2, [
-        { remoteEpk: standardKey(self) },
-        { remoteEpk: standardKey(sibling) },
-      ]))
-      .mockResolvedValueOnce(makeEnvelope(owner, 1, [
-        { remoteEpk: standardKey(self) },
-      ]));
+    const get = vi
+      .fn()
+      .mockResolvedValueOnce(
+        makeEnvelope(owner, 2, [
+          { remoteEpk: standardKey(self) },
+          { remoteEpk: standardKey(sibling) },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        makeEnvelope(owner, 1, [{ remoteEpk: standardKey(self) }]),
+      );
     const onTopologyChanged = vi.fn();
     const log = defaultLog();
     const revoker = new SelfRevoke({
@@ -440,8 +457,14 @@ describe("SelfRevoke anti-rollback", () => {
     expect(get).toHaveBeenNthCalledWith(1, ownerHash(owner), undefined);
     expect(get).toHaveBeenNthCalledWith(2, ownerHash(owner), 2);
     expect(onTopologyChanged).toHaveBeenCalledTimes(1);
-    expect(siblingKeys(onTopologyChanged.mock.calls[0]![0])).toEqual([standardKey(sibling)]);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringMatching(/event=owner_rollback.*received_version=1.*retained_version=2/));
+    expect(siblingKeys(onTopologyChanged.mock.calls[0]![0])).toEqual([
+      standardKey(sibling),
+    ]);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /event=owner_rollback.*received_version=1.*retained_version=2/,
+      ),
+    );
   });
 });
 
@@ -473,9 +496,7 @@ describe("SelfRevoke atomic topology publication", () => {
     const onTopologyChanged = vi.fn();
     const revoker = new SelfRevoke({
       client: client(get),
-      storage: storage(
-        vi.fn().mockResolvedValue([standardKey(owner)]),
-      ),
+      storage: storage(vi.fn().mockResolvedValue([standardKey(owner)])),
       myPubkey: self.publicKey,
       onTopologyChanged,
       log: defaultLog(),
@@ -520,12 +541,13 @@ describe("SelfRevoke atomic topology publication", () => {
     ]);
     const onTopologyChanged = vi.fn();
     const revoker = new SelfRevoke({
-      client: client(vi.fn(async (hash: string) => envelopes.get(hash) ?? null)),
+      client: client(
+        vi.fn(async (hash: string) => envelopes.get(hash) ?? null),
+      ),
       storage: storage(
-        vi.fn().mockResolvedValue([
-          standardKey(ownerTwo),
-          standardKey(ownerOne),
-        ]),
+        vi
+          .fn()
+          .mockResolvedValue([standardKey(ownerTwo), standardKey(ownerOne)]),
       ),
       myPubkey: self.publicKey,
       onTopologyChanged,
@@ -554,23 +576,26 @@ describe("SelfRevoke atomic topology publication", () => {
     const commitGate = new Promise<void>((resolve) => {
       releaseCommit = resolve;
     });
-    const removePeer = vi.fn(async (
-      remoteEpk: string,
-      canCommit?: () => boolean,
-    ): Promise<boolean> => {
-      signalRemovalStarted();
-      await commitGate;
-      if (canCommit && !canCommit()) return false;
-      const index = storedOwners.indexOf(remoteEpk);
-      if (index < 0) return false;
-      storedOwners.splice(index, 1);
-      return true;
-    });
+    const removePeer = vi.fn(
+      async (
+        remoteEpk: string,
+        canCommit?: () => boolean,
+      ): Promise<boolean> => {
+        signalRemovalStarted();
+        await commitGate;
+        if (canCommit && !canCommit()) return false;
+        const index = storedOwners.indexOf(remoteEpk);
+        if (index < 0) return false;
+        storedOwners.splice(index, 1);
+        return true;
+      },
+    );
     const sharedStorage: SelfRevokeStorage = {
-      snapshotOwnerPubkeys: async () => storedOwners.map((rawOwnerPubkey) => ({
-        rawOwnerPubkey,
-        token: "owner-v1",
-      })),
+      snapshotOwnerPubkeys: async () =>
+        storedOwners.map((rawOwnerPubkey) => ({
+          rawOwnerPubkey,
+          token: "owner-v1",
+        })),
       conditionalRemovePeer: async (remoteEpk, _token, canCommit) => {
         const removed = await removePeer(remoteEpk, canCommit);
         return removed
@@ -580,9 +605,13 @@ describe("SelfRevoke atomic topology publication", () => {
     };
     const oldOnRevoke = vi.fn();
     const stale = new SelfRevoke({
-      client: client(vi.fn().mockResolvedValue(makeEnvelope(owner, 1, [
-        { remoteEpk: standardKey(sibling) },
-      ]))),
+      client: client(
+        vi
+          .fn()
+          .mockResolvedValue(
+            makeEnvelope(owner, 1, [{ remoteEpk: standardKey(sibling) }]),
+          ),
+      ),
       storage: sharedStorage,
       myPubkey: self.publicKey,
       onRevoke: oldOnRevoke,
@@ -598,10 +627,16 @@ describe("SelfRevoke atomic topology publication", () => {
     storedOwners.splice(0, storedOwners.length, rawOwner);
     const replacementTopology = vi.fn();
     const replacement = new SelfRevoke({
-      client: client(vi.fn().mockResolvedValue(makeEnvelope(owner, 2, [
-        { remoteEpk: standardKey(self) },
-        { remoteEpk: standardKey(sibling) },
-      ]))),
+      client: client(
+        vi
+          .fn()
+          .mockResolvedValue(
+            makeEnvelope(owner, 2, [
+              { remoteEpk: standardKey(self) },
+              { remoteEpk: standardKey(sibling) },
+            ]),
+          ),
+      ),
       storage: sharedStorage,
       myPubkey: self.publicKey,
       onTopologyChanged: replacementTopology,
@@ -619,7 +654,6 @@ describe("SelfRevoke atomic topology publication", () => {
     expect(oldOnRevoke).not.toHaveBeenCalled();
     expect(replacementTopology).toHaveBeenCalledTimes(1);
   });
-
 });
 
 describe("SelfRevoke failure isolation", () => {
@@ -668,12 +702,14 @@ describe("SelfRevoke failure isolation", () => {
     const onTopologyChanged = vi.fn();
     const revoker = new SelfRevoke({
       client: client(
-        vi.fn().mockResolvedValue(
-          makeEnvelope(owner, 1, [
-            { remoteEpk: standardKey(self) },
-            { remoteEpk: standardKey(sibling) },
-          ]),
-        ),
+        vi
+          .fn()
+          .mockResolvedValue(
+            makeEnvelope(owner, 1, [
+              { remoteEpk: standardKey(self) },
+              { remoteEpk: standardKey(sibling) },
+            ]),
+          ),
       ),
       storage: storage(listOwnerPubkeys),
       myPubkey: self.publicKey,
@@ -700,12 +736,7 @@ describe("SelfRevoke failure isolation", () => {
     const listOwnerPubkeys = vi
       .fn()
       .mockResolvedValueOnce([standardKey(oldOwner)])
-      .mockResolvedValueOnce([
-        null,
-        42,
-        malformedRaw,
-        urlSafeKey(validOwner),
-      ]);
+      .mockResolvedValueOnce([null, 42, malformedRaw, urlSafeKey(validOwner)]);
     const envelopes = new Map([
       [
         ownerHash(oldOwner),
@@ -725,7 +756,9 @@ describe("SelfRevoke failure isolation", () => {
     const onTopologyChanged = vi.fn();
     const log = defaultLog();
     const revoker = new SelfRevoke({
-      client: client(vi.fn(async (hash: string) => envelopes.get(hash) ?? null)),
+      client: client(
+        vi.fn(async (hash: string) => envelopes.get(hash) ?? null),
+      ),
       storage: storage(listOwnerPubkeys),
       myPubkey: self.publicKey,
       onTopologyChanged,
@@ -741,10 +774,14 @@ describe("SelfRevoke failure isolation", () => {
     const messages = [...log.warn.mock.calls, ...log.error.mock.calls].map(
       ([message]) => message as string,
     );
-    expect(messages.some((message) =>
-      message.includes(rawFingerprint(malformedRaw)),
-    )).toBe(true);
-    expect(messages.every((message) => !message.includes(malformedRaw))).toBe(true);
+    expect(
+      messages.some((message) =>
+        message.includes(rawFingerprint(malformedRaw)),
+      ),
+    ).toBe(true);
+    expect(messages.every((message) => !message.includes(malformedRaw))).toBe(
+      true,
+    );
   });
 
   test("an unavailable initial Owner fetch completes with safe fallback topology", async () => {
@@ -755,9 +792,7 @@ describe("SelfRevoke failure isolation", () => {
       client: client(
         vi.fn().mockRejectedValue(new MeshFetchUnavailableError("timeout")),
       ),
-      storage: storage(
-        vi.fn().mockResolvedValue([standardKey(owner)]),
-      ),
+      storage: storage(vi.fn().mockResolvedValue([standardKey(owner)])),
       myPubkey: self.publicKey,
       onTopologyChanged,
       log: defaultLog(),

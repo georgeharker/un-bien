@@ -21,12 +21,7 @@ interface RequestInput {
 }
 
 type SendStatus =
-  | "received"
-  | "busy"
-  | "denied"
-  | "timeout"
-  | "sent"
-  | "refused";
+  "received" | "busy" | "denied" | "timeout" | "sent" | "refused";
 
 interface SendDetails {
   status: SendStatus;

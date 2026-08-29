@@ -40,15 +40,21 @@ let _lastGoodRegistry: ActionModelRegistry | null = null;
  */
 const _stubRegistry: ActionModelRegistry = {
   refresh() {},
-  getAvailable() { return []; },
-  find() { return undefined; },
+  getAvailable() {
+    return [];
+  },
+  find() {
+    return undefined;
+  },
 };
 
 /**
  * Resolve the live host `ModelRegistry` from the most recent extension ctx.
  * Falls back to the last one that worked, then to an inert stub.
  */
-export function ensureModelRegistry(ctx?: RegistryBearingCtx | null): ActionModelRegistry {
+export function ensureModelRegistry(
+  ctx?: RegistryBearingCtx | null,
+): ActionModelRegistry {
   try {
     const live = ctx?.modelRegistry;
     if (live) {

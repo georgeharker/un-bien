@@ -233,8 +233,7 @@ const BUILDERS: Record<string, Builder> = {
 // the consumer renders. See docs/rpc-on-event-map.md table A.
 function compactionEndFrame(p: Payload): Frame {
   const entry = p.compactionEntry as
-    | { summary?: unknown; tokensBefore?: unknown }
-    | undefined;
+    { summary?: unknown; tokensBefore?: unknown } | undefined;
   return {
     type: "compaction_end",
     reason: p.reason,

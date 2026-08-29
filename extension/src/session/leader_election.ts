@@ -1,4 +1,9 @@
-import { Server, Socket, createConnection, createServer } from "node:net";
+import {
+  type Server,
+  type Socket,
+  createConnection,
+  createServer,
+} from "node:net";
 import { existsSync, lstatSync, unlinkSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { usesNamedPipe } from "./ipc.js";
@@ -9,8 +14,7 @@ const JITTER_MS = 70;
 const PROBE_TIMEOUT_MS = 500;
 
 export type ElectionResult =
-  | { role: "leader"; server: Server }
-  | { role: "follower"; socket: Socket };
+  { role: "leader"; server: Server } | { role: "follower"; socket: Socket };
 
 /**
  * UDS-based leader election. Tries to connect to `sockPath`; on failure, tries
@@ -36,7 +40,9 @@ export async function joinOrLead(sockPath: string): Promise<ElectionResult> {
 
     await delay(BASE_BACKOFF_MS + Math.random() * JITTER_MS);
   }
-  throw new Error(`leader election failed after ${MAX_ATTEMPTS} attempts: ${sockPath}`);
+  throw new Error(
+    `leader election failed after ${MAX_ATTEMPTS} attempts: ${sockPath}`,
+  );
 }
 
 /**
@@ -89,7 +95,11 @@ function _tryBind(sockPath: string): Promise<Server | null> {
       if (settled) return;
       settled = true;
       if (!val) {
-        try { server.close(); } catch { /* ignored */ }
+        try {
+          server.close();
+        } catch {
+          /* ignored */
+        }
       }
       resolve(val);
     };

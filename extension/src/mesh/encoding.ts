@@ -95,7 +95,10 @@ export function encodeEd25519PublicKey(
   bytes: Uint8Array,
   field = "public key",
 ): string {
-  if (!(bytes instanceof Uint8Array) || bytes.length !== ED25519_PUBLIC_KEY_BYTES) {
+  if (
+    !(bytes instanceof Uint8Array) ||
+    bytes.length !== ED25519_PUBLIC_KEY_BYTES
+  ) {
     const length = bytes instanceof Uint8Array ? bytes.length : 0;
     throw new MeshPublicKeyError(
       field,
@@ -236,7 +239,11 @@ export function allocateRoutingAliases(
   for (const [base, group] of collidingGroups) {
     const fullPrefixLength = group[0]!.keyUrl.length;
     let allocated = false;
-    for (let prefixLength = 8; prefixLength <= fullPrefixLength; prefixLength++) {
+    for (
+      let prefixLength = 8;
+      prefixLength <= fullPrefixLength;
+      prefixLength++
+    ) {
       const candidates = group.map(
         (identity) => `${base}~${identity.keyUrl.slice(0, prefixLength)}`,
       );

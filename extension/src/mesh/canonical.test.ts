@@ -10,7 +10,7 @@ describe("canonical JSON encoder", () => {
     expect(canonicalize(42)).toBe("42");
     expect(canonicalize(-7)).toBe("-7");
     expect(canonicalize("hello")).toBe('"hello"');
-    expect(canonicalize("with \"quote\"")).toBe('"with \\"quote\\""');
+    expect(canonicalize('with "quote"')).toBe('"with \\"quote\\""');
   });
 
   test("object keys are sorted lexicographically", () => {
@@ -42,9 +42,9 @@ describe("canonical JSON encoder", () => {
     const out = canonicalize(input);
     expect(out).toBe(
       '{"issued_at":1700000000000,"members":' +
-      '[{"paired_at":"t1","relay_url":"u1","remote_epk":"k1"},' +
-      '{"nickname":"n2","paired_at":"t2","relay_url":"u2","remote_epk":"k2"}],' +
-      '"owner_pk":"OWNER","version":5}',
+        '[{"paired_at":"t1","relay_url":"u1","remote_epk":"k1"},' +
+        '{"nickname":"n2","paired_at":"t2","relay_url":"u2","remote_epk":"k2"}],' +
+        '"owner_pk":"OWNER","version":5}',
     );
   });
 

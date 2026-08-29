@@ -189,12 +189,12 @@ export function createExtensionUiBridge(
       typeof e.flowId === "string"
         ? e.flowId
         : activeFlows.size === 1
-          // Defensive: pi-ask always carries flowId. If it's ever absent, an
-          // unambiguous single active flow is a safe attribution; with zero or
-          // several, the warning is uncorrelatable and the app ignores
-          // unmatched notifies — drop it instead of broadcasting a random id
-          // no client can act on.
-          ? activeFlows.keys().next().value
+          ? // Defensive: pi-ask always carries flowId. If it's ever absent, an
+            // unambiguous single active flow is a safe attribution; with zero or
+            // several, the warning is uncorrelatable and the app ignores
+            // unmatched notifies — drop it instead of broadcasting a random id
+            // no client can act on.
+            activeFlows.keys().next().value
           : undefined;
     if (!flowId) return;
     broadcast({
@@ -216,8 +216,7 @@ export function createExtensionUiBridge(
       ("cancelled" in msg && msg.cancelled === true) ||
       (ask !== undefined && ask.kind === "cancel")
     ) {
-      const flowId =
-        ask?.flow_id ?? (activeFlows.has(msg.id) ? msg.id : null);
+      const flowId = ask?.flow_id ?? (activeFlows.has(msg.id) ? msg.id : null);
       if (!flowId) return;
       emitSubmit(msg.id, flowId, { kind: "cancel" });
       return;
@@ -370,7 +369,8 @@ function parseStartedEvent(raw: unknown): StartedEvent | null {
 
 function parseQuestion(value: unknown): AskQuestionWire | null {
   if (!isRecord(value)) return null;
-  if (typeof value.id !== "string" || typeof value.prompt !== "string") return null;
+  if (typeof value.id !== "string" || typeof value.prompt !== "string")
+    return null;
   if (!Array.isArray(value.options)) return null;
   const options: AskOptionWire[] = [];
   for (const o of value.options) {
@@ -396,7 +396,8 @@ function parseOption(value: unknown): AskOptionWire | null {
   if (!isRecord(value)) return null;
   // pi-ask's schema marks value/label Optional on input, but a started event
   // always carries resolved values. Be lenient: fall back label→value.
-  const val = typeof value.value === "string" ? value.value : asString(value.label);
+  const val =
+    typeof value.value === "string" ? value.value : asString(value.label);
   const label = typeof value.label === "string" ? value.label : val;
   if (!val || !label) return null;
   return {

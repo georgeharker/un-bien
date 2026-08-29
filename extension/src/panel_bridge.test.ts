@@ -33,15 +33,21 @@ function fakePi(bus: FakeBus): ExtensionAPI {
 }
 
 function panelOf(frames: ServerMessage[], key: string) {
-  const frame = [...frames].reverse().find(
-    (m): m is Extract<ServerMessage, { type: "panel_update" }> =>
-      m.type === "panel_update" && m.key === key,
-  );
+  const frame = [...frames]
+    .reverse()
+    .find(
+      (m): m is Extract<ServerMessage, { type: "panel_update" }> =>
+        m.type === "panel_update" && m.key === key,
+    );
   return frame;
 }
 
-function itemsOf(frame: Extract<ServerMessage, { type: "panel_update" }> | undefined) {
-  return ((frame?.data as { items?: Array<Record<string, unknown>> })?.items) ?? [];
+function itemsOf(
+  frame: Extract<ServerMessage, { type: "panel_update" }> | undefined,
+) {
+  return (
+    (frame?.data as { items?: Array<Record<string, unknown>> })?.items ?? []
+  );
 }
 
 describe("panel_bridge", () => {
@@ -83,8 +89,16 @@ describe("panel_bridge", () => {
     const out: ServerMessage[] = [];
     const bridge = createPanelBridge(fakePi(bus), (m) => out.push(m));
 
-    bus.emit("plan:snapshot", { ns: "crib", seq: 1, items: [{ id: "x", title: "X" }] });
-    bus.emit("plan:update", { ns: "crib", seq: 2, upsert: [{ id: "y", title: "Y" }] });
+    bus.emit("plan:snapshot", {
+      ns: "crib",
+      seq: 1,
+      items: [{ id: "x", title: "X" }],
+    });
+    bus.emit("plan:update", {
+      ns: "crib",
+      seq: 2,
+      upsert: [{ id: "y", title: "Y" }],
+    });
     bus.emit("plan:update", { ns: "crib", seq: 3, remove: ["x"] });
     vi.advanceTimersByTime(60);
 
@@ -99,8 +113,16 @@ describe("panel_bridge", () => {
     const out: ServerMessage[] = [];
     const bridge = createPanelBridge(fakePi(bus), (m) => out.push(m));
 
-    bus.emit("plan:snapshot", { ns: "crib", seq: 5, items: [{ id: "a", title: "A" }] });
-    bus.emit("plan:update", { ns: "crib", seq: 2, upsert: [{ id: "z", title: "Z" }] }); // stale
+    bus.emit("plan:snapshot", {
+      ns: "crib",
+      seq: 5,
+      items: [{ id: "a", title: "A" }],
+    });
+    bus.emit("plan:update", {
+      ns: "crib",
+      seq: 2,
+      upsert: [{ id: "z", title: "Z" }],
+    }); // stale
     vi.advanceTimersByTime(60);
 
     expect(itemsOf(panelOf(out, "plan")).map((i) => i.id)).toEqual(["a"]);
@@ -112,7 +134,11 @@ describe("panel_bridge", () => {
     const out: ServerMessage[] = [];
     const bridge = createPanelBridge(fakePi(bus), (m) => out.push(m));
 
-    bus.emit("subagents:started", { id: "s1", type: "Explore", description: "scan repo" });
+    bus.emit("subagents:started", {
+      id: "s1",
+      type: "Explore",
+      description: "scan repo",
+    });
     bus.emit("subagents:completed", { id: "s1" });
     // A late generic 'failed' must not overwrite a real 'completed'? No — completed
     // and failed are both terminal; a specific reason is only kept over generic
@@ -139,14 +165,21 @@ describe("panel_bridge", () => {
       seq: 1,
       items: [
         { id: "plan:a", kind: "plan", title: "Do A", status: "todo" },
-        { id: "agent:x", kind: "agent", title: "Explore repo", status: "in_progress" },
+        {
+          id: "agent:x",
+          kind: "agent",
+          title: "Explore repo",
+          status: "in_progress",
+        },
       ],
     });
     vi.advanceTimersByTime(60);
 
     // Plan panel excludes the agent; subagents panel contains only it.
     expect(itemsOf(panelOf(out, "plan")).map((i) => i.id)).toEqual(["plan:a"]);
-    expect(itemsOf(panelOf(out, "subagents")).map((i) => i.id)).toEqual(["agent:x"]);
+    expect(itemsOf(panelOf(out, "subagents")).map((i) => i.id)).toEqual([
+      "agent:x",
+    ]);
     bridge?.dispose();
   });
 
@@ -156,8 +189,16 @@ describe("panel_bridge", () => {
     const bridge = createPanelBridge(fakePi(bus), (m) => out.push(m));
 
     // `completed` arrives BEFORE `started` (pi can emit out of order).
-    bus.emit("subagents:completed", { id: "s1", type: "Explore", description: "scan" });
-    bus.emit("subagents:started", { id: "s1", type: "Explore", description: "scan" });
+    bus.emit("subagents:completed", {
+      id: "s1",
+      type: "Explore",
+      description: "scan",
+    });
+    bus.emit("subagents:started", {
+      id: "s1",
+      type: "Explore",
+      description: "scan",
+    });
     vi.advanceTimersByTime(60);
 
     const items = itemsOf(panelOf(out, "subagents"));
@@ -178,23 +219,30 @@ describe("panel_bridge", () => {
     bus.emit("session_shutdown", {});
     vi.advanceTimersByTime(60);
 
-    expect(itemsOf(panelOf(out, "subagents")).map((i) => i.id)).toEqual(["agent:s1"]);
+    expect(itemsOf(panelOf(out, "subagents")).map((i) => i.id)).toEqual([
+      "agent:s1",
+    ]);
     const pending = bridge?.pendingPanels() ?? [];
-    expect(pending.some((m) => m.type === "panel_update" && m.key === "subagents")).toBe(true);
+    expect(
+      pending.some((m) => m.type === "panel_update" && m.key === "subagents"),
+    ).toBe(true);
     bridge?.dispose();
   });
 
   it("pendingPanels replays the current plan + subagents snapshots", () => {
     const bus = fakeBus();
     const bridge = createPanelBridge(fakePi(bus), () => {});
-    bus.emit("plan:snapshot", { ns: "crib", seq: 1, items: [{ id: "a", title: "A" }] });
+    bus.emit("plan:snapshot", {
+      ns: "crib",
+      seq: 1,
+      items: [{ id: "a", title: "A" }],
+    });
     bus.emit("subagents:started", { id: "s1", type: "Plan" });
 
     const pending = bridge?.pendingPanels() ?? [];
-    expect(pending.map((m) => (m.type === "panel_update" ? m.key : m.type)).sort()).toEqual([
-      "plan",
-      "subagents",
-    ]);
+    expect(
+      pending.map((m) => (m.type === "panel_update" ? m.key : m.type)).sort(),
+    ).toEqual(["plan", "subagents"]);
     bridge?.dispose();
   });
 });

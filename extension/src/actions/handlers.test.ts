@@ -27,7 +27,10 @@ describe("wireFromModel", () => {
 
   // Plan/30: `vision` reflects whether the model's `input` includes "image".
   test('vision=true when model.input includes "image"', () => {
-    const visionModel: SdkModelLike = { ...sampleModel, input: ["text", "image"] };
+    const visionModel: SdkModelLike = {
+      ...sampleModel,
+      input: ["text", "image"],
+    };
     expect(wireFromModel(visionModel).vision).toBe(true);
   });
 

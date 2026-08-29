@@ -24,10 +24,7 @@ import type {
   MeshTopologySnapshot,
   PiRoutingIdentity,
 } from "../mesh/siblings.js";
-import {
-  isBoundedPeerAddresses,
-  isBoundedPeerRoster,
-} from "./peer_limits.js";
+import { isBoundedPeerAddresses, isBoundedPeerRoster } from "./peer_limits.js";
 
 const CACHE_TTL_MS = 5 * 60_000;
 const PEERS_REQUEST_TIMEOUT_MS = 2_000;
@@ -109,11 +106,7 @@ function compareAscii(left: string, right: string): number {
 }
 
 function validateAlias(alias: unknown, field: string): string {
-  if (
-    typeof alias !== "string" ||
-    alias.length === 0 ||
-    alias.includes(":")
-  ) {
+  if (typeof alias !== "string" || alias.length === 0 || alias.includes(":")) {
     throw new Error(`mesh: ${field} is not a valid routing alias`);
   }
   return alias;
@@ -145,10 +138,7 @@ function buildRoutingState(
 
   const normalizedSiblings = topology.siblings
     .map((sibling, index) => ({
-      pcLabel: validateAlias(
-        sibling?.pcLabel,
-        `siblings[${index}].pcLabel`,
-      ),
+      pcLabel: validateAlias(sibling?.pcLabel, `siblings[${index}].pcLabel`),
       legacyPcLabel: validateLegacyPcLabel(
         sibling?.legacyPcLabel,
         `siblings[${index}].legacyPcLabel`,
@@ -484,12 +474,10 @@ export class BrokerRemote implements RemoteRouter, BrokerRemoteLifecycle {
     return false;
   }
 
-  private _routeToCanonicalSibling(
-    siblingKey: string,
-    env: Envelope,
-  ): boolean {
+  private _routeToCanonicalSibling(siblingKey: string, env: Envelope): boolean {
     const destination = parseAddress(env.to as string);
-    const legacyDestinationLabel = this.routing.siblingLegacyLabelByPubkey.get(siblingKey);
+    const legacyDestinationLabel =
+      this.routing.siblingLegacyLabelByPubkey.get(siblingKey);
     if (!destination || !legacyDestinationLabel) return false;
     const rewritten: Envelope = {
       ...env,
@@ -532,13 +520,9 @@ export class BrokerRemote implements RemoteRouter, BrokerRemoteLifecycle {
       this._dropMetadataOnly("invalid_to");
       return;
     }
-    const senderLegacyLabel = this.routing.siblingLegacyLabelByPubkey.get(
-      canonicalFromPc,
-    );
-    const senderLocalAddress = stripKnownPcPrefix(
-      env.from,
-      senderLegacyLabel,
-    );
+    const senderLegacyLabel =
+      this.routing.siblingLegacyLabelByPubkey.get(canonicalFromPc);
+    const senderLocalAddress = stripKnownPcPrefix(env.from, senderLegacyLabel);
     const targetLocalAddress = stripKnownPcPrefix(
       env.to,
       this.routing.self.legacyPcLabel,
@@ -552,11 +536,13 @@ export class BrokerRemote implements RemoteRouter, BrokerRemoteLifecycle {
     try {
       // Cross-PC frames bypass the UDS parser. Round-trip their rewritten
       // envelope before inspecting a body or mutating control/cache state.
-      normalized = parse(serialize({
-        ...env,
-        from: `${localAlias}:${senderLocalAddress}`,
-        to: targetLocalAddress,
-      }));
+      normalized = parse(
+        serialize({
+          ...env,
+          from: `${localAlias}:${senderLocalAddress}`,
+          to: targetLocalAddress,
+        }),
+      );
     } catch {
       this._dropMetadataOnly("invalid_envelope");
       return;
@@ -567,7 +553,8 @@ export class BrokerRemote implements RemoteRouter, BrokerRemoteLifecycle {
     }
     const body = normalized.body as { type?: unknown } | null;
     const bodyType = body && typeof body === "object" ? body.type : undefined;
-    const isControlEndpoint = senderLocalAddress === "_broker_remote" &&
+    const isControlEndpoint =
+      senderLocalAddress === "_broker_remote" &&
       targetLocalAddress === "_broker_remote";
 
     if (isControlEndpoint && bodyType === "peers_update") {
@@ -608,10 +595,7 @@ export class BrokerRemote implements RemoteRouter, BrokerRemoteLifecycle {
     this.pi.sendEnvelopeToPi(canonicalFromPc, ackEnv);
   }
 
-  private _setRemoteCache(
-    pcPubkey: string,
-    infos: WirePeerInfo[],
-  ): void {
+  private _setRemoteCache(pcPubkey: string, infos: WirePeerInfo[]): void {
     this.remotePeers.set(pcPubkey, {
       infos,
       pcPubkey,
@@ -620,10 +604,7 @@ export class BrokerRemote implements RemoteRouter, BrokerRemoteLifecycle {
     this._clearPendingFills(pcPubkey);
   }
 
-  private _awaitPeersFill(
-    pcPubkey: string,
-    timeoutMs: number,
-  ): Promise<void> {
+  private _awaitPeersFill(pcPubkey: string, timeoutMs: number): Promise<void> {
     return new Promise<void>((resolve) => {
       const slot: PendingFill = {
         resolve,
@@ -658,9 +639,10 @@ export class BrokerRemote implements RemoteRouter, BrokerRemoteLifecycle {
 
   private _propagateTransportError(env: Envelope): void {
     const body = asTransportErrorBody(env.body);
-    const target = typeof env.to === "string"
-      ? stripKnownPcPrefix(env.to, this.routing.self.legacyPcLabel)
-      : null;
+    const target =
+      typeof env.to === "string"
+        ? stripKnownPcPrefix(env.to, this.routing.self.legacyPcLabel)
+        : null;
     // Relay-first compatibility: only the authenticated Relay sentinel may
     // carry its former lowercase 32-hex id shape. Normalize it locally before
     // it reaches Broker's normal strict envelope boundary.
@@ -706,10 +688,7 @@ export class BrokerRemote implements RemoteRouter, BrokerRemoteLifecycle {
     return this.routing.siblingLegacyLabelByPubkey.get(pcPubkey);
   }
 
-  private _dropMetadataOnly(
-    reason: DropReason,
-    fingerprint?: string,
-  ): void {
+  private _dropMetadataOnly(reason: DropReason, fingerprint?: string): void {
     this._logMetadataOnly(
       `[broker_remote] event=drop reason=${reason}` +
         (fingerprint ? ` fingerprint=${fingerprint}` : ""),
@@ -741,7 +720,8 @@ function stripKnownPcPrefix(
   legacyPcLabel: string | undefined,
 ): string | null {
   if (typeof value !== "string") return null;
-  const exactPrefix = legacyPcLabel === undefined ? undefined : `${legacyPcLabel}:`;
+  const exactPrefix =
+    legacyPcLabel === undefined ? undefined : `${legacyPcLabel}:`;
   if (exactPrefix && value.startsWith(exactPrefix)) {
     const remainder = value.slice(exactPrefix.length);
     return remainder.length > 0 ? remainder : null;

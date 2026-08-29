@@ -60,7 +60,11 @@ export class PiForwardClient extends EventEmitter {
    */
   sendEnvelopeToPi(toPc: string, env: Envelope): void {
     if (this.detached) return;
-    const frame: PiEnvelopeFrame = { type: "pi_envelope", to_pc: toPc, envelope: env };
+    const frame: PiEnvelopeFrame = {
+      type: "pi_envelope",
+      to_pc: toPc,
+      envelope: env,
+    };
     try {
       this.relay.send(JSON.stringify(frame));
     } catch {
@@ -88,7 +92,12 @@ export class PiForwardClient extends EventEmitter {
     if (!parsed || typeof parsed !== "object") return;
     const o = parsed as Partial<PiEnvelopeInFrame>;
     if (o.type !== "pi_envelope_in") return;
-    if (typeof o.from_pc !== "string" || !o.envelope || typeof o.envelope !== "object") return;
+    if (
+      typeof o.from_pc !== "string" ||
+      !o.envelope ||
+      typeof o.envelope !== "object"
+    )
+      return;
 
     // Cheap shape check — full envelope parse happens downstream in broker_remote.
     const env = o.envelope as Envelope;

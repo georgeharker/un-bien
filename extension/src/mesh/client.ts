@@ -55,10 +55,7 @@ function decodeStrictBase64(raw: string): Uint8Array {
 
   const normalizedBody = body.replaceAll("-", "+").replaceAll("_", "/");
   const bytes = new Uint8Array(
-    Buffer.from(
-      normalizedBody + "=".repeat(requiredPaddingLength),
-      "base64",
-    ),
+    Buffer.from(normalizedBody + "=".repeat(requiredPaddingLength), "base64"),
   );
   const canonicalPadded = Buffer.from(bytes).toString("base64");
   const canonicalUnpadded = canonicalPadded.replace(/=+$/, "");
@@ -89,18 +86,17 @@ export class MeshClient {
 
   async get(hash: string, since?: number): Promise<MeshEnvelope | null> {
     const query =
-      since !== undefined ? `?since=${encodeURIComponent(since)}` : "";
+      since === undefined ? "" : `?since=${encodeURIComponent(since)}`;
     const url = `${this.baseUrl}/mesh/${encodeURIComponent(hash)}${query}`;
     const controller = new AbortController();
     let rejectOnAbort: (() => void) | null = null;
     const aborted = new Promise<never>((_resolve, reject) => {
       rejectOnAbort = () => reject(unavailable());
-      controller.signal.addEventListener("abort", rejectOnAbort, { once: true });
+      controller.signal.addEventListener("abort", rejectOnAbort, {
+        once: true,
+      });
     });
-    const timeout = setTimeout(
-      () => controller.abort(),
-      this.requestTimeoutMs,
-    );
+    const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
 
     try {
       let response: Response;

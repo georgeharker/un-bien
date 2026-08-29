@@ -122,7 +122,7 @@ export function buildTopologySnapshot(
   const aliases = allocateRoutingAliases(
     [...selectedNicknames.entries()].map(([pcPubkey, nickname]) => ({
       pcPubkey,
-      ...(nickname !== undefined ? { nickname } : {}),
+      ...(nickname === undefined ? {} : { nickname }),
     })),
   );
   const selfLabel = aliases.get(selfPubkey);
@@ -133,11 +133,13 @@ export function buildTopologySnapshot(
   const siblings = [...aliases.entries()]
     .filter(([pcPubkey]) => pcPubkey !== selfPubkey)
     .sort(([left], [right]) => compareAscii(left, right))
-    .map(([pcPubkey, pcLabel]) => freezeIdentity(
-      pcPubkey,
-      pcLabel,
-      selectedNicknames.get(pcPubkey) ?? pcPubkey.slice(0, 8),
-    ));
+    .map(([pcPubkey, pcLabel]) =>
+      freezeIdentity(
+        pcPubkey,
+        pcLabel,
+        selectedNicknames.get(pcPubkey) ?? pcPubkey.slice(0, 8),
+      ),
+    );
 
   return Object.freeze({
     self: freezeIdentity(
@@ -228,9 +230,9 @@ export async function discoverTopology(
         ownerPubkey: encodeEd25519PublicKey(header.ownerPk),
         members: header.members.map((member) => ({
           pcPubkey: member.remoteEpk,
-          ...(member.nickname !== undefined
-            ? { nickname: member.nickname }
-            : {}),
+          ...(member.nickname === undefined
+            ? {}
+            : { nickname: member.nickname }),
         })),
       });
     } catch {

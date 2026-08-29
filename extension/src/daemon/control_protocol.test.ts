@@ -50,7 +50,10 @@ describe("control_protocol — request/reply framing", () => {
 
   test("encodeReply / parseReply round-trip ok=false", () => {
     const wire = encodeReply({ ok: false, error: "daemon not found" });
-    expect(parseReply(wire.trim())).toEqual({ ok: false, error: "daemon not found" });
+    expect(parseReply(wire.trim())).toEqual({
+      ok: false,
+      error: "daemon not found",
+    });
   });
 
   test("parseReply rejects missing ok field", () => {

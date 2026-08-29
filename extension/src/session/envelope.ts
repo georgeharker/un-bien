@@ -6,9 +6,9 @@ import { randomBytes } from "node:crypto";
  */
 export interface Envelope {
   from: string;
-  to: string | string[];        // single name, list of names, or "broadcast"
-  id: string;                   // UUID v7
-  re: string | null;            // id of the message this replies to, or null
+  to: string | string[]; // single name, list of names, or "broadcast"
+  id: string; // UUID v7
+  re: string | null; // id of the message this replies to, or null
   body: unknown;
 }
 
@@ -21,7 +21,7 @@ export const TRANSPORT_ERROR_REASONS = [
   "bad_envelope",
 ] as const;
 
-export type TransportErrorReason = typeof TRANSPORT_ERROR_REASONS[number];
+export type TransportErrorReason = (typeof TRANSPORT_ERROR_REASONS)[number];
 
 export interface TransportErrorBody {
   type: "transport_error";

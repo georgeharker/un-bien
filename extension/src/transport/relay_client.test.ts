@@ -20,7 +20,9 @@ class MockWS extends EventEmitter {
     setTimeout(() => this.emit("open"), 0);
   }
 
-  send(data: string): void { this.sent.push(data); }
+  send(data: string): void {
+    this.sent.push(data);
+  }
   close(): void {
     this.readyState = 3;
     this.emit("close");
@@ -47,11 +49,16 @@ function simulateChallenge(ws: MockWS, nonceByte = 0xab): void {
   const nonce = Buffer.alloc(32, nonceByte);
   ws.emit(
     "message",
-    Buffer.from(JSON.stringify({ type: "challenge", nonce: nonce.toString("base64") })),
+    Buffer.from(
+      JSON.stringify({ type: "challenge", nonce: nonce.toString("base64") }),
+    ),
   );
 }
 
-async function connectWithAuth(client: InstanceType<typeof RelayClient>, nonceByte = 0xab): Promise<void> {
+async function connectWithAuth(
+  client: InstanceType<typeof RelayClient>,
+  nonceByte = 0xab,
+): Promise<void> {
   const p = client.connect();
   await vi.waitFor(() => expect(currentWs().sent.length).toBeGreaterThan(0));
   simulateChallenge(currentWs(), nonceByte);
@@ -86,7 +93,9 @@ describe("RelayClient", () => {
     const ws = currentWs();
     const hello = JSON.parse(ws.sent[0]) as { type: string; pubkey: string };
     expect(hello.type).toBe("hello");
-    expect(hello.pubkey).toBe(Buffer.from(keypair.publicKey).toString("base64"));
+    expect(hello.pubkey).toBe(
+      Buffer.from(keypair.publicKey).toString("base64"),
+    );
 
     client.close();
   });
@@ -155,10 +164,12 @@ describe("RelayClient", () => {
   // Regression for "daemon shows online but is dead after a few idle hours":
   // a silently half-open WS never fires `close`, so reconnect never triggers.
 
-  async function connectFake(client: InstanceType<typeof RelayClient>): Promise<void> {
+  async function connectFake(
+    client: InstanceType<typeof RelayClient>,
+  ): Promise<void> {
     const p = client.connect();
-    await vi.advanceTimersByTimeAsync(1);  // MockWS defers 'open' via setTimeout(0)
-    simulateChallenge(currentWs());        // resolves auth's _nextMsg
+    await vi.advanceTimersByTimeAsync(1); // MockWS defers 'open' via setTimeout(0)
+    simulateChallenge(currentWs()); // resolves auth's _nextMsg
     await p;
   }
 
@@ -168,7 +179,9 @@ describe("RelayClient", () => {
       const client = new RelayClient("ws://localhost:9999", keypair);
       await connectFake(client);
       let closed = false;
-      client.on("close", () => { closed = true; });
+      client.on("close", () => {
+        closed = true;
+      });
 
       // No inbound frame for > 70s → watchdog terminates → close.
       await vi.advanceTimersByTimeAsync(90_000);
@@ -184,7 +197,9 @@ describe("RelayClient", () => {
       const client = new RelayClient("ws://localhost:9999", keypair);
       await connectFake(client);
       let closed = false;
-      client.on("close", () => { closed = true; });
+      client.on("close", () => {
+        closed = true;
+      });
 
       // Simulate the relay's keepalive ping every 25s for 2.5 min.
       for (let i = 0; i < 6; i++) {
