@@ -49,6 +49,7 @@ import {
 import {
   addPeer,
   getOrCreateEd25519Keypair,
+  describeIdentity,
   KeyringUnavailableError,
   PairedIdentityMissingError,
   listPeers,
@@ -3540,6 +3541,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         "relay status",
         "relay url",
         "config",
+        "identity",
+        "identity show",
         "test", // hidden e2e UI harness (dev-only)
         "peers", // plan/25 Wave D — local + cross-PC inventory
         "create",
@@ -3589,6 +3592,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         await _cmdRelay(sub.slice("relay".length).trim(), ctx);
       } else if (sub === "config") {
         _cmdConfig(ctx);
+      } else if (sub === "identity" || sub.startsWith("identity ")) {
+        await _cmdIdentity(ctx);
       } else if (sub === "test" || sub.startsWith("test ")) {
         // Hidden dev-only e2e UI harness: broadcast canned frames to paired apps.
         _safeNotify(
@@ -3706,6 +3711,22 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     handler: async (_, ctx) => {
       _lastCtx = ctx;
       _cmdConfig(ctx);
+    },
+  });
+  pi.registerCommand("unbien identity", {
+    description:
+      "Show this machine's identity: active EPK (public), backend, and source",
+    handler: async (_, ctx) => {
+      _lastCtx = ctx;
+      await _cmdIdentity(ctx);
+    },
+  });
+  pi.registerCommand("unbien identity show", {
+    description:
+      "Show this machine's identity (EPK/backend/source) — alias of `identity`",
+    handler: async (_, ctx) => {
+      _lastCtx = ctx;
+      await _cmdIdentity(ctx);
     },
   });
   pi.registerCommand("unbien relay", {
@@ -4109,7 +4130,7 @@ async function _cmdStart(
         "[un-bien] Could not read this machine's identity: the system " +
           "keychain is locked or access was denied. Unlock it (open the app / " +
           "log in) and run /unbien again. Your pairing is NOT lost. " +
-          "(Set UNBIEN_ALLOW_FILE_IDENTITY=1 only for headless hosts.)",
+          '(For a headless host, set "identity": { "storage": "file" } in un-bien.json.)',
         "error",
       );
       return;
@@ -4691,6 +4712,26 @@ function _cmdConfig(ctx: Pick<ExtensionContext, "ui">): void {
   ctx.ui.notify(
     `[un-bien]\n  Relay URL: ${url ?? "(none)"}\n  Source: ${source} — ${origin}${live}`,
     "info",
+  );
+}
+
+/**
+ * `/unbien identity` — report NON-SECRET identity state (active EPK, backend,
+ * resolved source). The private seed is NEVER shown: command output is
+ * LLM-visible, so extraction stays a manual `cat`/keychain op. Read-only
+ * (never mints).
+ */
+async function _cmdIdentity(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+  const info = await describeIdentity();
+  const backendLine =
+    info.backend === "file" ? `file (${info.filePath})` : "keychain";
+  const epkLine = info.epk ?? "(none yet — minted on first use)";
+  const sourceLine = info.detail
+    ? `${info.source} — ${info.detail}`
+    : info.source;
+  ctx.ui.notify(
+    `[un-bien] identity\n  Backend: ${backendLine}\n  EPK (public): ${epkLine}\n  Source: ${sourceLine}`,
+    info.source === "error" ? "error" : "info",
   );
 }
 

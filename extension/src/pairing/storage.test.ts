@@ -84,7 +84,19 @@ const NEW_SERVICE = "dev.unbien.pi";
 const OLD_SERVICE = "dev.unbien.mac";
 const ACCOUNT = "longterm-ed25519";
 
+// The resolver reads un-bien.json (identity.storage/path) via unbienConfigHome(),
+// which honors PI_CODING_AGENT_DIR. Pin it inside the temp home so tests never
+// pick up the developer's real config, and start each test from an absent one.
+const _origPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+function writeUnbienConfig(cfg: Record<string, unknown>): void {
+  const dir = join(_tmpHome, ".pi", "extensions");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "un-bien.json"), JSON.stringify(cfg));
+}
+
 beforeEach(async () => {
+  process.env.PI_CODING_AGENT_DIR = join(_tmpHome, ".pi");
+  rmSync(join(_tmpHome, ".pi", "extensions", "un-bien.json"), { force: true });
   // Silence the migration / fallback console output during tests so the
   // vitest output isn't polluted.
   vi.spyOn(console, "info").mockImplementation(() => undefined);
@@ -103,7 +115,9 @@ afterEach(() => {
   _setKeyringExpectedForTest(null);
   _setKeyringRetryForTest(null);
   _setNativeBindingErrorForTest(null);
-  delete process.env.UNBIEN_ALLOW_FILE_IDENTITY;
+  delete process.env.UNBIEN_IDENTITY_SEED;
+  if (_origPiAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = _origPiAgentDir;
   vi.restoreAllMocks();
 });
 
@@ -350,16 +364,111 @@ describe("getOrCreateEd25519Keypair — locked keyring does NOT regenerate", () 
     );
   });
 
-  test("UNBIEN_ALLOW_FILE_IDENTITY=1 opts into file identity even on a core-keyring platform", async () => {
-    const backend = new InMemoryBackend();
-    backend.failAll("read");
+  test("identity.storage=file mints a file identity even on a core-keyring platform (keychain empty)", async () => {
+    const backend = new InMemoryBackend(); // keychain readable + empty
     _setKeyStoreBackendForTest(backend);
     _setKeyringExpectedForTest(true);
-    process.env.UNBIEN_ALLOW_FILE_IDENTITY = "1";
+    writeUnbienConfig({ identity: { storage: "file" } });
 
     const kp = await getOrCreateEd25519Keypair();
     expect(kp.publicKey.length).toBe(32);
     expect(existsSync(_IDENTITY_FILE_FOR_TEST)).toBe(true);
+    // Minted into the FILE, not the keychain.
+    expect(backend.writes.length).toBe(0);
+  });
+});
+
+// ── UNBIEN_IDENTITY_SEED override (read-only, always wins) ───────────────────
+
+describe("getOrCreateEd25519Keypair — UNBIEN_IDENTITY_SEED override", () => {
+  test("identity JSON in env wins, touches no backend", async () => {
+    const backend = new InMemoryBackend();
+    backend.store.set(
+      `${NEW_SERVICE}|${ACCOUNT}`,
+      JSON.stringify({
+        pk: Buffer.from(new Uint8Array(32).fill(1)).toString("base64"),
+        sk: Buffer.from(new Uint8Array(32).fill(2)).toString("base64"),
+      }),
+    );
+    _setKeyStoreBackendForTest(backend);
+    process.env.UNBIEN_IDENTITY_SEED = JSON.stringify({
+      pk: Buffer.from(new Uint8Array(32).fill(9)).toString("base64"),
+      sk: Buffer.from(new Uint8Array(32).fill(8)).toString("base64"),
+    });
+
+    const kp = await getOrCreateEd25519Keypair();
+    expect(Buffer.from(kp.publicKey).toString("base64")).toBe(
+      Buffer.from(new Uint8Array(32).fill(9)).toString("base64"),
+    );
+    expect(backend.reads.length).toBe(0);
+    expect(backend.writes.length).toBe(0);
+  });
+
+  test("base64 32-byte seed in env derives the keypair, touches no backend", async () => {
+    const backend = new InMemoryBackend();
+    _setKeyStoreBackendForTest(backend);
+    const seed = new Uint8Array(32).fill(3);
+    process.env.UNBIEN_IDENTITY_SEED = Buffer.from(seed).toString("base64");
+
+    const kp = await getOrCreateEd25519Keypair();
+    expect(kp.secretKey.length).toBe(32);
+    expect(Buffer.from(kp.secretKey)).toEqual(Buffer.from(seed));
+    expect(kp.publicKey.length).toBe(32);
+    expect(backend.reads.length).toBe(0);
+  });
+
+  test("a malformed env override throws instead of being silently ignored", async () => {
+    const backend = new InMemoryBackend();
+    _setKeyStoreBackendForTest(backend);
+    process.env.UNBIEN_IDENTITY_SEED = "not-a-valid-seed";
+
+    await expect(getOrCreateEd25519Keypair()).rejects.toThrow();
+  });
+});
+
+// ── Unreadable identity file fails loud (never mints over it) ────────────────
+
+describe("getOrCreateEd25519Keypair — unreadable identity file", () => {
+  test("a corrupt identity.json throws FileIdentityUnreadableError, never mints", async () => {
+    mkdirSync(join(_tmpHome, ".pi", "un-bien"), { recursive: true });
+    writeFileSync(_IDENTITY_FILE_FOR_TEST, "{ not valid json");
+    const backend = new InMemoryBackend(); // keychain readable + empty
+    _setKeyStoreBackendForTest(backend);
+    _setKeyringExpectedForTest(true);
+
+    await expect(getOrCreateEd25519Keypair()).rejects.toBeInstanceOf(
+      storage.FileIdentityUnreadableError,
+    );
+    // Left untouched — not overwritten with a fresh mint.
+    expect(readFileSync(_IDENTITY_FILE_FOR_TEST, "utf8")).toBe(
+      "{ not valid json",
+    );
+    expect(backend.writes.length).toBe(0);
+  });
+});
+
+// ── Cross-backend migration read-in-place (no write-through) ─────────────────
+
+describe("getOrCreateEd25519Keypair — cross-backend migration read-in-place", () => {
+  test("keychain backend, keychain empty, file present → returns file key without writing keychain", async () => {
+    // Seed a file identity via the headless path.
+    const seedBackend = new InMemoryBackend();
+    seedBackend.failAll("read");
+    _setKeyStoreBackendForTest(seedBackend);
+    _setKeyringExpectedForTest(false);
+    const fileKp = await getOrCreateEd25519Keypair();
+
+    // Now: keychain backend (default), keychain readable + empty, file present.
+    const kc = new InMemoryBackend();
+    _setKeyStoreBackendForTest(kc);
+    _setKeyringExpectedForTest(true);
+    const kp = await getOrCreateEd25519Keypair();
+
+    expect(Buffer.from(kp.publicKey).toString("base64")).toBe(
+      Buffer.from(fileKp.publicKey).toString("base64"),
+    );
+    // Read in place — did NOT write-through into the keychain.
+    expect(kc.writes.length).toBe(0);
   });
 });
 
@@ -397,17 +506,17 @@ describe("getOrCreateEd25519Keypair — paired devices block identity minting", 
     expect(existsSync(_IDENTITY_FILE_FOR_TEST)).toBe(false);
   });
 
-  test("UNBIEN_ALLOW_FILE_IDENTITY=1 still opts out of the guard", async () => {
+  test("paired devices block minting even with the file backend selected", async () => {
     seedPairedDevice();
-    const backend = new InMemoryBackend();
-    backend.failAll("read");
+    const backend = new InMemoryBackend(); // keychain readable + empty
     _setKeyStoreBackendForTest(backend);
-    _setKeyringExpectedForTest(false);
-    process.env.UNBIEN_ALLOW_FILE_IDENTITY = "1";
+    _setKeyringExpectedForTest(true);
+    writeUnbienConfig({ identity: { storage: "file" } });
 
-    const kp = await getOrCreateEd25519Keypair();
-    expect(kp.publicKey).toHaveLength(32);
-    expect(existsSync(_IDENTITY_FILE_FOR_TEST)).toBe(true);
+    await expect(getOrCreateEd25519Keypair()).rejects.toBeInstanceOf(
+      storage.PairedIdentityMissingError,
+    );
+    expect(existsSync(_IDENTITY_FILE_FOR_TEST)).toBe(false);
   });
 
   test("no pairings yet → a genuine first run still mints normally", async () => {
@@ -419,6 +528,79 @@ describe("getOrCreateEd25519Keypair — paired devices block identity minting", 
     const kp = await getOrCreateEd25519Keypair();
     expect(kp.publicKey).toHaveLength(32);
     expect(existsSync(_IDENTITY_FILE_FOR_TEST)).toBe(true);
+  });
+});
+
+// ── describeIdentity (read-only, non-secret) ─────────────────────────────────
+
+describe("describeIdentity — non-secret, read-only", () => {
+  test("keychain backend with a key → reports epk + source keychain, no writes", async () => {
+    const backend = new InMemoryBackend();
+    const pk = Buffer.from(new Uint8Array(32).fill(11)).toString("base64");
+    backend.store.set(
+      `${NEW_SERVICE}|${ACCOUNT}`,
+      JSON.stringify({
+        pk,
+        sk: Buffer.from(new Uint8Array(32).fill(12)).toString("base64"),
+      }),
+    );
+    _setKeyStoreBackendForTest(backend);
+    _setKeyringExpectedForTest(true);
+
+    const info = await storage.describeIdentity();
+    expect(info.backend).toBe("keychain");
+    expect(info.source).toBe("keychain");
+    expect(info.epk).toBe(pk);
+    // Read-only: no promotion/mint side effects.
+    expect(backend.writes.length).toBe(0);
+    expect(backend.deletes.length).toBe(0);
+  });
+
+  test("no identity anywhere → epk null, source none, mints nothing", async () => {
+    const backend = new InMemoryBackend(); // readable + empty
+    _setKeyStoreBackendForTest(backend);
+    _setKeyringExpectedForTest(true);
+
+    const info = await storage.describeIdentity();
+    expect(info.epk).toBeNull();
+    expect(info.source).toBe("none");
+    expect(backend.writes.length).toBe(0);
+    expect(existsSync(_IDENTITY_FILE_FOR_TEST)).toBe(false);
+  });
+
+  test("env override → source env-override, touches no backend", async () => {
+    const backend = new InMemoryBackend();
+    _setKeyStoreBackendForTest(backend);
+    const pk = Buffer.from(new Uint8Array(32).fill(5)).toString("base64");
+    process.env.UNBIEN_IDENTITY_SEED = JSON.stringify({
+      pk,
+      sk: Buffer.from(new Uint8Array(32).fill(6)).toString("base64"),
+    });
+
+    const info = await storage.describeIdentity();
+    expect(info.source).toBe("env-override");
+    expect(info.epk).toBe(pk);
+    expect(backend.reads.length).toBe(0);
+  });
+
+  test("file backend with a key → source file, keychain not consulted", async () => {
+    // Seed a file identity via the headless path.
+    const seed = new InMemoryBackend();
+    seed.failAll("read");
+    _setKeyStoreBackendForTest(seed);
+    _setKeyringExpectedForTest(false);
+    const fileKp = await getOrCreateEd25519Keypair();
+
+    writeUnbienConfig({ identity: { storage: "file" } });
+    const kc = new InMemoryBackend();
+    _setKeyStoreBackendForTest(kc);
+    _setKeyringExpectedForTest(true);
+
+    const info = await storage.describeIdentity();
+    expect(info.backend).toBe("file");
+    expect(info.source).toBe("file");
+    expect(info.epk).toBe(Buffer.from(fileKp.publicKey).toString("base64"));
+    expect(kc.reads.length).toBe(0);
   });
 });
 
@@ -496,18 +678,18 @@ describe("peer record corruption isolation", () => {
   });
 });
 
-// ── File identity wins over a READABLE keyring (masking bug) ─────────────────
+// ── Backend precedence: the SELECTED backend wins, other is migration-read ──
 //
-// A file-backed/headless install pairs the mobile against the key in
-// `~/.pi/un-bien/identity.json`. If the platform keyring later becomes readable
-// (D-Bus/libsecret installed, a desktop session, a stale entry from another
-// install), consulting it FIRST would mask the file identity — returning a
-// different key, or minting a fresh one over an empty keyring — and break the
-// existing pairing. The file must win. (These cases differ from the
-// "locked keyring" ones above: here the keyring READS FINE, it just isn't the
-// paired identity.)
+// The flop was a bogus minted identity.json (file) MASKING the real keychain
+// key under the old "file always wins" rule: the fork announced the file key
+// while the mobile stayed paired to keychain. The operator-selectable model
+// fixes it by precedence — the SELECTED backend (default keychain) wins; the
+// other is READ IN PLACE only when the selected one is empty, and never minted
+// over. never-mint-over also means a genuine machine never ends up with
+// DIFFERENT keys in both backends (whichever exists first blocks minting the
+// other), so the conflict below only arises from external tampering.
 
-describe("getOrCreateEd25519Keypair — file identity wins over a readable keyring", () => {
+describe("getOrCreateEd25519Keypair — backend precedence (default keychain)", () => {
   /** Seed a file-backed identity via the headless path and return its key. */
   async function seedFileIdentity() {
     const seed = new InMemoryBackend();
@@ -519,38 +701,34 @@ describe("getOrCreateEd25519Keypair — file identity wins over a readable keyri
     return fileKp;
   }
 
-  test("readable keyring holding a DIFFERENT entry → file identity still wins", async () => {
-    const fileKp = await seedFileIdentity();
+  test("present keychain key WINS over a stray file identity (the flop fix)", async () => {
+    await seedFileIdentity(); // a stray/bogus file identity on disk
 
-    // A fully-readable keyring now holds a DIFFERENT identity.
+    // The real identity lives in the keychain (where the mobile paired).
     const keyring = new InMemoryBackend();
-    const otherPk = Buffer.from(new Uint8Array(32).fill(42)).toString("base64");
+    const realPk = Buffer.from(new Uint8Array(32).fill(42)).toString("base64");
     keyring.store.set(
       `${NEW_SERVICE}|${ACCOUNT}`,
       JSON.stringify({
-        pk: otherPk,
+        pk: realPk,
         sk: Buffer.from(new Uint8Array(64).fill(43)).toString("base64"),
       }),
     );
     _setKeyStoreBackendForTest(keyring);
-    _setKeyringExpectedForTest(true); // even on a core-keyring platform
+    _setKeyringExpectedForTest(true);
 
     const kp = await getOrCreateEd25519Keypair();
-    // File identity wins — the mobile is paired against it.
-    expect(Buffer.from(kp.publicKey).toString("base64")).toBe(
-      Buffer.from(fileKp.publicKey).toString("base64"),
-    );
-    expect(Buffer.from(kp.publicKey).toString("base64")).not.toBe(otherPk);
-    // The keyring is never consulted — the file short-circuits ahead of it.
-    expect(keyring.reads.length).toBe(0);
+    // The keychain key wins — a stray file can no longer mask it (the flop).
+    expect(Buffer.from(kp.publicKey).toString("base64")).toBe(realPk);
+    // Read-only: the resolver never rewrote the keychain.
     expect(keyring.writes.length).toBe(0);
-    expect(keyring.deletes.length).toBe(0);
   });
 
-  test("readable but EMPTY keyring → does NOT mint a fresh key over identity.json", async () => {
+  test("keychain empty + file present → file recovered via migration read, never minted over", async () => {
     const fileKp = await seedFileIdentity();
 
-    // A readable but EMPTY keyring appears (e.g. libsecret installed later).
+    // A readable but EMPTY keyring (default backend) — the file is the only
+    // identity, and must be recovered in place, not minted over.
     const keyring = new InMemoryBackend();
     _setKeyStoreBackendForTest(keyring);
     _setKeyringExpectedForTest(true);
@@ -559,9 +737,8 @@ describe("getOrCreateEd25519Keypair — file identity wins over a readable keyri
     expect(Buffer.from(kp.publicKey).toString("base64")).toBe(
       Buffer.from(fileKp.publicKey).toString("base64"),
     );
-    // Critically: no fresh keypair was generated + written into the keyring
-    // (that write is exactly what masked the file identity and broke pairing).
-    expect(keyring.reads.length).toBe(0);
+    // Critically: no fresh key was minted into the keychain over the file
+    // identity (that write is exactly what broke pairing in the flop).
     expect(keyring.writes.length).toBe(0);
   });
 });

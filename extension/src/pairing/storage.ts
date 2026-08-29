@@ -1,9 +1,14 @@
 import { writeFileSync } from "node:fs";
 import { mkdir, readFile, writeFile, chmod, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { generateEd25519Keypair, type Ed25519Keypair } from "./crypto.js";
+import {
+  generateEd25519Keypair,
+  ed25519KeypairFromSeed,
+  type Ed25519Keypair,
+} from "./crypto.js";
 import { canonicalizeEd25519PublicKey } from "../mesh/encoding.js";
 import { unbienStateHome } from "../paths.js";
+import { loadConfig } from "../config.js";
 
 /**
  * Pi-secret storage (plan/27 Wave E1).
@@ -49,8 +54,9 @@ export class KeyringUnavailableError extends Error {
     super(
       "Platform keyring is unreadable and no file-backed identity exists. " +
         "Refusing to generate a NEW identity (that would break existing " +
-        "pairing). Unlock your keychain / start your secret service and retry. " +
-        "Set UNBIEN_ALLOW_FILE_IDENTITY=1 to force a file-backed identity. " +
+        "pairing). Unlock your keychain / start your secret service and retry, " +
+        'or select the file backend with `"identity": { "storage": "file" }` ' +
+        "in un-bien.json for a headless host. " +
         `Cause: ${String(cause)}`,
     );
     this.name = "KeyringUnavailableError";
@@ -73,6 +79,23 @@ export class PairedIdentityMissingError extends Error {
         `Cause: ${String(cause)}`,
     );
     this.name = "PairedIdentityMissingError";
+  }
+}
+
+/** Raised when the file-backend identity EXISTS but cannot be read or parsed
+ *  (bad permissions, corruption). Treating that as "no identity" would let the
+ *  resolver mint a fresh seed over a real one — the file-side version of the
+ *  flop — so we FAIL LOUD instead of minting. */
+export class FileIdentityUnreadableError extends Error {
+  constructor(path: string, cause: unknown) {
+    super(
+      `The identity file at ${path} exists but could not be read/parsed. ` +
+        "Refusing to generate a NEW identity (that would break existing " +
+        "pairing). Fix the file's permissions/contents and retry, or point " +
+        "`identity.path` at the correct file. " +
+        `Cause: ${String(cause)}`,
+    );
+    this.name = "FileIdentityUnreadableError";
   }
 }
 
@@ -277,185 +300,422 @@ function _serialize(kp: Ed25519Keypair): string {
 }
 
 function _deserialize(stored: string): Ed25519Keypair {
-  const parsed = JSON.parse(stored) as SerializedKeypair;
-  return {
-    publicKey: Buffer.from(parsed.pk, "base64"),
-    secretKey: Buffer.from(parsed.sk, "base64"),
-  };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stored);
+  } catch (err) {
+    throw new Error(
+      `identity is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    typeof (parsed as SerializedKeypair).pk !== "string" ||
+    typeof (parsed as SerializedKeypair).sk !== "string"
+  ) {
+    throw new Error(
+      "identity JSON must be an object with base64 `pk` and `sk` strings",
+    );
+  }
+  const { pk, sk } = parsed as SerializedKeypair;
+  const publicKey = Buffer.from(pk, "base64");
+  const secretKey = Buffer.from(sk, "base64");
+  if (publicKey.length !== 32) {
+    throw new Error(
+      `identity public key must decode to 32 bytes (got ${publicKey.length})`,
+    );
+  }
+  return { publicKey, secretKey };
 }
 
-// ── File fallback (headless Linux) ──────────────────────────────────────────
+// ── Storage-backend selection (un-bien.json `identity`) ─────────────────────
 
-async function _readKeypairFromFile(): Promise<Ed25519Keypair | null> {
-  try {
-    const raw = await readFile(IDENTITY_FILE, "utf8");
-    return _deserialize(raw);
-  } catch {
-    return null;
-  }
-}
-
-async function _writeKeypairToFile(kp: Ed25519Keypair): Promise<void> {
-  await mkdir(PI_DIR, { recursive: true, mode: 0o700 });
-  // Best-effort tighten of the dir in case it pre-existed with looser
-  // permissions (mkdir's mode is only applied to NEW dirs).
-  try {
-    await chmod(PI_DIR, 0o700);
-  } catch {
-    /* not fatal */
-  }
-  await writeFile(IDENTITY_FILE, _serialize(kp), { mode: 0o600 });
-  try {
-    await chmod(IDENTITY_FILE, 0o600);
-  } catch {
-    /* not fatal */
-  }
-}
-
-// ── Public API ──────────────────────────────────────────────────────────────
+export type IdentityStorageBackend = "keychain" | "file";
 
 /**
- * Returns the Pi-secret Ed25519 keypair, generating + persisting one on
- * first call. Resolution order:
- *   1. Existing file `~/.pi/un-bien/identity.json`, if present — it WINS over
- *      the keyring. A file identity is only ever written by the headless/
- *      degraded fallback (step 4) or an explicit `UNBIEN_ALLOW_FILE_IDENTITY`
- *      opt-in, so its mere presence means this machine established its identity
- *      as a file and the mobile device paired against THAT pubkey. If the
- *      platform keyring later becomes readable (D-Bus/libsecret installed, a
- *      desktop session, or a stale/other entry from another install), reading
- *      it first would mask the file identity — returning a DIFFERENT key, or
- *      (when the keyring is empty) minting a fresh one and persisting it —
- *      silently breaking the existing pairing. So when both exist, file wins.
- *   2. New keyring service `dev.unbien.pi` (read retried — a transiently
- *      locked Keychain throws; we don't treat that as "no key")
- *   3. Old keyring service `dev.unbien.mac` (migrate → step 2, delete old)
- *   4. Generate a fresh keypair, BUT only when it's safe to: either both
- *      keyring reads succeeded and returned nothing (genuine first run), or
- *      the keyring is genuinely unavailable on a platform without a core one
- *      (headless Linux → a file identity is minted here). On macOS/Windows a
- *      persistent read failure with no file identity throws
- *      `KeyringUnavailableError` instead of minting a new key — generating
- *      there silently breaks existing pairing (the "lost pairing after idle"
- *      bug). `UNBIEN_ALLOW_FILE_IDENTITY=1` opts back into a file identity
- *      for headless macOS/Windows hosts.
- *
- * Idempotent: subsequent calls return the same identity. The migration
- * runs at most once per machine (the old entry is deleted after copy).
+ * The operator-selected PRIMARY store (`identity.storage` in un-bien.json),
+ * default keychain. Forced to `"file"` when this process has no usable keyring
+ * (Bun-built pi / native binding failed to load) — there is no keychain to
+ * select. Note the config may still say `"keychain"` on headless Linux; the
+ * read simply throws there and the genuine-first-run mint falls to a file
+ * identity exactly as before.
  */
-export async function getOrCreateEd25519Keypair(): Promise<Ed25519Keypair> {
-  const backend = _getBackend();
+function _selectedStorageBackend(): IdentityStorageBackend {
+  if (_nativeBindingUnavailable()) return "file";
+  return loadConfig().identity?.storage === "file" ? "file" : "keychain";
+}
 
-  // ── Path 0: an existing file-backed identity wins ──────────────────────
-  // `~/.pi/un-bien/identity.json` is only ever written by the headless/degraded
-  // fallback below (or an operator who set UNBIEN_ALLOW_FILE_IDENTITY=1) —
-  // never on a keyring-backed install. So its presence means THIS machine
-  // paired against the file key, and the keyring (readable or not, matching or
-  // not) must not be allowed to mask it. Short-circuit before touching the
-  // keyring so a keyring that later comes online can't return a different key,
-  // nor mint a fresh one over the file identity. No file → normal keyring
-  // resolution below; a headless first run still reaches Path B and mints one.
-  const existingFile = await _readKeypairFromFile();
-  if (existingFile) return existingFile;
+/** Resolved file-backend path (`identity.path` in un-bien.json), default
+ *  `~/.pi/un-bien/identity.json`. */
+function _identityFilePath(): string {
+  const p = loadConfig().identity?.path;
+  return p && p.length > 0 ? p : IDENTITY_FILE;
+}
 
-  // ── Path A: keyring (retried) ──────────────────────────────────────────
-  // A throw here means the keyring op FAILED — but on macOS/Windows that is
-  // almost always a transiently locked Keychain (idle/just-woke machine), not
-  // a missing backend. `read` returns `undefined` for "no such entry" (the
-  // genuine first-run signal). So we retry on throw, and only a throw that
-  // SURVIVES every attempt drops us to Path B.
-  let keyringError: unknown;
+function _isENOENT(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: unknown }).code === "ENOENT"
+  );
+}
+
+// ── env override ────────────────────────────────────────────────────────────
+
+/**
+ * `UNBIEN_IDENTITY_SEED` — a read-only override that always WINS when set. The
+ * operator populates it themselves (e.g. `cat` the identity file into it, or a
+ * base64 32-byte seed); un-bien NEVER writes it. Accepts either the identity
+ * JSON (`{pk,sk}`, i.e. the file's contents) or a bare base64 32-byte Ed25519
+ * seed. A malformed value THROWS rather than being silently ignored — a
+ * supplied-but-broken override is an operator error worth surfacing.
+ */
+function _keypairFromEnvOverride(): Ed25519Keypair | null {
+  const raw = process.env["UNBIEN_IDENTITY_SEED"];
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return null;
+  if (trimmed.startsWith("{")) return _deserialize(trimmed);
+  const seed = Buffer.from(trimmed, "base64");
+  if (seed.length !== 32) {
+    throw new Error(
+      "UNBIEN_IDENTITY_SEED must be the identity JSON ({pk,sk}) or a base64 " +
+        `32-byte Ed25519 seed (decoded to ${seed.length} bytes).`,
+    );
+  }
+  return ed25519KeypairFromSeed(seed);
+}
+
+// ── File backend ────────────────────────────────────────────────────────────
+
+/**
+ * Reads a file-backed identity, distinguishing "genuinely absent" (ENOENT →
+ * `null`, a safe first-run signal) from "present but unreadable/corrupt" (→
+ * `FileIdentityUnreadableError`). The distinction is load-bearing: treating a
+ * corrupt or permission-denied file as "no identity" would let the resolver
+ * MINT over an identity that is really there.
+ */
+async function _readKeypairFromFile(
+  path: string,
+): Promise<Ed25519Keypair | null> {
+  let raw: string;
+  try {
+    raw = await readFile(path, "utf8");
+  } catch (err) {
+    if (_isENOENT(err)) return null;
+    throw new FileIdentityUnreadableError(path, err);
+  }
+  try {
+    return _deserialize(raw);
+  } catch (err) {
+    throw new FileIdentityUnreadableError(path, err);
+  }
+}
+
+async function _writeKeypairToFile(
+  kp: Ed25519Keypair,
+  path: string,
+): Promise<void> {
+  const dir = dirname(path);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  // Best-effort tighten in case the dir pre-existed with looser permissions
+  // (mkdir's mode is only applied to NEW dirs).
+  try {
+    await chmod(dir, 0o700);
+  } catch {
+    /* not fatal */
+  }
+  await writeFile(path, _serialize(kp), { mode: 0o600 });
+  try {
+    await chmod(path, 0o600);
+  } catch {
+    /* not fatal */
+  }
+}
+
+// ── Keychain backend ────────────────────────────────────────────────────────
+
+type KeychainReadResult =
+  { ok: true; kp: Ed25519Keypair | null } | { ok: false; error: unknown };
+
+/**
+ * Retried read of the keychain: the new service, then the legacy service
+ * (`dev.unbien.mac`, promoted to the new one + deleted — a same-identity
+ * service rename, not a mint). `ok:true` with `kp:null` means both reads
+ * SUCCEEDED and found nothing (a genuine empty keychain). `ok:false` means the
+ * read threw on every attempt (locked/denied/unavailable) — the caller must
+ * NOT treat that as empty, or it mints over a possibly-present identity.
+ */
+async function _readKeychain(
+  backend: KeyStoreBackend,
+  promote = true,
+): Promise<KeychainReadResult> {
+  let lastError: unknown;
   for (let attempt = 0; attempt < _keyringReadAttempts; attempt++) {
     try {
       const existing = await backend.read(NEW_SERVICE, ACCOUNT);
-      if (existing) return _deserialize(existing);
+      if (existing) return { ok: true, kp: _deserialize(existing) };
 
       const legacy = await backend.read(OLD_SERVICE, ACCOUNT);
       if (legacy) {
         const kp = _deserialize(legacy);
-        await backend.write(NEW_SERVICE, ACCOUNT, legacy);
-        await backend.delete(OLD_SERVICE, ACCOUNT);
-        // Silent migration: writing the chat surface would be premature
-        // (Pi SDK isn't bound yet at this point in boot) and console
-        // output bleeds outside the TUI. The presence of an entry under
-        // NEW_SERVICE is itself the audit signal — re-running migration
-        // is idempotent and harmless.
-        return kp;
+        // `promote=false` keeps the read side-effect-free (e.g. describeIdentity
+        // for `show`); the resolver promotes the legacy entry once.
+        if (promote) {
+          await backend.write(NEW_SERVICE, ACCOUNT, legacy);
+          await backend.delete(OLD_SERVICE, ACCOUNT);
+        }
+        return { ok: true, kp };
       }
-
-      // Both reads SUCCEEDED and returned nothing → genuine first run on a
-      // working keyring. Generate and save to the new service.
-      const fresh = generateEd25519Keypair();
-      await backend.write(NEW_SERVICE, ACCOUNT, _serialize(fresh));
-      return fresh;
+      return { ok: true, kp: null };
     } catch (err) {
-      keyringError = err;
+      lastError = err;
       if (attempt < _keyringReadAttempts - 1) {
         // Linear backoff — a locked Keychain usually frees within seconds.
         await _sleep(_keyringRetryDelayMs * (attempt + 1));
       }
     }
   }
+  return { ok: false, error: lastError };
+}
 
-  // ── Path B: keyring threw on every attempt ─────────────────────────────
-  // Path 0 already returned any pre-existing file identity; this defensive
-  // re-check catches a file written concurrently by another Pi process during
-  // the keyring-retry window (still: use it, never regenerate).
-  const fromFile = await _readKeypairFromFile();
-  if (fromFile) return fromFile;
+// ── Public API ──────────────────────────────────────────────────────────────
 
-  // No file identity AND the keyring is unreadable. CRITICAL FORK:
-  //
-  //  - On a platform without a guaranteed keyring (headless Linux, no D-Bus),
-  //    minting a file-backed identity is the documented, correct first-run
-  //    behavior.
-  //  - On macOS/Windows the keyring is a core OS service, so a persistent read
-  //    failure means it's LOCKED/denied — NOT that we're a fresh install.
-  //    Generating a new key here is exactly what silently broke pairing after
-  //    a week idle, and the new key then masks the real Keychain identity via
-  //    the file. So we FAIL LOUD instead, unless the operator explicitly
-  //    opts into a file identity.
-  const forceFile = process.env.UNBIEN_ALLOW_FILE_IDENTITY === "1";
-  if (_keyringExpectedAvailable() && !forceFile) {
-    throw new KeyringUnavailableError(keyringError);
-  }
+/**
+ * Returns this Pi's long-term Ed25519 identity, minting one only on a genuine
+ * first run. The seed is portable and its public key (epk) is what the relay
+ * routes on and what devices pair against — so this resolver's ONE job is to
+ * never change the identity out from under an existing pairing (the "flop").
+ *
+ * Resolution (operator-selectable backend — see design):
+ *   0. `UNBIEN_IDENTITY_SEED` env override — always wins, read-only.
+ *   1. The SELECTED backend (`identity.storage`, default keychain): keychain
+ *      (retried — a locked Keychain throws, which is NOT "empty") or the 0600
+ *      file at `identity.path`.
+ *   2. Migration READ-IN-PLACE of the OTHER backend — recovers an existing
+ *      identity (a keychain key when file is selected, or a file when keychain
+ *      is selected) WITHOUT writing it through.
+ *   3. Generate + persist to the selected backend, but ONLY when every
+ *      consulted source was genuinely empty. A keychain that THREW on a
+ *      core-OS-keyring platform (macOS/Windows) is possibly-present →
+ *      `KeyringUnavailableError`, never minted over. Existing pairings →
+ *      `PairedIdentityMissingError`. A present-but-unreadable file →
+ *      `FileIdentityUnreadableError`. This is write-only-if-nonexistent: the
+ *      resolver's only mutation is a genuine-first-run mint.
+ *
+ * Idempotent. On headless Linux / a Bun-built pi (no usable keyring) the file
+ * backend is used automatically.
+ */
+export async function getOrCreateEd25519Keypair(): Promise<Ed25519Keypair> {
+  // ── Override: an env-supplied seed always wins (read-only) ──────────────
+  const override = _keypairFromEnvOverride();
+  if (override) return override;
 
-  // Issues #95 / #69 — minting a NEW identity when devices are already paired
-  // is destructive, on every platform.
-  //
-  // A daemon started by `systemd --user` resolves a different secret-service
-  // store than the desktop session that ran the pairing, so the keyring read
-  // fails, this path mints a fresh Ed25519 key, and the SelfRevoke poller then
-  // finds that key absent from the relay-side owner envelope, concludes it was
-  // revoked, and wipes `peers.json` — the phone silently goes offline a few
-  // seconds after every `daemon start`. `peers.json` being non-empty is proof
-  // that a working identity existed, so "no key found" here is a broken
-  // environment, not a first run. Fail loud and keep the pairing intact; the
-  // operator can pin the identity to a file (the confirmed workaround) or fix
-  // the service's keyring access.
-  if (!forceFile) {
-    const paired = await listPeers();
-    if (paired.length > 0) {
-      throw new PairedIdentityMissingError(paired.length, keyringError);
+  const backend = _getBackend();
+  const selected = _selectedStorageBackend();
+  const filePath = _identityFilePath();
+
+  let keychain: KeychainReadResult | null = null;
+
+  if (selected === "keychain") {
+    keychain = await _readKeychain(backend);
+    if (keychain.ok && keychain.kp) return keychain.kp;
+    // Migration read-in-place of the file backend (never written through).
+    const fromFile = await _readKeypairFromFile(filePath);
+    if (fromFile) return fromFile;
+  } else {
+    const fromFile = await _readKeypairFromFile(filePath);
+    if (fromFile) return fromFile;
+    // Migration read-in-place of the keychain — only where one could exist.
+    if (_keyringExpectedAvailable()) {
+      keychain = await _readKeychain(backend);
+      if (keychain.ok && keychain.kp) return keychain.kp;
     }
   }
 
-  console.warn(
-    _nativeBindingUnavailable()
-      ? // Issue #113: the @napi-rs/keyring native binding could not be loaded at
-        // all (typically a Bun-compiled pi). Name it explicitly — the error the
-        // loader prints blames npm's optional-dependency bug and sends people off
-        // to delete node_modules, which takes their other pi packages with it.
-        "[un-bien] @napi-rs/keyring native binding could not be loaded in this " +
-          `runtime; using file-backed identity at ${IDENTITY_FILE} (0600) instead. ` +
-          "This is expected on a Bun-built pi. Paired devices keyed to a previous " +
-          `keyring identity must be re-paired. ${String(keyringError)}`
-      : "[un-bien] keyring unavailable; using file-backed identity at " +
-          `${IDENTITY_FILE}. ${String(keyringError)}`,
-  );
+  // ── Nothing found. Mint — but only when it is SAFE to. ──────────────────
+  const keychainThrew = keychain !== null && keychain.ok === false;
+  const keychainError =
+    keychain !== null && keychain.ok === false ? keychain.error : null;
+
+  // A keychain that THREW on a platform where it's a core OS service isn't
+  // "empty" — it's locked/denied and may hold the real identity. Minting now
+  // is exactly the flop. Fail loud so the operator unlocks and retries.
+  if (keychainThrew && _keyringExpectedAvailable()) {
+    throw new KeyringUnavailableError(keychainError);
+  }
+
+  // Devices already paired ⇒ an identity provably existed; "not found" here is
+  // a broken environment (classically a systemd --user daemon that can't reach
+  // the desktop keyring), not a first run. Minting would let SelfRevoke wipe
+  // the pairings (issues #95/#69). Fail loud on every platform.
+  const paired = await listPeers();
+  if (paired.length > 0) {
+    throw new PairedIdentityMissingError(paired.length, keychainError);
+  }
+
+  // ── Genuine first run: mint once into the selected backend ──────────────
   const fresh = generateEd25519Keypair();
-  await _writeKeypairToFile(fresh);
+  const keychainUsable = !_nativeBindingUnavailable() && !keychainThrew;
+  if (selected === "keychain" && keychainUsable) {
+    await backend.write(NEW_SERVICE, ACCOUNT, _serialize(fresh));
+    return fresh;
+  }
+  // File backend — either selected, or keychain selected but unusable in this
+  // process (headless Linux / Bun-built pi), which degrades to a file identity.
+  if (selected === "keychain") {
+    console.warn(
+      _nativeBindingUnavailable()
+        ? "[un-bien] @napi-rs/keyring native binding could not be loaded in " +
+            `this runtime; using file-backed identity at ${filePath} (0600) ` +
+            "instead. Expected on a Bun-built pi. Paired devices keyed to a " +
+            `previous keyring identity must be re-paired. ${String(keychainError)}`
+        : "[un-bien] keyring unavailable; using file-backed identity at " +
+            `${filePath}. ${String(keychainError)}`,
+    );
+  }
+  await _writeKeypairToFile(fresh, filePath);
   return fresh;
+}
+
+// ── Read-only identity inspection (for `unbien identity show`) ──────────────
+
+export interface IdentityInfo {
+  /** Base64 Ed25519 public key (epk) — PUBLIC, safe to display. `null` when no
+   *  identity exists yet (one is minted on first real use). */
+  readonly epk: string | null;
+  /** The selected/effective storage backend. */
+  readonly backend: IdentityStorageBackend;
+  /** Where the identity resolved from (or would come from). */
+  readonly source: "env-override" | "keychain" | "file" | "none" | "error";
+  /** Resolved file-backend path. */
+  readonly filePath: string;
+  /** Human note (migration recovery, error cause, first-run hint). */
+  readonly detail?: string;
+}
+
+/**
+ * Reports the CURRENT identity state WITHOUT minting or mutating anything — the
+ * read-only backing for `unbien identity show`. Returns only NON-SECRET fields
+ * (epk is public); the private seed is NEVER included, since command output is
+ * LLM-visible. Read errors are surfaced as `source:"error"` with a `detail`,
+ * not thrown — this is a diagnostic.
+ */
+export async function describeIdentity(): Promise<IdentityInfo> {
+  const backend = _selectedStorageBackend();
+  const filePath = _identityFilePath();
+  const epkOf = (kp: Ed25519Keypair): string =>
+    Buffer.from(kp.publicKey).toString("base64");
+
+  try {
+    const override = _keypairFromEnvOverride();
+    if (override)
+      return {
+        epk: epkOf(override),
+        backend,
+        source: "env-override",
+        filePath,
+      };
+  } catch (err) {
+    return {
+      epk: null,
+      backend,
+      source: "error",
+      filePath,
+      detail: `env override invalid: ${String(err)}`,
+    };
+  }
+
+  const store = _getBackend();
+  const readFileSafe = async (): Promise<{
+    kp?: Ed25519Keypair;
+    err?: unknown;
+  }> => {
+    try {
+      const kp = await _readKeypairFromFile(filePath);
+      return kp ? { kp } : {};
+    } catch (err) {
+      return { err };
+    }
+  };
+  const readKcSafe = async (): Promise<{
+    kp?: Ed25519Keypair;
+    err?: unknown;
+  }> => {
+    const r = await _readKeychain(store, false);
+    return r.ok ? (r.kp ? { kp: r.kp } : {}) : { err: r.error };
+  };
+
+  if (backend === "keychain") {
+    const kc = await readKcSafe();
+    if (kc.kp)
+      return { epk: epkOf(kc.kp), backend, source: "keychain", filePath };
+    const f = await readFileSafe();
+    if (f.kp)
+      return {
+        epk: epkOf(f.kp),
+        backend,
+        source: "file",
+        filePath,
+        detail: "recovered from the file backend (migration read)",
+      };
+    if (kc.err)
+      return {
+        epk: null,
+        backend,
+        source: "error",
+        filePath,
+        detail: `keychain unreadable: ${String(kc.err)}`,
+      };
+    if (f.err)
+      return {
+        epk: null,
+        backend,
+        source: "error",
+        filePath,
+        detail: `file unreadable: ${String(f.err)}`,
+      };
+  } else {
+    const f = await readFileSafe();
+    if (f.kp) return { epk: epkOf(f.kp), backend, source: "file", filePath };
+    if (f.err)
+      return {
+        epk: null,
+        backend,
+        source: "error",
+        filePath,
+        detail: `file unreadable: ${String(f.err)}`,
+      };
+    if (_keyringExpectedAvailable()) {
+      const kc = await readKcSafe();
+      if (kc.kp)
+        return {
+          epk: epkOf(kc.kp),
+          backend,
+          source: "keychain",
+          filePath,
+          detail: "recovered from the keychain (migration read)",
+        };
+      if (kc.err)
+        return {
+          epk: null,
+          backend,
+          source: "error",
+          filePath,
+          detail: `keychain unreadable: ${String(kc.err)}`,
+        };
+    }
+  }
+
+  return {
+    epk: null,
+    backend,
+    source: "none",
+    filePath,
+    detail: "no identity yet — one is minted on first use",
+  };
 }
 
 // ── peers.json ────────────────────────────────────────────────────────────────
@@ -496,7 +756,14 @@ async function _readPeerContainerStrict(): Promise<unknown[]> {
     }
     throw error;
   }
-  const parsed = JSON.parse(raw) as { peers?: unknown };
+  let parsed: { peers?: unknown };
+  try {
+    parsed = JSON.parse(raw) as { peers?: unknown };
+  } catch (err) {
+    throw new Error(
+      `peers.json is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
   if (!Array.isArray(parsed.peers)) {
     throw new Error("Invalid peers.json container");
   }

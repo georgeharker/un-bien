@@ -1,77 +1,67 @@
-# Remote Pi — Pi Extension (Node + TypeScript)
+# un-bien — Pi Extension (Node + TypeScript)
 
-Extensão para o [Pi coding agent](https://github.com/earendil-works/pi) que
-adiciona o slash command `/remote-pi`. Embarca o SDK do Pi
-(`@earendil-works/pi-coding-agent`) e expõe via WebSocket pro relay.
+Extension for the [Pi coding agent](https://github.com/earendil-works/pi) that
+adds the `/unbien` slash command. It embeds the Pi SDK
+(`@earendil-works/pi-coding-agent`) and connects to the relay over WebSocket.
+Part of the cross-PC coding-agent mesh: each PC runs this extension with an
+Ed25519 identity, the phone pairs via QR, and envelopes route between peers.
 
-Faz parte da **mesh de agentes coding cross-PC** do Remote Pi: cada PC
-roda esta extensão (Node daemon) com uma Pi-key Ed25519 no keyring do
-sistema; o celular é autenticador inicial via QR; entre PCs irmãos do
-mesmo Owner, broker UDS local + relay forward Pi-to-Pi via WS roteiam
-envelopes com prefixo `<pc>:<peer>`.
+**Canonical docs (source of truth — prefer them over this summary):**
 
-Protocolo, identidades, ACK, roteamento cross-PC e trust model: ver
-[`../docs/rpc-envelope.md`](../docs/rpc-envelope.md) (doc canônica do repo).
+- Protocol, identities, ACK, cross-PC routing, trust model:
+  [`../docs/rpc-envelope.md`](../docs/rpc-envelope.md)
+- Machine identity (keychain/file backends, resolution order,
+  `/unbien identity`, extracting/moving the seed):
+  [`../docs/identity.md`](../docs/identity.md)
 
 ## Stack
 
-- Node 20+ / TypeScript 6
-- **Module system**: ESM only (NodeNext). Imports com extensão `.js` mesmo em `.ts`
-- Package manager: **pnpm** (não usar npm/yarn)
-- Crypto: libsodium-wrappers (Curve25519 + ChaCha20-Poly1305)
-- Pi-secret storage: `@napi-rs/keyring` (Keychain macOS / libsecret Linux desktop / Credential Manager Windows). Headless Linux sem D-Bus cai pra `~/.pi/remote/identity.json` (`chmod 0600`) com warning — instale GNOME Keyring/KWallet pra hardening real.
+- Node ≥ 20, TypeScript, **ESM only** (NodeNext) — imports carry the `.js`
+  extension even in `.ts`.
+- Package manager: **pnpm** (there's a `pnpm-lock.yaml`).
+- SDK: `@earendil-works/pi-coding-agent` (+ `@earendil-works/pi-tui`).
 
-## Comandos
+## Commands
 
-- `pnpm install` — instala deps
-- `pnpm typecheck` — `tsc --noEmit`, deve passar zero erros
-- `pnpm build` — `tsc`, gera `dist/`
-- `pnpm dev` — `tsx src/index.ts`, executa direto sem build
+- `pnpm install`
+- `pnpm typecheck` — `tsc --noEmit`
+- `pnpm build` — `tsc -p tsconfig.build.json` → `dist/`
+- `pnpm dev` — `tsx src/index.ts`
+- `pnpm test` — `vitest run`
 
-## Configuração do relay
+> The fork loads the **built** `dist/`, not `src/` — run `pnpm build` and
+> restart the fork after editing the extension.
 
-Ordem de resolução (precedência):
+## Relay configuration
 
-1. `process.env.REMOTE_PI_RELAY` — escape hatch pra CI/ops
-2. `~/.pi/remote/config.json` (`{ "relay": "..." }`) — persistido via
-   `/remote-pi set-relay <url>`
-3. `kDefaultRelayUrl` (`https://relay-rp1.jacobmoura.work`) — produção
+Resolution order (via `config.ts`) — **there is no built-in default**:
 
-Slash commands:
+1. `UNBIEN_RELAY` (env) — CI/ops escape hatch.
+2. the `relay` field in `un-bien.json`
+   (`<PI_CODING_AGENT_DIR>/extensions/un-bien.json`), written by
+   `/unbien set-relay <url>`.
+3. nothing configured ⇒ `source: "unset"` — the extension **refuses to
+   connect** and prompts you to configure a relay.
 
-- `/remote-pi set-relay <http://… | https://…>` — grava URL em
-  `~/.pi/remote/config.json`. Validação rejeita `ws://`, `wss://`,
-  string vazia e URLs malformadas (a extensão converte http(s)→ws(s)
-  internamente ao abrir o WebSocket).
-- `/remote-pi config` — mostra a URL efetiva atual + de qual fonte vem
-  (`env`/`config`/`default`).
+`/unbien set-relay` only accepts `http(s)://` (rejects `ws(s)://`/empty/
+malformed; the conversion to `ws(s)://` happens internally when opening the
+WebSocket). `/unbien config` shows the effective URL and its source.
 
-`_cmdStart` chama `resolveRelayUrl()` e exibe o `source` no notify
-("Connecting to relay <url> (source: …)") pra QA validar.
+## Conventions
 
-## Dependências importantes
+- **Strict TS**: no `any` — use `unknown` + narrow.
+- Imports require the `.js` extension (ESM). Top-level await is fine.
+- Errors: `class XxxError extends Error`, thrown early at the boundary.
 
-- `@earendil-works/pi-coding-agent` — SDK do Pi (`AgentSession`, `SessionManager`, `ModelRegistry`)
-- `ws` — WebSocket client
+## Don't
 
-## Convenções
+- Don't write CommonJS (`require`, `module.exports`).
+- Don't commit `dist/` (already in the root `.gitignore`).
+- Don't add a dependency that isn't ESM-friendly.
 
-- **Strict TS**: `"strict": true`, sem `any` exceto onde inevitável (use `unknown` + narrow)
-- **Imports**: `import { foo } from "./bar.js"` (extensão obrigatória em ESM)
-- **Top-level await** ok (ESM permite)
-- **Erros**: `class XxxError extends Error` para classes nomeadas, throw cedo no boundary
-- **Logging**: `console.log` ok no MVP; depois migrar pra `pino` ou similar
+## Orchestrated mode
 
-## NÃO fazer
-
-- Não escrever CommonJS (`require`, `module.exports`)
-- Não comitar `dist/` (já no .gitignore raiz)
-- Não criptografar/descriptografar de forma custom — usar libsodium
-- Não introduzir dependência que não seja ESM-friendly
-
-## Modo orquestrado
-
-Se receber um prompt começando com `[ORCH:<task-id>]`, leia
-`../.orchestration/INSTRUCTIONS.md` antes de qualquer outra ação. Esse marker
-indica que outro agente está coordenando o trabalho e tem regras específicas
-(onde escrever resultado, não comitar, etc).
+If you receive a prompt starting with `[ORCH:<task-id>]`, read
+`../.orchestration/INSTRUCTIONS.md` before doing anything else — another agent
+is coordinating and has specific rules (where to write results, not committing,
+etc).

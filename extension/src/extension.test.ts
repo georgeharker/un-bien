@@ -504,6 +504,9 @@ describe("extension default export", () => {
     expect(registeredCommands).toContain("unbien uninstall");
     // Cross-PC peer inventory (plan/25 W D)
     expect(registeredCommands).toContain("unbien peers");
+    // Machine identity (non-secret show) + its `show` verb alias
+    expect(registeredCommands).toContain("unbien identity");
+    expect(registeredCommands).toContain("unbien identity show");
   });
 
   test("restart-supervisor maps to the right OS command sequence per platform", () => {
@@ -537,8 +540,9 @@ describe("extension default export", () => {
     (extension as ExtensionFactory)(pi);
     // 8 plan-25 + 2 daemon registry (W1) + 6 fleet ops (W2) + 2 install (W3)
     // + 1 cross-PC inventory (plan-25 W D) + 1 cron (plan-39) + 1 rename (plan/41)
-    // + 1 relay control (issue #119 — README documents the verb family).
-    expect(registeredCommands).toHaveLength(23);
+    // + 1 relay control (issue #119 — README documents the verb family)
+    // + 2 identity (`unbien identity` and its `identity show` verb alias).
+    expect(registeredCommands).toHaveLength(25);
     // `relay` is back as ONE command with verbs (start/stop/status/url), not the
     // five separate registrations plan/19 trimmed — the README documents it and
     // without it every `/unbien relay …` silently reprinted the status panel.

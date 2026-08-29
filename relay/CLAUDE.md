@@ -1,74 +1,73 @@
-# Remote Pi — Relay (Rust)
+# un-bien — Relay (Rust)
 
-Servidor WebSocket que autentica conexões por `peer_id`, roteia tráfego App↔Pi,
-autoriza e encaminha envelopes Pi→Pi e mantém metadados de membership assinados
-pelo Owner em SQLite.
+WebSocket server that authenticates connections by `peer_id`, routes App↔Pi
+traffic, authorizes and forwards Pi→Pi envelopes, and keeps Owner-signed
+membership metadata in SQLite.
 
 ## Stack
 
-- Rust 1.94+ (edição 2024)
+- Rust 1.94+ (2024 edition)
 - Runtime: `tokio` (full features)
 - WebSocket: `tokio-tungstenite`
-- Serialização: `serde` + `serde_json`
-- Logging: `tracing` + `tracing-subscriber` (NÃO usar `println!`)
+- Serialization: `serde` + `serde_json`
+- Logging: `tracing` + `tracing-subscriber` (do NOT use `println!`)
 
-## Comandos
+## Commands
 
-- `cargo build` — build dev
-- `cargo build --release` — build otimizado
-- `cargo run` — roda local
-- `RUST_LOG=info cargo run` — com logs visíveis
-- `cargo clippy -- -D warnings` — lint estrito (deve passar antes de commit)
-- `cargo fmt` — formata
-- `cargo test` — testes
+- `cargo build` — dev build
+- `cargo build --release` — optimized build
+- `cargo run` — run locally
+- `RUST_LOG=info cargo run` — with visible logs
+- `cargo clippy -- -D warnings` — strict lint (must pass before commit)
+- `cargo fmt` — format
+- `cargo test` — tests
 
-## Convenções
+## Conventions
 
-- **Erros**: `anyhow::Result<()>` no `main`, `thiserror::Error` em libs internas
-- **Async**: tudo via `tokio::spawn` / `tokio::select!`, nada de `std::thread`
-- **Logging**: spans com `tracing::info_span!` em handlers, `info!`/`warn!`/`error!`
-- **Sem `unwrap()`** em código de produção. Use `?` e propague
-- **Sem `clone()` desnecessário** — passe `&` quando possível
+- **Errors**: `anyhow::Result<()>` in `main`, `thiserror::Error` in internal libs
+- **Async**: everything via `tokio::spawn` / `tokio::select!`, no `std::thread`
+- **Logging**: spans with `tracing::info_span!` in handlers, `info!`/`warn!`/`error!`
+- **No `unwrap()`** in production code. Use `?` and propagate
+- **No unnecessary `clone()`** — pass `&` where possible
 
-## Política de segurança e conteúdo
+## Security & content policy
 
-- No tráfego App↔Pi, o `ct` externo permanece opaco e nunca é decodificado.
-- `pi_envelope` Pi→Pi e membership assinado são parseados em memória somente
-  conforme necessário para routing e autorização.
-- Nenhum body de envelope, material de chave ou assinatura pode ser logado ou
-  persistido como payload de mensagem.
-- A persistência SQLite é limitada a metadados de autorização de membership
-  assinados pelo Owner; tráfego de mensagens nunca é persistido.
-- Uma rota é elegível quando qualquer blob Owner corretamente assinado lista
-  diretamente as duas chaves Pi canônicas. Isso não prova que o Owner pareou ou
-  controla qualquer Pi, nem oferece uma garantia de confiança mais forte. Não
-  há transitividade entre blobs sobrepostos.
-- O cache positivo de autorização pode reter uma permissão revogada por no
-  máximo 60 segundos; misses negativos de remetente são cacheados por 1 segundo
-  e o cache é limitado.
-- Rate limit por `peer_id` e por IP de origem.
+- In App↔Pi traffic, the outer `ct` stays opaque and is never decoded.
+- Pi→Pi `pi_envelope` and signed membership are parsed in memory only as needed
+  for routing and authorization.
+- No envelope body, key material, or signature may be logged or persisted as a
+  message payload.
+- SQLite persistence is limited to Owner-signed membership authorization
+  metadata; message traffic is never persisted.
+- A route is eligible when any correctly Owner-signed blob directly lists both
+  canonical Pi keys. This does not prove the Owner paired or controls any Pi,
+  nor does it offer a stronger trust guarantee. There is no transitivity across
+  overlapping blobs.
+- The positive authorization cache may retain a revoked permission for at most
+  60 seconds; negative sender misses are cached for 1 second and the cache is
+  bounded.
+- Rate limit per `peer_id` and per source IP.
 
 ## Upgrade
 
-- Implante primeiro o Relay 0.3: Extensions antigas consomem seus erros UUID.
-  Depois coordene a Extension 0.6 e minimize Extensions mistas, pois labels de
-  wire mistos continuam adiados. O shim da 0.6 cobre Relay antigo ou rollback,
-  não é a razão de Relay-first ser seguro.
-- Os procedimentos de rollout ficam centralizados no
-  Plano 51.
+- Deploy Relay 0.3 first: old Extensions consume its UUID errors. Then
+  coordinate Extension 0.6 and minimize mixed Extensions, since mixed wire
+  labels remain deferred. The 0.6 shim covers an old Relay or a rollback — it is
+  not the reason Relay-first is safe.
+- Rollout procedures are centralized in Plan 51.
 
-## NÃO fazer
+## Don't
 
-- Não usar `println!` (use `tracing`)
-- Não usar `.unwrap()` ou `.expect()` em paths de produção
-- Não logar conteúdo de mensagens, chaves completas ou assinaturas
-- Não adicionar persistência de tráfego/payload; apenas metadata de membership
-  assinada pelo Owner pertence ao SQLite
-- Não comitar `target/` (já no .gitignore raiz)
+- Don't use `println!` (use `tracing`)
+- Don't use `.unwrap()` or `.expect()` in production paths
+- Don't log message content, full keys, or signatures
+- Don't add traffic/payload persistence; only Owner-signed membership metadata
+  belongs in SQLite
+- Don't commit `target/` (already in the root `.gitignore`)
 
-## Modo orquestrado
+## Orchestrated mode
 
-Se receber um prompt começando com `[ORCH:<task-id>]`, leia
-`../.orchestration/INSTRUCTIONS.md` antes de qualquer outra ação. Esse marker
-indica que outro agente está coordenando o trabalho e tem regras específicas
-(onde escrever resultado, não comitar, etc).
+If you receive a prompt starting with `[ORCH:<task-id>]`, read
+`../.orchestration/INSTRUCTIONS.md` before doing anything else — another agent
+is coordinating and has specific rules (where to write results, not committing,
+etc).

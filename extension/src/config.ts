@@ -27,6 +27,16 @@ export type UnBienConfig = {
    * omitting it preserves the historical per-cwd-only behaviour exactly.
    */
   defaults?: { auto_start_relay?: boolean };
+  /**
+   * Machine-identity storage. `storage` selects the PRIMARY backend for this
+   * Pi's long-term Ed25519 seed — `"keychain"` (OS-secured, the default) or
+   * `"file"` (a 0600 seed file, the SSH-private-key model: cat-able, portable,
+   * works headless). `path` overrides the file-backend location (default
+   * `~/.pi/un-bien/identity.json`). The unselected backend is still READ (to
+   * recover an existing identity) but never written; the resolver mints only on
+   * a genuine first run. See `pairing/storage.ts`. Absent ⇒ keychain default.
+   */
+  identity?: { storage?: "keychain" | "file"; path?: string };
 };
 
 export function loadConfig(): UnBienConfig {
