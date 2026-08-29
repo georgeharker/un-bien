@@ -2473,6 +2473,96 @@ describe("multi-channel broadcast (W2D)", () => {
     });
   });
 
+  // The rpc `prompt` handler is the path the APP actually uses
+  // (mapToWire -> {rpc:{type:"prompt", streamingBehavior}}). Per design
+  // 01M14T6J5W it PASSES the app's verb straight to pi's deliverAs (no fork
+  // steer inference), so a busy followUp queues instead of steering.
+  function emitRpcPrompt(peer: string, frame: Record<string, unknown>): void {
+    relayRef.current!.emit(
+      "message",
+      JSON.stringify({
+        peer,
+        ct: Buffer.from(
+          JSON.stringify({ rpc: { type: "prompt", ...frame } }),
+        ).toString("base64"),
+      }),
+    );
+  }
+
+  test("rpc prompt: busy followUp is delivered as followUp (not steered)", async () => {
+    await _pairForTest("ownerA__1234567890");
+    const sendUserMessage = vi.fn();
+    _setPiForTest({
+      sendUserMessage,
+      sendMessage: () => undefined,
+      isStreaming: true,
+    });
+    emitRpcPrompt("ownerA__1234567890", {
+      id: "q1",
+      message: "after you're done",
+      streamingBehavior: "followUp",
+    });
+    await new Promise<void>((r) => setImmediate(r));
+    expect(sendUserMessage).toHaveBeenCalledWith("after you're done", {
+      deliverAs: "followUp",
+    });
+  });
+
+  test("rpc prompt: busy steer is delivered as steer", async () => {
+    await _pairForTest("ownerA__1234567890");
+    const sendUserMessage = vi.fn();
+    _setPiForTest({
+      sendUserMessage,
+      sendMessage: () => undefined,
+      isStreaming: true,
+    });
+    emitRpcPrompt("ownerA__1234567890", {
+      id: "q2",
+      message: "refine now",
+      streamingBehavior: "steer",
+    });
+    await new Promise<void>((r) => setImmediate(r));
+    expect(sendUserMessage).toHaveBeenCalledWith("refine now", {
+      deliverAs: "steer",
+    });
+  });
+
+  test("rpc prompt: busy send with NO behavior defensively steers (mechanical net)", async () => {
+    await _pairForTest("ownerA__1234567890");
+    const sendUserMessage = vi.fn();
+    _setPiForTest({
+      sendUserMessage,
+      sendMessage: () => undefined,
+      isStreaming: true,
+    });
+    emitRpcPrompt("ownerA__1234567890", { id: "q3", message: "oops racing" });
+    await new Promise<void>((r) => setImmediate(r));
+    expect(sendUserMessage).toHaveBeenCalledWith("oops racing", {
+      deliverAs: "steer",
+    });
+  });
+
+  test("rpc prompt: IDLE send runs fresh (deliverAs undefined, behavior ignored)", async () => {
+    await _pairForTest("ownerA__1234567890");
+    const sendUserMessage = vi.fn();
+    _setPiForTest({
+      sendUserMessage,
+      sendMessage: () => undefined,
+      isStreaming: false,
+    });
+    emitRpcPrompt("ownerA__1234567890", {
+      id: "q4",
+      message: "hello",
+      streamingBehavior: "steer",
+    });
+    await new Promise<void>((r) => setImmediate(r));
+    // idle: fork forwards the app's behavior; pi's prompt() ignores it and runs
+    // fresh. The fork does not fabricate a deliverAs when idle.
+    expect(sendUserMessage).toHaveBeenCalledWith("hello", {
+      deliverAs: "steer",
+    });
+  });
+
   test("plan/43: steering sendUserMessage throw returns correlated error and no echo", async () => {
     await _pairForTest("ownerA__1234567890");
     const onInput = captureEventHandler("input");

@@ -30,12 +30,18 @@ public struct QueuedMessageItem: Codable, Equatable, Sendable {
     public let text: String
     public let editable: Bool
     public let createdAt: Int
+    /// App-local OPTIMISTIC flag: a not-yet-confirmed queued entry shown
+    /// instantly on Queue submit, cleared when pi's next `queue_update` wholesale-
+    /// replaces the list (design 01M15S77E). NOT on the wire (absent from
+    /// CodingKeys); defaults false so decoded/authoritative items are non-pending.
+    public var pending: Bool = false
 
-    public init(id: String, text: String, editable: Bool, createdAt: Int) {
+    public init(id: String, text: String, editable: Bool, createdAt: Int, pending: Bool = false) {
         self.id = id
         self.text = text
         self.editable = editable
         self.createdAt = createdAt
+        self.pending = pending
     }
 
     enum CodingKeys: String, CodingKey {

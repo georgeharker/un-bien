@@ -1711,13 +1711,14 @@ function _routeRpcCommandFrom(
       //    busy-room send.
       //  - seed `_rootState().turnId` for a fresh (non-steer) turn so the agent's
       //    reply chunks/done have a target; restore it if the handoff fails.
+      // The APP owns the steer-vs-followUp semantic switch (design 01M14T6J5W):
+      // pass its chosen streamingBehavior straight through to pi. The fork does
+      // NOT force steer over a followUp anymore. `shouldSteer` below is now only
+      // BOOKKEEPING (turn-seeding + image-preview defer), not the delivery verb.
       const requestedSteer = opts.streamingBehavior === "steer";
-      // Authoritative busy signal from pi's OWN state (AgentSession.isStreaming).
-      // `_rootState().turnId` / `_myRoomMeta.working` are NOT reinitialized after a
-      // SUBAGENT run, so they stick "busy" — making an IDLE prompt steer, which
-      // queues with no running turn to attach to ("goes to the void").
-      // isStreaming is correct across subagent lifecycles. Idle -> fresh run (no
-      // deliverAs); streaming -> steer.
+      // Authoritative busy signal from pi's OWN state (AgentSession.isStreaming),
+      // correct across subagent lifecycles (turnId/working stick busy after a
+      // subagent run).
       const streaming =
         (_pi as unknown as { isStreaming?: boolean } | null)?.isStreaming ===
         true;
@@ -1736,14 +1737,20 @@ function _routeRpcCommandFrom(
       const previousTurnId = _rootState().turnId;
       const seededTurnId = !shouldSteer || _rootState().turnId === null;
       if (seededTurnId) _rootState().turnId = msg.id;
-      // deliverAs:"steer" ONLY when busy. pi 0.84.3 QUEUES a steer message with
-      // no running turn to attach to (idle -> "goes to the void"); an idle
-      // prompt must start a FRESH run (no deliverAs). Busy sends steer so the
-      // SDK doesn't reject them.
+      // PASS-THROUGH the app's verb (design 01M14T6J5W). pi's prompt(): idle
+      // ignores streamingBehavior (fresh run); streaming+"steer" -> _queueSteer;
+      // streaming+"followUp" -> _queueFollowUp; streaming+none -> throws. The
+      // `?? (streaming ? "steer" : undefined)` is a MECHANICAL safety net (not
+      // semantic inference) so a racing/old client's no-behavior busy send
+      // defensively steers instead of throwing (keeps plan/43).
       const wake = _wakeAgent(
         message,
         "app rpc prompt",
-        shouldSteer ? "steer" : undefined,
+        opts.streamingBehavior === "followUp"
+          ? "followUp"
+          : opts.streamingBehavior === "steer" || streaming
+            ? "steer"
+            : undefined,
       );
       if (!wake.ok) {
         if (seededTurnId) _rootState().turnId = previousTurnId;

@@ -543,6 +543,25 @@ public final class AppModel: ObservableObject {
 
     public func queueMessage(_ text: String, to session: LiveSession) async {
         guard let connection = connections[session.relayID] else { return }
+        // Optimistic PENDING display: when the message will actually pend (busy),
+        // show it instantly so the Queue button gives feedback — pi's queue_update
+        // round-trips a moment later and wholesale-replaces queued[], clearing the
+        // temp. Resolve by queue_update ARRIVAL, not text-match (design 01M15S77E).
+        // A timeout drops the temp if no queue_update lands (e.g. pi went idle and
+        // ran the followUp fresh).
+        if activeTurnID(for: session) != nil {
+            let tempID = "pending-\(UUID().uuidString)"
+            var forSession = queued[session.id] ?? []
+            forSession.append(QueuedMessageItem(id: tempID, text: text, editable: false,
+                                                createdAt: Int(Date().timeIntervalSince1970 * 1000),
+                                                pending: true))
+            queued[session.id] = forSession
+            let sid = session.id
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                self?.queued[sid]?.removeAll { $0.id == tempID && $0.pending }
+            }
+        }
         // pi's native queue: a `prompt` with `followUp` behavior queues while the
         // turn streams (fresh turn when idle).
         try? await connection.send(

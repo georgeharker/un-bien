@@ -232,13 +232,16 @@ struct TranscriptView: View {
                 HStack(spacing: 6) {
                     ForEach(items, id: \.id) { item in
                         HStack(spacing: 4) {
-                            Image(systemName: "tray.and.arrow.down")
+                            // Optimistic not-yet-confirmed entries read as pending
+                            // (clock + dimmed) until pi's queue_update settles them.
+                            Image(systemName: item.pending ? "clock" : "tray.and.arrow.down")
                             Text(item.text).lineLimit(1)
                         }
                         .font(.caption)
                         .padding(.horizontal, 8).padding(.vertical, 5)
                         .background(theme.surface, in: Capsule())
                         .foregroundStyle(theme.secondaryText)
+                        .opacity(item.pending ? 0.55 : 1)
                     }
                 }
                 .padding(.horizontal, 10)
