@@ -19,7 +19,7 @@ final class TransportTests: XCTestCase {
     }
 
     func testInboundRoutedFrameCarriesServerMessage() throws {
-        let serverLine = #"{"type":"agent_chunk","in_reply_to":"r1","delta":"hi"}"#
+        let serverLine = #"{"type":"models_list","in_reply_to":"r1","models":[]}"#
         let ct = Data(serverLine.utf8).base64EncodedString()
         let frame = #"{"peer":"PEER","room":"main","ct":"\#(ct)"}"#
 
@@ -27,7 +27,7 @@ final class TransportTests: XCTestCase {
             return XCTFail("expected routed frame")
         }
         XCTAssertEqual(try envelope.decodeServer(),
-                       .agentChunk(inReplyTo: "r1", delta: "hi"))
+                       .modelsList(inReplyTo: "r1", models: [], current: nil))
     }
 
     func testInboundControlChallenge() throws {

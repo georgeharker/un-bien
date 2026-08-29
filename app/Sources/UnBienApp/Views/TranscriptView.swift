@@ -24,6 +24,7 @@ struct TranscriptView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if model.hasEnded(session) { endedBanner }
             statusStrip
             ScrollViewReader { proxy in
                 ScrollView {
@@ -95,14 +96,26 @@ struct TranscriptView: View {
                 }
                 if let flow = request.askFlow {
                     RichAskFlowView(flow: flow, requestID: request.id, onRespond: respond)
+                    #if os(macOS)
+                        // macOS ignores presentationDetents — size the sheet
+                        // explicitly so a multi-question Form isn't cramped.
+                        .frame(minWidth: 440, idealWidth: 520, minHeight: 360, idealHeight: 560)
+                    #else
                         .presentationDetents([.large])
+                        .presentationDragIndicator(.visible)
+                    #endif
                 } else {
                     ExtensionUIPromptView(
                         request: request,
                         onRespond: respond,
                         onCancel: { model.prompts[session.id] = nil }
                     )
-                    .presentationDetents([.medium, .large])
+                    #if os(macOS)
+                        .frame(minWidth: 380, idealWidth: 460, minHeight: 220, idealHeight: 420)
+                    #else
+                        .presentationDetents([.medium, .large])
+                        .presentationDragIndicator(.visible)
+                    #endif
                 }
             }
         }
@@ -198,6 +211,19 @@ struct TranscriptView: View {
         }
     }
 
+    private var endedBanner: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "moon.zzz.fill")
+            Text("Session ended")
+            Spacer(minLength: 0)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(theme.background)
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(theme.secondaryText)
+    }
+
     @ViewBuilder
     private var queuedChips: some View {
         let items = model.queued[session.id] ?? []
@@ -205,18 +231,14 @@ struct TranscriptView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     ForEach(items, id: \.id) { item in
-                        Button {
-                            Task { await model.clearQueued(targetID: item.id, session: session) }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Text(item.text).lineLimit(1)
-                                Image(systemName: "xmark.circle.fill")
-                            }
-                            .font(.caption)
-                            .padding(.horizontal, 8).padding(.vertical, 5)
-                            .background(theme.surface, in: Capsule())
-                            .foregroundStyle(theme.secondaryText)
+                        HStack(spacing: 4) {
+                            Image(systemName: "tray.and.arrow.down")
+                            Text(item.text).lineLimit(1)
                         }
+                        .font(.caption)
+                        .padding(.horizontal, 8).padding(.vertical, 5)
+                        .background(theme.surface, in: Capsule())
+                        .foregroundStyle(theme.secondaryText)
                     }
                 }
                 .padding(.horizontal, 10)
@@ -241,6 +263,7 @@ private struct ComposerBar: View {
     @State private var draft = ""
 
     private var trimmed: String { draft.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var ended: Bool { model.hasEnded(session) }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -251,11 +274,12 @@ private struct ComposerBar: View {
                     Image(systemName: "stop.circle.fill").font(.title2)
                 }
             }
-            MessageComposer(text: $draft, placeholder: "Message",
+            MessageComposer(text: $draft, placeholder: ended ? "Session ended" : "Message",
                             font: typography.monoPlatformFont(size: typography.bodySize),
                             onSend: send)
                 .padding(.horizontal, 6)
                 .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
+                .disabled(ended)
             Button {
                 guard !trimmed.isEmpty else { return }
                 let text = trimmed
@@ -264,11 +288,11 @@ private struct ComposerBar: View {
             } label: {
                 Image(systemName: "tray.and.arrow.down").font(.title3)
             }
-            .disabled(trimmed.isEmpty)
+            .disabled(trimmed.isEmpty || ended)
             Button(action: send) {
                 Image(systemName: "arrow.up.circle.fill").font(.title2)
             }
-            .disabled(trimmed.isEmpty)
+            .disabled(trimmed.isEmpty || ended)
         }
         .padding(10)
         .background(theme.background)
@@ -453,6 +477,7 @@ private enum SVGHTML {
         """
     }
 
+    @MainActor
     static func makeWebView() -> WKWebView {
         let config = WKWebViewConfiguration()
         config.defaultWebpagePreferences.allowsContentJavaScript = false
@@ -523,10 +548,15 @@ private struct ToolCardView: View {
         VStack(alignment: .leading, spacing: 8) {
             DisclosureGroup(isExpanded: $expanded) {
                 VStack(alignment: .leading, spacing: 6) {
-                    if !card.args.isEmpty {
+                    if let hunks = card.hunks, !hunks.isEmpty {
+                        diffView(hunks)
+                    } else if !card.args.isEmpty {
                         labeled("input", JSONValue.object(card.args).prettyString)
                     }
-                    if let result = card.result {
+                    if card.output?["kind"]?.stringValue == "diff",
+                       let hunks = card.output?["hunks"]?.arrayValue, !hunks.isEmpty {
+                        diffView(hunks)
+                    } else if let result = card.result {
                         labeled("output", result.prettyString)
                     }
                     if let error = card.error {
@@ -551,6 +581,40 @@ private struct ToolCardView: View {
         }
         .padding(10)
         .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    @ViewBuilder
+    private func diffView(_ hunks: [JSONValue]) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("DIFF").font(.system(size: 9, weight: .bold))
+                .foregroundStyle(theme.secondaryText)
+            ForEach(Array(hunks.enumerated()), id: \.offset) { _, hunk in
+                ForEach(Array((hunk["lines"]?.arrayValue ?? []).enumerated()), id: \.offset) { _, line in
+                    let kind = line["kind"]?.stringValue ?? ""
+                    Text(diffPrefix(kind) + (line["text"]?.stringValue ?? ""))
+                        .foregroundStyle(diffColor(kind))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+    }
+
+    private func diffPrefix(_ kind: String) -> String {
+        switch kind {
+        case "remove": return "-"
+        case "add": return "+"
+        case "ellipsis": return " \u{22EF}"
+        default: return " "
+        }
+    }
+
+    private func diffColor(_ kind: String) -> Color {
+        switch kind {
+        case "remove": return theme.error
+        case "add": return theme.success
+        default: return theme.secondaryText
+        }
     }
 
     private func labeled(_ label: String, _ value: String) -> some View {

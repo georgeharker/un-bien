@@ -25,7 +25,9 @@ import type {
   ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
 
-const _convertToPngMock = vi.hoisted(() => vi.fn(async () => null));
+const _convertToPngMock = vi.hoisted(() =>
+  vi.fn(async (): Promise<{ data: string; mimeType: string } | null> => null),
+);
 
 // ── Mock RelayClient ──────────────────────────────────────────────────────────
 
@@ -246,7 +248,7 @@ vi.mock("./mesh/self_revoke.js", async (importOriginal) => {
   class CapturingSelfRevoke extends original.SelfRevoke {
     constructor(options: ConstructorParameters<typeof original.SelfRevoke>[0]) {
       super(options);
-      selfRevokeHarness.options.push(options);
+      (selfRevokeHarness.options as unknown[]).push(options);
     }
   }
   return { ...original, SelfRevoke: CapturingSelfRevoke };
@@ -269,7 +271,6 @@ const {
   _setCurrentModelForTest,
   _setPiForTest,
   _getCurrentTurnIdForTest,
-  _getPendingSteerIdsForTest,
   _connectForTest,
   _startRelayForTest,
   _getCachedPublicKeyForTest,
@@ -283,12 +284,19 @@ const {
   _hasMeshNodeForTest,
   _getLockedNameForTest,
   _resetCwdLockForTest,
+  _resetSessionsForTest,
   _handleControl,
-  _routeClientMessageFrom,
   _deliverMeshMessageToAgentForTest,
   CTRL_PREFIX,
 } = indexModule;
 const { acquireCwdLock } = await import("./session/cwd_lock.js");
+
+// Keyed per-session state (_sessions Map + _rootSessionId) is module-global;
+// reset it at every test boundary so it can't leak across tests. NOT in
+// _resetBridgeOwnersForTest — that fires mid-test on each captureEventHandler.
+beforeEach(() => {
+  _resetSessionsForTest();
+});
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -388,7 +396,7 @@ function emitEnvelopeSync(
       peer,
       ct: Buffer.from(
         JSON.stringify({
-          rpc: {
+          un: {
             type: "session_sync",
             id,
             ...(limit == null ? {} : { limit }),
@@ -405,6 +413,14 @@ function rpcFramesFrom(raws: string[]): Array<Record<string, unknown>> {
   return raws
     .map(decodeSentCt)
     .map((d) => d.inner["rpc"])
+    .filter((r): r is Record<string, unknown> => !!r && typeof r === "object");
+}
+
+/** Decoded `{un}` frames (un-bien plane) from a slice of relay sends, in order. */
+function unFramesFrom(raws: string[]): Array<Record<string, unknown>> {
+  return raws
+    .map(decodeSentCt)
+    .map((d) => d.inner["un"])
     .filter((r): r is Record<string, unknown> => !!r && typeof r === "object");
 }
 
@@ -430,7 +446,8 @@ function replayMessageEnds(raws: string[]): Array<{
 
 /** The single `session_sync_end` terminator frame from a slice of sends. */
 function syncEndFrame(raws: string[]): Record<string, unknown> | undefined {
-  return rpcFramesFrom(raws).find((f) => f["type"] === "session_sync_end");
+  // session_sync_end is un-bien's own terminator on the un plane.
+  return unFramesFrom(raws).find((f) => f["type"] === "session_sync_end");
 }
 
 const OWNER_PUBLIC_FIXTURE = Buffer.from(
@@ -998,9 +1015,9 @@ describe("contract fixtures: pair_*", () => {
     }
   });
 
-  test("all 31 fixture files present", () => {
+  test("all 29 fixture files present", () => {
     const files = readdirSync(fixtureDir).filter((f) => f.endsWith(".jsonl"));
-    expect(files).toHaveLength(31);
+    expect(files).toHaveLength(29);
   });
 });
 
@@ -1412,7 +1429,7 @@ describe("agent-network mesh delivery", () => {
 // ── user_input mirroring (local terminal / RPC) ───────────────────────────────
 
 type AnyEvent = { type: string; [k: string]: unknown };
-type EventHandler = (event: AnyEvent) => unknown;
+type EventHandler = (event: AnyEvent, ctx?: unknown) => unknown;
 
 function captureEventHandler(eventName: string): EventHandler {
   let captured: EventHandler | undefined;
@@ -1429,6 +1446,10 @@ function captureEventHandler(eventName: string): EventHandler {
     sendMessage: () => undefined,
     sendUserMessage: () => undefined,
   } as unknown as ExtensionAPI;
+  // Shared test process: clear globalThis bridge ownership so THIS pi claims it
+  // (root) — the turn-lifecycle handlers gate on the factory's root-session flag,
+  // so a non-root capture pi would register handlers that no-op.
+  _resetBridgeOwnersForTest();
   (extension as ExtensionFactory)(pi);
   if (!captured) throw new Error(`event "${eventName}" handler not registered`);
   return captured;
@@ -1687,36 +1708,6 @@ describe("multi-channel broadcast (W2D)", () => {
     expect(calls.every((m) => !m.includes("Already paired"))).toBe(true);
   });
 
-  test("agent_chunk broadcasts to every attached owner", async () => {
-    await _pairForTest("ownerA__1234567890");
-    await _pairAdditionalForTest("ownerB__abcdefghij", "Android");
-
-    // Trigger an agent_chunk via the SDK message_update hook. The captured
-    // handlers expect `AnyEvent`; cast since we control the test payload.
-    const onUpdate = captureEventHandler("message_update");
-    const onInput = captureEventHandler("input");
-    // Seed _currentTurnId by simulating a terminal input first.
-    onInput({ source: "terminal", text: "hello" } as unknown as Parameters<
-      typeof onInput
-    >[0]);
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-    onUpdate({
-      assistantMessageEvent: { type: "text_delta", delta: "hi" },
-    } as unknown as Parameters<typeof onUpdate>[0]);
-
-    const sent = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt);
-    const chunks = sent.filter((d) => d.inner.type === "agent_chunk");
-    // One for each attached owner.
-    expect(chunks).toHaveLength(2);
-    const recipients = new Set(chunks.map((d) => d.peer));
-    expect(recipients).toEqual(
-      new Set(["ownerA__1234567890", "ownerB__abcdefghij"]),
-    );
-  });
-
   test("session_sync from owner A → sync reply (terminator) only to A", async () => {
     await _pairForTest("ownerA__1234567890");
     await _pairAdditionalForTest("ownerB__abcdefghij", "Android");
@@ -1729,7 +1720,7 @@ describe("multi-channel broadcast (W2D)", () => {
         peer: "ownerA__1234567890",
         ct: Buffer.from(
           JSON.stringify({
-            rpc: { type: "session_sync", id: "sync-1", limit: 50 },
+            un: { type: "session_sync", id: "sync-1", limit: 50 },
           }),
         ).toString("base64"),
       }),
@@ -1745,7 +1736,7 @@ describe("multi-channel broadcast (W2D)", () => {
     // (Caps now ride the `hello` handshake, not the sync reply.)
     const ends = sent.filter(
       (d) =>
-        (d.inner["rpc"] as Record<string, unknown> | undefined)?.["type"] ===
+        (d.inner["un"] as Record<string, unknown> | undefined)?.["type"] ===
         "session_sync_end",
     );
     expect(ends).toHaveLength(1);
@@ -1814,305 +1805,11 @@ describe("multi-channel broadcast (W2D)", () => {
     );
   });
 
-  test("queued_message_set while working broadcasts editable queue and targeted clear", async () => {
-    await _pairForTest("ownerA__1234567890");
-    await _pairAdditionalForTest("ownerB__abcdefghij", "Android");
-    const harness = captureEventHarness();
-    const onInput = harness.handler("input");
-    onInput({ type: "input", text: "primary", source: "interactive" });
-    await new Promise<void>((r) => setImmediate(r));
-
-    const sendUserMessage = vi.fn();
-    _setPiForTest({ sendUserMessage, sendMessage: () => undefined });
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    relayRef.current!.emit(
-      "message",
-      JSON.stringify({
-        peer: "ownerA__1234567890",
-        ct: Buffer.from(
-          JSON.stringify({
-            type: "queued_message_set",
-            id: "q1",
-            text: " next ",
-          }),
-        ).toString("base64"),
-      }),
-    );
-    await new Promise<void>((r) => setImmediate(r));
-
-    expect(sendUserMessage).not.toHaveBeenCalled();
-    let sent = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt);
-    const states = sent.filter((d) => d.inner.type === "queued_message_state");
-    expect(states).toHaveLength(2);
-    expect(new Set(states.map((d) => d.peer))).toEqual(
-      new Set(["ownerA__1234567890", "ownerB__abcdefghij"]),
-    );
-    for (const state of states) {
-      expect(state.inner).toMatchObject({
-        type: "queued_message_state",
-        id: "q1",
-        text: "next",
-        items: [
-          expect.objectContaining({ id: "q1", text: "next", editable: true }),
-        ],
-      });
-    }
-
-    const syncBefore = relayRef.current!.send.mock.calls.length;
-    relayRef.current!.emit(
-      "message",
-      JSON.stringify({
-        peer: "ownerA__1234567890",
-        ct: Buffer.from(
-          JSON.stringify({
-            rpc: { type: "session_sync", id: "sync-q", limit: 50 },
-          }),
-        ).toString("base64"),
-      }),
-    );
-    await new Promise<void>((r) => setImmediate(r));
-    sent = relayRef
-      .current!.send.mock.calls.slice(syncBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt);
-    expect(sent[0]?.inner.type).toBe("queued_message_state");
-    expect(
-      (sent[1]?.inner["rpc"] as Record<string, unknown> | undefined)?.["type"],
-    ).toBe("session_sync_end");
-
-    const clearBefore = relayRef.current!.send.mock.calls.length;
-    relayRef.current!.emit(
-      "message",
-      JSON.stringify({
-        peer: "ownerA__1234567890",
-        ct: Buffer.from(
-          JSON.stringify({
-            type: "queued_message_clear",
-            id: "clear-q",
-            target_id: "q1",
-          }),
-        ).toString("base64"),
-      }),
-    );
-    await new Promise<void>((r) => setImmediate(r));
-    sent = relayRef
-      .current!.send.mock.calls.slice(clearBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt);
-    expect(
-      sent
-        .filter((d) => d.inner.type === "queued_message_state")
-        .every(
-          (d) => Array.isArray(d.inner.items) && d.inner.items.length === 0,
-        ),
-    ).toBe(true);
-  });
-
-  test("queued_message_set while idle drains immediately as a normal user turn", async () => {
-    await _pairForTest("ownerA__1234567890");
-    await _pairAdditionalForTest("ownerB__abcdefghij", "Android");
-    const sendUserMessage = vi.fn();
-    _setPiForTest({ sendUserMessage, sendMessage: () => undefined });
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    relayRef.current!.emit(
-      "message",
-      JSON.stringify({
-        peer: "ownerA__1234567890",
-        ct: Buffer.from(
-          JSON.stringify({
-            type: "queued_message_set",
-            id: "q-idle",
-            text: "after this",
-          }),
-        ).toString("base64"),
-      }),
-    );
-    await new Promise<void>((r) => setImmediate(r));
-
-    expect(sendUserMessage).toHaveBeenCalledWith("after this", {
-      deliverAs: "steer",
-    });
-    expect(_getCurrentTurnIdForTest()).toBe("q-idle");
-    const sent = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt);
-    const lastState = sent
-      .filter((d) => d.inner.type === "queued_message_state")
-      .at(-1);
-    expect(lastState?.inner.items).toEqual([]);
-    const echoes = sent.filter((d) => d.inner.type === "user_message");
-    expect(echoes).toHaveLength(2);
-    for (const echo of echoes) {
-      expect(echo.inner).toMatchObject({
-        type: "user_message",
-        id: "q-idle",
-        text: "after this",
-      });
-      expect(echo.inner).not.toHaveProperty("streaming_behavior");
-    }
-  });
-
-  test("queued drain waits for both agent_end and turn_end regardless of ordering", async () => {
-    await _pairForTest("ownerA__1234567890");
-    const harness = captureEventHarness();
-    const sendUserMessage = vi.fn();
-    _setPiForTest({ sendUserMessage, sendMessage: () => undefined });
-
-    harness.handler("input")({
-      type: "input",
-      text: "primary",
-      source: "interactive",
-    });
-    harness.handler("turn_start")({
-      type: "turn_start",
-      turnIndex: 0,
-      timestamp: 0,
-    });
-    await new Promise<void>((r) => setImmediate(r));
-    const sendsBeforeA = relayRef.current!.send.mock.calls.length;
-    relayRef.current!.emit(
-      "message",
-      JSON.stringify({
-        peer: "ownerA__1234567890",
-        ct: Buffer.from(
-          JSON.stringify({
-            type: "queued_message_set",
-            id: "q-order-a",
-            text: "after A",
-          }),
-        ).toString("base64"),
-      }),
-    );
-    await new Promise<void>((r) => setImmediate(r));
-    expect(sendUserMessage).not.toHaveBeenCalledWith("after A", undefined);
-
-    harness.handler("agent_end")({ type: "agent_end" });
-    expect(sendUserMessage).not.toHaveBeenCalledWith("after A", {
-      deliverAs: "steer",
-    });
-    harness.handler("turn_end")({
-      type: "turn_end",
-      turnIndex: 0,
-      timestamp: 0,
-    });
-    expect(sendUserMessage).toHaveBeenCalledWith("after A", {
-      deliverAs: "steer",
-    });
-    const statesA = relayRef
-      .current!.send.mock.calls.slice(sendsBeforeA)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt)
-      .filter((d) => d.inner.type === "queued_message_state");
-    expect(statesA.at(-1)?.inner.items).toEqual([]);
-
-    sendUserMessage.mockClear();
-    harness.handler("input")({
-      type: "input",
-      text: "primary 2",
-      source: "interactive",
-    });
-    harness.handler("turn_start")({
-      type: "turn_start",
-      turnIndex: 1,
-      timestamp: 1,
-    });
-    await new Promise<void>((r) => setImmediate(r));
-    const sendsBeforeB = relayRef.current!.send.mock.calls.length;
-    relayRef.current!.emit(
-      "message",
-      JSON.stringify({
-        peer: "ownerA__1234567890",
-        ct: Buffer.from(
-          JSON.stringify({
-            type: "queued_message_set",
-            id: "q-order-b",
-            text: "after B",
-          }),
-        ).toString("base64"),
-      }),
-    );
-    await new Promise<void>((r) => setImmediate(r));
-    harness.handler("turn_end")({
-      type: "turn_end",
-      turnIndex: 1,
-      timestamp: 1,
-    });
-    expect(sendUserMessage).not.toHaveBeenCalledWith("after B", {
-      deliverAs: "steer",
-    });
-    harness.handler("agent_end")({ type: "agent_end" });
-    expect(sendUserMessage).toHaveBeenCalledWith("after B", {
-      deliverAs: "steer",
-    });
-    const statesB = relayRef
-      .current!.send.mock.calls.slice(sendsBeforeB)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt)
-      .filter((d) => d.inner.type === "queued_message_state");
-    expect(statesB.at(-1)?.inner.items).toEqual([]);
-  });
-
-  test("queued drain restores item on synchronous sendUserMessage rejection", async () => {
-    await _pairForTest("ownerA__1234567890");
-    _setPiForTest({
-      sendUserMessage: vi.fn(() => {
-        throw new Error("queue rejected");
-      }),
-      sendMessage: () => undefined,
-    });
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    relayRef.current!.emit(
-      "message",
-      JSON.stringify({
-        peer: "ownerA__1234567890",
-        ct: Buffer.from(
-          JSON.stringify({
-            type: "queued_message_set",
-            id: "q-fail",
-            text: "after fail",
-          }),
-        ).toString("base64"),
-      }),
-    );
-    await new Promise<void>((r) => setImmediate(r));
-
-    const sent = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt);
-    expect(
-      sent.some(
-        (d) => d.inner.type === "user_message" && d.inner.id === "q-fail",
-      ),
-    ).toBe(false);
-    expect(sent.find((d) => d.inner.type === "error")?.inner).toMatchObject({
-      type: "error",
-      code: "internal_error",
-      in_reply_to: "q-fail",
-    });
-    const lastState = sent
-      .filter((d) => d.inner.type === "queued_message_state")
-      .at(-1);
-    expect(lastState?.inner).toMatchObject({
-      type: "queued_message_state",
-      id: "q-fail",
-      text: "after fail",
-      items: [expect.objectContaining({ id: "q-fail", text: "after fail" })],
-    });
-  });
-
   test("plan/30: user_message with an image → save preview + send metadata-only custom message", async () => {
     await _pairForTest("ownerA__1234567890");
     // Override _pi with a spy to capture the multimodal content sent to the SDK.
     const sentToAgent: unknown[] = [];
-    const sentMessages: Array<[unknown, ...unknown[]]> = [];
+    const sentMessages: unknown[][] = [];
     const timeline: string[] = [];
     const messageId = "msg with spaces/and##symbols";
     _setPiForTest({
@@ -2120,7 +1817,7 @@ describe("multi-channel broadcast (W2D)", () => {
         timeline.push("agent");
         sentToAgent.push(c);
       },
-      sendMessage: (...messageArgs) => {
+      sendMessage: (...messageArgs: unknown[]) => {
         timeline.push("preview");
         sentMessages.push(messageArgs);
       },
@@ -2219,10 +1916,10 @@ describe("multi-channel broadcast (W2D)", () => {
     });
 
     await _pairForTest("ownerA__1234567890");
-    const sentMessages: Array<[unknown, ...unknown[]]> = [];
+    const sentMessages: unknown[][] = [];
     _setPiForTest({
       sendUserMessage: () => undefined,
-      sendMessage: (...messageArgs) => {
+      sendMessage: (...messageArgs: unknown[]) => {
         sentMessages.push(messageArgs);
       },
     });
@@ -2268,10 +1965,10 @@ describe("multi-channel broadcast (W2D)", () => {
     });
 
     await _pairForTest("ownerA__1234567890");
-    const sentMessages: Array<[unknown, ...unknown[]]> = [];
+    const sentMessages: unknown[][] = [];
     _setPiForTest({
       sendUserMessage: () => undefined,
-      sendMessage: (...messageArgs) => {
+      sendMessage: (...messageArgs: unknown[]) => {
         sentMessages.push(messageArgs);
       },
     });
@@ -2310,12 +2007,12 @@ describe("multi-channel broadcast (W2D)", () => {
     onInput({ type: "input", text: "already running", source: "interactive" });
 
     const sentToAgent: unknown[] = [];
-    const sentMessages: Array<[unknown, ...unknown[]]> = [];
+    const sentMessages: unknown[][] = [];
     _setPiForTest({
       sendUserMessage: (content: unknown) => {
         sentToAgent.push(content);
       },
-      sendMessage: (...messageArgs) => {
+      sendMessage: (...messageArgs: unknown[]) => {
         sentMessages.push(messageArgs);
       },
     });
@@ -2360,10 +2057,10 @@ describe("multi-channel broadcast (W2D)", () => {
     await _pairForTest("ownerA__1234567890");
     const onInput = captureEventHandler("input");
     const onAgentEnd = captureEventHandler("agent_end");
-    const sentMessages: Array<[unknown, ...unknown[]]> = [];
+    const sentMessages: unknown[][] = [];
     _setPiForTest({
       sendUserMessage: () => undefined,
-      sendMessage: (...messageArgs) => {
+      sendMessage: (...messageArgs: unknown[]) => {
         sentMessages.push(messageArgs);
       },
     });
@@ -2681,170 +2378,6 @@ describe("multi-channel broadcast (W2D)", () => {
     });
   });
 
-  test("plan/43: persisted user message clears the oldest pending steer", async () => {
-    await _pairForTest("ownerA__1234567890");
-    const sendUserMessage = vi.fn();
-    _setPiForTest({
-      sendUserMessage,
-      sendMessage: () => undefined,
-    });
-    const onMessageEnd = captureEventHandler("message_end");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    relayRef.current!.emit(
-      "message",
-      JSON.stringify({
-        peer: "ownerA__1234567890",
-        ct: Buffer.from(
-          JSON.stringify({
-            type: "user_message",
-            id: "msg-steer-end-consumed",
-            text: "consume this persisted steer",
-            streaming_behavior: "steer",
-          }),
-        ).toString("base64"),
-      }),
-    );
-    await new Promise<void>((r) => setImmediate(r));
-    expect(_getPendingSteerIdsForTest("consume this persisted steer")).toEqual([
-      "msg-steer-end-consumed",
-    ]);
-
-    onMessageEnd({
-      type: "message_end",
-      message: {
-        role: "user",
-        content: [{ type: "text", text: "consume this persisted steer" }],
-        timestamp: Date.now(),
-      },
-    });
-    await new Promise<void>((r) => setImmediate(r));
-    expect(_getPendingSteerIdsForTest("consume this persisted steer")).toEqual(
-      [],
-    );
-
-    const sent = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt);
-    expect(
-      sent.some(
-        (d) =>
-          d.inner.type === "steer_consumed" &&
-          d.inner.id === "msg-steer-end-consumed",
-      ),
-    ).toBe(true);
-  });
-
-  test("plan/43: started user message clears the oldest pending steer", async () => {
-    await _pairForTest("ownerA__1234567890");
-    const sendUserMessage = vi.fn();
-    _setPiForTest({
-      sendUserMessage,
-      sendMessage: () => undefined,
-    });
-    const onMessageStart = captureEventHandler("message_start");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    relayRef.current!.emit(
-      "message",
-      JSON.stringify({
-        peer: "ownerA__1234567890",
-        ct: Buffer.from(
-          JSON.stringify({
-            type: "user_message",
-            id: "msg-steer-consumed",
-            text: "consume this exact steer",
-            streaming_behavior: "steer",
-          }),
-        ).toString("base64"),
-      }),
-    );
-    await new Promise<void>((r) => setImmediate(r));
-    expect(_getPendingSteerIdsForTest("consume this exact steer")).toEqual([
-      "msg-steer-consumed",
-    ]);
-
-    onMessageStart({
-      type: "message_start",
-      message: {
-        role: "user",
-        content: [{ type: "text", text: "SDK-rendered text differed" }],
-        timestamp: Date.now(),
-      },
-    });
-    await new Promise<void>((r) => setImmediate(r));
-    expect(_getPendingSteerIdsForTest("consume this exact steer")).toEqual([]);
-    expect(_getActivePeerCountForTest()).toBe(1);
-
-    const sent = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt);
-    expect(
-      sent.some(
-        (d) =>
-          d.inner.type === "steer_consumed" &&
-          d.inner.id === "msg-steer-consumed",
-      ),
-    ).toBe(true);
-  });
-
-  test("plan/43: message_start plus message_end consumes one steer only", async () => {
-    await _pairForTest("ownerA__1234567890");
-    _setPiForTest({
-      sendUserMessage: vi.fn(),
-      sendMessage: () => undefined,
-    });
-    const onMessageStart = captureEventHandler("message_start");
-    const onMessageEnd = captureEventHandler("message_end");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    for (const [id, text] of [
-      ["steer-1", "1"],
-      ["steer-2", "2"],
-    ]) {
-      relayRef.current!.emit(
-        "message",
-        JSON.stringify({
-          peer: "ownerA__1234567890",
-          ct: Buffer.from(
-            JSON.stringify({
-              type: "user_message",
-              id,
-              text,
-              streaming_behavior: "steer",
-            }),
-          ).toString("base64"),
-        }),
-      );
-    }
-    await new Promise<void>((r) => setImmediate(r));
-
-    const event = {
-      type: "message_start",
-      message: {
-        role: "user",
-        content: [{ type: "text", text: "1" }],
-        timestamp: Date.now(),
-      },
-    };
-    onMessageStart(event);
-    onMessageEnd({ ...event, type: "message_end" });
-    await new Promise<void>((r) => setImmediate(r));
-
-    expect(_getPendingSteerIdsForTest("1")).toEqual([]);
-    expect(_getPendingSteerIdsForTest("2")).toEqual(["steer-2"]);
-    const consumed = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt)
-      .filter((d) => d.inner.type === "steer_consumed");
-    expect(consumed.map((d) => (d.inner as { id: string }).id)).toEqual([
-      "steer-1",
-    ]);
-  });
-
   test("plan/43: steering without a known turn id still reaches SDK as steer", async () => {
     await _pairForTest("ownerA__1234567890");
     expect(_getCurrentTurnIdForTest()).toBeNull();
@@ -3024,87 +2557,6 @@ describe("multi-channel broadcast (W2D)", () => {
     expect(_getCurrentTurnIdForTest()).toBe(priorTurn);
   });
 
-  test("plan/32: session_compact → broadcasts compaction, working=false, buffers a marker", async () => {
-    await _pairForTest("ownerA__1234567890");
-    _setMessageBufferForTest([]);
-    const onCompact = captureEventHandler("session_compact");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-    const ctrlBefore = relayRef.current!.sendControl.mock.calls.length;
-
-    onCompact({
-      type: "session_compact",
-      compactionEntry: {
-        type: "compaction",
-        summary: "compacted 10 turns",
-        tokensBefore: 12345,
-        firstKeptEntryId: "e1",
-        timestamp: "2026-05-31T00:00:00Z",
-      },
-      fromExtension: false,
-    });
-
-    // (1) compaction broadcast reaches the owner
-    const sent = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt);
-    const compaction = sent.find((d) => d.inner.type === "compaction");
-    expect(compaction?.inner).toMatchObject({
-      type: "compaction",
-      summary: "compacted 10 turns",
-      tokens_before: 12345,
-    });
-
-    // (3) working=false via room_meta_update
-    const ctrls = relayRef
-      .current!.sendControl.mock.calls.slice(ctrlBefore)
-      .map((c) => c[0] as { type: string; meta?: { working?: boolean } })
-      .filter((f) => f.type === "room_meta_update");
-    expect(ctrls.some((f) => f.meta?.working === false)).toBe(true);
-
-    // (2) a compaction marker landed in _messageBuffer (survives session_sync)
-    const buf = _getMessageBufferForTest() as Array<{
-      role?: string;
-      content?: unknown;
-      tokensBefore?: number;
-    }>;
-    expect(
-      buf.some(
-        (m) =>
-          m.role === "compaction" &&
-          m.content === "compacted 10 turns" &&
-          m.tokensBefore === 12345,
-      ),
-    ).toBe(true);
-  });
-
-  test("provider error (assistant stopReason:error) → forwards `error` to owners (was silent)", async () => {
-    await _pairForTest("ownerA__1234567890");
-    const onMsgEnd = captureEventHandler("message_end");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    onMsgEnd({
-      type: "message_end",
-      message: {
-        role: "assistant",
-        stopReason: "error",
-        errorMessage: "Provider finish_reason: error",
-        content: [],
-      },
-    });
-
-    const sent = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt);
-    const err = sent.find((d) => d.inner.type === "error");
-    expect(err?.inner).toMatchObject({
-      type: "error",
-      code: "provider_error",
-      message: "Provider finish_reason: error",
-    });
-  });
-
   test("normal assistant turn (stopReason:stop) → no error forwarded", async () => {
     await _pairForTest("ownerA__1234567890");
     const onMsgEnd = captureEventHandler("message_end");
@@ -3182,7 +2634,7 @@ describe("multi-channel broadcast (W2D)", () => {
         peer: "ownerA__1234567890",
         ct: Buffer.from(
           JSON.stringify({
-            rpc: { type: "session_sync", id: "sync-buffer-1", limit: 50 },
+            un: { type: "session_sync", id: "sync-buffer-1", limit: 50 },
           }),
         ).toString("base64"),
       }),
@@ -3195,481 +2647,6 @@ describe("multi-channel broadcast (W2D)", () => {
     // The buffered user turn replays as a message_end(role:user) frame.
     const ends = replayMessageEnds(sent);
     expect(ends.some((e) => e.role === "user" && e.text === "oi")).toBe(true);
-  });
-});
-
-describe("user_input mirroring", () => {
-  beforeEach(async () => {
-    vi.clearAllMocks();
-    _knownPeers.length = 0;
-    _addedPeers.length = 0;
-    _removedPeers.length = 0;
-    _consumeCalls.length = 0;
-    _setRelayCalls.length = 0;
-    _savedRelayUrl = "https://relay.test";
-    _tokenStatus = "ok";
-    relayRef.current = null;
-    const qr = await import("./pairing/qr.js");
-    (
-      qr.qrSession.consumeToken as unknown as ReturnType<typeof vi.fn>
-    ).mockImplementation((token: string) => {
-      _consumeCalls.push(token);
-      return _tokenStatus;
-    });
-    const stop = captureHandler("unbien stop");
-    await stop("", makeMockCtx());
-  });
-
-  test("interactive input → user_input emitted + _currentTurnId set", async () => {
-    await _pairForTest("peer-A");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    const onInput = captureEventHandler("input");
-    onInput({ type: "input", text: "listar arquivos", source: "interactive" });
-
-    const sent = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string);
-    const userInputs = sent
-      .map(decodeSentCt)
-      .filter((d) => d.inner.type === "user_input");
-    expect(userInputs).toHaveLength(1);
-    expect(userInputs[0]!.peer).toBe("peer-A");
-    expect(userInputs[0]!.inner).toMatchObject({
-      type: "user_input",
-      text: "listar arquivos",
-    });
-    expect(typeof userInputs[0]!.inner["id"]).toBe("string");
-    expect((userInputs[0]!.inner["id"] as string).startsWith("local_")).toBe(
-      true,
-    );
-  });
-
-  test("extension input → NO user_input emitted (routeClientMessage already handles app turns)", async () => {
-    await _pairForTest("peer-B");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    const onInput = captureEventHandler("input");
-    onInput({ type: "input", text: "via app", source: "extension" });
-
-    const sent = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string);
-    const userInputs = sent
-      .map(decodeSentCt)
-      .filter((d) => d.inner.type === "user_input");
-    expect(userInputs).toHaveLength(0);
-  });
-
-  test("rpc input → user_input emitted (same as interactive)", async () => {
-    await _pairForTest("peer-C");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    const onInput = captureEventHandler("input");
-    onInput({ type: "input", text: "remoto via RPC", source: "rpc" });
-
-    const sent = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string);
-    const userInputs = sent
-      .map(decodeSentCt)
-      .filter((d) => d.inner.type === "user_input");
-    expect(userInputs).toHaveLength(1);
-    expect(userInputs[0]!.inner).toMatchObject({
-      type: "user_input",
-      text: "remoto via RPC",
-    });
-  });
-
-  test("subsequent agent_chunk reuses turnId set by local input", async () => {
-    await _pairForTest("peer-D");
-
-    const onInput = captureEventHandler("input");
-    onInput({ type: "input", text: "ola", source: "interactive" });
-
-    const sentInputs = relayRef.current!.send.mock.calls.map(
-      (c) => c[0] as string,
-    );
-    const userInputs = sentInputs
-      .map(decodeSentCt)
-      .filter((d) => d.inner.type === "user_input");
-    const turnId = userInputs[0]!.inner["id"] as string;
-
-    const onMsgUpdate = captureEventHandler("message_update");
-    onMsgUpdate({
-      type: "message_update",
-      message: {},
-      assistantMessageEvent: {
-        type: "text_delta",
-        contentIndex: 0,
-        delta: "hi",
-        partial: {},
-      },
-    });
-
-    const allSent = relayRef.current!.send.mock.calls.map(
-      (c) => c[0] as string,
-    );
-    const chunks = allSent
-      .map(decodeSentCt)
-      .filter((d) => d.inner.type === "agent_chunk");
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0]!.inner).toMatchObject({
-      type: "agent_chunk",
-      in_reply_to: turnId,
-      delta: "hi",
-    });
-  });
-});
-
-// ── tool visibility (tool_execution_start → tool_request) ─────────────────────
-
-describe("tool visibility", () => {
-  beforeEach(async () => {
-    vi.clearAllMocks();
-    _knownPeers.length = 0;
-    _addedPeers.length = 0;
-    _removedPeers.length = 0;
-    _consumeCalls.length = 0;
-    _setRelayCalls.length = 0;
-    _savedRelayUrl = "https://relay.test";
-    _tokenStatus = "ok";
-    relayRef.current = null;
-    const qr = await import("./pairing/qr.js");
-    (
-      qr.qrSession.consumeToken as unknown as ReturnType<typeof vi.fn>
-    ).mockImplementation((token: string) => {
-      _consumeCalls.push(token);
-      return _tokenStatus;
-    });
-    const stop = captureHandler("unbien stop");
-    await stop("", makeMockCtx());
-  });
-
-  test("tool_execution_start → tool_request emitted via channel", async () => {
-    await _pairForTest("peer-tool");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    const onToolStart = captureEventHandler("tool_execution_start");
-    onToolStart({
-      type: "tool_execution_start",
-      toolCallId: "tc_1",
-      toolName: "bash",
-      args: { command: "ls" },
-    });
-
-    const sent = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string);
-    const requests = sent
-      .map(decodeSentCt)
-      .filter((d) => d.inner.type === "tool_request");
-    expect(requests).toHaveLength(1);
-    expect(requests[0]!.peer).toBe("peer-tool");
-    expect(requests[0]!.inner).toMatchObject({
-      type: "tool_request",
-      tool_call_id: "tc_1",
-      tool: "bash",
-      args: { command: "ls" },
-    });
-  });
-
-  test("tool_execution_start enriches edit args with numbered context hunks", async () => {
-    await _pairForTest("peer-edit");
-    const cwd = mkdtempSync(join(tmpdir(), "un-bien-edit-"));
-    const file = join(cwd, "sample.dart");
-    writeFileSync(
-      file,
-      [
-        "line 1",
-        "line 2",
-        "line 3",
-        "line 4",
-        "line 5",
-        "  tool: 'Edit',",
-        "  args: {",
-        "    'file_path': 'x',",
-        "  },",
-        "line 10",
-      ].join("\n"),
-    );
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    try {
-      const onToolStart = captureEventHandler("tool_execution_start");
-      onToolStart({
-        type: "tool_execution_start",
-        toolCallId: "tc_edit",
-        toolName: "edit",
-        args: {
-          path: file,
-          edits: [
-            {
-              oldText: "  tool: 'Edit',\n  args: {\n    'file_path': 'x',",
-              newText: "  tool: 'edit',\n  args: {\n    'path': 'x',",
-            },
-          ],
-        },
-      });
-
-      const requests = relayRef
-        .current!.send.mock.calls.slice(sendsBefore)
-        .map((c) => c[0] as string)
-        .map(decodeSentCt)
-        .filter((d) => d.inner.type === "tool_request");
-      const args = requests[0]!.inner.args as {
-        hunks: Array<{
-          lines: Array<{
-            kind: string;
-            oldLine?: number;
-            newLine?: number;
-            text?: string;
-          }>;
-        }>;
-      };
-      expect(args.hunks[0]!.lines).toEqual(
-        expect.arrayContaining([
-          { kind: "context", oldLine: 5, newLine: 5, text: "line 5" },
-          { kind: "remove", oldLine: 6, text: "  tool: 'Edit'," },
-          { kind: "add", newLine: 6, text: "  tool: 'edit'," },
-          { kind: "context", oldLine: 9, newLine: 9, text: "  }," },
-        ]),
-      );
-    } finally {
-      rmSync(cwd, { recursive: true, force: true });
-    }
-  });
-
-  test("tool_execution_start keeps unchanged edit lines as context", async () => {
-    await _pairForTest("peer-edit-context");
-    const cwd = mkdtempSync(join(tmpdir(), "un-bien-edit-context-"));
-    const file = join(cwd, "README.md");
-    writeFileSync(
-      file,
-      [
-        '<p align="center">',
-        "  Control your Pi from your phone.",
-        "  Pair with a one-time QR code.",
-        "</p>",
-      ].join("\n"),
-    );
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    try {
-      const onToolStart = captureEventHandler("tool_execution_start");
-      onToolStart({
-        type: "tool_execution_start",
-        toolCallId: "tc_edit_context",
-        toolName: "edit",
-        args: {
-          path: file,
-          edits: [
-            {
-              oldText: "  Pair with a one-time QR code.",
-              newText:
-                "  Pair with a one-time QR code.\n  Test note: edit preview smoke test.",
-            },
-          ],
-        },
-      });
-
-      const requests = relayRef
-        .current!.send.mock.calls.slice(sendsBefore)
-        .map((c) => c[0] as string)
-        .map(decodeSentCt)
-        .filter((d) => d.inner.type === "tool_request");
-      const args = requests[0]!.inner.args as {
-        hunks: Array<{
-          lines: Array<{
-            kind: string;
-            oldLine?: number;
-            newLine?: number;
-            text?: string;
-          }>;
-        }>;
-      };
-      expect(args.hunks[0]!.lines).toEqual(
-        expect.arrayContaining([
-          {
-            kind: "context",
-            oldLine: 3,
-            newLine: 3,
-            text: "  Pair with a one-time QR code.",
-          },
-          {
-            kind: "add",
-            newLine: 4,
-            text: "  Test note: edit preview smoke test.",
-          },
-          { kind: "context", oldLine: 4, newLine: 5, text: "</p>" },
-        ]),
-      );
-      expect(args.hunks[0]!.lines).not.toEqual(
-        expect.arrayContaining([
-          {
-            kind: "remove",
-            oldLine: 3,
-            text: "  Pair with a one-time QR code.",
-          },
-        ]),
-      );
-    } finally {
-      rmSync(cwd, { recursive: true, force: true });
-    }
-  });
-
-  test("tool_execution_start ignored when _peerChannel is null (idle state)", () => {
-    expect(_getState()).toBe("idle");
-
-    const onToolStart = captureEventHandler("tool_execution_start");
-    onToolStart({
-      type: "tool_execution_start",
-      toolCallId: "tc_idle",
-      toolName: "bash",
-      args: { command: "ls" },
-    });
-
-    // Relay was never instantiated in idle state (no start happened)
-    expect(relayRef.current).toBeNull();
-  });
-
-  test("start → end pair emits tool_request then tool_result (no gate)", async () => {
-    await _pairForTest("peer-pair");
-
-    const onToolStart = captureEventHandler("tool_execution_start");
-    const onToolEnd = captureEventHandler("tool_execution_end");
-
-    onToolStart({
-      type: "tool_execution_start",
-      toolCallId: "tc_2",
-      toolName: "Read",
-      args: { file_path: "/tmp/x" },
-    });
-    onToolEnd({
-      type: "tool_execution_end",
-      toolCallId: "tc_2",
-      toolName: "Read",
-      result: { content: "hello" },
-      isError: false,
-    });
-
-    const sent = relayRef
-      .current!.send.mock.calls.map((c) => c[0] as string)
-      .map(decodeSentCt);
-    const requests = sent.filter((d) => d.inner.type === "tool_request");
-    const results = sent.filter((d) => d.inner.type === "tool_result");
-    expect(requests).toHaveLength(1);
-    expect(results).toHaveLength(1);
-    expect(results[0]!.inner).toMatchObject({
-      type: "tool_result",
-      tool_call_id: "tc_2",
-    });
-  });
-
-  test("tool_result stringifies content-array/object (no [object Object]) and == re-sync", async () => {
-    await _pairForTest("peer-tr");
-    const onToolEnd = captureEventHandler("tool_execution_end");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    // success: content-array result → joined text (was "[object Object]").
-    onToolEnd({
-      type: "tool_execution_end",
-      toolCallId: "tc_ok",
-      toolName: "Read",
-      result: [{ type: "text", text: "file contents" }],
-      isError: false,
-    });
-    // error: content-array → text (was "[object Object]").
-    onToolEnd({
-      type: "tool_execution_end",
-      toolCallId: "tc_err",
-      toolName: "Bash",
-      result: [{ type: "text", text: "command failed: boom" }],
-      isError: true,
-    });
-    // plain object → readable JSON (was "[object Object]").
-    onToolEnd({
-      type: "tool_execution_end",
-      toolCallId: "tc_obj",
-      toolName: "X",
-      result: { code: 1, msg: "nope" },
-      isError: true,
-    });
-
-    const sent = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt)
-      .filter((d) => d.inner.type === "tool_result");
-    const ok = sent.find((d) => d.inner.tool_call_id === "tc_ok");
-    const err = sent.find((d) => d.inner.tool_call_id === "tc_err");
-    const obj = sent.find((d) => d.inner.tool_call_id === "tc_obj");
-
-    expect(ok?.inner.result).toBe("file contents");
-    expect(err?.inner.error).toBe("command failed: boom");
-    expect(obj?.inner.error).toBe(JSON.stringify({ code: 1, msg: "nope" }));
-    expect(JSON.stringify(sent)).not.toContain("[object Object]");
-
-    // live == re-sync: the history mapper yields identical text for the same tool.
-    const histOk = _mapAgentMessagesToEvents([
-      {
-        role: "toolResult",
-        toolCallId: "tc_ok",
-        content: [{ type: "text", text: "file contents" }],
-        timestamp: 1,
-      },
-    ])[0] as { result?: string };
-    const histErr = _mapAgentMessagesToEvents([
-      {
-        role: "toolResult",
-        toolCallId: "tc_err",
-        isError: true,
-        content: [{ type: "text", text: "command failed: boom" }],
-        timestamp: 1,
-      },
-    ])[0] as { error?: string };
-    expect(histOk.result).toBe(ok?.inner.result);
-    expect(histErr.error).toBe(err?.inner.error);
-  });
-
-  test("tool_result unwraps the live { content:[…], details } wrapper (== re-sync)", async () => {
-    await _pairForTest("peer-tr2");
-    const onToolEnd = captureEventHandler("tool_execution_end");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    // Live: event.result is the WRAPPER object, NOT a bare content-array.
-    onToolEnd({
-      type: "tool_execution_end",
-      toolCallId: "tc_w",
-      toolName: "run_command",
-      result: {
-        content: [{ type: "text", text: "ping: cannot resolve host" }],
-        details: {},
-      },
-      isError: true,
-    });
-
-    const sent = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt)
-      .filter((d) => d.inner.type === "tool_result");
-    const w = sent.find((d) => d.inner.tool_call_id === "tc_w");
-    // unwrapped to the clean text — no braces / JSON wrapper / "[object Object]".
-    expect(w?.inner.error).toBe("ping: cannot resolve host");
-    expect(JSON.stringify(sent)).not.toContain('"content"');
-
-    // live == re-sync: history (m.content = bare content-array) gives same text.
-    const hist = _mapAgentMessagesToEvents([
-      {
-        role: "toolResult",
-        toolCallId: "tc_w",
-        isError: true,
-        content: [{ type: "text", text: "ping: cannot resolve host" }],
-        timestamp: 1,
-      },
-    ])[0] as { error?: string };
-    expect(hist.error).toBe(w?.inner.error);
   });
 });
 
@@ -3906,6 +2883,9 @@ describe("/unbien set-relay + config", () => {
 describe("routeClientMessage cancel handling", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    // Reset the globalThis root-session slot so this describe's activation
+    // re-claims root and sets `_pi` (it now binds only to the root session).
+    _resetBridgeOwnersForTest();
     _knownPeers.length = 0;
     _addedPeers.length = 0;
     _removedPeers.length = 0;
@@ -3977,13 +2957,11 @@ describe("routeClientMessage cancel handling", () => {
       .map((c) => c[0] as string)
       .map(decodeSentCt)
       .filter((d) => d.peer === "owner-cancel-1");
+    // No stock `cancelled` frame is emitted (dropped in the envelope purge) —
+    // the app sees the turn end via the envelope turn_end/agent_settled. The
+    // abort routing (fresh ctx, not stale) is what this test guards.
     const cancelled = sent.filter((d) => d.inner.type === "cancelled");
-    expect(cancelled).toHaveLength(1);
-    expect(cancelled[0]!.inner).toMatchObject({
-      type: "cancelled",
-      in_reply_to: "cancel-stale",
-      target_id: "msg-stale",
-    });
+    expect(cancelled).toHaveLength(0);
     expect(staleAbort).not.toHaveBeenCalled();
     expect(freshAbort).toHaveBeenCalledTimes(1);
   });
@@ -4000,7 +2978,7 @@ describe("routeClientMessage cancel handling", () => {
     await _pairForTestWithCtx(owner, {
       ui: { notify: vi.fn(), setStatus: vi.fn(), setTitle: vi.fn() },
       cwd: "/tmp/unbien-stale-ui",
-    });
+    } as Parameters<typeof _pairForTestWithCtx>[1]);
 
     // Plant a command ctx whose ui GETTER throws (real SDK stale-ctx behaviour).
     // The status handler assigns _lastCtx = ctx before touching ui.
@@ -4014,7 +2992,7 @@ describe("routeClientMessage cancel handling", () => {
       },
     };
     await expect(
-      status("", staleCtx as ReturnType<typeof makeMockCtx>),
+      status("", staleCtx as unknown as ReturnType<typeof makeMockCtx>),
     ).rejects.toThrow(/stale/);
 
     // Rebind the always-fresh session_start ctx (module-reuse path after /new).
@@ -4099,13 +3077,10 @@ describe("routeClientMessage cancel handling", () => {
       .map((c) => c[0] as string)
       .map(decodeSentCt)
       .filter((d) => d.peer === "owner-cancel-nopi");
+    // No stock `cancelled` frame (dropped in the envelope purge); the abort
+    // still runs ahead of the strict pi-binding guard, which is the point here.
     const cancelled = sent.filter((d) => d.inner.type === "cancelled");
-    expect(cancelled).toHaveLength(1);
-    expect(cancelled[0]!.inner).toMatchObject({
-      type: "cancelled",
-      in_reply_to: "cancel-nopi",
-      target_id: "msg-nopi",
-    });
+    expect(cancelled).toHaveLength(0);
     expect(freshAbort).toHaveBeenCalledTimes(1);
   });
 
@@ -4696,7 +3671,7 @@ describe("session sync", () => {
         role: "assistant",
         content: [
           { type: "text", text: "here is the plot" },
-          { type: "image", data: "UE5H", mimeType: "image/png" },
+          { type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" },
         ],
         timestamp: ts,
       },
@@ -4706,7 +3681,7 @@ describe("session sync", () => {
       images?: Array<{ data: string; mime: string }>;
     };
     expect(agent.text).toBe("here is the plot");
-    expect(agent.images).toEqual([{ data: "UE5H", mime: "image/png" }]);
+    expect(agent.images).toEqual([{ data: "iVBORw0KGgo=", mime: "image/png" }]);
   });
 
   test("mapping (un-bien): image-only assistant → text-less agent_message with images", () => {
@@ -4747,7 +3722,7 @@ describe("session sync", () => {
         toolCallId: "tc1",
         content: [
           { type: "text", text: "captured" },
-          { type: "image", data: "UE5H", mimeType: "image/png" },
+          { type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" },
         ],
         timestamp: ts,
       },
@@ -4755,7 +3730,7 @@ describe("session sync", () => {
     const tr = events.find((e) => e.type === "tool_result") as {
       images?: Array<{ data: string; mime: string }>;
     };
-    expect(tr.images).toEqual([{ data: "UE5H", mime: "image/png" }]);
+    expect(tr.images).toEqual([{ data: "iVBORw0KGgo=", mime: "image/png" }]);
   });
 
   test("mapping (un-bien): text-only toolResult → no images key (path unchanged)", () => {
@@ -4888,30 +3863,6 @@ describe("bye on teardown", () => {
     await stop("", makeMockCtx());
   });
 
-  test("paired + /unbien stop → channel.send sees bye{peer_stop} BEFORE detach", async () => {
-    await _pairForTest("peer-bye-1");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    const stop = captureHandler("unbien stop");
-    await stop("", makeMockCtx());
-
-    const sent = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string);
-    const decoded = sent.map(decodeSentCt);
-    const byeIdx = decoded.findIndex((d) => d.inner.type === "bye");
-    expect(byeIdx).toBeGreaterThanOrEqual(0);
-    expect(decoded[byeIdx]!.inner).toMatchObject({
-      type: "bye",
-      reason: "peer_stop",
-    });
-    expect(decoded[byeIdx]!.peer).toBe("peer-bye-1");
-    // After the bye, no more sends to that peer (channel detached)
-    const afterBye = decoded.slice(byeIdx + 1);
-    expect(afterBye).toHaveLength(0);
-    expect(_getState()).toBe("idle");
-  });
-
   test("/unbien stop invalidates Relay and producer before a deferred mesh leave", async () => {
     captureHandler("unbien");
     await _connectForTest(makeMockCtx());
@@ -4934,29 +3885,27 @@ describe("bye on teardown", () => {
     let staleTopologyCallback = Promise.resolve();
     const leaveSpy = vi
       .spyOn(peerModule.SessionPeer.prototype, "leave")
-      .mockImplementation(function (
+      .mockImplementation(async function (
         this: InstanceType<typeof peerModule.SessionPeer>,
       ) {
         stateAtLeave = _getState();
         relayClosedAtLeave = relay.close.mock.calls.length > 0;
-        staleTopologyCallback = Promise.resolve(
-          staleProducer.onTopologyChanged?.({
+        staleTopologyCallback = (async () => {
+          await staleProducer.onTopologyChanged?.({
             self: {
               pcLabel: "stale-self",
               pcPubkey: Buffer.alloc(32).toString("base64"),
               legacyPcLabel: "stale-self",
             },
             siblings: [],
-          }),
-        ).then(() => undefined);
+          });
+        })();
         void staleProducer.onRevoke?.(
           OWNER_URL_SAFE_FIXTURE,
           OWNER_STANDARD_FIXTURE,
         );
         const actualLeave = originalLeave.call(this);
-        return Promise.all([actualLeave, leaveGate.promise]).then(
-          () => undefined,
-        );
+        await Promise.all([actualLeave, leaveGate.promise]);
       });
 
     let stopping: Promise<void> | undefined;
@@ -4982,42 +3931,15 @@ describe("bye on teardown", () => {
     }
   });
 
-  test("started (no peer paired) + /unbien stop → no bye sent (channel is null)", async () => {
-    captureHandler("unbien");
-    await _connectForTest(makeMockCtx());
-    expect(_getState()).toBe("started");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    const stop = captureHandler("unbien stop");
-    await stop("", makeMockCtx());
-
-    const sent = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string);
-    const byes = sent.map(decodeSentCt).filter((d) => d.inner.type === "bye");
-    expect(byes).toHaveLength(0);
-    expect(_getState()).toBe("idle");
-  });
-
-  test("revoke of attached owner → channel sees bye{session_replaced}, relay stays started", async () => {
+  test("revoke of attached owner → channel is closed, relay stays started", async () => {
     _tokenStatus = "ok";
     const ACTIVE = OWNER_STANDARD_FIXTURE;
     // Attach the peer so it lives in _activePeers
     await _pairForTest(ACTIVE);
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
 
     const revoke = captureHandler("unbien revoke");
     await revoke(OWNER_STANDARD_FIXTURE.slice(0, 8), makeMockCtx());
 
-    const sent = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string);
-    const byes = sent.map(decodeSentCt).filter((d) => d.inner.type === "bye");
-    expect(byes).toHaveLength(1);
-    expect(byes[0]!.inner).toMatchObject({
-      type: "bye",
-      reason: "session_replaced",
-    });
     // Multi-channel (W2D): only this owner's channel is closed; the relay
     // stays up, ready for new pairings. Pre-W2D this dropped to idle.
     expect(_hasActivePeerForTest(ACTIVE)).toBe(false);
@@ -5097,10 +4019,26 @@ describe("session_shutdown teardown", () => {
     expect(_getState()).toBe("idle");
   });
 
-  test("session_shutdown invalidates without bye before a deferred mesh leave", async () => {
-    await _pairForTest(OWNER_STANDARD_FIXTURE);
+  test("root session_shutdown with an active peer broadcasts rpc:session_shutdown", async () => {
+    await _pairForTest("peer-shutdown-1");
     const relay = relayRef.current!;
     const sendsBefore = relay.send.mock.calls.length;
+
+    const shutdown = captureEventHandler("session_shutdown");
+    await shutdown({ type: "session_shutdown", reason: "resume" });
+
+    const sent = relay.send.mock.calls
+      .slice(sendsBefore)
+      .map((c) => c[0] as string);
+    const shutdownFrames = rpcFramesFrom(sent).filter(
+      (f) => f["type"] === "session_shutdown",
+    );
+    expect(shutdownFrames).toHaveLength(1);
+  });
+
+  test("session_shutdown invalidates before a deferred mesh leave", async () => {
+    await _pairForTest(OWNER_STANDARD_FIXTURE);
+    const relay = relayRef.current!;
     const peerModule = await import("./session/peer.js");
     const originalLeave = peerModule.SessionPeer.prototype.leave;
     const leaveGate = deferred<void>();
@@ -5108,15 +4046,13 @@ describe("session_shutdown teardown", () => {
     let relayClosedAtLeave = false;
     const leaveSpy = vi
       .spyOn(peerModule.SessionPeer.prototype, "leave")
-      .mockImplementation(function (
+      .mockImplementation(async function (
         this: InstanceType<typeof peerModule.SessionPeer>,
       ) {
         stateAtLeave = _getState();
         relayClosedAtLeave = relay.close.mock.calls.length > 0;
         const actualLeave = originalLeave.call(this);
-        return Promise.all([actualLeave, leaveGate.promise]).then(
-          () => undefined,
-        );
+        await Promise.all([actualLeave, leaveGate.promise]);
       });
 
     const shutdown = captureEventHandler("session_shutdown");
@@ -5131,10 +4067,6 @@ describe("session_shutdown teardown", () => {
       expect(stateAtLeave).toBe("idle");
       expect(relayClosedAtLeave).toBe(true);
       expect(_hasMeshNodeForTest()).toBe(false);
-      const sent = relay.send.mock.calls
-        .slice(sendsBefore)
-        .map((call) => decodeSentCt(call[0] as string));
-      expect(sent.filter(({ inner }) => inner.type === "bye")).toEqual([]);
     } finally {
       leaveGate.resolve(undefined);
       await shuttingDown;
@@ -5339,7 +4271,9 @@ describe("session_shutdown teardown", () => {
       const root = captureHandler("unbien");
       outgoingRoot = root("", outgoingCtx);
       await vi.waitFor(() => expect(connectSpy).toHaveBeenCalledTimes(1));
-      const outgoingCandidate = connectSpy.mock.instances[0]!;
+      const outgoingCandidate = connectSpy.mock.instances[0]! as unknown as {
+        close: () => Promise<void>;
+      };
       outgoingCloseSpy = vi
         .spyOn(outgoingCandidate, "close")
         .mockResolvedValue(undefined);
@@ -5401,7 +4335,9 @@ describe("session_shutdown teardown", () => {
       const root = captureHandler("unbien");
       outgoingRoot = root("", outgoingCtx);
       await vi.waitFor(() => expect(connectSpy).toHaveBeenCalledTimes(1));
-      const outgoingCandidate = connectSpy.mock.instances[0]!;
+      const outgoingCandidate = connectSpy.mock.instances[0]! as unknown as {
+        close: () => Promise<void>;
+      };
       outgoingCloseSpy = vi
         .spyOn(outgoingCandidate, "close")
         .mockResolvedValue(undefined);
@@ -6128,7 +5064,9 @@ describe("relay reconnect", () => {
       const root = captureHandler("unbien");
       rootPromise = root("", makeMockCtx(cwd));
       await vi.waitFor(() => expect(connectSpy).toHaveBeenCalledTimes(1));
-      const candidate = connectSpy.mock.instances[0]!;
+      const candidate = connectSpy.mock.instances[0]! as unknown as {
+        close: () => Promise<void>;
+      };
       candidateCloseSpy = vi
         .spyOn(candidate, "close")
         .mockResolvedValue(undefined);
@@ -6498,7 +5436,7 @@ describe("relay reconnect", () => {
       expect(staleRelay.close).toHaveBeenCalledTimes(1);
       expect(
         attachBridgeSpy.mock.calls.some(
-          ([options]) => options.relay === staleRelay,
+          ([options]) => (options.relay as unknown) === staleRelay,
         ),
       ).toBe(false);
 
@@ -6604,7 +5542,7 @@ describe("relay reconnect", () => {
       expect(replacementRelay.close).not.toHaveBeenCalled();
       expect(
         attachBridgeSpy.mock.calls.some(
-          ([options]) => options.relay === staleRelay,
+          ([options]) => (options.relay as unknown) === staleRelay,
         ),
       ).toBe(false);
       expect(_hasPendingReconnect()).toBe(false);

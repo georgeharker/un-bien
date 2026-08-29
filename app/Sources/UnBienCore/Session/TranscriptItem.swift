@@ -96,9 +96,16 @@ public struct ToolCard: Equatable, Sendable {
     public var state: State
     /// Images returned in the tool result (screenshots/plots), rendered on the card.
     public var images: [WireImage]
+    /// Raw Edit-diff `hunks` array from the envelope `aux` sidecar; when present,
+    /// the card renders a diff instead of raw args JSON.
+    public var hunks: [JSONValue]?
+    /// Classified tool OUTPUT sidecar from the envelope `aux.output` (e.g.
+    /// `{ kind:"diff", hunks:[...] }`); when a known `kind` is present the card
+    /// renders it instead of the raw `result` JSON. Unknown/absent → raw fallback.
+    public var output: JSONValue?
     public init(toolCallID: String, tool: String, args: [String: JSONValue],
                 result: JSONValue? = nil, error: String? = nil, state: State = .running,
-                images: [WireImage] = []) {
+                images: [WireImage] = [], hunks: [JSONValue]? = nil, output: JSONValue? = nil) {
         self.toolCallID = toolCallID
         self.tool = tool
         self.args = args
@@ -106,6 +113,8 @@ public struct ToolCard: Equatable, Sendable {
         self.error = error
         self.state = state
         self.images = images
+        self.hunks = hunks
+        self.output = output
     }
 }
 

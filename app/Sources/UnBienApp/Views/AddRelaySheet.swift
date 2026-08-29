@@ -24,6 +24,7 @@ struct AddRelaySheet: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
+            .formStyle(.grouped)
             .navigationTitle("Add relay")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

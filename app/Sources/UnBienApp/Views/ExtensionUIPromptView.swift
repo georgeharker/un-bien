@@ -20,6 +20,7 @@ struct ExtensionUIPromptView: View {
                 }
                 content
             }
+            .formStyle(.grouped)
             .navigationTitle(navTitle)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

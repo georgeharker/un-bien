@@ -21,11 +21,11 @@ final class PairingTests: XCTestCase {
         let invite = try PairingURI.parse(
             "unbien://pair?t=TOKEN123"
             + "&epk=0Umma2Xg5AyTvU4DMFXcPoA7xMbLnfGVeImWp2QVFvY"
-            + "&n=remote_pi%20%C2%B7%20main&rm=aB12CD34eF56")
+            + "&n=un-bien%20%C2%B7%20main&rm=aB12CD34eF56")
         XCTAssertEqual(invite.token, "TOKEN123")
         // base64url QR epk is canonicalized to standard padded base64.
         XCTAssertEqual(invite.epk, "0Umma2Xg5AyTvU4DMFXcPoA7xMbLnfGVeImWp2QVFvY=")
-        XCTAssertEqual(invite.sessionName, "remote_pi · main")
+        XCTAssertEqual(invite.sessionName, "un-bien · main")
         XCTAssertEqual(invite.roomID, "aB12CD34eF56")
         XCTAssertNil(invite.relayURL)
     }

@@ -3,7 +3,10 @@ import { EventEmitter } from "node:events";
 import { BrokerRemote, parseAddress } from "./broker_remote.js";
 import type { Broker, RemoteInjectStatus } from "./broker.js";
 import { envelope, type Envelope } from "./envelope.js";
-import type { MeshTopologySnapshot, PiRoutingIdentity } from "../mesh/siblings.js";
+import type {
+  MeshTopologySnapshot,
+  PiRoutingIdentity,
+} from "../mesh/siblings.js";
 
 function keyBytes(seed: number): Uint8Array {
   return Uint8Array.from(
@@ -25,15 +28,23 @@ const KEY_B_URL = Buffer.from(KEY_B_BYTES).toString("base64url");
 // Pinned 32-byte values whose legacy standard-Base64 prefixes differ from
 // Base64url (`+///AAAA` / `////AAAA`).
 const FALLBACK_KEY_A_BYTES = Uint8Array.from([
-  0xfb, 0xff, 0xff, ...Array.from({ length: 29 }, (_, index) => index),
+  0xfb,
+  0xff,
+  0xff,
+  ...Array.from({ length: 29 }, (_, index) => index),
 ]);
 const FALLBACK_KEY_B_BYTES = Uint8Array.from([
-  0xff, 0xff, 0xff, ...Array.from({ length: 29 }, (_, index) => 255 - index),
+  0xff,
+  0xff,
+  0xff,
+  ...Array.from({ length: 29 }, (_, index) => 255 - index),
 ]);
 const FALLBACK_KEY_A = Buffer.from(FALLBACK_KEY_A_BYTES).toString("base64");
 const FALLBACK_KEY_B = Buffer.from(FALLBACK_KEY_B_BYTES).toString("base64");
-const FALLBACK_KEY_A_URL = Buffer.from(FALLBACK_KEY_A_BYTES).toString("base64url");
-const FALLBACK_KEY_B_URL = Buffer.from(FALLBACK_KEY_B_BYTES).toString("base64url");
+const FALLBACK_KEY_A_URL =
+  Buffer.from(FALLBACK_KEY_A_BYTES).toString("base64url");
+const FALLBACK_KEY_B_URL =
+  Buffer.from(FALLBACK_KEY_B_BYTES).toString("base64url");
 
 type TestRoutingIdentity = Omit<PiRoutingIdentity, "legacyPcLabel"> & {
   readonly legacyPcLabel?: string;
@@ -43,7 +54,9 @@ function topology(
   self: TestRoutingIdentity,
   siblings: readonly TestRoutingIdentity[] = [],
 ): MeshTopologySnapshot {
-  const withLegacyLabel = (identity: TestRoutingIdentity): PiRoutingIdentity => ({
+  const withLegacyLabel = (
+    identity: TestRoutingIdentity,
+  ): PiRoutingIdentity => ({
     ...identity,
     legacyPcLabel: identity.legacyPcLabel ?? identity.pcLabel,
   });
@@ -65,7 +78,9 @@ class FakePi extends EventEmitter {
   sendEnvelopeToPi(toPc: string, env: Envelope): void {
     this.sent.push({ toPc, env });
   }
-  detach(): void { /* no-op */ }
+  detach(): void {
+    /* no-op */
+  }
 }
 
 interface LinkedDelivery {
@@ -95,7 +110,9 @@ class BoundedInMemoryPiLink {
 
       for (const sent of fromA) {
         if (sent.toPc !== KEY_B) {
-          throw new Error("in-memory Pi link received an unexpected A destination");
+          throw new Error(
+            "in-memory Pi link received an unexpected A destination",
+          );
         }
         deliveries.push({
           direction: "A→B",
@@ -106,7 +123,9 @@ class BoundedInMemoryPiLink {
       }
       for (const sent of fromB) {
         if (sent.toPc !== KEY_A) {
-          throw new Error("in-memory Pi link received an unexpected B destination");
+          throw new Error(
+            "in-memory Pi link received an unexpected B destination",
+          );
         }
         deliveries.push({
           direction: "B→A",
@@ -117,7 +136,9 @@ class BoundedInMemoryPiLink {
       }
     }
 
-    throw new Error(`in-memory Pi link did not quiesce after ${maxRounds} rounds`);
+    throw new Error(
+      `in-memory Pi link did not quiesce after ${maxRounds} rounds`,
+    );
   }
 }
 
@@ -146,7 +167,10 @@ function frozenOldParseAddress(
 ): { pcLabel: string; peerName: string } | null {
   const index = address.indexOf(":");
   if (index <= 0 || index === address.length - 1) return null;
-  return { pcLabel: address.slice(0, index), peerName: address.slice(index + 1) };
+  return {
+    pcLabel: address.slice(0, index),
+    peerName: address.slice(index + 1),
+  };
 }
 
 interface FrozenOldWirePeerInfo {
@@ -158,10 +182,10 @@ interface FrozenOldWirePeerInfo {
 type FrozenOldControl =
   | { type: "peers_request" }
   | {
-    type: "peers_update";
-    peers: string[];
-    peers_detailed: FrozenOldWirePeerInfo[];
-  };
+      type: "peers_update";
+      peers: string[];
+      peers_detailed: FrozenOldWirePeerInfo[];
+    };
 
 interface FrozenPendingAckSlot {
   expectedFrom: string;
@@ -274,7 +298,11 @@ class FrozenOldBrokerRemoteOracle {
     } | null;
     const bodyType = body && typeof body === "object" ? body.type : undefined;
     if (bodyType === "peers_update") {
-      this.remotePeers.splice(0, this.remotePeers.length, ...this.peersFromUpdate(body));
+      this.remotePeers.splice(
+        0,
+        this.remotePeers.length,
+        ...this.peersFromUpdate(body!),
+      );
       return;
     }
     if (bodyType === "peers_request") {
@@ -316,17 +344,19 @@ class FrozenOldBrokerRemoteOracle {
     peers_detailed?: unknown;
   }): FrozenOldWirePeerInfo[] {
     if (Array.isArray(body.peers_detailed)) {
-      return body.peers_detailed.filter((peer): peer is FrozenOldWirePeerInfo =>
-        !!peer && typeof peer === "object" &&
-        typeof (peer as FrozenOldWirePeerInfo).cwd === "string" &&
-        typeof (peer as FrozenOldWirePeerInfo).name === "string" &&
-        typeof (peer as FrozenOldWirePeerInfo).address === "string",
+      return body.peers_detailed.filter(
+        (peer): peer is FrozenOldWirePeerInfo =>
+          !!peer &&
+          typeof peer === "object" &&
+          typeof (peer as FrozenOldWirePeerInfo).cwd === "string" &&
+          typeof (peer as FrozenOldWirePeerInfo).name === "string" &&
+          typeof (peer as FrozenOldWirePeerInfo).address === "string",
       );
     }
     return Array.isArray(body.peers)
       ? body.peers
-        .filter((peer): peer is string => typeof peer === "string")
-        .map((address) => ({ cwd: "", name: address, address }))
+          .filter((peer): peer is string => typeof peer === "string")
+          .map((address) => ({ cwd: "", name: address, address }))
       : [];
   }
 
@@ -410,9 +440,13 @@ function makeFakeBroker(opts: FakeBrokerOptions = {}): {
   const peerNames = vi.fn(() => [..._localPeers]);
   // plan/38 Fase 2: the cross-PC push reads the structured local inventory.
   // Synthesize `{cwd:"", name:addr, address:addr}` from the same address list.
-  const localPeerInfos = vi.fn(() => _localPeers.map((address) => ({ cwd: "", name: address, address })));
+  const localPeerInfos = vi.fn(() =>
+    _localPeers.map((address) => ({ cwd: "", name: address, address })),
+  );
   // Expose a setter for tests that mutate the local set mid-test.
-  (peerNames as unknown as { set: (p: string[]) => void }).set = (p: string[]) => {
+  (peerNames as unknown as { set: (p: string[]) => void }).set = (
+    p: string[],
+  ) => {
     _localPeers = p;
   };
   const broker = {
@@ -447,10 +481,16 @@ describe("parseAddress", () => {
     expect(parseAddress(":agent")).toBeNull();
   });
   test("simple pc:peer → both parts", () => {
-    expect(parseAddress("trab:agent-1")).toEqual({ pcLabel: "trab", peerName: "agent-1" });
+    expect(parseAddress("trab:agent-1")).toEqual({
+      pcLabel: "trab",
+      peerName: "agent-1",
+    });
   });
   test("multiple colons → split on first", () => {
-    expect(parseAddress("trab:sub:agent")).toEqual({ pcLabel: "trab", peerName: "sub:agent" });
+    expect(parseAddress("trab:sub:agent")).toEqual({
+      pcLabel: "trab",
+      peerName: "sub:agent",
+    });
   });
 });
 
@@ -461,13 +501,13 @@ describe("BrokerRemote.tryRouteOutbound", () => {
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker();
     const br = new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "self", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "self", pcPubkey: KEY_A }, [
+        { pcLabel: "trab", pcPubkey: KEY_B },
+      ]),
     });
-    fakePi.sent.length = 0;  // drop bootstrap peers_request
+    fakePi.sent.length = 0; // drop bootstrap peers_request
 
     const env = envelope("sess-3", "agent-1", { x: 1 });
     expect(br.tryRouteOutbound(env)).toBe(false);
@@ -478,7 +518,8 @@ describe("BrokerRemote.tryRouteOutbound", () => {
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker();
     const br = new BrokerRemote({
-      broker, pi: fakePi as never,
+      broker,
+      pi: fakePi as never,
       topology: topology({ pcLabel: "self", pcPubkey: KEY_A }),
     });
 
@@ -491,13 +532,13 @@ describe("BrokerRemote.tryRouteOutbound", () => {
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker();
     const br = new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "self", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "self", pcPubkey: KEY_A }, [
+        { pcLabel: "trab", pcPubkey: KEY_B },
+      ]),
     });
-    fakePi.sent.length = 0;  // drop bootstrap peers_request
+    fakePi.sent.length = 0; // drop bootstrap peers_request
 
     const env = envelope("sess-3", "weird:peer", { x: 1 });
     expect(br.tryRouteOutbound(env)).toBe(false);
@@ -508,11 +549,11 @@ describe("BrokerRemote.tryRouteOutbound", () => {
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker();
     const br = new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+        { pcLabel: "trab", pcPubkey: KEY_B },
+      ]),
     });
 
     const env = envelope("sess-3", "trab:agent-1", { x: 1 });
@@ -532,18 +573,31 @@ describe("BrokerRemote.tryRouteOutbound", () => {
       broker,
       pi: fakePi as never,
       topology: topology(
-        { pcLabel: "Self%20Alias", pcPubkey: KEY_A, legacyPcLabel: "Self Alias" },
-        [{ pcLabel: "Peer%20Alias", pcPubkey: KEY_B, legacyPcLabel: "Peer Alias" }],
+        {
+          pcLabel: "Self%20Alias",
+          pcPubkey: KEY_A,
+          legacyPcLabel: "Self Alias",
+        },
+        [
+          {
+            pcLabel: "Peer%20Alias",
+            pcPubkey: KEY_B,
+            legacyPcLabel: "Peer Alias",
+          },
+        ],
       ),
     });
     fakePi.sent.length = 0;
 
-    const outbound = envelope("local", "Peer%20Alias:agent", { hello: "world" });
+    const outbound = envelope("local", "Peer%20Alias:agent", {
+      hello: "world",
+    });
     expect(br.tryRouteOutbound(outbound)).toBe(true);
 
     const normal = fakePi.sent.find((sent) => sent.env.id === outbound.id)!;
-    const control = fakePi.sent.find((sent) =>
-      (sent.env.body as { type?: string } | null)?.type === "peers_request",
+    const control = fakePi.sent.find(
+      (sent) =>
+        (sent.env.body as { type?: string } | null)?.type === "peers_request",
     )!;
     expect(normal).toMatchObject({
       toPc: KEY_B,
@@ -567,11 +621,13 @@ describe("BrokerRemote.tryRouteOutbound", () => {
           pcPubkey: FALLBACK_KEY_A,
           legacyPcLabel: FALLBACK_KEY_A.slice(0, 8),
         },
-        [{
-          pcLabel: "pc-peer",
-          pcPubkey: FALLBACK_KEY_B,
-          legacyPcLabel: FALLBACK_KEY_B.slice(0, 8),
-        }],
+        [
+          {
+            pcLabel: "pc-peer",
+            pcPubkey: FALLBACK_KEY_B,
+            legacyPcLabel: FALLBACK_KEY_B.slice(0, 8),
+          },
+        ],
       ),
     });
     fakePi.sent.length = 0;
@@ -582,7 +638,9 @@ describe("BrokerRemote.tryRouteOutbound", () => {
     expect(FALLBACK_KEY_B.slice(0, 8)).not.toBe(FALLBACK_KEY_B_URL.slice(0, 8));
     const outbound = envelope("local", "pc-peer:agent", { hello: "world" });
     expect(br.tryRouteOutbound(outbound)).toBe(true);
-    expect(fakePi.sent.find((sent) => sent.env.id === outbound.id)?.env).toMatchObject({
+    expect(
+      fakePi.sent.find((sent) => sent.env.id === outbound.id)?.env,
+    ).toMatchObject({
       from: `${FALLBACK_KEY_A.slice(0, 8)}:local`,
       to: `${FALLBACK_KEY_B.slice(0, 8)}:agent`,
     });
@@ -592,11 +650,11 @@ describe("BrokerRemote.tryRouteOutbound", () => {
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker();
     const br = new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+        { pcLabel: "trab", pcPubkey: KEY_B },
+      ]),
     });
     // Bootstrap fires peers_request to every sibling on construction.
     // Clear that out so we can verify the cache-miss path also fires one.
@@ -605,8 +663,8 @@ describe("BrokerRemote.tryRouteOutbound", () => {
     const env = envelope("sess-3", "trab:agent-1", { x: 1 });
     br.tryRouteOutbound(env);
 
-    const peersReq = fakePi.sent.find((s) =>
-      (s.env.body as { type?: string } | null)?.type === "peers_request",
+    const peersReq = fakePi.sent.find(
+      (s) => (s.env.body as { type?: string } | null)?.type === "peers_request",
     );
     expect(peersReq).toBeDefined();
     expect(peersReq!.toPc).toBe(KEY_B);
@@ -616,25 +674,29 @@ describe("BrokerRemote.tryRouteOutbound", () => {
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker();
     const br = new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+        { pcLabel: "trab", pcPubkey: KEY_B },
+      ]),
     });
 
     // Prime the cache via peers_update
-    fakePi.emit("envelope", envelope(
-      "trab:_broker_remote", "casa:_broker_remote",
-      { type: "peers_update", peers: ["agent-1"] },
-    ), KEY_B);
+    fakePi.emit(
+      "envelope",
+      envelope("trab:_broker_remote", "casa:_broker_remote", {
+        type: "peers_update",
+        peers: ["agent-1"],
+      }),
+      KEY_B,
+    );
 
     fakePi.sent.length = 0;
     const env = envelope("sess-3", "trab:agent-1", { x: 1 });
     br.tryRouteOutbound(env);
 
-    const peersReq = fakePi.sent.find((s) =>
-      (s.env.body as { type?: string } | null)?.type === "peers_request",
+    const peersReq = fakePi.sent.find(
+      (s) => (s.env.body as { type?: string } | null)?.type === "peers_request",
     );
     expect(peersReq).toBeUndefined();
   });
@@ -648,15 +710,19 @@ describe("BrokerRemote.handleIncoming (anti-spoof + injection)", () => {
     const { broker, injectFromRemote } = makeFakeBroker();
     const logs: string[] = [];
     new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+        { pcLabel: "trab", pcPubkey: KEY_B },
+      ]),
       log: (m) => logs.push(m),
     });
 
-    fakePi.emit("envelope", envelope("evil:sess", "casa:agent-1", { x: 1 }), KEY_D);
+    fakePi.emit(
+      "envelope",
+      envelope("evil:sess", "casa:agent-1", { x: 1 }),
+      KEY_D,
+    );
 
     expect(injectFromRemote).not.toHaveBeenCalled();
     expect(logs.some((line) => /reason=unknown_from_pc/.test(line))).toBe(true);
@@ -668,15 +734,19 @@ describe("BrokerRemote.handleIncoming (anti-spoof + injection)", () => {
     const { broker, injectFromRemote } = makeFakeBroker();
     const logs: string[] = [];
     new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+        { pcLabel: "trab", pcPubkey: KEY_B },
+      ]),
       log: (m) => logs.push(m),
     });
 
-    fakePi.emit("envelope", envelope("sender-old:sess", "receiver-old:agent-1", { x: 1 }), KEY_B_URL);
+    fakePi.emit(
+      "envelope",
+      envelope("sender-old:sess", "receiver-old:agent-1", { x: 1 }),
+      KEY_B_URL,
+    );
 
     expect(injectFromRemote).toHaveBeenCalledTimes(1);
     expect(injectFromRemote.mock.calls[0]![0]).toMatchObject({
@@ -688,26 +758,37 @@ describe("BrokerRemote.handleIncoming (anti-spoof + injection)", () => {
 
   test("valid envelope → strip to-prefix, injectFromRemote, ACK back", () => {
     const fakePi = new FakePi();
-    const { broker, injectFromRemote } = makeFakeBroker({ injectStatus: "received" });
+    const { broker, injectFromRemote } = makeFakeBroker({
+      injectStatus: "received",
+    });
     new BrokerRemote({
-      broker, pi: fakePi as never,
+      broker,
+      pi: fakePi as never,
       topology: topology(
         { pcLabel: "casa-local", pcPubkey: KEY_A, legacyPcLabel: "casa wire" },
-        [{ pcLabel: "trab-local", pcPubkey: KEY_B, legacyPcLabel: "trab wire" }],
+        [
+          {
+            pcLabel: "trab-local",
+            pcPubkey: KEY_B,
+            legacyPcLabel: "trab wire",
+          },
+        ],
       ),
     });
 
-    const inbound = envelope("trab wire:agent-1", "casa wire:sess-3", { hello: "world" });
+    const inbound = envelope("trab wire:agent-1", "casa wire:sess-3", {
+      hello: "world",
+    });
     fakePi.emit("envelope", inbound, KEY_B);
 
     expect(injectFromRemote).toHaveBeenCalledTimes(1);
     const injected = injectFromRemote.mock.calls[0]![0] as Envelope;
     expect(injected.from).toBe("trab-local:agent-1");
-    expect(injected.to).toBe("sess-3");  // prefix stripped
+    expect(injected.to).toBe("sess-3"); // prefix stripped
 
     // ACK packed back to K_B
-    const acks = fakePi.sent.filter((s) =>
-      (s.env.body as { type?: string } | null)?.type === "ack",
+    const acks = fakePi.sent.filter(
+      (s) => (s.env.body as { type?: string } | null)?.type === "ack",
     );
     expect(acks).toHaveLength(1);
     expect(acks[0]!.toPc).toBe(KEY_B);
@@ -722,11 +803,11 @@ describe("BrokerRemote.handleIncoming (anti-spoof + injection)", () => {
     const { broker, injectFromRemote } = makeFakeBroker();
     const logs: string[] = [];
     new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+        { pcLabel: "trab", pcPubkey: KEY_B },
+      ]),
       log: (m) => logs.push(m),
     });
 
@@ -745,22 +826,23 @@ describe("BrokerRemote.handleIncoming (anti-spoof + injection)", () => {
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker();
     new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+        { pcLabel: "trab", pcPubkey: KEY_B },
+      ]),
     });
 
     const ackEnv: Envelope = envelope(
-      "trab:broker", "casa:sess-3",
+      "trab:broker",
+      "casa:sess-3",
       { type: "ack", status: "received", target: "agent-1" },
       "01976000-0000-7000-8000-000000000000",
     );
     fakePi.emit("envelope", ackEnv, KEY_B);
 
-    const generatedAck = fakePi.sent.find((s) =>
-      (s.env.body as { type?: string } | null)?.type === "ack",
+    const generatedAck = fakePi.sent.find(
+      (s) => (s.env.body as { type?: string } | null)?.type === "ack",
     );
     expect(generatedAck).toBeUndefined();
   });
@@ -773,21 +855,36 @@ describe("BrokerRemote: control envelopes (peers_update / peers_request)", () =>
     const fakePi = new FakePi();
     const { broker, injectFromRemote } = makeFakeBroker();
     const br = new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+        { pcLabel: "trab", pcPubkey: KEY_B },
+      ]),
     });
-    fakePi.emit("envelope", envelope(
-      "trab:_broker_remote", "casa:_broker_remote",
-      { type: "peers_update", peers: ["known"] },
-    ), KEY_B);
+    fakePi.emit(
+      "envelope",
+      envelope("trab:_broker_remote", "casa:_broker_remote", {
+        type: "peers_update",
+        peers: ["known"],
+      }),
+      KEY_B,
+    );
     fakePi.sent.length = 0;
 
     for (const invalid of [
-      { ...envelope("trab:_broker_remote", "casa:_broker_remote", { type: "peers_update", peers: ["forged"] }), id: "not-a-uuid" },
-      { ...envelope("trab:_broker_remote", "casa:_broker_remote", { type: "peers_request" }), re: "not-a-uuid" },
+      {
+        ...envelope("trab:_broker_remote", "casa:_broker_remote", {
+          type: "peers_update",
+          peers: ["forged"],
+        }),
+        id: "not-a-uuid",
+      },
+      {
+        ...envelope("trab:_broker_remote", "casa:_broker_remote", {
+          type: "peers_request",
+        }),
+        re: "not-a-uuid",
+      },
     ]) {
       fakePi.emit("envelope", invalid as Envelope, KEY_B);
     }
@@ -801,28 +898,30 @@ describe("BrokerRemote: control envelopes (peers_update / peers_request)", () =>
     const fakePi = new FakePi();
     const { broker, injectFromRemote } = makeFakeBroker();
     const br = new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+        { pcLabel: "trab", pcPubkey: KEY_B },
+      ]),
     });
     fakePi.sent.length = 0;
 
-    const incoming = envelope(
-      "trab:ordinary-agent", "casa:local-agent",
-      { type: "peers_update", peers: ["forged"] },
-    );
+    const incoming = envelope("trab:ordinary-agent", "casa:local-agent", {
+      type: "peers_update",
+      peers: ["forged"],
+    });
     fakePi.emit("envelope", incoming, KEY_B);
 
     expect(br.getRemotePeers("trab")).toEqual([]);
-    expect(injectFromRemote).toHaveBeenCalledWith(expect.objectContaining({
-      from: "trab:ordinary-agent",
-      to: "local-agent",
-      body: { type: "peers_update", peers: ["forged"] },
-    }));
-    const acks = fakePi.sent.filter((sent) =>
-      (sent.env.body as { type?: string } | null)?.type === "ack",
+    expect(injectFromRemote).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: "trab:ordinary-agent",
+        to: "local-agent",
+        body: { type: "peers_update", peers: ["forged"] },
+      }),
+    );
+    const acks = fakePi.sent.filter(
+      (sent) => (sent.env.body as { type?: string } | null)?.type === "ack",
     );
     expect(acks).toHaveLength(1);
     expect(acks[0]!.env.re).toBe(incoming.id);
@@ -832,18 +931,22 @@ describe("BrokerRemote: control envelopes (peers_update / peers_request)", () =>
     const fakePi = new FakePi();
     const { broker, injectFromRemote } = makeFakeBroker();
     new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+        { pcLabel: "trab", pcPubkey: KEY_B },
+      ]),
     });
     fakePi.sent.length = 0;
 
-    fakePi.emit("envelope", {
-      ...envelope("trab:agent", "casa:local-agent", { hello: "world" }),
-      id: "not-a-uuid",
-    } as Envelope, KEY_B);
+    fakePi.emit(
+      "envelope",
+      {
+        ...envelope("trab:agent", "casa:local-agent", { hello: "world" }),
+        id: "not-a-uuid",
+      } as Envelope,
+      KEY_B,
+    );
 
     expect(injectFromRemote).not.toHaveBeenCalled();
     expect(fakePi.sent).toEqual([]);
@@ -853,17 +956,21 @@ describe("BrokerRemote: control envelopes (peers_update / peers_request)", () =>
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker();
     const br = new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+        { pcLabel: "trab", pcPubkey: KEY_B },
+      ]),
     });
 
-    fakePi.emit("envelope", envelope(
-      "trab:_broker_remote", "casa:_broker_remote",
-      { type: "peers_update", peers: ["agent-1", "agent-2"] },
-    ), KEY_B);
+    fakePi.emit(
+      "envelope",
+      envelope("trab:_broker_remote", "casa:_broker_remote", {
+        type: "peers_update",
+        peers: ["agent-1", "agent-2"],
+      }),
+      KEY_B,
+    );
 
     expect(br.getRemotePeers("trab")).toEqual(["agent-1", "agent-2"]);
     expect(br.listRemotePeers()).toEqual(["trab:agent-1", "trab:agent-2"]);
@@ -874,30 +981,45 @@ describe("BrokerRemote: control envelopes (peers_update / peers_request)", () =>
     const { broker } = makeFakeBroker();
     const logs: string[] = [];
     const br = new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+        { pcLabel: "trab", pcPubkey: KEY_B },
+      ]),
       log: (message) => logs.push(message),
     });
-    fakePi.emit("envelope", envelope(
-      "trab:_broker_remote", "casa:_broker_remote",
-      { type: "peers_update", peers: ["known"] },
-    ), KEY_B);
+    fakePi.emit(
+      "envelope",
+      envelope("trab:_broker_remote", "casa:_broker_remote", {
+        type: "peers_update",
+        peers: ["known"],
+      }),
+      KEY_B,
+    );
 
-    fakePi.emit("envelope", envelope(
-      "trab:_broker_remote", "casa:_broker_remote",
-      { type: "peers_update", peers: Array.from({ length: 1025 }, () => "oversized") },
-    ), KEY_B);
-    fakePi.emit("envelope", envelope(
-      "trab:_broker_remote", "casa:_broker_remote",
-      {
+    fakePi.emit(
+      "envelope",
+      envelope("trab:_broker_remote", "casa:_broker_remote", {
+        type: "peers_update",
+        peers: Array.from({ length: 1025 }, () => "oversized"),
+      }),
+      KEY_B,
+    );
+    fakePi.emit(
+      "envelope",
+      envelope("trab:_broker_remote", "casa:_broker_remote", {
         type: "peers_update",
         peers: ["still-invalid"],
-        peers_detailed: [{ cwd: "/" + "x".repeat(4096), name: "agent", address: "still-invalid" }],
-      },
-    ), KEY_B);
+        peers_detailed: [
+          {
+            cwd: "/" + "x".repeat(4096),
+            name: "agent",
+            address: "still-invalid",
+          },
+        ],
+      }),
+      KEY_B,
+    );
 
     expect(br.getRemotePeers("trab")).toEqual(["known"]);
     expect(logs).toEqual([
@@ -910,11 +1032,11 @@ describe("BrokerRemote: control envelopes (peers_update / peers_request)", () =>
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker();
     const br = new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+        { pcLabel: "trab", pcPubkey: KEY_B },
+      ]),
     });
     const cwd = `/${"c".repeat(4095)}`;
     const name = "n".repeat(255);
@@ -923,55 +1045,83 @@ describe("BrokerRemote: control envelopes (peers_update / peers_request)", () =>
     expect(name).toHaveLength(255);
     expect(address).toHaveLength(4352);
 
-    fakePi.emit("envelope", envelope(
-      "trab:_broker_remote", "casa:_broker_remote",
-      { type: "peers_update", peers: [address], peers_detailed: [{ cwd, name, address }] },
-    ), KEY_B);
+    fakePi.emit(
+      "envelope",
+      envelope("trab:_broker_remote", "casa:_broker_remote", {
+        type: "peers_update",
+        peers: [address],
+        peers_detailed: [{ cwd, name, address }],
+      }),
+      KEY_B,
+    );
     expect(br.getRemotePeers("trab")).toEqual([address]);
 
     const invalidUpdates = [
-      { type: "peers_update", peers: [address], peers_detailed: [{ cwd: `${cwd}x`, name, address }] },
-      { type: "peers_update", peers: [address], peers_detailed: [{ cwd: "", name: "n".repeat(257), address: "short" }] },
+      {
+        type: "peers_update",
+        peers: [address],
+        peers_detailed: [{ cwd: `${cwd}x`, name, address }],
+      },
+      {
+        type: "peers_update",
+        peers: [address],
+        peers_detailed: [{ cwd: "", name: "n".repeat(257), address: "short" }],
+      },
       { type: "peers_update", peers: ["a".repeat(4353)] },
-      { type: "peers_update", peers: Array.from({ length: 1025 }, () => "peer") },
+      {
+        type: "peers_update",
+        peers: Array.from({ length: 1025 }, () => "peer"),
+      },
     ];
     for (const body of invalidUpdates) {
-      fakePi.emit("envelope", envelope(
-        "trab:_broker_remote", "casa:_broker_remote", body,
-      ), KEY_B);
+      fakePi.emit(
+        "envelope",
+        envelope("trab:_broker_remote", "casa:_broker_remote", body),
+        KEY_B,
+      );
     }
     expect(br.getRemotePeers("trab")).toEqual([address]);
 
     const codeUnitName = "😀".repeat(128);
-    fakePi.emit("envelope", envelope(
-      "trab:_broker_remote", "casa:_broker_remote",
-      {
+    fakePi.emit(
+      "envelope",
+      envelope("trab:_broker_remote", "casa:_broker_remote", {
         type: "peers_update",
         peers: [codeUnitName],
-        peers_detailed: [{ cwd: "", name: codeUnitName, address: codeUnitName }],
-      },
-    ), KEY_B);
+        peers_detailed: [
+          { cwd: "", name: codeUnitName, address: codeUnitName },
+        ],
+      }),
+      KEY_B,
+    );
     expect(codeUnitName).toHaveLength(256);
     expect(br.getRemotePeers("trab")).toEqual([codeUnitName]);
     const tooLongCodeUnitName = "😀".repeat(129);
-    fakePi.emit("envelope", envelope(
-      "trab:_broker_remote", "casa:_broker_remote",
-      {
+    fakePi.emit(
+      "envelope",
+      envelope("trab:_broker_remote", "casa:_broker_remote", {
         type: "peers_update",
         peers: [tooLongCodeUnitName],
-        peers_detailed: [{
-          cwd: "",
-          name: tooLongCodeUnitName,
-          address: tooLongCodeUnitName,
-        }],
-      },
-    ), KEY_B);
+        peers_detailed: [
+          {
+            cwd: "",
+            name: tooLongCodeUnitName,
+            address: tooLongCodeUnitName,
+          },
+        ],
+      }),
+      KEY_B,
+    );
     expect(br.getRemotePeers("trab")).toEqual([codeUnitName]);
 
-    fakePi.emit("envelope", envelope(
-      "trab:_broker_remote", "casa:_broker_remote",
-      { type: "peers_update", peers: Array.from({ length: 1024 }, () => "peer") },
-    ), KEY_B);
+    fakePi.emit(
+      "envelope",
+      envelope("trab:_broker_remote", "casa:_broker_remote", {
+        type: "peers_update",
+        peers: Array.from({ length: 1024 }, () => "peer"),
+      }),
+      KEY_B,
+    );
     expect(br.getRemotePeers("trab")).toHaveLength(1024);
   });
 
@@ -979,27 +1129,31 @@ describe("BrokerRemote: control envelopes (peers_update / peers_request)", () =>
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker();
     const br = new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+        { pcLabel: "trab", pcPubkey: KEY_B },
+      ]),
     });
 
-    fakePi.emit("envelope", envelope(
-      "trab:_broker_remote", "casa:_broker_remote",
-      {
+    fakePi.emit(
+      "envelope",
+      envelope("trab:_broker_remote", "casa:_broker_remote", {
         type: "peers_update",
         peers: ["/w/app@App", "/w/api@Api"],
         peers_detailed: [
           { cwd: "/w/app", name: "App", address: "/w/app@App" },
           { cwd: "/w/api", name: "Api", address: "/w/api@Api" },
         ],
-      },
-    ), KEY_B);
+      }),
+      KEY_B,
+    );
 
     // Addresses (the `peers` half) get the sibling-label prefix.
-    expect(br.listRemotePeers()).toEqual(["trab:/w/app@App", "trab:/w/api@Api"]);
+    expect(br.listRemotePeers()).toEqual([
+      "trab:/w/app@App",
+      "trab:/w/api@Api",
+    ]);
     // Structured: `pc` filled from the verified sibling label, cwd/name preserved,
     // address prefixed `<pc>:<cwd>@<nome>` — this is what powers `peers_detailed`.
     expect(br.listRemotePeerInfos()).toEqual([
@@ -1012,18 +1166,22 @@ describe("BrokerRemote: control envelopes (peers_update / peers_request)", () =>
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker();
     const br = new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+        { pcLabel: "trab", pcPubkey: KEY_B },
+      ]),
     });
 
     // An older sibling sends addresses only — no peers_detailed.
-    fakePi.emit("envelope", envelope(
-      "trab:_broker_remote", "casa:_broker_remote",
-      { type: "peers_update", peers: ["/w/app@App"] },
-    ), KEY_B);
+    fakePi.emit(
+      "envelope",
+      envelope("trab:_broker_remote", "casa:_broker_remote", {
+        type: "peers_update",
+        peers: ["/w/app@App"],
+      }),
+      KEY_B,
+    );
 
     expect(br.listRemotePeers()).toEqual(["trab:/w/app@App"]);
     // Synthesized: cwd "", name == address, pc filled, address prefixed. Routing
@@ -1037,18 +1195,22 @@ describe("BrokerRemote: control envelopes (peers_update / peers_request)", () =>
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker();
     const br = new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
-      cacheTtlMs: 10,  // tight TTL for tests
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+        { pcLabel: "trab", pcPubkey: KEY_B },
+      ]),
+      cacheTtlMs: 10, // tight TTL for tests
     });
 
-    fakePi.emit("envelope", envelope(
-      "trab:_broker_remote", "casa:_broker_remote",
-      { type: "peers_update", peers: ["agent-1"] },
-    ), KEY_B);
+    fakePi.emit(
+      "envelope",
+      envelope("trab:_broker_remote", "casa:_broker_remote", {
+        type: "peers_update",
+        peers: ["agent-1"],
+      }),
+      KEY_B,
+    );
     expect(br.getRemotePeers("trab")).toEqual(["agent-1"]);
 
     return new Promise<void>((resolve) => {
@@ -1056,9 +1218,13 @@ describe("BrokerRemote: control envelopes (peers_update / peers_request)", () =>
         expect(br.getRemotePeers("trab")).toEqual([]);
         fakePi.sent.length = 0;
         br.tryRouteOutbound(envelope("local", "trab:agent-1", { retry: true }));
-        expect(fakePi.sent.some((sent) =>
-          (sent.env.body as { type?: string } | null)?.type === "peers_request",
-        )).toBe(true);
+        expect(
+          fakePi.sent.some(
+            (sent) =>
+              (sent.env.body as { type?: string } | null)?.type ===
+              "peers_request",
+          ),
+        ).toBe(true);
         resolve();
       }, 30);
     });
@@ -1068,25 +1234,31 @@ describe("BrokerRemote: control envelopes (peers_update / peers_request)", () =>
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker({ localPeers: ["sess-3", "agent-1"] });
     new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+        { pcLabel: "trab", pcPubkey: KEY_B },
+      ]),
     });
     fakePi.sent.length = 0;
 
-    fakePi.emit("envelope", envelope(
-      "trab:_broker_remote", "casa:_broker_remote",
-      { type: "peers_request" },
-    ), KEY_B);
+    fakePi.emit(
+      "envelope",
+      envelope("trab:_broker_remote", "casa:_broker_remote", {
+        type: "peers_request",
+      }),
+      KEY_B,
+    );
 
-    const reply = fakePi.sent.find((s) =>
-      (s.env.body as { type?: string } | null)?.type === "peers_update",
+    const reply = fakePi.sent.find(
+      (s) => (s.env.body as { type?: string } | null)?.type === "peers_update",
     );
     expect(reply).toBeDefined();
     expect(reply!.toPc).toBe(KEY_B);
-    expect((reply!.env.body as { peers: string[] }).peers).toEqual(["sess-3", "agent-1"]);
+    expect((reply!.env.body as { peers: string[] }).peers).toEqual([
+      "sess-3",
+      "agent-1",
+    ]);
   });
 
   test("peers_request reply pulls the LIVE local inventory (broker.localPeerInfos), not a stale cache", () => {
@@ -1094,31 +1266,41 @@ describe("BrokerRemote: control envelopes (peers_update / peers_request)", () =>
     // peer_joined event ever fires for the joiner, so a cached local list
     // would stay []. Reading the broker's live inventory bypasses that.
     const fakePi = new FakePi();
-    const { broker, localPeerInfos } = makeFakeBroker({ localPeers: ["MacMini"] });
+    const { broker, localPeerInfos } = makeFakeBroker({
+      localPeers: ["MacMini"],
+    });
     new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "MacMini", pcPubkey: KEY_B },
-        [{ pcLabel: "MacBook", pcPubkey: KEY_A }],
-      ),
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "MacMini", pcPubkey: KEY_B }, [
+        { pcLabel: "MacBook", pcPubkey: KEY_A },
+      ]),
     });
     // Note: no `onLocalPeersChanged` was ever called. Bootstrap traffic
     // was sent; clear it so we observe the reply path cleanly.
     fakePi.sent.length = 0;
 
-    fakePi.emit("envelope", envelope(
-      "MacBook:_broker_remote", "MacMini:_broker_remote",
-      { type: "peers_request" },
-    ), KEY_A);
+    fakePi.emit(
+      "envelope",
+      envelope("MacBook:_broker_remote", "MacMini:_broker_remote", {
+        type: "peers_request",
+      }),
+      KEY_A,
+    );
 
-    const reply = fakePi.sent.find((s) =>
-      (s.env.body as { type?: string } | null)?.type === "peers_update",
+    const reply = fakePi.sent.find(
+      (s) => (s.env.body as { type?: string } | null)?.type === "peers_update",
     );
     expect(reply).toBeDefined();
-    const body = reply!.env.body as { peers: string[]; peers_detailed: Array<{ cwd: string; name: string; address: string }> };
+    const body = reply!.env.body as {
+      peers: string[];
+      peers_detailed: Array<{ cwd: string; name: string; address: string }>;
+    };
     expect(body.peers).toEqual(["MacMini"]);
     // plan/38 Fase 2: the reply also carries the structured roster.
-    expect(body.peers_detailed).toEqual([{ cwd: "", name: "MacMini", address: "MacMini" }]);
+    expect(body.peers_detailed).toEqual([
+      { cwd: "", name: "MacMini", address: "MacMini" },
+    ]);
     expect(localPeerInfos).toHaveBeenCalled();
   });
 
@@ -1126,22 +1308,20 @@ describe("BrokerRemote: control envelopes (peers_update / peers_request)", () =>
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker();
     const br = new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
         { pcLabel: "trab", pcPubkey: KEY_B },
         { pcLabel: "movel", pcPubkey: KEY_C },
-      ],
-      ),
+      ]),
     });
     // Discard bootstrap announce/request traffic; we only care about the
     // peers_update emitted by `onLocalPeersChanged` below.
     fakePi.sent.length = 0;
     br.onLocalPeersChanged(["sess-3"]);
 
-    const updates = fakePi.sent.filter((s) =>
-      (s.env.body as { type?: string } | null)?.type === "peers_update",
+    const updates = fakePi.sent.filter(
+      (s) => (s.env.body as { type?: string } | null)?.type === "peers_update",
     );
     expect(updates.map((u) => u.toPc).sort()).toEqual([KEY_B, KEY_C]);
   });
@@ -1155,20 +1335,21 @@ describe("BrokerRemote: control envelopes (peers_update / peers_request)", () =>
       const fakePi = new FakePi();
       const { broker } = makeFakeBroker({ localPeers: ["sess-3"] });
       const br = new BrokerRemote({
-        broker, pi: fakePi as never,
-        topology: topology(
-          { pcLabel: "casa", pcPubkey: KEY_A },
-          [{ pcLabel: "trab", pcPubkey: KEY_B }],
-        ),
+        broker,
+        pi: fakePi as never,
+        topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+          { pcLabel: "trab", pcPubkey: KEY_B },
+        ]),
         reannounceIntervalMs: 1_000,
       });
-      fakePi.sent.length = 0;  // drop bootstrap request+push
+      fakePi.sent.length = 0; // drop bootstrap request+push
 
       vi.advanceTimersByTime(1_000);
       // One full re-announce cycle = the bootstrap pair (request + push).
-      const byType = (t: string) => fakePi.sent.filter(
-        (s) => (s.env.body as { type?: string } | null)?.type === t,
-      );
+      const byType = (t: string) =>
+        fakePi.sent.filter(
+          (s) => (s.env.body as { type?: string } | null)?.type === t,
+        );
       expect(byType("peers_request").map((s) => s.toPc)).toEqual([KEY_B]);
       expect(byType("peers_update").map((s) => s.toPc)).toEqual([KEY_B]);
 
@@ -1193,7 +1374,11 @@ describe("BrokerRemote: trusted transport_error provenance boundary", () => {
       ...envelope(
         "_relay",
         "casa:sess-3",
-        { type: "transport_error", reason: "offline", ignored: "private-detail" },
+        {
+          type: "transport_error",
+          reason: "offline",
+          ignored: "private-detail",
+        },
         VALID_RE,
       ),
       ...overrides,
@@ -1212,11 +1397,11 @@ describe("BrokerRemote: trusted transport_error provenance boundary", () => {
       const fakePi = new FakePi();
       const { broker, injectFromRemote } = makeFakeBroker();
       new BrokerRemote({
-        broker, pi: fakePi as never,
-        topology: topology(
-          { pcLabel: "casa", pcPubkey: KEY_A },
-          [{ pcLabel: "trab", pcPubkey: KEY_B }],
-        ),
+        broker,
+        pi: fakePi as never,
+        topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+          { pcLabel: "trab", pcPubkey: KEY_B },
+        ]),
       });
 
       const incoming = relayError({
@@ -1243,36 +1428,46 @@ describe("BrokerRemote: trusted transport_error provenance boundary", () => {
       pi: fakePi as never,
       topology: topology(
         { pcLabel: "casa-local", pcPubkey: KEY_A, legacyPcLabel: ":casa:wire" },
-        [{ pcLabel: "trab-local", pcPubkey: KEY_B, legacyPcLabel: "trab:wire" }],
+        [
+          {
+            pcLabel: "trab-local",
+            pcPubkey: KEY_B,
+            legacyPcLabel: "trab:wire",
+          },
+        ],
       ),
     });
 
     fakePi.emit("envelope", relayError({ to: ":casa:wire:sess-3" }), "_relay");
 
-    expect(injectFromRemote).toHaveBeenCalledWith(expect.objectContaining({
-      from: "broker",
-      to: "sess-3",
-    }));
+    expect(injectFromRemote).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: "broker",
+        to: "sess-3",
+      }),
+    );
   });
 
   test("normalizes only lowercase 32-hex Relay error ids before strict broker injection", () => {
     const fakePi = new FakePi();
     const { broker, injectFromRemote } = makeFakeBroker();
     new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+        { pcLabel: "trab", pcPubkey: KEY_B },
+      ]),
     });
     const legacyId = "01976000000070008000000000000000";
     fakePi.emit("envelope", relayError({ id: legacyId }), "_relay");
 
-    expect(injectFromRemote).toHaveBeenCalledWith(expect.objectContaining({
-      id: "01976000-0000-7000-8000-000000000000",
-      from: "broker",
-      to: "sess-3",
-    }));
+    expect(injectFromRemote).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "01976000-0000-7000-8000-000000000000",
+        from: "broker",
+        to: "sess-3",
+      }),
+    );
   });
 
   test("drops malformed privileged frames before UDS injection or ACK", () => {
@@ -1280,11 +1475,11 @@ describe("BrokerRemote: trusted transport_error provenance boundary", () => {
     const { broker, injectFromRemote } = makeFakeBroker();
     const logs: string[] = [];
     new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+        { pcLabel: "trab", pcPubkey: KEY_B },
+      ]),
       log: (message) => logs.push(message),
     });
 
@@ -1311,7 +1506,9 @@ describe("BrokerRemote: trusted transport_error provenance boundary", () => {
     expect(injectFromRemote).not.toHaveBeenCalled();
     expect(ackCount(fakePi)).toBe(0);
     expect(logs).toHaveLength(invalidFrames.length);
-    expect(logs.every((line) => /event=drop reason=invalid_relay_error/.test(line))).toBe(true);
+    expect(
+      logs.every((line) => /event=drop reason=invalid_relay_error/.test(line)),
+    ).toBe(true);
     for (const privateValue of [
       "private-origin",
       "private-target",
@@ -1326,23 +1523,26 @@ describe("BrokerRemote: trusted transport_error provenance boundary", () => {
     [KEY_B, "_relay"],
     ["_relay ", "_relay"],
     ["_RELAY", "_relay"],
-  ])("requires the exact authenticated outer sentinel: %s", (fromPc, innerFrom) => {
-    const fakePi = new FakePi();
-    const { broker, injectFromRemote } = makeFakeBroker();
-    new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
-      log: () => undefined,
-    });
+  ])(
+    "requires the exact authenticated outer sentinel: %s",
+    (fromPc, innerFrom) => {
+      const fakePi = new FakePi();
+      const { broker, injectFromRemote } = makeFakeBroker();
+      new BrokerRemote({
+        broker,
+        pi: fakePi as never,
+        topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+          { pcLabel: "trab", pcPubkey: KEY_B },
+        ]),
+        log: () => undefined,
+      });
 
-    fakePi.emit("envelope", relayError({ from: innerFrom }), fromPc);
+      fakePi.emit("envelope", relayError({ from: innerFrom }), fromPc);
 
-    expect(injectFromRemote).not.toHaveBeenCalled();
-    expect(ackCount(fakePi)).toBe(0);
-  });
+      expect(injectFromRemote).not.toHaveBeenCalled();
+      expect(ackCount(fakePi)).toBe(0);
+    },
+  );
 
   test.each([
     {
@@ -1355,29 +1555,34 @@ describe("BrokerRemote: trusted transport_error provenance boundary", () => {
       body: { text: "_relay" },
       expectedFrom: "trab:_relay",
     },
-  ])("keeps authenticated sibling text ordinary for $expectedFrom", ({ from, body, expectedFrom }) => {
-    const fakePi = new FakePi();
-    const { broker, injectFromRemote } = makeFakeBroker({ injectStatus: "received" });
-    new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
-    });
+  ])(
+    "keeps authenticated sibling text ordinary for $expectedFrom",
+    ({ from, body, expectedFrom }) => {
+      const fakePi = new FakePi();
+      const { broker, injectFromRemote } = makeFakeBroker({
+        injectStatus: "received",
+      });
+      new BrokerRemote({
+        broker,
+        pi: fakePi as never,
+        topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+          { pcLabel: "trab", pcPubkey: KEY_B },
+        ]),
+      });
 
-    const incoming = envelope(from, "casa:sess-3", body);
-    fakePi.emit("envelope", incoming, KEY_B);
+      const incoming = envelope(from, "casa:sess-3", body);
+      fakePi.emit("envelope", incoming, KEY_B);
 
-    expect(injectFromRemote).toHaveBeenCalledTimes(1);
-    expect(injectFromRemote.mock.calls[0]![0]).toMatchObject({
-      from: expectedFrom,
-      to: "sess-3",
-      body,
-    });
-    expect(injectFromRemote.mock.calls[0]![0].from).not.toBe("broker");
-    expect(ackCount(fakePi)).toBe(1);
-  });
+      expect(injectFromRemote).toHaveBeenCalledTimes(1);
+      expect(injectFromRemote.mock.calls[0]![0]).toMatchObject({
+        from: expectedFrom,
+        to: "sess-3",
+        body,
+      });
+      expect(injectFromRemote.mock.calls[0]![0].from).not.toBe("broker");
+      expect(ackCount(fakePi)).toBe(1);
+    },
+  );
 });
 
 // ── setTopology ──────────────────────────────────────────────────────────────
@@ -1387,25 +1592,28 @@ describe("BrokerRemote.setTopology", () => {
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker();
     const br = new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
         { pcLabel: "trab", pcPubkey: KEY_B },
         { pcLabel: "movel", pcPubkey: KEY_C },
-      ],
-      ),
+      ]),
     });
-    fakePi.emit("envelope", envelope(
-      "trab:_broker_remote", "casa:_broker_remote",
-      { type: "peers_update", peers: ["agent-1"] },
-    ), KEY_B);
+    fakePi.emit(
+      "envelope",
+      envelope("trab:_broker_remote", "casa:_broker_remote", {
+        type: "peers_update",
+        peers: ["agent-1"],
+      }),
+      KEY_B,
+    );
     expect(br.getRemotePeers("trab")).toEqual(["agent-1"]);
 
-    br.setTopology(topology(
-      { pcLabel: "casa", pcPubkey: KEY_A },
-      [{ pcLabel: "movel", pcPubkey: KEY_C }],
-    ));
+    br.setTopology(
+      topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+        { pcLabel: "movel", pcPubkey: KEY_C },
+      ]),
+    );
     expect(br.getRemotePeers("trab")).toEqual([]);
   });
 
@@ -1413,18 +1621,16 @@ describe("BrokerRemote.setTopology", () => {
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker();
     const br = new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [
-        { pcLabel: "casa", pcPubkey: KEY_A },     // self by both
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+        { pcLabel: "casa", pcPubkey: KEY_A }, // self by both
         { pcLabel: "trab", pcPubkey: KEY_B },
-      ],
-      ),
+      ]),
     });
 
     const env = envelope("sess-3", "casa:agent-1", { x: 1 });
-    expect(br.tryRouteOutbound(env)).toBe(false);  // self → local
+    expect(br.tryRouteOutbound(env)).toBe(false); // self → local
   });
 });
 
@@ -1435,18 +1641,16 @@ describe("BrokerRemote: bootstrap peers_request (plan/25 Wave B)", () => {
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker();
     new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
         { pcLabel: "trab", pcPubkey: KEY_B },
         { pcLabel: "movel", pcPubkey: KEY_C },
-      ],
-      ),
+      ]),
     });
 
-    const requests = fakePi.sent.filter((s) =>
-      (s.env.body as { type?: string } | null)?.type === "peers_request",
+    const requests = fakePi.sent.filter(
+      (s) => (s.env.body as { type?: string } | null)?.type === "peers_request",
     );
     expect(requests.map((r) => r.toPc).sort()).toEqual([KEY_B, KEY_C]);
   });
@@ -1455,26 +1659,29 @@ describe("BrokerRemote: bootstrap peers_request (plan/25 Wave B)", () => {
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker({ localPeers: ["MacMini"] });
     new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "MacMini", pcPubkey: KEY_B },
-        [{ pcLabel: "MacBook", pcPubkey: KEY_A }],
-      ),
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "MacMini", pcPubkey: KEY_B }, [
+        { pcLabel: "MacBook", pcPubkey: KEY_A },
+      ]),
     });
 
-    const announces = fakePi.sent.filter((s) =>
-      (s.env.body as { type?: string } | null)?.type === "peers_update",
+    const announces = fakePi.sent.filter(
+      (s) => (s.env.body as { type?: string } | null)?.type === "peers_update",
     );
     expect(announces.length).toBe(1);
     expect(announces[0]!.toPc).toBe(KEY_A);
-    expect((announces[0]!.env.body as { peers: string[] }).peers).toEqual(["MacMini"]);
+    expect((announces[0]!.env.body as { peers: string[] }).peers).toEqual([
+      "MacMini",
+    ]);
   });
 
   test("no peers_request emitted when there are zero siblings", () => {
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker();
     new BrokerRemote({
-      broker, pi: fakePi as never,
+      broker,
+      pi: fakePi as never,
       topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }),
     });
 
@@ -1485,27 +1692,26 @@ describe("BrokerRemote: bootstrap peers_request (plan/25 Wave B)", () => {
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker();
     const br = new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [{ pcLabel: "trab", pcPubkey: KEY_B }],
-      ),
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+        { pcLabel: "trab", pcPubkey: KEY_B },
+      ]),
     });
     // Drop initial bootstrap traffic so the assertion is isolated.
     fakePi.sent.length = 0;
 
     // Replace with set that keeps K_B and adds K_C. We expect a single
     // peers_request to K_C; K_B should NOT be re-pinged.
-    br.setTopology(topology(
-      { pcLabel: "casa", pcPubkey: KEY_A },
-      [
+    br.setTopology(
+      topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
         { pcLabel: "trab", pcPubkey: KEY_B },
         { pcLabel: "movel", pcPubkey: KEY_C },
-      ],
-    ));
+      ]),
+    );
 
-    const requests = fakePi.sent.filter((s) =>
-      (s.env.body as { type?: string } | null)?.type === "peers_request",
+    const requests = fakePi.sent.filter(
+      (s) => (s.env.body as { type?: string } | null)?.type === "peers_request",
     );
     expect(requests.map((r) => r.toPc)).toEqual([KEY_C]);
   });
@@ -1523,38 +1729,41 @@ describe("BrokerRemote: bootstrap peers_request (plan/25 Wave B)", () => {
     });
     fakePi.sent.length = 0;
 
-    br.setTopology(topology(
-      { pcLabel: "casa", pcPubkey: KEY_A, legacyPcLabel: "casa-old" },
-      [{ pcLabel: "trab", pcPubkey: KEY_B, legacyPcLabel: "trab-new" }],
-    ));
+    br.setTopology(
+      topology(
+        { pcLabel: "casa", pcPubkey: KEY_A, legacyPcLabel: "casa-old" },
+        [{ pcLabel: "trab", pcPubkey: KEY_B, legacyPcLabel: "trab-new" }],
+      ),
+    );
 
     const controls = fakePi.sent.filter((sent) => sent.toPc === KEY_B);
     expect(controls).toHaveLength(2);
-    expect(controls.every((sent) => sent.env.to === "trab-new:_broker_remote")).toBe(true);
+    expect(
+      controls.every((sent) => sent.env.to === "trab-new:_broker_remote"),
+    ).toBe(true);
   });
 
   test("setTopology removes a sibling without firing peers_request for the survivors", () => {
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker();
     const br = new BrokerRemote({
-      broker, pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "casa", pcPubkey: KEY_A },
-        [
+      broker,
+      pi: fakePi as never,
+      topology: topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
         { pcLabel: "trab", pcPubkey: KEY_B },
         { pcLabel: "movel", pcPubkey: KEY_C },
-      ],
-      ),
+      ]),
     });
     fakePi.sent.length = 0;
 
-    br.setTopology(topology(
-      { pcLabel: "casa", pcPubkey: KEY_A },
-      [{ pcLabel: "movel", pcPubkey: KEY_C }],
-    ));
+    br.setTopology(
+      topology({ pcLabel: "casa", pcPubkey: KEY_A }, [
+        { pcLabel: "movel", pcPubkey: KEY_C },
+      ]),
+    );
 
-    const requests = fakePi.sent.filter((s) =>
-      (s.env.body as { type?: string } | null)?.type === "peers_request",
+    const requests = fakePi.sent.filter(
+      (s) => (s.env.body as { type?: string } | null)?.type === "peers_request",
     );
     expect(requests).toEqual([]);
   });
@@ -1569,21 +1778,18 @@ describe("BrokerRemote canonical topology and receiver-local routing", () => {
       new BrokerRemote({
         broker,
         pi: fakePi as never,
-        topology: topology(
-          { pcLabel: "Captiva-RTX-4090", pcPubkey: KEY_A },
-          [{ pcLabel: "mac", pcPubkey: KEY_B }],
-        ),
+        topology: topology({ pcLabel: "Captiva-RTX-4090", pcPubkey: KEY_A }, [
+          { pcLabel: "mac", pcPubkey: KEY_B },
+        ]),
         reannounceIntervalMs: 0,
       });
       fakePi.sent.length = 0;
 
       fakePi.emit(
         "envelope",
-        envelope(
-          "Mac:C:\\work\\sender@agent",
-          "RTX4090:/local@target",
-          { hello: "world" },
-        ),
+        envelope("Mac:C:\\work\\sender@agent", "RTX4090:/local@target", {
+          hello: "world",
+        }),
         fromPc,
       );
 
@@ -1602,10 +1808,9 @@ describe("BrokerRemote canonical topology and receiver-local routing", () => {
     new BrokerRemote({
       broker,
       pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "self", pcPubkey: KEY_A },
-        [{ pcLabel: "remote", pcPubkey: KEY_B }],
-      ),
+      topology: topology({ pcLabel: "self", pcPubkey: KEY_A }, [
+        { pcLabel: "remote", pcPubkey: KEY_B },
+      ]),
       reannounceIntervalMs: 0,
       log: (message) => logs.push(message),
     });
@@ -1625,22 +1830,26 @@ describe("BrokerRemote canonical topology and receiver-local routing", () => {
     expect(logs).toHaveLength(2);
     expect(logs[0]).toMatch(/reason=invalid_from_pc/);
     expect(logs[1]).toMatch(/reason=unknown_from_pc fingerprint=[0-9a-f]{8}/);
-    expect(logs.every((line) => !/raw-secret|raw-target|bad key|secret/.test(line))).toBe(true);
+    expect(
+      logs.every((line) => !/raw-secret|raw-target|bad key|secret/.test(line)),
+    ).toBe(true);
   });
 
   test("rejects a sibling alias that conflicts with the self alias", () => {
     const fakePi = new FakePi();
     const { broker } = makeFakeBroker();
 
-    expect(() => new BrokerRemote({
-      broker,
-      pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "same", pcPubkey: KEY_A },
-        [{ pcLabel: "same", pcPubkey: KEY_B }],
-      ),
-      reannounceIntervalMs: 0,
-    })).toThrow(/alias conflicts with self/);
+    expect(
+      () =>
+        new BrokerRemote({
+          broker,
+          pi: fakePi as never,
+          topology: topology({ pcLabel: "same", pcPubkey: KEY_A }, [
+            { pcLabel: "same", pcPubkey: KEY_B },
+          ]),
+          reannounceIntervalMs: 0,
+        }),
+    ).toThrow(/alias conflicts with self/);
   });
 
   test("alias-only topology refresh preserves cache, rekeys roster, and reboots controls", () => {
@@ -1649,48 +1858,61 @@ describe("BrokerRemote canonical topology and receiver-local routing", () => {
     const br = new BrokerRemote({
       broker,
       pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "self-old", pcPubkey: KEY_A },
-        [{ pcLabel: "remote-old", pcPubkey: KEY_B }],
-      ),
+      topology: topology({ pcLabel: "self-old", pcPubkey: KEY_A }, [
+        { pcLabel: "remote-old", pcPubkey: KEY_B },
+      ]),
       reannounceIntervalMs: 0,
     });
     fakePi.sent.length = 0;
     fakePi.emit(
       "envelope",
-      envelope(
-        "sender-old:_broker_remote",
-        "receiver-old:_broker_remote",
-        { type: "peers_update", peers: ["/remote@app"] },
-      ),
+      envelope("sender-old:_broker_remote", "receiver-old:_broker_remote", {
+        type: "peers_update",
+        peers: ["/remote@app"],
+      }),
       KEY_B_URL,
     );
     expect(br.listRemotePeers()).toEqual(["remote-old:/remote@app"]);
     fakePi.sent.length = 0;
 
     br.setTopology(
-      topology(
-        { pcLabel: "self-new", pcPubkey: KEY_A },
-        [{ pcLabel: "remote-new", pcPubkey: KEY_B_URL }],
-      ),
+      topology({ pcLabel: "self-new", pcPubkey: KEY_A }, [
+        { pcLabel: "remote-new", pcPubkey: KEY_B_URL },
+      ]),
     );
 
     expect(br.listRemotePeers()).toEqual(["remote-new:/remote@app"]);
-    expect(fakePi.sent.filter((sent) =>
-      (sent.env.body as { type?: string } | null)?.type === "peers_request"
-    ).map((sent) => sent.toPc)).toEqual([KEY_B]);
-    expect(fakePi.sent.filter((sent) =>
-      (sent.env.body as { type?: string } | null)?.type === "peers_update"
-    ).map((sent) => sent.toPc)).toEqual([KEY_B]);
+    expect(
+      fakePi.sent
+        .filter(
+          (sent) =>
+            (sent.env.body as { type?: string } | null)?.type ===
+            "peers_request",
+        )
+        .map((sent) => sent.toPc),
+    ).toEqual([KEY_B]);
+    expect(
+      fakePi.sent
+        .filter(
+          (sent) =>
+            (sent.env.body as { type?: string } | null)?.type ===
+            "peers_update",
+        )
+        .map((sent) => sent.toPc),
+    ).toEqual([KEY_B]);
     const outbound = envelope("local", "remote-new:agent", { task: true });
     br.tryRouteOutbound(outbound);
-    expect(fakePi.sent.find((sent) => sent.env.id === outbound.id)?.env.from)
-      .toBe("self-new:local");
+    expect(
+      fakePi.sent.find((sent) => sent.env.id === outbound.id)?.env.from,
+    ).toBe("self-new:local");
 
-    expect(() => br.setTopology(topology(
-      { pcLabel: "self-new", pcPubkey: KEY_C },
-      [{ pcLabel: "remote-new", pcPubkey: KEY_B }],
-    ))).toThrow(/self public key/);
+    expect(() =>
+      br.setTopology(
+        topology({ pcLabel: "self-new", pcPubkey: KEY_C }, [
+          { pcLabel: "remote-new", pcPubkey: KEY_B },
+        ]),
+      ),
+    ).toThrow(/self public key/);
     expect(br.listRemotePeers()).toEqual(["remote-new:/remote@app"]);
   });
 
@@ -1700,20 +1922,24 @@ describe("BrokerRemote canonical topology and receiver-local routing", () => {
     const br = new BrokerRemote({
       broker,
       pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "self", pcPubkey: KEY_A },
-        [{ pcLabel: "__proto__", pcPubkey: KEY_B }],
-      ),
+      topology: topology({ pcLabel: "self", pcPubkey: KEY_A }, [
+        { pcLabel: "__proto__", pcPubkey: KEY_B },
+      ]),
       reannounceIntervalMs: 0,
     });
-    fakePi.emit("envelope", envelope(
-      "ignored:_broker_remote",
-      "self:_broker_remote",
-      { type: "peers_update", peers: ["remote"] },
-    ), KEY_B);
+    fakePi.emit(
+      "envelope",
+      envelope("ignored:_broker_remote", "self:_broker_remote", {
+        type: "peers_update",
+        peers: ["remote"],
+      }),
+      KEY_B,
+    );
 
     const grouped = br.getAllRemote();
-    expect(Object.prototype.hasOwnProperty.call(grouped, "__proto__")).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(grouped, "__proto__")).toBe(
+      true,
+    );
     expect(grouped["__proto__"]).toEqual(["remote"]);
     expect(Object.getPrototypeOf(grouped)).toBe(Object.prototype);
   });
@@ -1724,32 +1950,35 @@ describe("BrokerRemote canonical topology and receiver-local routing", () => {
     const br = new BrokerRemote({
       broker,
       pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "self", pcPubkey: KEY_A },
-        [{ pcLabel: "remote", pcPubkey: KEY_B }],
-      ),
+      topology: topology({ pcLabel: "self", pcPubkey: KEY_A }, [
+        { pcLabel: "remote", pcPubkey: KEY_B },
+      ]),
       reannounceIntervalMs: 0,
     });
     fakePi.sent.length = 0;
 
-    expect(() => br.setTopology(topology(
-      { pcLabel: "self", pcPubkey: KEY_A },
-      [
-        { pcLabel: "duplicate", pcPubkey: KEY_C },
-        { pcLabel: "duplicate", pcPubkey: KEY_D },
-      ],
-    ))).toThrow(/duplicate sibling routing alias/);
-    expect(() => br.setTopology(topology(
-      { pcLabel: "self", pcPubkey: KEY_A },
-      [
-        { pcLabel: "one", pcPubkey: KEY_B },
-        { pcLabel: "two", pcPubkey: KEY_B_URL },
-      ],
-    ))).toThrow(/duplicate sibling public key/);
+    expect(() =>
+      br.setTopology(
+        topology({ pcLabel: "self", pcPubkey: KEY_A }, [
+          { pcLabel: "duplicate", pcPubkey: KEY_C },
+          { pcLabel: "duplicate", pcPubkey: KEY_D },
+        ]),
+      ),
+    ).toThrow(/duplicate sibling routing alias/);
+    expect(() =>
+      br.setTopology(
+        topology({ pcLabel: "self", pcPubkey: KEY_A }, [
+          { pcLabel: "one", pcPubkey: KEY_B },
+          { pcLabel: "two", pcPubkey: KEY_B_URL },
+        ]),
+      ),
+    ).toThrow(/duplicate sibling public key/);
 
     const outbound = envelope("local", "remote:agent", { task: true });
     expect(br.tryRouteOutbound(outbound)).toBe(true);
-    expect(fakePi.sent.find((sent) => sent.env.id === outbound.id)?.toPc).toBe(KEY_B);
+    expect(fakePi.sent.find((sent) => sent.env.id === outbound.id)?.toPc).toBe(
+      KEY_B,
+    );
   });
 
   test("missing technical prefixes fail closed without logging addresses", () => {
@@ -1759,21 +1988,32 @@ describe("BrokerRemote canonical topology and receiver-local routing", () => {
     new BrokerRemote({
       broker,
       pi: fakePi as never,
-      topology: topology(
-        { pcLabel: "self", pcPubkey: KEY_A },
-        [{ pcLabel: "remote", pcPubkey: KEY_B }],
-      ),
+      topology: topology({ pcLabel: "self", pcPubkey: KEY_A }, [
+        { pcLabel: "remote", pcPubkey: KEY_B },
+      ]),
       reannounceIntervalMs: 0,
       log: (message) => logs.push(message),
     });
 
-    fakePi.emit("envelope", envelope("no-prefix", "self:target", { x: 1 }), KEY_B);
-    fakePi.emit("envelope", envelope("old:sender", "no-prefix", { x: 2 }), KEY_B);
+    fakePi.emit(
+      "envelope",
+      envelope("no-prefix", "self:target", { x: 1 }),
+      KEY_B,
+    );
+    fakePi.emit(
+      "envelope",
+      envelope("old:sender", "no-prefix", { x: 2 }),
+      KEY_B,
+    );
     fakePi.emit("envelope", envelope("old:", "self:target", { x: 3 }), KEY_B);
-    fakePi.emit("envelope", {
-      ...envelope("old:sender", "self:target", { x: 4 }),
-      to: ["self:target"],
-    }, KEY_B);
+    fakePi.emit(
+      "envelope",
+      {
+        ...envelope("old:sender", "self:target", { x: 4 }),
+        to: ["self:target"],
+      },
+      KEY_B,
+    );
 
     expect(injectFromRemote).not.toHaveBeenCalled();
     expect(logs).toEqual([
@@ -1782,7 +2022,9 @@ describe("BrokerRemote canonical topology and receiver-local routing", () => {
       expect.stringMatching(/reason=invalid_cross_pc_address/),
       expect.stringMatching(/reason=invalid_to/),
     ]);
-    expect(logs.every((line) => !/no-prefix|target|sender/.test(line))).toBe(true);
+    expect(logs.every((line) => !/no-prefix|target|sender/.test(line))).toBe(
+      true,
+    );
   });
 });
 
@@ -1802,293 +2044,318 @@ describe("BrokerRemote current ↔ frozen old-Extension compatibility oracle", (
       newPcPubkey: FALLBACK_KEY_A,
       oldPcPubkey: FALLBACK_KEY_B,
     },
-  ])("preserves bootstrap, delivery, ACKs, replies, and receiver-local aliases for $name", ({
-    newNickname,
-    oldNickname,
-    newPcPubkey,
-    oldPcPubkey,
-  }) => {
-    const newLegacyLabel = frozenOldLegacyPcLabel(newNickname, newPcPubkey);
-    const oldLegacyLabel = frozenOldLegacyPcLabel(oldNickname, oldPcPubkey);
-    if (newNickname === undefined && oldNickname === undefined) {
-      expect(newLegacyLabel).toBe(newPcPubkey.slice(0, 8));
-      expect(oldLegacyLabel).toBe(oldPcPubkey.slice(0, 8));
-      for (const [standard, urlSafe] of [
-        [newPcPubkey, FALLBACK_KEY_A_URL],
-        [oldPcPubkey, FALLBACK_KEY_B_URL],
-      ]) {
-        expect(standard.slice(0, 8)).toMatch(/[+/]/);
-        expect(standard.slice(0, 8)).not.toBe(urlSafe.slice(0, 8));
+  ])(
+    "preserves bootstrap, delivery, ACKs, replies, and receiver-local aliases for $name",
+    ({ newNickname, oldNickname, newPcPubkey, oldPcPubkey }) => {
+      const newLegacyLabel = frozenOldLegacyPcLabel(newNickname, newPcPubkey);
+      const oldLegacyLabel = frozenOldLegacyPcLabel(oldNickname, oldPcPubkey);
+      if (newNickname === undefined && oldNickname === undefined) {
+        expect(newLegacyLabel).toBe(newPcPubkey.slice(0, 8));
+        expect(oldLegacyLabel).toBe(oldPcPubkey.slice(0, 8));
+        for (const [standard, urlSafe] of [
+          [newPcPubkey, FALLBACK_KEY_A_URL],
+          [oldPcPubkey, FALLBACK_KEY_B_URL],
+        ]) {
+          expect(standard.slice(0, 8)).toMatch(/[+/]/);
+          expect(standard.slice(0, 8)).not.toBe(urlSafe.slice(0, 8));
+        }
       }
-    }
 
-    const currentPi = new FakePi();
-    const currentPending = new FrozenPendingAckRegistry();
-    const oldPending = new FrozenPendingAckRegistry();
-    const currentBroker = makeFakeBroker({
-      localPeers: ["new-sender"],
-      onInject: (env) => currentPending.consume(env),
-    });
-    const current = new BrokerRemote({
-      broker: currentBroker.broker,
-      pi: currentPi as never,
-      topology: topology(
-        {
-          pcLabel: "new-self-local",
-          pcPubkey: newPcPubkey,
-          legacyPcLabel: newLegacyLabel,
-        },
-        [{
-          pcLabel: "old-at-new",
-          pcPubkey: oldPcPubkey,
-          legacyPcLabel: oldLegacyLabel,
-        }],
-      ),
-      reannounceIntervalMs: 0,
-    });
-    const old = new FrozenOldBrokerRemoteOracle(
-      oldLegacyLabel,
-      newLegacyLabel,
-      newPcPubkey,
-      ["old-worker"],
-      (env) => oldPending.consume(env),
-    );
-
-    try {
-      // Both implementations bootstrap with peers_request + peers_update in
-      // both directions, using the exact historical legacy prefixes.
-      const bootstrap = pumpCurrentAndFrozenOld(
-        currentPi,
-        old,
-        newPcPubkey,
-        oldPcPubkey,
-      );
-      expect(bootstrap).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          direction: "current→old",
-          env: expect.objectContaining({
-            from: `${newLegacyLabel}:_broker_remote`,
-            to: `${oldLegacyLabel}:_broker_remote`,
-            body: expect.objectContaining({ type: "peers_request" }),
-          }),
-        }),
-        expect.objectContaining({
-          direction: "current→old",
-          env: expect.objectContaining({
-            from: `${newLegacyLabel}:_broker_remote`,
-            to: `${oldLegacyLabel}:_broker_remote`,
-            body: expect.objectContaining({ type: "peers_update" }),
-          }),
-        }),
-        expect.objectContaining({
-          direction: "old→current",
-          env: expect.objectContaining({
-            from: `${oldLegacyLabel}:_broker_remote`,
-            to: `${newLegacyLabel}:_broker_remote`,
-            body: expect.objectContaining({ type: "peers_request" }),
-          }),
-        }),
-        expect.objectContaining({
-          direction: "old→current",
-          env: expect.objectContaining({
-            from: `${oldLegacyLabel}:_broker_remote`,
-            to: `${newLegacyLabel}:_broker_remote`,
-            body: expect.objectContaining({ type: "peers_update" }),
-          }),
-        }),
-      ]));
-      const oldUpdate = bootstrap.find((delivery) =>
-        delivery.direction === "old→current" &&
-        (delivery.env.body as { type?: string } | null)?.type === "peers_update",
-      );
-      expect(oldUpdate?.env.body).toEqual({
-        type: "peers_update",
-        peers: ["old-worker"],
-        peers_detailed: [{ cwd: "", name: "old-worker", address: "old-worker" }],
+      const currentPi = new FakePi();
+      const currentPending = new FrozenPendingAckRegistry();
+      const oldPending = new FrozenPendingAckRegistry();
+      const currentBroker = makeFakeBroker({
+        localPeers: ["new-sender"],
+        onInject: (env) => currentPending.consume(env),
       });
-      expect(current.getRemotePeers("old-at-new")).toEqual(["old-worker"]);
-      expect(old.getRemotePeers()).toEqual(["new-sender"]);
-
-      // New → old: current emits old labels, old settles the one wire ACK.
-      const newToOld = envelope(
-        "new-sender",
-        "old-at-new:old-worker",
-        { type: "work", direction: "new-to-old" },
-      );
-      currentPending.track(newToOld, "old-at-new:broker");
-      expect(current.tryRouteOutbound(newToOld)).toBe(true);
-      const newToOldDeliveries = pumpCurrentAndFrozenOld(
-        currentPi,
-        old,
-        newPcPubkey,
-        oldPcPubkey,
-      );
-      const newToOldRequest = newToOldDeliveries.filter((delivery) =>
-        delivery.direction === "current→old" && delivery.env.id === newToOld.id,
-      );
-      const newToOldAck = newToOldDeliveries.filter((delivery) =>
-        delivery.direction === "old→current" &&
-        delivery.env.re === newToOld.id &&
-        (delivery.env.body as { type?: string } | null)?.type === "ack",
-      );
-      expect(newToOldRequest).toHaveLength(1);
-      expect(newToOldAck).toHaveLength(1);
-      expect(newToOldAck[0]!.env.to).toBe(newToOldRequest[0]!.env.from);
-      expect(newToOldAck[0]!.env.re).toBe(newToOld.id);
-      expect(old.injected).toContainEqual(expect.objectContaining({
-        id: newToOld.id,
-        from: `${newLegacyLabel}:new-sender`,
-        to: "old-worker",
-      }));
-      const newToOldSettled = currentBroker.injected.filter(
-        (candidate) => candidate.re === newToOld.id,
-      );
-      expect(newToOldSettled).toHaveLength(1);
-      expect(newToOldSettled[0]).toMatchObject({
-        from: "old-at-new:broker",
-        to: "new-sender",
-        body: expect.objectContaining({ type: "ack", target: "old-worker" }),
+      const current = new BrokerRemote({
+        broker: currentBroker.broker,
+        pi: currentPi as never,
+        topology: topology(
+          {
+            pcLabel: "new-self-local",
+            pcPubkey: newPcPubkey,
+            legacyPcLabel: newLegacyLabel,
+          },
+          [
+            {
+              pcLabel: "old-at-new",
+              pcPubkey: oldPcPubkey,
+              legacyPcLabel: oldLegacyLabel,
+            },
+          ],
+        ),
+        reannounceIntervalMs: 0,
       });
-      expectExactlyOnceSettlement(
-        currentPending,
-        newToOld.id,
-        newToOldSettled[0]!,
+      const old = new FrozenOldBrokerRemoteOracle(
+        oldLegacyLabel,
+        newLegacyLabel,
+        newPcPubkey,
+        ["old-worker"],
+        (env) => oldPending.consume(env),
       );
 
-      // Old → new: current strips the wire labels and old gets one ACK back.
-      const oldToNew = envelope(
-        "old-worker",
-        `${newLegacyLabel}:new-sender`,
-        { type: "work", direction: "old-to-new" },
-      );
-      oldPending.track(oldToNew, `${newLegacyLabel}:broker`);
-      expect(old.tryRouteOutbound(oldToNew)).toBe(true);
-      const oldToNewDeliveries = pumpCurrentAndFrozenOld(
-        currentPi,
-        old,
-        newPcPubkey,
-        oldPcPubkey,
-      );
-      const oldToNewRequest = oldToNewDeliveries.filter((delivery) =>
-        delivery.direction === "old→current" && delivery.env.id === oldToNew.id,
-      );
-      const oldToNewAck = oldToNewDeliveries.filter((delivery) =>
-        delivery.direction === "current→old" &&
-        delivery.env.re === oldToNew.id &&
-        (delivery.env.body as { type?: string } | null)?.type === "ack",
-      );
-      expect(oldToNewRequest).toHaveLength(1);
-      expect(oldToNewAck).toHaveLength(1);
-      expect(oldToNewAck[0]!.env.to).toBe(oldToNewRequest[0]!.env.from);
-      expect(oldToNewAck[0]!.env.re).toBe(oldToNew.id);
-      expect(currentBroker.injected).toContainEqual(expect.objectContaining({
-        id: oldToNew.id,
-        from: "old-at-new:old-worker",
-        to: "new-sender",
-      }));
-      const oldToNewSettled = old.injected.filter(
-        (candidate) => candidate.re === oldToNew.id,
-      );
-      expect(oldToNewSettled).toHaveLength(1);
-      expect(oldToNewSettled[0]).toMatchObject({
-        from: `${newLegacyLabel}:broker`,
-        to: "old-worker",
-        body: expect.objectContaining({ type: "ack", target: "new-sender" }),
-      });
-      expectExactlyOnceSettlement(
-        oldPending,
-        oldToNew.id,
-        oldToNewSettled[0]!,
-      );
+      try {
+        // Both implementations bootstrap with peers_request + peers_update in
+        // both directions, using the exact historical legacy prefixes.
+        const bootstrap = pumpCurrentAndFrozenOld(
+          currentPi,
+          old,
+          newPcPubkey,
+          oldPcPubkey,
+        );
+        expect(bootstrap).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              direction: "current→old",
+              env: expect.objectContaining({
+                from: `${newLegacyLabel}:_broker_remote`,
+                to: `${oldLegacyLabel}:_broker_remote`,
+                body: expect.objectContaining({ type: "peers_request" }),
+              }),
+            }),
+            expect.objectContaining({
+              direction: "current→old",
+              env: expect.objectContaining({
+                from: `${newLegacyLabel}:_broker_remote`,
+                to: `${oldLegacyLabel}:_broker_remote`,
+                body: expect.objectContaining({ type: "peers_update" }),
+              }),
+            }),
+            expect.objectContaining({
+              direction: "old→current",
+              env: expect.objectContaining({
+                from: `${oldLegacyLabel}:_broker_remote`,
+                to: `${newLegacyLabel}:_broker_remote`,
+                body: expect.objectContaining({ type: "peers_request" }),
+              }),
+            }),
+            expect.objectContaining({
+              direction: "old→current",
+              env: expect.objectContaining({
+                from: `${oldLegacyLabel}:_broker_remote`,
+                to: `${newLegacyLabel}:_broker_remote`,
+                body: expect.objectContaining({ type: "peers_update" }),
+              }),
+            }),
+          ]),
+        );
+        const oldUpdate = bootstrap.find(
+          (delivery) =>
+            delivery.direction === "old→current" &&
+            (delivery.env.body as { type?: string } | null)?.type ===
+              "peers_update",
+        );
+        expect(oldUpdate?.env.body).toEqual({
+          type: "peers_update",
+          peers: ["old-worker"],
+          peers_detailed: [
+            { cwd: "", name: "old-worker", address: "old-worker" },
+          ],
+        });
+        expect(current.getRemotePeers("old-at-new")).toEqual(["old-worker"]);
+        expect(old.getRemotePeers()).toEqual(["new-sender"]);
 
-      // Replies retain correlation and each produces one reverse wire ACK.
-      const oldReply = envelope(
-        "old-worker",
-        `${newLegacyLabel}:new-sender`,
-        { type: "reply", direction: "old-to-new" },
-        newToOld.id,
-      );
-      oldPending.track(oldReply, `${newLegacyLabel}:broker`);
-      expect(old.tryRouteOutbound(oldReply)).toBe(true);
-      const oldReplyDeliveries = pumpCurrentAndFrozenOld(
-        currentPi,
-        old,
-        newPcPubkey,
-        oldPcPubkey,
-      );
-      const oldReplyRequest = oldReplyDeliveries.filter((delivery) =>
-        delivery.direction === "old→current" && delivery.env.id === oldReply.id,
-      );
-      const oldReplyAck = oldReplyDeliveries.filter((delivery) =>
-        delivery.direction === "current→old" &&
-        delivery.env.re === oldReply.id &&
-        (delivery.env.body as { type?: string } | null)?.type === "ack",
-      );
-      expect(oldReplyRequest).toHaveLength(1);
-      expect(oldReplyAck).toHaveLength(1);
-      expect(oldReplyAck[0]!.env.to).toBe(oldReplyRequest[0]!.env.from);
-      expect(oldReplyAck[0]!.env.re).toBe(oldReply.id);
-      const oldReplySettled = old.injected.filter(
-        (candidate) => candidate.re === oldReply.id,
-      );
-      expect(oldReplySettled).toHaveLength(1);
-      expectExactlyOnceSettlement(
-        oldPending,
-        oldReply.id,
-        oldReplySettled[0]!,
-      );
-      expect(currentBroker.injected).toContainEqual(expect.objectContaining({
-        id: oldReply.id,
-        re: newToOld.id,
-        from: "old-at-new:old-worker",
-        to: "new-sender",
-      }));
+        // New → old: current emits old labels, old settles the one wire ACK.
+        const newToOld = envelope("new-sender", "old-at-new:old-worker", {
+          type: "work",
+          direction: "new-to-old",
+        });
+        currentPending.track(newToOld, "old-at-new:broker");
+        expect(current.tryRouteOutbound(newToOld)).toBe(true);
+        const newToOldDeliveries = pumpCurrentAndFrozenOld(
+          currentPi,
+          old,
+          newPcPubkey,
+          oldPcPubkey,
+        );
+        const newToOldRequest = newToOldDeliveries.filter(
+          (delivery) =>
+            delivery.direction === "current→old" &&
+            delivery.env.id === newToOld.id,
+        );
+        const newToOldAck = newToOldDeliveries.filter(
+          (delivery) =>
+            delivery.direction === "old→current" &&
+            delivery.env.re === newToOld.id &&
+            (delivery.env.body as { type?: string } | null)?.type === "ack",
+        );
+        expect(newToOldRequest).toHaveLength(1);
+        expect(newToOldAck).toHaveLength(1);
+        expect(newToOldAck[0]!.env.to).toBe(newToOldRequest[0]!.env.from);
+        expect(newToOldAck[0]!.env.re).toBe(newToOld.id);
+        expect(old.injected).toContainEqual(
+          expect.objectContaining({
+            id: newToOld.id,
+            from: `${newLegacyLabel}:new-sender`,
+            to: "old-worker",
+          }),
+        );
+        const newToOldSettled = currentBroker.injected.filter(
+          (candidate) => candidate.re === newToOld.id,
+        );
+        expect(newToOldSettled).toHaveLength(1);
+        expect(newToOldSettled[0]).toMatchObject({
+          from: "old-at-new:broker",
+          to: "new-sender",
+          body: expect.objectContaining({ type: "ack", target: "old-worker" }),
+        });
+        expectExactlyOnceSettlement(
+          currentPending,
+          newToOld.id,
+          newToOldSettled[0]!,
+        );
 
-      const newReply = envelope(
-        "new-sender",
-        "old-at-new:old-worker",
-        { type: "reply", direction: "new-to-old" },
-        oldToNew.id,
-      );
-      currentPending.track(newReply, "old-at-new:broker");
-      expect(current.tryRouteOutbound(newReply)).toBe(true);
-      const newReplyDeliveries = pumpCurrentAndFrozenOld(
-        currentPi,
-        old,
-        newPcPubkey,
-        oldPcPubkey,
-      );
-      const newReplyRequest = newReplyDeliveries.filter((delivery) =>
-        delivery.direction === "current→old" && delivery.env.id === newReply.id,
-      );
-      const newReplyAck = newReplyDeliveries.filter((delivery) =>
-        delivery.direction === "old→current" &&
-        delivery.env.re === newReply.id &&
-        (delivery.env.body as { type?: string } | null)?.type === "ack",
-      );
-      expect(newReplyRequest).toHaveLength(1);
-      expect(newReplyAck).toHaveLength(1);
-      expect(newReplyAck[0]!.env.to).toBe(newReplyRequest[0]!.env.from);
-      expect(newReplyAck[0]!.env.re).toBe(newReply.id);
-      const newReplySettled = currentBroker.injected.filter(
-        (candidate) => candidate.re === newReply.id,
-      );
-      expect(newReplySettled).toHaveLength(1);
-      expectExactlyOnceSettlement(
-        currentPending,
-        newReply.id,
-        newReplySettled[0]!,
-      );
-      expect(old.injected).toContainEqual(expect.objectContaining({
-        id: newReply.id,
-        re: oldToNew.id,
-        from: `${newLegacyLabel}:new-sender`,
-        to: "old-worker",
-      }));
-    } finally {
-      current.detach();
-    }
-  });
+        // Old → new: current strips the wire labels and old gets one ACK back.
+        const oldToNew = envelope(
+          "old-worker",
+          `${newLegacyLabel}:new-sender`,
+          { type: "work", direction: "old-to-new" },
+        );
+        oldPending.track(oldToNew, `${newLegacyLabel}:broker`);
+        expect(old.tryRouteOutbound(oldToNew)).toBe(true);
+        const oldToNewDeliveries = pumpCurrentAndFrozenOld(
+          currentPi,
+          old,
+          newPcPubkey,
+          oldPcPubkey,
+        );
+        const oldToNewRequest = oldToNewDeliveries.filter(
+          (delivery) =>
+            delivery.direction === "old→current" &&
+            delivery.env.id === oldToNew.id,
+        );
+        const oldToNewAck = oldToNewDeliveries.filter(
+          (delivery) =>
+            delivery.direction === "current→old" &&
+            delivery.env.re === oldToNew.id &&
+            (delivery.env.body as { type?: string } | null)?.type === "ack",
+        );
+        expect(oldToNewRequest).toHaveLength(1);
+        expect(oldToNewAck).toHaveLength(1);
+        expect(oldToNewAck[0]!.env.to).toBe(oldToNewRequest[0]!.env.from);
+        expect(oldToNewAck[0]!.env.re).toBe(oldToNew.id);
+        expect(currentBroker.injected).toContainEqual(
+          expect.objectContaining({
+            id: oldToNew.id,
+            from: "old-at-new:old-worker",
+            to: "new-sender",
+          }),
+        );
+        const oldToNewSettled = old.injected.filter(
+          (candidate) => candidate.re === oldToNew.id,
+        );
+        expect(oldToNewSettled).toHaveLength(1);
+        expect(oldToNewSettled[0]).toMatchObject({
+          from: `${newLegacyLabel}:broker`,
+          to: "old-worker",
+          body: expect.objectContaining({ type: "ack", target: "new-sender" }),
+        });
+        expectExactlyOnceSettlement(
+          oldPending,
+          oldToNew.id,
+          oldToNewSettled[0]!,
+        );
+
+        // Replies retain correlation and each produces one reverse wire ACK.
+        const oldReply = envelope(
+          "old-worker",
+          `${newLegacyLabel}:new-sender`,
+          { type: "reply", direction: "old-to-new" },
+          newToOld.id,
+        );
+        oldPending.track(oldReply, `${newLegacyLabel}:broker`);
+        expect(old.tryRouteOutbound(oldReply)).toBe(true);
+        const oldReplyDeliveries = pumpCurrentAndFrozenOld(
+          currentPi,
+          old,
+          newPcPubkey,
+          oldPcPubkey,
+        );
+        const oldReplyRequest = oldReplyDeliveries.filter(
+          (delivery) =>
+            delivery.direction === "old→current" &&
+            delivery.env.id === oldReply.id,
+        );
+        const oldReplyAck = oldReplyDeliveries.filter(
+          (delivery) =>
+            delivery.direction === "current→old" &&
+            delivery.env.re === oldReply.id &&
+            (delivery.env.body as { type?: string } | null)?.type === "ack",
+        );
+        expect(oldReplyRequest).toHaveLength(1);
+        expect(oldReplyAck).toHaveLength(1);
+        expect(oldReplyAck[0]!.env.to).toBe(oldReplyRequest[0]!.env.from);
+        expect(oldReplyAck[0]!.env.re).toBe(oldReply.id);
+        const oldReplySettled = old.injected.filter(
+          (candidate) => candidate.re === oldReply.id,
+        );
+        expect(oldReplySettled).toHaveLength(1);
+        expectExactlyOnceSettlement(
+          oldPending,
+          oldReply.id,
+          oldReplySettled[0]!,
+        );
+        expect(currentBroker.injected).toContainEqual(
+          expect.objectContaining({
+            id: oldReply.id,
+            re: newToOld.id,
+            from: "old-at-new:old-worker",
+            to: "new-sender",
+          }),
+        );
+
+        const newReply = envelope(
+          "new-sender",
+          "old-at-new:old-worker",
+          { type: "reply", direction: "new-to-old" },
+          oldToNew.id,
+        );
+        currentPending.track(newReply, "old-at-new:broker");
+        expect(current.tryRouteOutbound(newReply)).toBe(true);
+        const newReplyDeliveries = pumpCurrentAndFrozenOld(
+          currentPi,
+          old,
+          newPcPubkey,
+          oldPcPubkey,
+        );
+        const newReplyRequest = newReplyDeliveries.filter(
+          (delivery) =>
+            delivery.direction === "current→old" &&
+            delivery.env.id === newReply.id,
+        );
+        const newReplyAck = newReplyDeliveries.filter(
+          (delivery) =>
+            delivery.direction === "old→current" &&
+            delivery.env.re === newReply.id &&
+            (delivery.env.body as { type?: string } | null)?.type === "ack",
+        );
+        expect(newReplyRequest).toHaveLength(1);
+        expect(newReplyAck).toHaveLength(1);
+        expect(newReplyAck[0]!.env.to).toBe(newReplyRequest[0]!.env.from);
+        expect(newReplyAck[0]!.env.re).toBe(newReply.id);
+        const newReplySettled = currentBroker.injected.filter(
+          (candidate) => candidate.re === newReply.id,
+        );
+        expect(newReplySettled).toHaveLength(1);
+        expectExactlyOnceSettlement(
+          currentPending,
+          newReply.id,
+          newReplySettled[0]!,
+        );
+        expect(old.injected).toContainEqual(
+          expect.objectContaining({
+            id: newReply.id,
+            re: oldToNew.id,
+            from: `${newLegacyLabel}:new-sender`,
+            to: "old-worker",
+          }),
+        );
+      } finally {
+        current.detach();
+      }
+    },
+  );
 });
 
 describe("BrokerRemote linked two-PC matrix", () => {
@@ -2104,7 +2371,13 @@ describe("BrokerRemote linked two-PC matrix", () => {
       pi: piA as never,
       topology: topology(
         { pcLabel: "Mac", pcPubkey: KEY_A, legacyPcLabel: "Mac:Wire" },
-        [{ pcLabel: "RTX4090", pcPubkey: KEY_B, legacyPcLabel: ":Captiva Wire" }],
+        [
+          {
+            pcLabel: "RTX4090",
+            pcPubkey: KEY_B,
+            legacyPcLabel: ":Captiva Wire",
+          },
+        ],
       ),
       reannounceIntervalMs: 0,
     });
@@ -2112,7 +2385,11 @@ describe("BrokerRemote linked two-PC matrix", () => {
       broker: brokerB.broker,
       pi: piB as never,
       topology: topology(
-        { pcLabel: "Captiva-RTX-4090", pcPubkey: KEY_B, legacyPcLabel: ":Captiva Wire" },
+        {
+          pcLabel: "Captiva-RTX-4090",
+          pcPubkey: KEY_B,
+          legacyPcLabel: ":Captiva Wire",
+        },
         [{ pcLabel: "mac", pcPubkey: KEY_A, legacyPcLabel: "Mac:Wire" }],
       ),
       reannounceIntervalMs: 0,
@@ -2121,12 +2398,20 @@ describe("BrokerRemote linked two-PC matrix", () => {
 
     try {
       const bootstrap = link.pumpUntilQuiescent();
-      expect(bootstrap.some((delivery) =>
-        (delivery.env.body as { type?: string } | null)?.type === "peers_request"
-      )).toBe(true);
-      expect(bootstrap.some((delivery) =>
-        (delivery.env.body as { type?: string } | null)?.type === "peers_update"
-      )).toBe(true);
+      expect(
+        bootstrap.some(
+          (delivery) =>
+            (delivery.env.body as { type?: string } | null)?.type ===
+            "peers_request",
+        ),
+      ).toBe(true);
+      expect(
+        bootstrap.some(
+          (delivery) =>
+            (delivery.env.body as { type?: string } | null)?.type ===
+            "peers_update",
+        ),
+      ).toBe(true);
       expect(piA.sent).toEqual([]);
       expect(piB.sent).toEqual([]);
 
@@ -2216,9 +2501,10 @@ describe("BrokerRemote linked two-PC matrix", () => {
         });
         expect(mode.senderWireAlias).not.toBe(mode.senderAliasAtReceiver);
         expect(mode.receiverAliasAtSender).not.toBe(mode.receiverWireAlias);
-        const ackOnWire = messageDeliveries.find((delivery) =>
-          delivery.env.re === message.id &&
-          (delivery.env.body as { type?: string } | null)?.type === "ack",
+        const ackOnWire = messageDeliveries.find(
+          (delivery) =>
+            delivery.env.re === message.id &&
+            (delivery.env.body as { type?: string } | null)?.type === "ack",
         );
         expect(ackOnWire?.env).toMatchObject({
           from: `${mode.receiverWireAlias}:broker`,
@@ -2274,9 +2560,10 @@ describe("BrokerRemote linked two-PC matrix", () => {
             body: replyBody,
           },
         });
-        const replyAckOnWire = replyDeliveries.find((delivery) =>
-          delivery.env.re === reply.id &&
-          (delivery.env.body as { type?: string } | null)?.type === "ack",
+        const replyAckOnWire = replyDeliveries.find(
+          (delivery) =>
+            delivery.env.re === reply.id &&
+            (delivery.env.body as { type?: string } | null)?.type === "ack",
         );
         expect(replyAckOnWire?.env).toMatchObject({
           from: `${mode.senderWireAlias}:broker`,

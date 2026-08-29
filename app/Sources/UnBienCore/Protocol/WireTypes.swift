@@ -57,12 +57,6 @@ public struct WireModel: Codable, Equatable, Sendable {
     }
 }
 
-public enum ByeReason: String, Codable, Sendable {
-    case peerStop = "peer_stop"
-    case sessionReplaced = "session_replaced"
-    case shutdown
-}
-
 public enum PairErrorCode: String, Codable, Sendable {
     case tokenExpired = "token_expired"
     case tokenConsumed = "token_consumed"

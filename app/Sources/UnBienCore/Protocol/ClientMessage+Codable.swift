@@ -44,12 +44,6 @@ extension ClientMessage: Codable {
             try container.encode(text, forKey: .text)
             try container.encodeIfPresent(images, forKey: .images)
             try container.encodeIfPresent(streamingBehavior, forKey: .streamingBehavior)
-        case let .queuedMessageSet(id, text):
-            try container.encode(id, forKey: .id)
-            try container.encode(text, forKey: .text)
-        case let .queuedMessageClear(id, targetID):
-            try container.encode(id, forKey: .id)
-            try container.encodeIfPresent(targetID, forKey: .targetID)
         case let .approveTool(id, toolCallID, decision):
             try container.encode(id, forKey: .id)
             try container.encode(toolCallID, forKey: .toolCallID)
@@ -105,13 +99,6 @@ extension ClientMessage: Codable {
                 text: try string(.text),
                 images: try container.decodeIfPresent([WireImage].self, forKey: .images),
                 streamingBehavior: try container.decodeIfPresent(String.self, forKey: .streamingBehavior)
-            )
-        case "queued_message_set":
-            self = .queuedMessageSet(id: try string(.id), text: try string(.text))
-        case "queued_message_clear":
-            self = .queuedMessageClear(
-                id: try string(.id),
-                targetID: try container.decodeIfPresent(String.self, forKey: .targetID)
             )
         case "approve_tool":
             self = .approveTool(

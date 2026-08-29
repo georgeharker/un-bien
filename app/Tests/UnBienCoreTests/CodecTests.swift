@@ -4,9 +4,7 @@ import XCTest
 final class CodecTests: XCTestCase {
     /// Server-type fixtures — decodeServer must accept each line.
     private let serverFixtures: Set<String> = [
-        "pair_ok.jsonl", "pair_error.jsonl", "user_input.jsonl", "agent_stream.jsonl",
-        "agent_message.jsonl", "tool_request.jsonl", "tool_result.jsonl", "error.jsonl",
-        "cancelled.jsonl", "pong.jsonl", "bye.jsonl", "session_history.jsonl",
+        "pair_ok.jsonl", "pair_error.jsonl",
     ]
 
     private func fixture(_ name: String) throws -> [String] {
@@ -22,24 +20,6 @@ final class CodecTests: XCTestCase {
                 XCTAssertNoThrow(try Codec.decodeServer(line), "decoding \(name): \(line)")
             }
         }
-    }
-
-    func testSessionHistoryDecodesCapabilities() throws {
-        let line = #"{"type":"session_history","in_reply_to":"s1","session_started_at":1,"events":[],"eos":true,"truncated":false,"protocol_version":1,"capabilities":["thinking","models"]}"#
-        guard case let .sessionHistory(_, _, _, _, _, version, caps) = try Codec.decodeServer(line) else {
-            return XCTFail("not a session_history")
-        }
-        XCTAssertEqual(version, 1)
-        XCTAssertEqual(caps, ["thinking", "models"])
-    }
-
-    func testSessionHistoryWithoutCapabilitiesDecodesNil() throws {
-        let line = #"{"type":"session_history","in_reply_to":"s1","session_started_at":1,"events":[],"eos":true,"truncated":false}"#
-        guard case let .sessionHistory(_, _, _, _, _, version, caps) = try Codec.decodeServer(line) else {
-            return XCTFail("not a session_history")
-        }
-        XCTAssertNil(version)
-        XCTAssertNil(caps)
     }
 
     func testSessionLaunchEncodes() throws {

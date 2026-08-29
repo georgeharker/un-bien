@@ -1,0 +1,39 @@
+name: Publish Relay Crate
+
+on:
+  push:
+    tags:
+      # Component-scoped: the extension publishes on `v*`, the relay on
+      # `relay-v*`, so a single monorepo tag never publishes both.
+      - "relay-v*"
+  workflow_dispatch:
+
+permissions:
+  id-token: write # Required for crates.io OIDC trusted publishing
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: crates-io
+    defaults:
+      run:
+        working-directory: relay
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: relay
+
+      - run: cargo test --all-features
+
+      - name: Mint a short-lived crates.io token via OIDC
+        uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
+      - run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

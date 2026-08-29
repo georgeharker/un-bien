@@ -39,6 +39,7 @@ struct RichAskFlowView: View {
                     }
                 }
             }
+            .formStyle(.grouped)
             .navigationTitle(flow.title ?? "Questions")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

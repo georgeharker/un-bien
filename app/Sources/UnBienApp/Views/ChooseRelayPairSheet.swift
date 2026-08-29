@@ -78,6 +78,7 @@ struct ChooseRelayPairSheet: View {
 
                 statusView
             }
+            .formStyle(.grouped)
             .navigationTitle("Pair a machine")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

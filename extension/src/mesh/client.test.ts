@@ -8,10 +8,7 @@ import {
 const VALID_BLOB = new TextEncoder().encode('{"members":[]}');
 const VALID_SIGNATURE = Uint8Array.from({ length: 64 }, (_, index) => index);
 
-function response(
-  status: number,
-  payload: unknown = undefined,
-): Response {
+function response(status: number, payload: unknown = undefined): Response {
   return {
     status,
     json: vi.fn().mockResolvedValue(payload),
@@ -57,30 +54,43 @@ describe("MeshClient", () => {
     const res = response(status);
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(res));
 
-    await expect(new MeshClient("https://relay.test").get("abc")).resolves.toBeNull();
+    await expect(
+      new MeshClient("https://relay.test").get("abc"),
+    ).resolves.toBeNull();
     expect(res.json).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
   });
 
   test("classifies a network failure as unavailable", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network failed")));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("network failed")),
+    );
 
-    await expect(new MeshClient("https://relay.test").get("abc"))
-      .rejects.toBeInstanceOf(MeshFetchUnavailableError);
+    await expect(
+      new MeshClient("https://relay.test").get("abc"),
+    ).rejects.toBeInstanceOf(MeshFetchUnavailableError);
     expect(vi.getTimerCount()).toBe(0);
   });
 
   test.each([
-    [503, MeshFetchUnavailableError],
-    [400, MeshFetchInvalidResponseError],
+    [503, MeshFetchUnavailableError, undefined],
+    [400, MeshFetchInvalidResponseError, undefined],
     [200, MeshFetchInvalidResponseError, { blob: "e30=" }],
-  ])("classifies representative unavailable and invalid responses", async (status, expectedError, payload) => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(status, payload)));
+  ])(
+    "classifies representative unavailable and invalid responses",
+    async (status, expectedError, payload) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(response(status, payload)),
+      );
 
-    await expect(new MeshClient("https://relay.test").get("abc"))
-      .rejects.toBeInstanceOf(expectedError);
-    expect(vi.getTimerCount()).toBe(0);
-  });
+      await expect(
+        new MeshClient("https://relay.test").get("abc"),
+      ).rejects.toBeInstanceOf(expectedError);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   test("classifies JSON body parsing failure as invalid", async () => {
     const secretBody = "invalid JSON";
@@ -157,6 +167,4 @@ describe("MeshClient", () => {
     expect(await outcome).toBeInstanceOf(MeshFetchUnavailableError);
     expect(vi.getTimerCount()).toBe(0);
   });
-
-
 });

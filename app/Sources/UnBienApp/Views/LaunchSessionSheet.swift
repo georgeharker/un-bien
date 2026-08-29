@@ -41,6 +41,7 @@ struct LaunchSessionSheet: View {
                         #endif
                 }
             }
+            .formStyle(.grouped)
             .navigationTitle("New conversation")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

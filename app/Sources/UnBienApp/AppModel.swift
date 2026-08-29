@@ -59,7 +59,7 @@ public final class AppModel: ObservableObject {
     private var sessionIds: [String: String] = [:]
     /// Pending interactive prompt per session (extension_ui_request).
     @Published public var prompts: [String: ExtensionUiRequest] = [:]
-    /// Pending queued follow-up messages per session (queued_message_state).
+    /// Pending queued follow-up messages per session (pi-native `queue_update`).
     @Published public var queued: [String: [QueuedMessageItem]] = [:]
     /// Named side-panels per session (plan/subagents/…), keyed by panel key.
     @Published public var panels: [String: [String: PanelState]] = [:]
@@ -251,12 +251,17 @@ public final class AppModel: ObservableObject {
                 // Envelope-native capability handshake: learn caps here (not just
                 // from stock session_history) so the {rpc|evt} route + stock
                 // suppression turn on before any session content arrives.
-                if env.type == "hello" {
+                // Envelope-native capability handshake on the un-bien plane: a
+                // {type:"un", un:{type:"hello", caps, sessionId}} frame the APP
+                // acts on (learn caps + session identity) so the {rpc|evt} route
+                // + stock suppression turn on before any session content arrives.
+                if env.type == "un", let un = env.un, un["type"]?.stringValue == "hello" {
                     // Last NON-EMPTY wins: re-hellos (session_sync/attach, N clients)
                     // carry the pi's current caps; a legit change is still a
                     // non-empty set. But an empty/degraded hello must NOT clobber a
                     // good set — that silently gates off thinking/models/panels.
-                    if let caps = env.caps, !caps.isEmpty {
+                    let caps = un["caps"]?.arrayValue?.compactMap { $0.stringValue }
+                    if let caps, !caps.isEmpty {
                         capabilities[key] = Set(caps)
                     } else if capabilities[key] == nil {
                         capabilities[key] = []
@@ -265,14 +270,25 @@ public final class AppModel: ObservableObject {
                     // new pi sessionId here means a different session reused it. Reset
                     // so the prior transcript/panels/prompt don't leak in; a fresh
                     // session_sync + live frames rebuild the new one.
-                    if let sid = env.sessionId, let prev = sessionIds[key], prev != sid {
+                    let sid = un["sessionId"]?.stringValue
+                    if let sid, let prev = sessionIds[key], prev != sid {
                         transcripts[key] = nil
                         envelopeReducers[key] = nil
                         panels[key] = nil
                         prompts[key] = nil
                     }
-                    if let sid = env.sessionId { sessionIds[key] = sid }
+                    if let sid { sessionIds[key] = sid }
                     if envelopeReducers[key] == nil { envelopeReducers[key] = EnvelopeReducer() }
+                    return
+                }
+                // Other un-bien-plane frames (the session_sync_end terminator):
+                // fold via the reducer as a frame — its inner `.type` drives
+                // applyRPC, exactly like an rpc-plane frame.
+                if env.type == "un", let un = env.un {
+                    var reducer = envelopeReducers[key] ?? EnvelopeReducer()
+                    reducer.apply(EnvelopeMessage(rpc: un))
+                    envelopeReducers[key] = reducer
+                    transcripts[key] = reducer.session
                     return
                 }
                 if env.rpc != nil || env.evt != nil {
@@ -299,58 +315,51 @@ public final class AppModel: ObservableObject {
                        case let .extensionUiRequest(request) = decoded {
                         prompts[key] = request
                     }
+                    // models_list is envelope-only: the {rpc} models_list frame
+                    // is the same JSON as the stock ServerMessage, so reuse the
+                    // stock decoder to update the per-session model catalog.
+                    if let rpc = env.rpc, rpc["type"]?.stringValue == "models_list",
+                       let data = try? JSONEncoder().encode(rpc),
+                       let line = String(data: data, encoding: .utf8),
+                       let decoded = try? Codec.decodeServer(line),
+                       case let .modelsList(_, models, current) = decoded {
+                        availableModels[key] = models
+                        if let current { currentModel[key] = current }
+                    }
+                    // Native pi queue: {rpc queue_update, steering[], followUp[]}
+                    // is the pending-queue snapshot. Fold its string arrays into
+                    // the pending display list (ids synthesized by index).
+                    if let rpc = env.rpc, rpc["type"]?.stringValue == "queue_update" {
+                        let steering = rpc["steering"]?.arrayValue?.compactMap { $0.stringValue } ?? []
+                        let followUp = rpc["followUp"]?.arrayValue?.compactMap { $0.stringValue } ?? []
+                        queued[key] = (steering + followUp).enumerated().map {
+                            QueuedMessageItem(id: "\($0.offset)", text: $0.element,
+                                              editable: false, createdAt: 0)
+                        }
+                    }
                     return
                 }
             }
-            do {
-                let message = try envelope.decodeServer()
-                route(message, relayID: relayID, peer: envelope.peer, room: envelope.room)
-            } catch {}
         case let .control(event):
             handle(control: event, relayID: relayID)
         }
     }
 
+    // Only reached from the envelope PANEL path: {evt channel:"panel"} decodes
+    // to a stock `panel_update` frame and routes here. All other stock session
+    // frames are gone from the fork (E1–E7), so no general receive fallback.
     private func route(_ message: ServerMessage, relayID: UUID, peer: String, room: String) {
         let key = "\(relayID.uuidString):\(peer):\(room)"
         switch message {
-        case let .sessionHistory(_, _, _, _, _, _, caps):
-            // Envelope route reconstructs the transcript via {rpc} replay (see the
-            // hello handshake), so the stock history is IGNORED — it must not
-            // clobber the replayed transcript. Caps come from the hello; keep the
-            // stock caps only as a fallback when the hello hasn't landed.
-            if capabilities[key] == nil { capabilities[key] = Set(caps ?? []) }
-            return
-        case let .extensionUiRequest(request):
-            prompts[key] = request
-            return
-        case let .queuedMessageState(_, text, items):
-            if let items { queued[key] = items } else if let text, !text.isEmpty {
-                queued[key] = [QueuedMessageItem(id: "0", text: text, editable: true, createdAt: 0)]
-            } else {
-                queued[key] = []
-            }
-            return
-        case let .modelsList(_, models, current):
-            availableModels[key] = models
-            if let current { currentModel[key] = current }
-            return
         case let .panelUpdate(panelKey, title, icon, data):
             let wasOpen = panels[key]?[panelKey]?.changed == false && openPanel == "\(key):\(panelKey)"
             var forSession = panels[key] ?? [:]
             forSession[panelKey] = PanelState(key: panelKey, title: title, icon: icon,
                                               data: data, changed: !wasOpen)
             panels[key] = forSession
-            return
         default:
             break
         }
-        // On the envelope route the reducer owns this session's transcript
-        // (see `handle`); drop stock session-content so the two don't
-        // double-render during the transition.
-        if capabilities[key]?.contains("rpc_envelope") == true { return }
-        var state = transcripts[key] ?? SessionState()
-        if state.apply(message) { transcripts[key] = state }
     }
 
     private func handle(control event: RelayControlIn, relayID: UUID) {
@@ -382,23 +391,26 @@ public final class AppModel: ObservableObject {
             return
         }
         // Envelope-native resume request (was stock session_sync): the fork
-        // replies with a {rpc} history replay folded via applyRPC. Reuse the
-        // stock encoder to build the frame, then send it inside an envelope.
-        if let data = try? Codec.encodeClientBody(.sessionSync(id: UUID().uuidString, limit: limit)),
-           let frame = try? JSONDecoder().decode(JSONValue.self, from: data) {
-            try? await connection.sendEnvelope(EnvelopeMessage(rpc: frame),
-                                               toPeer: session.peerEPK, room: session.roomID)
-        }
+        // replies with a {rpc} history replay folded via applyRPC.
+        try? await connection.send(.sessionSync(id: UUID().uuidString, limit: limit),
+                                   toPeer: session.peerEPK, room: session.roomID)
         if availableModels[session.id] == nil {
             try? await connection.send(.listModels(id: UUID().uuidString),
                                        toPeer: session.peerEPK, room: session.roomID)
         }
     }
 
+    /// Whether the paired pi session has shut down (`rpc:session_shutdown`).
+    /// When true the transcript shows a "session ended" banner and refuses input.
+    public func hasEnded(_ session: LiveSession) -> Bool {
+        transcripts[session.id]?.ended ?? false
+    }
+
     public func sendMessage(_ text: String, to session: LiveSession) async {
+        guard !hasEnded(session) else { return }
         guard let connection = connections[session.relayID] else { return }
         try? await connection.send(
-            .userMessage(id: UUID().uuidString, text: text, images: nil, streamingBehavior: nil),
+            .userMessage(id: UUID().uuidString, text: text, images: nil, streamingBehavior: "steer"),
             toPeer: session.peerEPK, room: session.roomID)
     }
 
@@ -459,6 +471,22 @@ public final class AppModel: ObservableObject {
                                    toPeer: session.peerEPK, room: session.roomID)
     }
 
+    /// Start a fresh pi session (`session_new` -> pi `new_session`). Wired to the
+    /// envelope but NOT yet surfaced in the UI (no caller) — the fork handles it.
+    public func newSession(_ session: LiveSession) async {
+        guard let connection = connections[session.relayID] else { return }
+        try? await connection.send(.sessionNew(id: UUID().uuidString),
+                                   toPeer: session.peerEPK, room: session.roomID)
+    }
+
+    /// Compact the pi context (`session_compact` -> pi `compact`). Wired to the
+    /// envelope but NOT yet surfaced in the UI (no caller) — the fork handles it.
+    public func compact(_ session: LiveSession) async {
+        guard let connection = connections[session.relayID] else { return }
+        try? await connection.send(.sessionCompact(id: UUID().uuidString),
+                                   toPeer: session.peerEPK, room: session.roomID)
+    }
+
     // MARK: - Panels (plan / subagents / …)
 
     /// The `sessionID:panelKey` currently on screen, so live updates to it stay
@@ -482,27 +510,21 @@ public final class AppModel: ObservableObject {
     public func respondToPrompt(_ response: ExtensionUiResponse, session: LiveSession) async {
         prompts[session.id] = nil
         guard let connection = connections[session.relayID] else { return }
-        // Envelope-only: reuse the stock encoder to build the extension_ui_response
-        // frame, then send it inside an {rpc} envelope (the fork routes it to the
-        // ui bridge from the rpc path).
-        guard let data = try? Codec.encodeClientBody(.extensionUiResponse(response)),
-              let frame = try? JSONDecoder().decode(JSONValue.self, from: data) else { return }
-        try? await connection.sendEnvelope(EnvelopeMessage(rpc: frame),
-                                           toPeer: session.peerEPK, room: session.roomID)
+        // Envelope-only: the fork routes the extension_ui_response to the ui
+        // bridge from the rpc path.
+        try? await connection.send(.extensionUiResponse(response),
+                                   toPeer: session.peerEPK, room: session.roomID)
     }
 
     // MARK: - Queued messages
 
     public func queueMessage(_ text: String, to session: LiveSession) async {
         guard let connection = connections[session.relayID] else { return }
-        try? await connection.send(.queuedMessageSet(id: UUID().uuidString, text: text),
-                                   toPeer: session.peerEPK, room: session.roomID)
-    }
-
-    public func clearQueued(targetID: String?, session: LiveSession) async {
-        guard let connection = connections[session.relayID] else { return }
-        try? await connection.send(.queuedMessageClear(id: UUID().uuidString, targetID: targetID),
-                                   toPeer: session.peerEPK, room: session.roomID)
+        // pi's native queue: a `prompt` with `followUp` behavior queues while the
+        // turn streams (fresh turn when idle).
+        try? await connection.send(
+            .userMessage(id: UUID().uuidString, text: text, images: nil, streamingBehavior: "followUp"),
+            toPeer: session.peerEPK, room: session.roomID)
     }
 
     // MARK: - Pairing

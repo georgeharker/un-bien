@@ -26,7 +26,7 @@ public extension RelayConnection {
         // Room-scoped handshake: routes to the issuing session's room (invite.roomID),
         // so only the session that owns the QR token answers. Trust still lands on the
         // machine (pair_ok → PairedMachine keyed by epk).
-        try await send(request, toPeer: invite.epk, room: invite.roomID)
+        try await sendStock(request, toPeer: invite.epk, room: invite.roomID)
 
         while true {
             let frame = try await nextFrame()

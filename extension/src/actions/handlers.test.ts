@@ -24,13 +24,19 @@ import {
   type SdkModelLike,
 } from "./handlers.js";
 import type { ServerMessage } from "../protocol/types.js";
+import type { EnvelopeMessage } from "../session/rpc_envelope.js";
 
 function makeSender() {
   const sent: ServerMessage[] = [];
+  const envelopes: EnvelopeMessage[] = [];
   return {
     sent,
+    envelopes,
     send(msg: ServerMessage): void {
       sent.push(msg);
+    },
+    sendEnvelope(env: EnvelopeMessage): void {
+      envelopes.push(env);
     },
   };
 }
@@ -54,12 +60,16 @@ const sampleModel: SdkModelLike = {
 function fakeRegistry(catalog: SdkModelLike[]): ActionModelRegistry {
   let refreshed = 0;
   return {
-    refresh: () => { refreshed += 1; },
+    refresh: () => {
+      refreshed += 1;
+    },
     getAvailable: () => catalog,
     find: (provider, modelId) =>
       catalog.find((m) => m.provider === provider && m.id === modelId),
     // expose refresh counter via a closure read for tests that care
-    get _refreshes() { return refreshed; },
+    get _refreshes() {
+      return refreshed;
+    },
   } as ActionModelRegistry & { _refreshes: number };
 }
 
@@ -68,13 +78,17 @@ function fakeRegistry(catalog: SdkModelLike[]): ActionModelRegistry {
 describe("handleSessionCompact", () => {
   test("calls ctx.compact() with an English-summary instruction and replies action_ok", () => {
     const compactArgs: unknown[] = [];
-    const ctx: ActionCtx = { compact: (opts) => { compactArgs.push(opts); } };
+    const ctx: ActionCtx = {
+      compact: (opts) => {
+        compactArgs.push(opts);
+      },
+    };
     const sender = makeSender();
     handleSessionCompact(ctx, sender, { type: "session_compact", id: "r1" });
     expect(compactArgs).toHaveLength(1);
     // The summary must be forced to English (surfaced via the `compaction` msg).
     expect(JSON.stringify(compactArgs[0])).toMatch(/English/i);
-    expect(sender.sent).toEqual([
+    expect(sender.envelopes.map((e) => e.rpc)).toEqual([
       { type: "action_ok", in_reply_to: "r1", action: "session_compact" },
     ]);
   });
@@ -82,8 +96,8 @@ describe("handleSessionCompact", () => {
   test("returns action_error when ctx is null", () => {
     const sender = makeSender();
     handleSessionCompact(null, sender, { type: "session_compact", id: "r1" });
-    expect(sender.sent).toHaveLength(1);
-    expect(sender.sent[0]).toMatchObject({
+    expect(sender.envelopes).toHaveLength(1);
+    expect(sender.envelopes[0].rpc).toMatchObject({
       type: "action_error",
       in_reply_to: "r1",
       action: "session_compact",
@@ -92,10 +106,14 @@ describe("handleSessionCompact", () => {
   });
 
   test("returns action_error when ctx.compact throws", () => {
-    const ctx: ActionCtx = { compact: () => { throw new Error("boom"); } };
+    const ctx: ActionCtx = {
+      compact: () => {
+        throw new Error("boom");
+      },
+    };
     const sender = makeSender();
     handleSessionCompact(ctx, sender, { type: "session_compact", id: "r1" });
-    expect(sender.sent[0]).toMatchObject({
+    expect(sender.envelopes[0].rpc).toMatchObject({
       type: "action_error",
       error: "boom",
     });
@@ -108,9 +126,12 @@ describe("handleSessionNew", () => {
   test("happy path → action_ok + returns true (drives Pi-side reset)", async () => {
     const ctx: ActionCtx = { newSession: async () => ({ cancelled: false }) };
     const sender = makeSender();
-    const created = await handleSessionNew(ctx, sender, { type: "session_new", id: "r2" });
+    const created = await handleSessionNew(ctx, sender, {
+      type: "session_new",
+      id: "r2",
+    });
     expect(created).toBe(true);
-    expect(sender.sent).toEqual([
+    expect(sender.envelopes.map((e) => e.rpc)).toEqual([
       { type: "action_ok", in_reply_to: "r2", action: "session_new" },
     ]);
   });
@@ -118,9 +139,12 @@ describe("handleSessionNew", () => {
   test("cancelled by extension hook → action_error + returns false (no reset)", async () => {
     const ctx: ActionCtx = { newSession: async () => ({ cancelled: true }) };
     const sender = makeSender();
-    const created = await handleSessionNew(ctx, sender, { type: "session_new", id: "r2" });
+    const created = await handleSessionNew(ctx, sender, {
+      type: "session_new",
+      id: "r2",
+    });
     expect(created).toBe(false);
-    expect(sender.sent[0]).toMatchObject({
+    expect(sender.envelopes[0].rpc).toMatchObject({
       type: "action_error",
       action: "session_new",
       error: expect.stringContaining("cancelled"),
@@ -129,9 +153,12 @@ describe("handleSessionNew", () => {
 
   test("ctx without newSession → action_error + returns false (no reset)", async () => {
     const sender = makeSender();
-    const created = await handleSessionNew({}, sender, { type: "session_new", id: "r2" });
+    const created = await handleSessionNew({}, sender, {
+      type: "session_new",
+      id: "r2",
+    });
     expect(created).toBe(false);
-    expect(sender.sent[0]).toMatchObject({
+    expect(sender.envelopes[0].rpc).toMatchObject({
       type: "action_error",
       error: expect.stringContaining("newSession unavailable"),
     });
@@ -157,7 +184,9 @@ describe("handleSessionNew", () => {
       ctx,
       sender,
       { type: "session_new", id: "r2" },
-      (c) => { recaptured = c; },
+      (c) => {
+        recaptured = c;
+      },
     );
     expect(created).toBe(true);
     expect(recaptured).toBe(freshCtx);
@@ -169,20 +198,36 @@ describe("handleSessionNew", () => {
 describe("handleThinkingSet", () => {
   test("forwards level to pi.setThinkingLevel and replies action_ok", () => {
     const calls: string[] = [];
-    const pi = fakePi({ setThinkingLevel: (lvl) => { calls.push(lvl); } });
+    const pi = fakePi({
+      setThinkingLevel: (lvl) => {
+        calls.push(lvl);
+      },
+    });
     const sender = makeSender();
-    handleThinkingSet(pi, sender, { type: "thinking_set", id: "r3", level: "high" });
+    handleThinkingSet(pi, sender, {
+      type: "thinking_set",
+      id: "r3",
+      level: "high",
+    });
     expect(calls).toEqual(["high"]);
-    expect(sender.sent).toEqual([
+    expect(sender.envelopes.map((e) => e.rpc)).toEqual([
       { type: "action_ok", in_reply_to: "r3", action: "thinking_set" },
     ]);
   });
 
   test("setThinkingLevel throwing surfaces as action_error", () => {
-    const pi = fakePi({ setThinkingLevel: () => { throw new Error("nope"); } });
+    const pi = fakePi({
+      setThinkingLevel: () => {
+        throw new Error("nope");
+      },
+    });
     const sender = makeSender();
-    handleThinkingSet(pi, sender, { type: "thinking_set", id: "r3", level: "low" });
-    expect(sender.sent[0]).toMatchObject({
+    handleThinkingSet(pi, sender, {
+      type: "thinking_set",
+      id: "r3",
+      level: "low",
+    });
+    expect(sender.envelopes[0].rpc).toMatchObject({
       type: "action_error",
       action: "thinking_set",
       error: "nope",
@@ -197,16 +242,23 @@ describe("handleModelSet", () => {
     const reg = fakeRegistry([sampleModel]);
     const setModelArgs: SdkModelLike[] = [];
     const pi = fakePi({
-      setModel: async (m) => { setModelArgs.push(m as SdkModelLike); return true; },
+      setModel: async (m) => {
+        setModelArgs.push(m as SdkModelLike);
+        return true;
+      },
     });
     const sender = makeSender();
     await handleModelSet(pi, null, reg, sender, {
-      type: "model_set", id: "r4", provider: "anthropic", model_id: "claude-opus-4-7",
+      type: "model_set",
+      id: "r4",
+      provider: "anthropic",
+      model_id: "claude-opus-4-7",
     });
     expect(setModelArgs).toHaveLength(1);
     expect(setModelArgs[0].id).toBe("claude-opus-4-7");
-    expect(sender.sent[0]).toMatchObject({
-      type: "action_ok", action: "model_set",
+    expect(sender.envelopes[0].rpc).toMatchObject({
+      type: "action_ok",
+      action: "model_set",
     });
   });
 
@@ -214,9 +266,12 @@ describe("handleModelSet", () => {
     const reg = fakeRegistry([sampleModel]);
     const sender = makeSender();
     await handleModelSet(fakePi(), null, reg, sender, {
-      type: "model_set", id: "r4", provider: "anthropic", model_id: "nope-3",
+      type: "model_set",
+      id: "r4",
+      provider: "anthropic",
+      model_id: "nope-3",
     });
-    expect(sender.sent[0]).toMatchObject({
+    expect(sender.envelopes[0].rpc).toMatchObject({
       type: "action_error",
       error: expect.stringContaining("not in registry"),
     });
@@ -227,9 +282,12 @@ describe("handleModelSet", () => {
     const pi = fakePi({ setModel: async () => false });
     const sender = makeSender();
     await handleModelSet(pi, null, reg, sender, {
-      type: "model_set", id: "r4", provider: "anthropic", model_id: "claude-opus-4-7",
+      type: "model_set",
+      id: "r4",
+      provider: "anthropic",
+      model_id: "claude-opus-4-7",
     });
-    expect(sender.sent[0]).toMatchObject({
+    expect(sender.envelopes[0].rpc).toMatchObject({
       type: "action_error",
       error: expect.stringContaining("no auth configured"),
     });
@@ -241,12 +299,22 @@ describe("handleModelSet", () => {
     const sender = makeSender();
     const persisted: Array<{ provider: string; modelId: string }> = [];
     await handleModelSet(
-      pi, null, reg, sender,
-      { type: "model_set", id: "r4", provider: "anthropic", model_id: "claude-opus-4-7" },
+      pi,
+      null,
+      reg,
+      sender,
+      {
+        type: "model_set",
+        id: "r4",
+        provider: "anthropic",
+        model_id: "claude-opus-4-7",
+      },
       (provider, modelId) => persisted.push({ provider, modelId }),
     );
     // onPersist receives the resolved model's provider/id so it survives restart.
-    expect(persisted).toEqual([{ provider: "anthropic", modelId: "claude-opus-4-7" }]);
+    expect(persisted).toEqual([
+      { provider: "anthropic", modelId: "claude-opus-4-7" },
+    ]);
   });
 
   test("does NOT persist when the live set fails (no auth)", async () => {
@@ -255,12 +323,22 @@ describe("handleModelSet", () => {
     const sender = makeSender();
     let persistCalls = 0;
     await handleModelSet(
-      pi, null, reg, sender,
-      { type: "model_set", id: "r4", provider: "anthropic", model_id: "claude-opus-4-7" },
-      () => { persistCalls += 1; },
+      pi,
+      null,
+      reg,
+      sender,
+      {
+        type: "model_set",
+        id: "r4",
+        provider: "anthropic",
+        model_id: "claude-opus-4-7",
+      },
+      () => {
+        persistCalls += 1;
+      },
     );
     expect(persistCalls).toBe(0);
-    expect(sender.sent[0]).toMatchObject({ type: "action_error" });
+    expect(sender.envelopes[0].rpc).toMatchObject({ type: "action_error" });
   });
 
   test("does NOT persist when the model is unknown", async () => {
@@ -268,9 +346,19 @@ describe("handleModelSet", () => {
     const sender = makeSender();
     let persistCalls = 0;
     await handleModelSet(
-      fakePi(), null, reg, sender,
-      { type: "model_set", id: "r4", provider: "anthropic", model_id: "nope-3" },
-      () => { persistCalls += 1; },
+      fakePi(),
+      null,
+      reg,
+      sender,
+      {
+        type: "model_set",
+        id: "r4",
+        provider: "anthropic",
+        model_id: "nope-3",
+      },
+      () => {
+        persistCalls += 1;
+      },
     );
     expect(persistCalls).toBe(0);
   });
@@ -284,9 +372,13 @@ describe("handleListModels", () => {
     const ctx: ActionCtx = { getModel: () => sampleModel };
     const sender = makeSender();
     handleListModels(ctx, reg, sender, { type: "list_models", id: "r5" });
-    const reply = sender.sent[0];
+    const reply = sender.envelopes[0].rpc as {
+      type: string;
+      in_reply_to: string;
+      models: unknown[];
+      current: unknown;
+    };
     expect(reply.type).toBe("models_list");
-    if (reply.type !== "models_list") throw new Error("type guard");
     expect(reply.in_reply_to).toBe("r5");
     expect(reply.models).toEqual([
       {
@@ -305,9 +397,11 @@ describe("handleListModels", () => {
     const reg = fakeRegistry([sampleModel]);
     const sender = makeSender();
     handleListModels(null, reg, sender, { type: "list_models", id: "r5" });
-    const reply = sender.sent[0];
+    const reply = sender.envelopes[0].rpc as {
+      type: string;
+      current: unknown;
+    };
     expect(reply.type).toBe("models_list");
-    if (reply.type !== "models_list") throw new Error("type guard");
     expect(reply.current).toBeUndefined();
   });
 
@@ -324,9 +418,11 @@ describe("handleListModels", () => {
     const ctx: ActionCtx = { modelRegistry: live };
     const sender = makeSender();
     handleListModels(ctx, fallback, sender, { type: "list_models", id: "r5" });
-    const reply = sender.sent[0];
+    const reply = sender.envelopes[0].rpc as {
+      type: string;
+      models: unknown[];
+    };
     expect(reply.type).toBe("models_list");
-    if (reply.type !== "models_list") throw new Error("type guard");
     expect(reply.models).toEqual([
       {
         id: "gpt-oss-20b",
@@ -341,13 +437,15 @@ describe("handleListModels", () => {
 
   test("registry refresh failure surfaces as error envelope", () => {
     const reg: ActionModelRegistry = {
-      refresh: () => { throw new Error("models.json malformed"); },
+      refresh: () => {
+        throw new Error("models.json malformed");
+      },
       getAvailable: () => [],
       find: () => undefined,
     };
     const sender = makeSender();
     handleListModels(null, reg, sender, { type: "list_models", id: "r5" });
-    expect(sender.sent[0]).toMatchObject({
+    expect(sender.envelopes[0].rpc).toMatchObject({
       type: "error",
       in_reply_to: "r5",
       code: "internal_error",
@@ -366,13 +464,16 @@ describe("wireFromModel", () => {
       provider: "anthropic",
       reasoning: true,
       context_window: 200_000,
-      vision: false,  // sampleModel has no `input` → text-only
+      vision: false, // sampleModel has no `input` → text-only
     });
   });
 
   // Plan/30: `vision` reflects whether the model's `input` includes "image".
-  test("vision=true when model.input includes \"image\"", () => {
-    const visionModel: SdkModelLike = { ...sampleModel, input: ["text", "image"] };
+  test('vision=true when model.input includes "image"', () => {
+    const visionModel: SdkModelLike = {
+      ...sampleModel,
+      input: ["text", "image"],
+    };
     expect(wireFromModel(visionModel).vision).toBe(true);
   });
 

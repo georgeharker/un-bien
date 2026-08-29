@@ -14,8 +14,6 @@ const SERVER_TYPES = new Set<ServerMessage["type"]>([
   "error",
   "cancelled",
   "pong",
-  "bye",
-  "session_history",
   // Plan/57 — interactive extension prompt (ask_user via pi-ask).
   "extension_ui_request",
 ]);
@@ -39,7 +37,10 @@ export function decodeServer(line: string): ServerMessage {
   try {
     obj = JSON.parse(line.trim());
   } catch (e) {
-    throw new DecodeError("invalid_message", `not JSON: ${(e as Error).message}`);
+    throw new DecodeError(
+      "invalid_message",
+      `not JSON: ${(e as Error).message}`,
+    );
   }
   if (
     !obj ||

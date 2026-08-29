@@ -17,15 +17,25 @@ arbitration).
 
 ```ts
 interface EnvelopeMessage {
-  /** Wrapper-kind discriminator, stamped at the outbound choke. `"env"` = the
-   *  session {rpc|evt} plane (today). OPEN string — other values are reserved
-   *  for future handshake/control envelopes on the same bidirectional wire.
-   *  Also satisfies the relay-peer channel's inbound guard (a frame without a
-   *  top-level `type` string is dropped) and lets each end tell this route from
-   *  the stock protocol without probing. */
-  type?: string;   // "env"
-  /** Epoch ms, stamped at send (ordering / dedup / debug). */
+  /** WHO-HANDLES / plane discriminator (NOT direction), stamped at the outbound
+   *  choke. Names the handler + the top-level field to read:
+   *    "rpc" — the `.rpc` plane: a byte-faithful pi rpc frame handled by the rpc
+   *            handler on the RECEIVING side (fork → pi/SDK ACTS; app → RENDERS).
+   *    "evt" — the `.evt` plane: an ephemeral forwarded bus event (fork→app).
+   *    "cmd" — the `.cmd` plane: an app-custom command with NO pi first-class
+   *            verb, handled by the EXTENSION (app→fork).
+   *    "hello" — the capability handshake (see below).
+   *  Direction is NOT encoded here (a receiver knows its own role, and the inner
+   *  `.rpc` frame's own `.type` carries command-vs-response). Also satisfies the
+   *  channel's inbound guard (a frame without a top-level `type` is dropped).
+   *  NOTE: the wire currently still stamps "env" for the rpc/evt plane
+   *  (transitional); the rpc/evt/cmd split is the target. */
+  type?: string;
+  /** Epoch ms, stamped at send (ordering / dedup / debug). Cross-cutting. */
   ts?: number;
+  /** Envelope / pi-rpc protocol version for decode-guarding. Cross-cutting
+   *  (meaningful on any frame), so it stays top-level — unlike handshake data. */
+  protocolVersion?: number;
   /** A VERBATIM pi rpc frame, forwarded opaquely. The app parses only what it
    *  renders and IGNORES unknown types (forward-compatible). Byte-faithful to
    *  pi — its own `.type` (message_update/response/...) is a DIFFERENT level
@@ -35,6 +45,19 @@ interface EnvelopeMessage {
    *  plane): plan/subagents/... The fork produces these; they never appear on
    *  `pi --mode rpc` stdout. */
   evt?: Evt;
+  /** An APP-CUSTOM command (the {cmd} plane, app→fork only) — a command with no
+   *  pi first-class rpc verb, so the EXTENSION acts on it, not pi's rpc dispatch.
+   *  Its own `.type` names the command (e.g. "session_launch"). */
+  cmd?: Cmd;
+  /** The capability handshake payload (the {hello} plane, fork→app on attach).
+   *  Handshake-only fields nest HERE, not at top level — a session-plane
+   *  (rpc/evt/cmd) message must not carry handshake keys. */
+  hello?: Hello;
+}
+interface Cmd { type: string; id?: string; /* command-specific fields */ }
+interface Hello {
+  caps: string[];       // advertised capabilities the app gates UI on
+  sessionId?: string;   // stable pi session id (app keys sessions by it)
 }
 interface Evt {
   channel: string;   // "plan:snapshot" | "subagents:started" | ...
@@ -83,10 +106,63 @@ the live panel; `subagents:record` **entry_appended** is the persist/reconstruct
 copy. Plan for us is **evt only** (pi-acp uses `appendEntry` because its ACP
 host is an *external* rpc consumer that can't see the bus).
 
-## Direction
+## Direction & who-handles
 
-- **fork→app**: `rpc` (responses/events/extension_ui_request) + `evt`.
-- **app→fork**: `rpc` (RpcCommand / extension_ui_response). No `evt` app→fork.
+`type` encodes WHO HANDLES / which plane — NOT direction. Direction is carried by
+(a) which side receives and (b) the inner `rpc.type` (`prompt`/`abort` up;
+`response`/`message_update` down). Encoding direction in `type` would be
+redundant and would force parallel up/down values, so we don't.
+
+- **`type:"rpc"`** — the rpc handler on the RECEIVING side. fork→ **pi/SDK acts**
+  (commands); app→ **renders** (responses + events + `extension_ui_request`).
+- **`type:"evt"`** — app view plane. **fork→app only**.
+- **`type:"cmd"`** — extension app-command handler. **app→fork only** (the
+  extension acts, not pi).
+
+## App→fork command taxonomy (who acts)
+
+Governing rule (decision *"un-bien = pi's first-class rpc surface + a thin layer
+on top"*): if pi provides a command **first-class**, the app issues that pi rpc
+verb on the `.rpc` plane and **pi acts** — no invented extension hop. un-bien's
+two own concerns — **app display** and **who-else-sees-it** (multi-owner
+fan-out) — are layered **on top** of pi's native events, never replacing them. A
+command rides `.cmd` (extension acts) **only** when pi has no first-class verb.
+
+All pi-native commands carry an optional `id`; the fork replies
+`{rpc:{type:"response", command, success, data?, error?, id}}` to the sender.
+Command shapes are pi's own (pi.dev/docs/latest/rpc):
+
+| app intent | pi rpc verb (`.rpc`, pi acts) | payload |
+| --- | --- | --- |
+| send a message | `prompt` | `message`, `images?`, `streamingBehavior?` |
+| steer mid-turn | `steer` | `message`, `images?` |
+| follow-up after turn | `follow_up` | `message`, `images?` |
+| clear the queue | `clear_queue` | — (data = removed text) |
+| stop | `abort` | — |
+| switch model | `set_model` | `provider`, `modelId` (data = Model) |
+| set thinking | `set_thinking_level` | `level` |
+| list models | `get_available_models` | — (data = Model[]) |
+| compact | `compact` | `customInstructions?` |
+| new session | `new_session` | `parentSession?` |
+
+Two `.rpc`-plane frames are un-bien protocol the **fork** handles (not pi's SDK
+dispatch), kept on `.rpc` for now: `session_sync` (reconstruction — see below)
+and `extension_ui_response` (answers a fork dialog; routed to the ui bridge).
+
+**Queue = pi's native queue.** un-bien does NOT keep a parallel queue buffer:
+queuing is `steer`/`follow_up`, clearing is `clear_queue`, and the multi-owner
+display ("who else sees it") is pi's native `queue_update` event fanned by the
+fork to all owners — the on-top layer, not a replacement.
+
+**`.cmd` plane (extension acts, app→fork only).** The lone member today:
+
+| app intent | `.cmd` frame | why app-custom |
+| --- | --- | --- |
+| remote launch | `session_launch` `{mode, cwd?, name?}` | spawns a SEPARATE pi process (mesh); pi's `new_session` is same-process |
+
+Status: the app→fork wire is converging onto this taxonomy — the transitional
+stock fallback is being removed and the `.cmd`/`type=cmd` plane added; pairing
+(`pair_request`) stays a bare pre-attach frame (before any plane exists).
 
 ## Versioning
 
@@ -106,20 +182,28 @@ canonical description of the surface as implemented in the fork
 ### Wrapper
 
 Every message is `{ type, ts?, ...payload }`, base64(JSON) inside the relay's
-opaque `ct`. `type` = wrapper kind: `"env"` (session `{rpc|evt}` plane) or
-`"hello"` (handshake). Stamped at the single outbound choke on each side
-(`PlainPeerChannel.sendEnvelope` / `RelayConnection.sendEnvelope`). `ts` = epoch
-ms. The inner `.rpc` frame keeps its own `.type` (a different object level).
+opaque `ct`. `type` = WHO-HANDLES / plane (see *Direction & who-handles*):
+`"rpc"` / `"evt"` / `"cmd"`, plus `"hello"` (handshake). Stamped at the single
+outbound choke on each side (`PlainPeerChannel.sendEnvelope` /
+`RelayConnection.sendEnvelope`). `ts` = epoch ms. The inner `.rpc` frame keeps
+its own `.type` (a different object level). NOTE: the rpc/evt plane is still
+stamped `"env"` on the wire today (transitional); the rpc/evt/cmd split + the
+`.cmd` plane are the target this section is converging to.
 
 ### Handshake (fork → app, on attach)
 
 ```json
-{ "type":"hello", "caps":["thinking","models",...,"rpc_envelope"], "protocolVersion":1 }
+{ "type":"hello", "protocolVersion":1,
+  "hello":{ "caps":["thinking","models",...,"rpc_envelope"], "sessionId":"abc123" } }
 ```
 
 Sent from `_attachOwner` (pairing + reconnect), **before** any session content.
-The app reads `caps` here (not from a stock `session_history`) and enables the
-envelope route.
+Handshake-only fields (`caps`, `sessionId`) nest in the **`hello`** payload — NOT
+at the envelope top level, so a session-plane message never carries handshake
+keys. `protocolVersion` + `ts` are cross-cutting and stay top-level. The app
+reads `hello.caps` (not a stock `session_history`) and enables the envelope
+route. (Current code still carries `caps`/`sessionId` top-level; nesting them is
+part of the envelope-cleanup pass.)
 
 ### Live plane (fork → app, `{rpc}`)
 
@@ -149,7 +233,13 @@ success,data?,error?,id}}` to the **sender**, correlated by `id`.
 | `extension_ui_response` | `id`, `value`/`confirmed`/`cancelled` | answer a dialog (routed to the ui bridge, no `response`) |
 | `session_sync` | `limit?` | request reconstruction (see below; no `response`) |
 
-(`get_state`/`get_entries`/`compact`/`bash` — reserved, not yet wired.)
+The FULL target command set + who-acts is the *App→fork command taxonomy* table
+above: app intents map to pi's first-class verbs (`prompt`/`steer`/`follow_up`/
+`clear_queue`/`abort`/`set_model`/`set_thinking_level`/`get_available_models`/
+`compact`/`new_session`) on `.rpc` (pi acts). Queued messages use pi's NATIVE
+queue (`steer`/`follow_up`/`clear_queue` + `queue_update` fanned to owners), not
+a parallel buffer. The only `.cmd` (extension-acts) command is `session_launch`
+(mesh remote-launch of a separate pi process).
 
 ### Reconstruction / resume
 

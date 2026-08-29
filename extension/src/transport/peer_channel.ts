@@ -1,5 +1,9 @@
 import type { ClientMessage, ServerMessage } from "../protocol/types.js";
-import { ENVELOPE_KIND, type EnvelopeMessage } from "../session/rpc_envelope.js";
+import {
+  ENVELOPE_KIND,
+  UN_KIND,
+  type EnvelopeMessage,
+} from "../session/rpc_envelope.js";
 import { envLog } from "../session/debug_log.js";
 import type { RelayClient } from "./relay_client.js";
 
@@ -54,13 +58,16 @@ export class PlainPeerChannel implements PeerChannel {
     _onDisconnect?: () => void,
     /** Route an inbound mesh-envelope ({rpc|evt}, docs/rpc-envelope.md) to the
      *  new-protocol dispatcher. Absent → the channel ignores envelope frames. */
-    private readonly onRpc?: (env: EnvelopeMessage, sender: PlainPeerChannel) => void,
+    private readonly onRpc?: (
+      env: EnvelopeMessage,
+      sender: PlainPeerChannel,
+    ) => void,
   ) {
     const listener = (line: string) => this._onLine(line);
     relay.on("message", listener);
     this._unsubscribe = () => relay.off("message", listener);
     void _onDisconnect;
-    void myRoomId;  // intentionally unused — see send() comment
+    void myRoomId; // intentionally unused — see send() comment
   }
 
   // ── PeerChannel interface ──────────────────────────────────────────────────
@@ -96,7 +103,13 @@ export class PlainPeerChannel implements PeerChannel {
    */
   sendEnvelope(env: EnvelopeMessage): void {
     // Stamp the wrapper kind + timestamp at the single outbound choke.
-    const wire: EnvelopeMessage = { ...env, type: env.type ?? ENVELOPE_KIND, ts: env.ts ?? Date.now() };
+    const wire: EnvelopeMessage = {
+      ...env,
+      // Namespace: un-bien plane -> "un"; rpc/evt still stamp legacy "env" this
+      // wave (the explicit rpc/evt split lands later).
+      type: env.type ?? (env.un !== undefined ? UN_KIND : ENVELOPE_KIND),
+      ts: env.ts ?? Date.now(),
+    };
     const ct = Buffer.from(JSON.stringify(wire)).toString("base64");
     const outer: OuterEnvelope = { peer: this.remotePeerId, ct };
     try {
@@ -145,10 +158,17 @@ export class PlainPeerChannel implements PeerChannel {
       `inbound<-${this.remotePeerId.slice(0, 8)}: type=${String(obj.type)} rpc=${obj.rpc !== undefined} evt=${obj.evt !== undefined}`,
     );
 
-    // New-protocol mesh-envelope inbound: a `type:"env"` wrapper (or a bare
-    // rpc/evt body, for transition robustness) routes to the rpc dispatcher,
-    // NOT the stock ClientMessage switch.
-    if (obj.type === ENVELOPE_KIND || obj.rpc !== undefined || obj.evt !== undefined) {
+    // New-protocol mesh-envelope inbound: an `env`/`un` wrapper (or a bare
+    // rpc/evt/un body, for transition robustness) routes to the envelope
+    // dispatcher, NOT the stock ClientMessage switch. The dispatcher branches
+    // by plane (rpc vs un) itself.
+    if (
+      obj.type === ENVELOPE_KIND ||
+      obj.type === UN_KIND ||
+      obj.rpc !== undefined ||
+      obj.evt !== undefined ||
+      obj.un !== undefined
+    ) {
       this.onRpc?.(obj as EnvelopeMessage, this);
       return;
     }

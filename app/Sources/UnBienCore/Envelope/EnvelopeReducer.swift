@@ -60,7 +60,7 @@ public struct EnvelopeReducer {
 
     public mutating func apply(_ message: EnvelopeMessage) {
         if let evt = message.evt { applyEvt(evt) }
-        if let rpc = message.rpc { applyRpc(rpc) }
+        if let rpc = message.rpc { applyRpc(rpc, aux: message.aux) }
     }
 
     public mutating func apply<S: Sequence>(_ messages: S) where S.Element == EnvelopeMessage {
@@ -69,7 +69,7 @@ public struct EnvelopeReducer {
 
     // MARK: - rpc plane
 
-    private mutating func applyRpc(_ rpc: JSONValue) {
+    private mutating func applyRpc(_ rpc: JSONValue, aux: JSONValue? = nil) {
         switch rpc["type"]?.stringValue {
         case "extension_ui_request":
             applyExtensionUI(rpc)
@@ -79,6 +79,19 @@ public struct EnvelopeReducer {
             break   // other command responses carry no transcript/side effect here
         default:
             session.applyRPC(rpc)   // message / tool / turn / compaction → transcript
+            // After the card is opened, attach any Edit-diff hunks the envelope
+            // carried in its `aux` sidecar (args stay raw — untouched above).
+            if rpc["type"]?.stringValue == "tool_execution_start",
+               let toolCallID = rpc["toolCallId"]?.stringValue,
+               let hunks = aux?["hunks"]?.arrayValue {
+                session.attachToolHunks(toolCallID: toolCallID, hunks: hunks)
+            }
+            // On tool_execution_end, attach any classified OUTPUT sidecar the
+            // envelope carried (rpc.result stays raw — untouched above).
+            if rpc["type"]?.stringValue == "tool_execution_end",
+               let output = aux?["output"] {
+                session.attachToolOutput(toolCallID: rpc["toolCallId"]?.stringValue ?? "", output: output)
+            }
         }
     }
 

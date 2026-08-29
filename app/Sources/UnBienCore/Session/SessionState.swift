@@ -20,6 +20,10 @@ public struct SessionState: Equatable, Sendable {
     /// or `nil` when idle. This is the `target_id` a `cancel` should carry.
     public private(set) var activeTurnID: String?
 
+    /// Set once the paired pi session has shut down (`rpc:session_shutdown`).
+    /// The UI shows a "session ended" banner and refuses further input.
+    public private(set) var ended: Bool = false
+
     /// Index of each addressable item so updates are O(1).
     /// Index of the assistant bubble currently accepting streamed chunks. A
     /// tool card (or any inserted row) closes it, so post-tool text starts a
@@ -79,52 +83,6 @@ public struct SessionState: Equatable, Sendable {
         }
     }
 
-    /// Apply one live server message. Returns `false` for messages that carry
-    /// no transcript effect (status/lifecycle), so callers can route those
-    /// separately without special-casing here.
-    @discardableResult
-    public mutating func apply(_ message: ServerMessage) -> Bool {
-        switch message {
-        case let .userMessage(id, text, images, _):
-            append(.user(UserBubble(id: id, text: text, images: images ?? [])))
-            return true
-        case let .userInput(id, text, _):
-            append(.user(UserBubble(id: id, text: text)))
-            return true
-        case let .agentChunk(inReplyTo, delta):
-            appendChunk(inReplyTo: inReplyTo, delta: delta)
-            return true
-        case let .agentReasoning(inReplyTo, delta):
-            appendReasoning(inReplyTo: inReplyTo, delta: delta)
-            return true
-        case let .agentDone(inReplyTo, usage):
-            finishStreaming(inReplyTo: inReplyTo, usage: usage)
-            return true
-        case let .agentMessage(inReplyTo, text, usage, images):
-            settleAssistant(inReplyTo: inReplyTo, text: text, usage: usage, images: images ?? [])
-            return true
-        case let .toolRequest(toolCallID, tool, args):
-            openToolCard(toolCallID: toolCallID, tool: tool, args: args)
-            return true
-        case let .toolResult(toolCallID, result, error, images):
-            fillToolCard(toolCallID: toolCallID, result: result, error: error, images: images ?? [])
-            return true
-        case let .compaction(summary, tokensBefore, _):
-            appendCompaction(summary: summary, tokensBefore: tokensBefore)
-            return true
-        case .cancelled:
-            activeTurnID = nil
-            closeOpenAssistant()
-            return true
-        case let .error(_, code, message):
-            noticeSeq += 1
-            append(.notice(NoticeItem(id: "n\(noticeSeq)", code: code, message: message)))
-            return true
-        default:
-            return false
-        }
-    }
-
     // MARK: - Mutators
 
     /// Append a non-chunk row. Closes the open streaming bubble first, so the
@@ -178,15 +136,6 @@ public struct SessionState: Equatable, Sendable {
         activeTurnID = inReplyTo
     }
 
-    private mutating func finishStreaming(inReplyTo: String, usage: Usage?) {
-        if let index = openAssistantIndex, case var .assistant(bubble) = items[index] {
-            bubble.usage = usage ?? bubble.usage
-            items[index] = .assistant(bubble)
-        }
-        if activeTurnID == inReplyTo { activeTurnID = nil }
-        closeOpenAssistant()
-    }
-
     private mutating func settleAssistant(inReplyTo: String, text: String, usage: Usage?,
                                           images: [WireImage] = []) {
         if let index = openAssistantIndex, case var .assistant(bubble) = items[index],
@@ -212,6 +161,22 @@ public struct SessionState: Equatable, Sendable {
             append(.tool(ToolCard(toolCallID: toolCallID, tool: tool, args: args)))
             toolIndex[toolCallID] = items.count - 1
         }
+    }
+
+    /// Attach pre-rendered Edit-diff `hunks` (from the envelope `aux` sidecar) to
+    /// an already-opened tool card. No-op if the card isn't found yet.
+    public mutating func attachToolHunks(toolCallID: String, hunks: [JSONValue]) {
+        guard let index = toolIndex[toolCallID], case var .tool(card) = items[index] else { return }
+        card.hunks = hunks
+        items[index] = .tool(card)
+    }
+
+    /// Attach a classified tool OUTPUT sidecar (from the envelope `aux.output`) to
+    /// an already-opened tool card. No-op if the card isn't found.
+    public mutating func attachToolOutput(toolCallID: String, output: JSONValue) {
+        guard let index = toolIndex[toolCallID], case var .tool(card) = items[index] else { return }
+        card.output = output
+        items[index] = .tool(card)
     }
 
     private mutating func fillToolCard(toolCallID: String, result: JSONValue?, error: String?,
@@ -270,6 +235,10 @@ public struct SessionState: Equatable, Sendable {
         case "agent_settled":
             if let turn = rpcTurn, activeTurnID == turn { activeTurnID = nil }
             closeOpenAssistant()
+        case "session_shutdown":
+            ended = true
+            activeTurnID = nil
+            closeOpenAssistant()
         case "session_sync_end":
             // Envelope-native terminator for a session_sync replay: carries the
             // session clock (stock bundled it on `session_history`). `truncated`
@@ -277,6 +246,22 @@ public struct SessionState: Equatable, Sendable {
             if let started = frame["session_started_at"]?.intValue, started > 0 {
                 sessionStartedAt = started
             }
+        case "action_ok":
+            break  // command succeeded — no visible surface (silent)
+        case "action_error":
+            // A failed app command (session_new/compact/model_set/…) surfaces as
+            // a transcript notice, reusing the provider-error notice mechanism.
+            noticeSeq += 1
+            let action = frame["action"]?.stringValue ?? "action"
+            let err = frame["error"]?.stringValue ?? "failed"
+            append(.notice(NoticeItem(id: "act\(noticeSeq)", code: "action_error",
+                                      message: "\(action) failed: \(err)")))
+        case "error":
+            // Enveloped error reply (e.g. malformed models.json on list_models):
+            // same notice surface as a provider error.
+            noticeSeq += 1
+            append(.notice(NoticeItem(id: "n\(noticeSeq)", code: frame["code"]?.stringValue ?? "error",
+                                      message: frame["message"]?.stringValue ?? "")))
         default:
             break
         }

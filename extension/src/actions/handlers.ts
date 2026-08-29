@@ -27,6 +27,7 @@ import type {
   WireModel,
   ActionName,
 } from "../protocol/types.js";
+import type { EnvelopeMessage } from "../session/rpc_envelope.js";
 
 /**
  * Structural subset of the SDK's `Model<Api>` interface (defined in
@@ -58,6 +59,10 @@ type Model<_TApi = unknown> = SdkModelLike;
  */
 export interface ActionReplySender {
   send(msg: ServerMessage): void;
+  /** Envelope sink. When present, `models_list` rides the mesh envelope
+   *  (`{ rpc }`, docs/rpc-envelope.md) instead of the stock frame. Optional so
+   *  legacy/test senders without an envelope surface still fall back to send. */
+  sendEnvelope?(env: EnvelopeMessage): void;
 }
 
 /**
@@ -128,12 +133,23 @@ export function wireFromModel(model: Model<any>): WireModel {
 
 // ── ack helpers ────────────────────────────────────────────────────────────
 
+// action_ok/action_error ride the mesh envelope (`{ rpc }`) — the app consumes
+// them in its envelope block, no stock ServerMessage receive path. Fall back to
+// the stock frame only when no envelope sink is wired (legacy/test senders).
+function emitAck(sender: ActionReplySender, rpc: ServerMessage): void {
+  if (sender.sendEnvelope) {
+    sender.sendEnvelope({ rpc });
+  } else {
+    sender.send(rpc);
+  }
+}
+
 function ok(
   sender: ActionReplySender,
   msg: { id: string },
   action: ActionName,
 ): void {
-  sender.send({ type: "action_ok", in_reply_to: msg.id, action });
+  emitAck(sender, { type: "action_ok", in_reply_to: msg.id, action });
 }
 
 function fail(
@@ -143,7 +159,7 @@ function fail(
   err: unknown,
 ): void {
   const error = err instanceof Error ? err.message : String(err);
-  sender.send({ type: "action_error", in_reply_to: msg.id, action, error });
+  emitAck(sender, { type: "action_error", in_reply_to: msg.id, action, error });
 }
 
 /** Run a synchronous action with uniform success/failure replies. */
@@ -294,18 +310,33 @@ export function handleListModels(
     liveReg.refresh();
     const models = liveReg.getAvailable().map(wireFromModel);
     const current = ctx?.getModel?.();
-    sender.send({
+    const rpc = {
       type: "models_list",
       in_reply_to: msg.id,
       models,
       current: current ? wireFromModel(current) : undefined,
-    });
+    };
+    // models_list rides the mesh envelope (`{ rpc }`) — the app consumes it in
+    // its envelope block, no stock ServerMessage receive path. Fall back to the
+    // stock frame only when no envelope sink is wired (legacy/test senders).
+    if (sender.sendEnvelope) {
+      sender.sendEnvelope({ rpc });
+    } else {
+      sender.send(rpc as ServerMessage);
+    }
   } catch (e) {
-    sender.send({
+    // The malformed-models.json error also rides the envelope (`{ rpc }`) — the
+    // app surfaces it as a transcript notice. Stock fallback for legacy senders.
+    const rpc: ServerMessage = {
       type: "error",
       in_reply_to: msg.id,
       code: "internal_error",
       message: e instanceof Error ? e.message : String(e),
-    });
+    };
+    if (sender.sendEnvelope) {
+      sender.sendEnvelope({ rpc });
+    } else {
+      sender.send(rpc);
+    }
   }
 }

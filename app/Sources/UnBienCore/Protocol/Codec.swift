@@ -13,11 +13,7 @@ public enum DecodeError: Error, Equatable {
 /// message). Extra Pi→App types present in the protocol but absent from the
 /// reference set are included here where the app renders them.
 private let serverTypes: Set<String> = [
-    "pair_ok", "pair_error", "user_input", "user_message", "queued_message_state",
-    "steer_consumed", "agent_chunk", "agent_reasoning", "agent_done",
-    "agent_message", "compaction",
-    "tool_request", "tool_result", "error", "cancelled", "pong", "bye",
-    "session_history", "action_ok", "action_error", "models_list",
+    "pair_ok", "pair_error", "models_list",
     "extension_ui_request", "panel_update",
 ]
 

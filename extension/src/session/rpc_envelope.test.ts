@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createRpcEnvelope, envelopeForEvent, RPC_EVENT_NAMES } from "./rpc_envelope.js";
+import {
+  createRpcEnvelope,
+  envelopeForEvent,
+  RPC_EVENT_NAMES,
+} from "./rpc_envelope.js";
 
 // Golden shapes are grounded in the real `pi --mode rpc` capture
 // (un-bien Tests/Fixtures/rpc-stream/message-turn-clean.jsonl): a message_update
@@ -12,7 +16,11 @@ describe("envelopeForEvent — live plane", () => {
     const usage = { input: 2, output: 1, totalTokens: 3 };
     const env = envelopeForEvent("message_update", {
       type: "message_update",
-      message: { role: "assistant", usage, content: [{ type: "text", text: "hello world" }] },
+      message: {
+        role: "assistant",
+        usage,
+        content: [{ type: "text", text: "hello world" }],
+      },
       assistantMessageEvent: {
         type: "text_delta",
         contentIndex: 0,
@@ -24,11 +32,16 @@ describe("envelopeForEvent — live plane", () => {
       rpc: {
         type: "message_update",
         usage,
-        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "hello" },
+        assistantMessageEvent: {
+          type: "text_delta",
+          contentIndex: 0,
+          delta: "hello",
+        },
       },
     });
     // No cumulative fields leak onto the wire.
-    const ame = (env?.rpc as { assistantMessageEvent: Record<string, unknown> }).assistantMessageEvent;
+    const ame = (env?.rpc as { assistantMessageEvent: Record<string, unknown> })
+      .assistantMessageEvent;
     expect("partial" in ame).toBe(false);
     expect("message" in (env?.rpc as object)).toBe(false);
   });
@@ -40,23 +53,45 @@ describe("envelopeForEvent — live plane", () => {
       assistantMessageEvent: {
         type: "toolcall_start",
         contentIndex: 1,
-        partial: { content: [{ type: "text" }, { type: "toolCall", id: "tc_1", name: "bash" }] },
+        partial: {
+          content: [
+            { type: "text" },
+            { type: "toolCall", id: "tc_1", name: "bash" },
+          ],
+        },
       },
     });
-    const ame = (env?.rpc as { assistantMessageEvent: Record<string, unknown> }).assistantMessageEvent;
-    expect(ame).toMatchObject({ type: "toolcall_start", contentIndex: 1, id: "tc_1", toolName: "bash" });
+    const ame = (env?.rpc as { assistantMessageEvent: Record<string, unknown> })
+      .assistantMessageEvent;
+    expect(ame).toMatchObject({
+      type: "toolcall_start",
+      contentIndex: 1,
+      id: "tc_1",
+      toolName: "bash",
+    });
     expect("partial" in ame).toBe(false);
   });
 
   it("turn_start drops extension-only enrichment (bare rpc frame)", () => {
-    const env = envelopeForEvent("turn_start", { type: "turn_start", turnIndex: 3, timestamp: 123 });
+    const env = envelopeForEvent("turn_start", {
+      type: "turn_start",
+      turnIndex: 3,
+      timestamp: 123,
+    });
     expect(env).toEqual({ rpc: { type: "turn_start" } });
   });
 
   it("turn_end keeps message + toolResults only", () => {
     const message = { role: "assistant", content: [] };
-    const env = envelopeForEvent("turn_end", { type: "turn_end", turnIndex: 3, message, toolResults: [] });
-    expect(env).toEqual({ rpc: { type: "turn_end", message, toolResults: [] } });
+    const env = envelopeForEvent("turn_end", {
+      type: "turn_end",
+      turnIndex: 3,
+      message,
+      toolResults: [],
+    });
+    expect(env).toEqual({
+      rpc: { type: "turn_end", message, toolResults: [] },
+    });
   });
 
   it("tool_execution_end passes through the card fields", () => {
@@ -80,10 +115,14 @@ describe("envelopeForEvent — live plane", () => {
 
   it("message_end / message_start carry the message", () => {
     const message = { role: "user", content: [{ type: "text", text: "hi" }] };
-    expect(envelopeForEvent("message_end", { type: "message_end", message })).toEqual({
+    expect(
+      envelopeForEvent("message_end", { type: "message_end", message }),
+    ).toEqual({
       rpc: { type: "message_end", message },
     });
-    expect(envelopeForEvent("message_start", { type: "message_start", message })).toEqual({
+    expect(
+      envelopeForEvent("message_start", { type: "message_start", message }),
+    ).toEqual({
       rpc: { type: "message_start", message },
     });
   });
@@ -93,7 +132,11 @@ describe("envelopeForEvent — live plane", () => {
       type: "session_compact",
       reason: "threshold",
       fromExtension: false,
-      compactionEntry: { summary: "did stuff", tokensBefore: 150000, firstKeptEntryId: "abc" },
+      compactionEntry: {
+        summary: "did stuff",
+        tokensBefore: 150000,
+        firstKeptEntryId: "abc",
+      },
     });
     expect(env).toEqual({
       rpc: {
@@ -107,16 +150,26 @@ describe("envelopeForEvent — live plane", () => {
   });
 
   it("agent_settled / agent_start are bare; agent_end defaults willRetry", () => {
-    expect(envelopeForEvent("agent_settled", { type: "agent_settled" })).toEqual({ rpc: { type: "agent_settled" } });
-    expect(envelopeForEvent("agent_start", { type: "agent_start" })).toEqual({ rpc: { type: "agent_start" } });
-    expect(envelopeForEvent("agent_end", { type: "agent_end", messages: [] })).toEqual({
+    expect(
+      envelopeForEvent("agent_settled", { type: "agent_settled" }),
+    ).toEqual({ rpc: { type: "agent_settled" } });
+    expect(envelopeForEvent("agent_start", { type: "agent_start" })).toEqual({
+      rpc: { type: "agent_start" },
+    });
+    expect(
+      envelopeForEvent("agent_end", { type: "agent_end", messages: [] }),
+    ).toEqual({
       rpc: { type: "agent_end", messages: [], willRetry: false },
     });
   });
 
   it("returns null for events with no streamed frame", () => {
-    expect(envelopeForEvent("context", { type: "context", messages: [] })).toBeNull();
-    expect(envelopeForEvent("model_select", { type: "model_select" })).toBeNull();
+    expect(
+      envelopeForEvent("context", { type: "context", messages: [] }),
+    ).toBeNull();
+    expect(
+      envelopeForEvent("model_select", { type: "model_select" }),
+    ).toBeNull();
   });
 });
 
@@ -141,8 +194,13 @@ describe("createRpcEnvelope — wiring", () => {
     const { pi, handlers } = fakePi();
     const out: unknown[] = [];
     createRpcEnvelope(pi, (env) => out.push(env));
-    handlers.get("message_end")?.({ type: "message_end", message: { role: "user", content: [] } });
-    expect(out).toEqual([{ rpc: { type: "message_end", message: { role: "user", content: [] } } }]);
+    handlers.get("message_end")?.({
+      type: "message_end",
+      message: { role: "user", content: [] },
+    });
+    expect(out).toEqual([
+      { rpc: { type: "message_end", message: { role: "user", content: [] } } },
+    ]);
   });
 
   it("stops broadcasting after dispose()", () => {
@@ -159,6 +217,116 @@ describe("createRpcEnvelope — wiring", () => {
     createRpcEnvelope(pi, () => {
       throw new Error("relay down");
     });
-    expect(() => handlers.get("agent_settled")?.({ type: "agent_settled" })).not.toThrow();
+    expect(() =>
+      handlers.get("agent_settled")?.({ type: "agent_settled" }),
+    ).not.toThrow();
+  });
+
+  it("rides display hunks in aux for an edit tool_execution_start; rpc.args stays RAW", () => {
+    const { pi, handlers } = fakePi();
+    const out: unknown[] = [];
+    const hunks = [{ lines: [{ kind: "add", newLine: 1, text: "x" }] }];
+    const rawArgs = { path: "/tmp/f", edits: [{ oldText: "a", newText: "b" }] };
+    createRpcEnvelope(pi, (env) => out.push(env), {
+      enrichArgs: (tool) => (tool === "edit" ? { hunks } : null),
+    });
+    handlers.get("tool_execution_start")?.({
+      type: "tool_execution_start",
+      toolCallId: "tc_1",
+      toolName: "edit",
+      args: rawArgs,
+    });
+    expect(out).toEqual([
+      {
+        rpc: {
+          type: "tool_execution_start",
+          toolCallId: "tc_1",
+          toolName: "edit",
+          args: rawArgs,
+        },
+        aux: { hunks },
+      },
+    ]);
+    // rpc.args is the RAW object, unenriched (no hunks leaked in).
+    expect((out[0] as { rpc: { args: unknown } }).rpc.args).toBe(rawArgs);
+  });
+
+  it("rides classified output in aux on tool_execution_end; rpc.result stays RAW", () => {
+    const { pi, handlers } = fakePi();
+    const out: unknown[] = [];
+    const rawResult = "@@ -1 +1 @@\n-a\n+b";
+    const classified = {
+      kind: "diff",
+      hunks: [{ lines: [{ kind: "remove", oldLine: 1, text: "a" }] }],
+    };
+    createRpcEnvelope(pi, (env) => out.push(env), {
+      classifyOutput: () => classified,
+    });
+    handlers.get("tool_execution_end")?.({
+      type: "tool_execution_end",
+      toolCallId: "tc_1",
+      toolName: "edit",
+      result: rawResult,
+      isError: false,
+    });
+    const env = out[0] as {
+      rpc: { result: unknown };
+      aux?: { output?: unknown };
+    };
+    expect(env.aux?.output).toEqual(classified);
+    // rpc.result is the RAW input, unmodified.
+    expect(env.rpc.result).toBe(rawResult);
+  });
+
+  it("emits NO aux.output on tool_execution_end when the classifier returns null", () => {
+    const { pi, handlers } = fakePi();
+    const out: unknown[] = [];
+    createRpcEnvelope(pi, (env) => out.push(env), {
+      classifyOutput: () => null,
+    });
+    handlers.get("tool_execution_end")?.({
+      type: "tool_execution_end",
+      toolCallId: "tc_2",
+      toolName: "bash",
+      result: "plain text",
+      isError: false,
+    });
+    expect(out).toEqual([
+      {
+        rpc: {
+          type: "tool_execution_end",
+          toolCallId: "tc_2",
+          toolName: "bash",
+          result: "plain text",
+          isError: false,
+        },
+      },
+    ]);
+    expect("aux" in (out[0] as object)).toBe(false);
+  });
+
+  it("emits NO aux for a non-edit tool_execution_start", () => {
+    const { pi, handlers } = fakePi();
+    const out: unknown[] = [];
+    createRpcEnvelope(pi, (env) => out.push(env), {
+      enrichArgs: (tool) => (tool === "edit" ? { hunks: [] } : null),
+    });
+    handlers.get("tool_execution_start")?.({
+      type: "tool_execution_start",
+      toolCallId: "tc_2",
+      toolName: "bash",
+      args: { command: "ls" },
+    });
+    expect(out).toEqual([
+      {
+        rpc: {
+          type: "tool_execution_start",
+          toolCallId: "tc_2",
+          toolName: "bash",
+          args: { command: "ls" },
+        },
+      },
+    ]);
+    expect("aux" in (out[0] as object)).toBe(false);
   });
 });

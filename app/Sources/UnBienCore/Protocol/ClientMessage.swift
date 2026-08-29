@@ -5,8 +5,6 @@ import Foundation
 public enum ClientMessage: Equatable, Sendable {
     case pairRequest(id: String, token: String, deviceName: String)
     case userMessage(id: String, text: String, images: [WireImage]?, streamingBehavior: String?)
-    case queuedMessageSet(id: String, text: String)
-    case queuedMessageClear(id: String, targetID: String?)
     case approveTool(id: String, toolCallID: String, decision: ToolDecision)
     case cancel(id: String, targetID: String)
     case ping(id: String)
@@ -32,8 +30,6 @@ public enum ClientMessage: Equatable, Sendable {
         switch self {
         case .pairRequest: return "pair_request"
         case .userMessage: return "user_message"
-        case .queuedMessageSet: return "queued_message_set"
-        case .queuedMessageClear: return "queued_message_clear"
         case .approveTool: return "approve_tool"
         case .cancel: return "cancel"
         case .ping: return "ping"

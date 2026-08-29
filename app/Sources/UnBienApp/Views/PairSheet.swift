@@ -53,6 +53,7 @@ struct PairSheet: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
+            .formStyle(.grouped)
             .navigationTitle("Pair — \(relay.name)")
             #if os(iOS)
             .sheet(isPresented: $showScanner) {

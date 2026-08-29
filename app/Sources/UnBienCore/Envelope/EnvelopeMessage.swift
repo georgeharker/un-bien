@@ -4,26 +4,35 @@ import Foundation
 /// a verbatim pi rpc frame and/or an ephemeral forwarded bus event. At least
 /// one of `rpc` / `evt` is present.
 public struct EnvelopeMessage: Codable, Sendable {
-    /// Wrapper-kind discriminator: `"env"` = session {rpc|evt} plane, `"hello"`
-    /// = capability handshake. Absent on a stock ServerMessage body.
+    /// Protocol-namespace discriminator: `"rpc"` / `"evt"` / `"un"` (legacy
+    /// `"env"` accepted on read during the transition). Names the payload plane;
+    /// direction is carried by the inner frame `.type` + receiver, not here.
     public let type: String?
-    /// Epoch ms stamped at send (ordering/debug).
+    /// Epoch ms stamped at send (ordering/debug). Cross-cutting.
     public let ts: Double?
-    /// Handshake (`type == "hello"`): the fork's advertised capabilities.
-    public let caps: [String]?
-    /// Handshake: stable pi session id — disambiguates reused session names.
-    public let sessionId: String?
+    /// Envelope/pi-rpc protocol version for decode-guarding. Cross-cutting.
+    public let protocolVersion: Int?
     public let rpc: JSONValue?
     public let evt: EnvelopeEvt?
+    /// un-bien's own protocol plane (`type == "un"`): an inner frame with its own
+    /// `.type` (hello / session_sync / session_launch / …). Handshake caps +
+    /// sessionId nest inside the `hello` inner frame, NOT at the top level.
+    public let un: JSONValue?
+    /// Optional bidirectional sidecar carried ALONGSIDE `rpc`/`evt`/`un` (e.g.
+    /// pre-rendered Edit-diff `hunks` for a `tool_execution_start` frame).
+    /// Absent on most frames — decode must tolerate its absence.
+    public let aux: JSONValue?
 
-    public init(type: String? = nil, ts: Double? = nil, caps: [String]? = nil,
-                sessionId: String? = nil, rpc: JSONValue? = nil, evt: EnvelopeEvt? = nil) {
+    public init(type: String? = nil, ts: Double? = nil, protocolVersion: Int? = nil,
+                rpc: JSONValue? = nil, evt: EnvelopeEvt? = nil, un: JSONValue? = nil,
+                aux: JSONValue? = nil) {
         self.type = type
         self.ts = ts
-        self.caps = caps
-        self.sessionId = sessionId
+        self.protocolVersion = protocolVersion
         self.rpc = rpc
         self.evt = evt
+        self.un = un
+        self.aux = aux
     }
 }
 

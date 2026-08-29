@@ -32,45 +32,80 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 /**
- * One mesh-envelope wrapper message (docs/rpc-envelope.md). The WRAPPER carries
- * a verbatim pi rpc frame (`rpc`) and/or an ephemeral forwarded bus event
- * (`evt`); the inner `.rpc` stays byte-faithful to pi (its own `.type`).
- *
- * `type` is an OPEN wrapper-kind discriminator (stamped at the outbound choke):
- * `"env"` = the session {rpc|evt} plane (today). Other values are RESERVED for
- * future handshake/control envelopes (e.g. capability negotiation) that ride the
- * same bidirectional wire. `type` also satisfies the channel's inbound guard
- * (`_onLine` drops frames without a top-level `type` string) and lets each end
- * tell our route from stock without probing. `ts` = epoch ms (ordering/debug).
+ * One mesh-envelope wrapper message (docs/rpc-envelope.md). `type` is the
+ * PROTOCOL-NAMESPACE discriminator (NOT direction) and names the payload field:
+ *   "rpc" -> `.rpc` — byte-faithful pi rpc frame (pi's rpc handler acts).
+ *   "evt" -> `.evt` — forwarded pi bus event (app view plane).
+ *   "un"  -> `.un`  — un-bien's OWN protocol; inner `.type` = hello /
+ *                     session_sync / session_launch / ...; the inner type +
+ *                     receiver role decide who acts and which direction.
+ * Direction is carried by the inner frame `.type` + receiver role, never `type`.
+ * `ts` (epoch ms) and `protocolVersion` (decode-guard) are cross-cutting and stay
+ * top-level. NOTE: legacy `"env"` is still ACCEPTED on read + stamped for the
+ * rpc/evt plane during the transition; the explicit rpc/evt split is a later wave.
  */
 export interface EnvelopeMessage {
   type?: string;
   ts?: number;
-  /** Handshake (`type:"hello"`): advertised capability list. */
-  caps?: string[];
-  /** Handshake: envelope/pi-rpc protocol version for client decode-guarding. */
+  /** Envelope/pi-rpc protocol version for client decode-guarding. Cross-cutting. */
   protocolVersion?: number;
-  /** Handshake: stable pi session id — the app keys sessions by this so reused
-   *  session NAMES don't collide. */
-  sessionId?: string;
   rpc?: unknown;
+  /** un-bien display sidecar riding ALONGSIDE `rpc` in the same envelope. For
+   *  edit-family `tool_execution_start` frames it carries `{ hunks }` display
+   *  diff data; the `rpc` frame itself stays byte-faithful (raw args). */
+  aux?: { hunks?: unknown[] } & Record<string, unknown>;
   evt?: { channel: string; data: unknown };
+  /** un-bien's own protocol plane (`type:"un"`). The inner frame is one of
+   *  ``UnFrame`` — handshake fields (caps, sessionId) nest in the `hello`
+   *  variant, NOT at the envelope top level. */
+  un?: UnFrame;
 }
 
-/** Wrapper-kind marker for the session {rpc|evt} plane. */
+/**
+ * The un-bien plane's inner frames — un-bien's OWN protocol (we own these, so
+ * they are typed, unlike the opaque byte-faithful pi `rpc` frame). The inner
+ * `.type` + receiver role decide who acts and which direction it flows.
+ */
+export type UnFrame =
+  | { type: "hello"; caps: string[]; sessionId?: string } // ext->app: app acts
+  | { type: "session_sync"; id?: string; limit?: number } // app->ext: reconstruction request
+  | {
+      type: "session_sync_end"; // ext->app: reconstruction terminator
+      in_reply_to?: string;
+      session_started_at?: number;
+      truncated?: boolean;
+    }
+  | {
+      type: "session_launch"; // app->ext: mesh remote-launch (extension acts)
+      id?: string;
+      mode: string;
+      cwd?: string;
+      name?: string;
+    };
+
+/** Legacy wrapper marker for the rpc/evt plane — still stamped + accepted during
+ *  the transition (the explicit rpc/evt namespace split is a later wave). */
 export const ENVELOPE_KIND = "env";
-/** Wrapper-kind marker for the capability/bootstrap handshake. */
+/** un-bien-owned plane wrapper marker. */
+export const UN_KIND = "un";
+/** un-bien-plane INNER frame type for the capability handshake. */
 export const HELLO_KIND = "hello";
 
 /**
  * Build the capability handshake sent to a peer on attach — the envelope-native
- * replacement for the stock `session_history.capabilities`. The app reads caps
- * from this and gates its decode/UX on them.
+ * replacement for the stock `session_history.capabilities`. Rides the un-bien
+ * plane (`type:"un"`) as a `hello` inner frame the APP handles; caps + sessionId
+ * nest inside it, protocolVersion stays top-level.
  */
-export function helloEnvelope(caps: string[], sessionId?: string, protocolVersion = 1): EnvelopeMessage {
-  const hello: EnvelopeMessage = { type: HELLO_KIND, caps, protocolVersion };
-  if (sessionId) hello.sessionId = sessionId;
-  return hello;
+export function helloEnvelope(
+  caps: string[],
+  sessionId?: string,
+  protocolVersion = 1,
+): EnvelopeMessage {
+  const hello: UnFrame = sessionId
+    ? { type: "hello", caps, sessionId }
+    : { type: "hello", caps };
+  return { type: UN_KIND, protocolVersion, un: hello };
 }
 
 type Frame = Record<string, unknown>;
@@ -111,15 +146,25 @@ type Builder = (p: Payload) => Frame;
 
 const BUILDERS: Record<string, Builder> = {
   agent_start: () => ({ type: "agent_start" }),
-  agent_end: (p) => ({ type: "agent_end", messages: p.messages, willRetry: p.willRetry ?? false }),
+  agent_end: (p) => ({
+    type: "agent_end",
+    messages: p.messages,
+    willRetry: p.willRetry ?? false,
+  }),
   agent_settled: () => ({ type: "agent_settled" }),
   turn_start: () => ({ type: "turn_start" }),
-  turn_end: (p) => ({ type: "turn_end", message: p.message, toolResults: p.toolResults ?? [] }),
+  turn_end: (p) => ({
+    type: "turn_end",
+    message: p.message,
+    toolResults: p.toolResults ?? [],
+  }),
   message_start: (p) => ({ type: "message_start", message: p.message }),
   message_update: (p) => ({
     type: "message_update",
     usage: (p.message as { usage?: unknown } | undefined)?.usage,
-    assistantMessageEvent: stripPartial((p.assistantMessageEvent ?? {}) as AssistantMessageEventLike),
+    assistantMessageEvent: stripPartial(
+      (p.assistantMessageEvent ?? {}) as AssistantMessageEventLike,
+    ),
   }),
   message_end: (p) => ({ type: "message_end", message: p.message }),
   tool_execution_start: (p) => ({
@@ -142,31 +187,49 @@ const BUILDERS: Record<string, Builder> = {
     result: p.result,
     isError: p.isError ?? false,
   }),
+  // pi's NATIVE steering/follow-up queue snapshot ({steering[], followUp[]}),
+  // forwarded so every owner shows the same pending queue (un-bien's multi-owner
+  // display layer on top of pi's queue — no app-owned buffer).
+  queue_update: (p) => ({
+    type: "queue_update",
+    steering: p.steering ?? [],
+    followUp: p.followUp ?? [],
+  }),
 };
 
 // The extension fires `session_compact` (not the subscribe-only `compaction_end`)
 // with the persisted `compactionEntry`. Remap to the rpc `compaction_end` frame
 // the consumer renders. See docs/rpc-on-event-map.md table A.
 function compactionEndFrame(p: Payload): Frame {
-  const entry = p.compactionEntry as { summary?: unknown; tokensBefore?: unknown } | undefined;
+  const entry = p.compactionEntry as
+    | { summary?: unknown; tokensBefore?: unknown }
+    | undefined;
   return {
     type: "compaction_end",
     reason: p.reason,
-    result: entry ? { summary: entry.summary, tokensBefore: entry.tokensBefore } : null,
+    result: entry
+      ? { summary: entry.summary, tokensBefore: entry.tokensBefore }
+      : null,
     aborted: false,
     willRetry: p.willRetry ?? false,
   };
 }
 
 /** Event names we register a `pi.on()` cue for (the live plane). */
-export const RPC_EVENT_NAMES: readonly string[] = [...Object.keys(BUILDERS), "session_compact"];
+export const RPC_EVENT_NAMES: readonly string[] = [
+  ...Object.keys(BUILDERS),
+  "session_compact",
+];
 
 /**
  * Pure map: a `pi.on()` event (name + payload) → its rpc-envelope `{ rpc }`
  * message, or `null` when the event carries no streamed frame. Exported for
  * conformance tests against the captured `pi --mode rpc` corpus.
  */
-export function envelopeForEvent(name: string, payload: Payload): EnvelopeMessage | null {
+export function envelopeForEvent(
+  name: string,
+  payload: Payload,
+): EnvelopeMessage | null {
   if (name === "session_compact") return { rpc: compactionEndFrame(payload) };
   const build = BUILDERS[name];
   return build ? { rpc: build(payload) } : null;
@@ -180,14 +243,40 @@ export function envelopeForEvent(name: string, payload: Payload): EnvelopeMessag
 export function createRpcEnvelope(
   pi: ExtensionAPI,
   broadcast: (env: EnvelopeMessage) => void,
+  opts?: {
+    enrichArgs?: (tool: string, args: unknown) => { hunks: unknown[] } | null;
+    classifyOutput?: (
+      toolName: string,
+      result: unknown,
+    ) => { kind: string; [k: string]: unknown } | null;
+  },
 ): { dispose(): void } {
   let disposed = false;
-  const on = pi.on as unknown as (event: string, handler: (payload: unknown) => void) => void;
+  // SAFETY: pi.on's public typing is a narrower event-name union; the live
+  // plane subscribes by string name, which is valid at runtime for every
+  // RPC_EVENT_NAMES entry (they are real AgentSessionEvent names).
+  const on = pi.on as unknown as (
+    event: string,
+    handler: (payload: unknown) => void,
+  ) => void;
   for (const name of RPC_EVENT_NAMES) {
     on(name, (payload: unknown) => {
       if (disposed) return;
-      const env = envelopeForEvent(name, (payload ?? {}) as Payload);
+      const p = (payload ?? {}) as Payload;
+      let env = envelopeForEvent(name, p);
       if (!env) return;
+      if (name === "tool_execution_start" && opts?.enrichArgs) {
+        const enriched = opts.enrichArgs(p.toolName as string, p.args);
+        if (enriched && Array.isArray(enriched.hunks)) {
+          env = { ...env, aux: { hunks: enriched.hunks } };
+        }
+      }
+      if (name === "tool_execution_end" && opts?.classifyOutput) {
+        const out = opts.classifyOutput(p.toolName as string, p.result);
+        if (out) {
+          env = { ...env, aux: { ...(env.aux ?? {}), output: out } };
+        }
+      }
       try {
         broadcast(env);
       } catch {

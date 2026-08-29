@@ -72,7 +72,6 @@ import type {
   SessionHistoryEvent,
   ThinkingLevel,
   WireImage,
-  QueuedMessageItem,
 } from "./protocol/types.js";
 import { RelayClient, RoomAlreadyOpenError } from "./transport/relay_client.js";
 import { PlainPeerChannel } from "./transport/peer_channel.js";
@@ -88,6 +87,7 @@ import {
   helloEnvelope,
   type EnvelopeMessage,
 } from "./session/rpc_envelope.js";
+import { classifyToolOutput } from "./session/classify_output.js";
 import {
   dispatchRpcCommand,
   type RpcCommandHandlers,
@@ -272,7 +272,7 @@ let _myRoomId: string | null = null; // this Pi's room id (derived from the sess
  *  name changes on reconnect; falls back to the legacy (cwd, name) derivation
  *  only when no session id is available yet (pre-sessionManager edge). */
 function _deriveRoomId(cwd: string, name: string): string {
-  const sid = _sessionManager?.getSessionId();
+  const sid = _rootState().sessionManager?.getSessionId();
   return sid ? roomIdForSession(sid) : roomIdFor(cwd, name);
 }
 
@@ -540,7 +540,7 @@ function _sendReceivedImagePreviewNow(details: ReceivedImageDetails): void {
 }
 
 function _shouldDeferReceivedImagePreview(): boolean {
-  return _currentTurnId !== null || _myRoomMeta?.working === true;
+  return _rootState().turnId !== null || _myRoomMeta?.working === true;
 }
 
 function _sendReceivedImagePreview(
@@ -832,7 +832,7 @@ async function _deliverImageUserMessage(
   shouldSteer: boolean,
 ): Promise<void> {
   const previewDelivery: ReceivedImagePreviewDelivery =
-    shouldSteer || _currentTurnId !== null || _myRoomMeta?.working === true
+    shouldSteer || _rootState().turnId !== null || _myRoomMeta?.working === true
       ? "defer"
       : "immediate";
   const emitPreview = async () => {
@@ -854,9 +854,9 @@ async function _deliverImageUserMessage(
     });
   }
 
-  const previousTurnId = _currentTurnId;
-  const seededTurnId = !shouldSteer || _currentTurnId === null;
-  if (seededTurnId) _currentTurnId = msg.id;
+  const previousTurnId = _rootState().turnId;
+  const seededTurnId = !shouldSteer || _rootState().turnId === null;
+  if (seededTurnId) _rootState().turnId = msg.id;
 
   const wake = _wakeAgent(
     _contentFromUserMessage(msg),
@@ -864,7 +864,7 @@ async function _deliverImageUserMessage(
     "steer",
   );
   if (!wake.ok) {
-    if (seededTurnId) _currentTurnId = previousTurnId;
+    if (seededTurnId) _rootState().turnId = previousTurnId;
     sender.send({
       type: "error",
       code: "internal_error",
@@ -874,7 +874,6 @@ async function _deliverImageUserMessage(
     return;
   }
 
-  if (shouldSteer) _trackPendingSteer(msg.id, msg.text);
   _echoUserMessage(msg, shouldSteer);
 }
 
@@ -1029,17 +1028,16 @@ type BufferMsg = {
    *  `role:"compaction"` marker pushed in `session_compact`. */
   tokensBefore?: number;
 };
-let _messageBuffer: BufferMsg[] = [];
-// Read-only handle to the persisted session log (ExtensionContext.sessionManager).
-// Captured from event ctx so reconstruction can read history that predates this
-// fork process (survives restarts) — the in-memory _messageBuffer cannot.
-let _sessionManager: ExtensionContext["sessionManager"] | null = null;
+// _messageBuffer + _sessionManager now live PER-SESSION in _stateFor(sid); the
+// root session's records back reconstruction/session_sync (_rootState().buffer /
+// .sessionManager). Both are captured from event ctx (survive fork restarts via
+// the persisted session log).
 
 /** Messages for reconstruction: prefer the PERSISTED session log (survives fork
  *  restarts) via sessionManager.getEntries(); fall back to the in-memory buffer
  *  when no ctx has bound yet. Each `message`-type entry carries an AgentMessage. */
 function _sessionHistoryMessages(): BufferMsg[] {
-  const sm = _sessionManager;
+  const sm = _rootState().sessionManager;
   if (sm) {
     try {
       const entries = sm.getEntries() as Array<{
@@ -1075,15 +1073,8 @@ function _sessionHistoryMessages(): BufferMsg[] {
       envLog(`getEntries failed: ${String(err)}`);
     }
   }
-  return _messageBuffer;
+  return _rootState().buffer;
 }
-type PendingSteer = { id: string; text: string };
-let _pendingSteers: PendingSteer[] = [];
-let _lastConsumedSteerText: string | null = null;
-
-type AndroidQueuedItem = QueuedMessageItem & { editable: true };
-let _queuedItems: AndroidQueuedItem[] = [];
-
 type MeshEnvelope = {
   id: string;
   from: string;
@@ -1091,125 +1082,9 @@ type MeshEnvelope = {
   body: unknown;
 };
 let _pendingMeshMessages: MeshEnvelope[] = [];
-let _agentRunActive = false;
-let _agentRunGeneration = 0;
+// agent-run active/generation now live PER-SESSION in _stateFor(sid).agentRun;
+// mesh delivery targets the ROOT run, so the drain reads _rootState().agentRun.
 let _meshDrainScheduled = false;
-
-function _queuedStateMessage(): ServerMessage {
-  const first = _queuedItems[0];
-  return {
-    type: "queued_message_state",
-    ...(first ? { id: first.id, text: first.text } : {}),
-    items: _queuedItems.map((item) => ({ ...item })),
-  };
-}
-
-function _sendQueuedState(sender: PlainPeerChannel): void {
-  sender.send(_queuedStateMessage());
-}
-
-function _broadcastQueuedState(): void {
-  _broadcastToActive(_queuedStateMessage());
-}
-
-function _resetQueuedItems({
-  broadcast = false,
-}: {
-  broadcast?: boolean;
-} = {}): void {
-  _queuedItems = [];
-  if (broadcast) _broadcastQueuedState();
-}
-
-function _upsertQueuedItem(item: AndroidQueuedItem): void {
-  const index = _queuedItems.findIndex((existing) => existing.id === item.id);
-  if (index === -1) {
-    _queuedItems = [..._queuedItems, item];
-  } else {
-    _queuedItems = [
-      ..._queuedItems.slice(0, index),
-      item,
-      ..._queuedItems.slice(index + 1),
-    ];
-  }
-  _broadcastQueuedState();
-}
-
-function _clearQueuedItems(targetId?: string): void {
-  _queuedItems = targetId
-    ? _queuedItems.filter((item) => item.id !== targetId)
-    : [];
-  _broadcastQueuedState();
-}
-
-function _isBusyForQueueDrain(): boolean {
-  return _currentTurnId !== null || _myRoomMeta?.working === true;
-}
-
-function _normalizeSteerText(text: string): string {
-  return text.trim();
-}
-
-function _trackPendingSteer(id: string, text: string): void {
-  const key = _normalizeSteerText(text);
-  if (!key) return;
-  _pendingSteers.push({ id, text: key });
-}
-
-function _consumePendingSteerForStartedUser(text: string): string | null {
-  if (_pendingSteers.length === 0) return null;
-  const key = _normalizeSteerText(text);
-  const index = key
-    ? _pendingSteers.findIndex((item) => item.text === key)
-    : -1;
-  const [item] = _pendingSteers.splice(index >= 0 ? index : 0, 1);
-  return item?.id ?? null;
-}
-
-function _broadcastConsumedSteerForUserContent(content: unknown): void {
-  const text = _stringifyContent(content);
-  if (_lastConsumedSteerText === text) {
-    _lastConsumedSteerText = null;
-    return;
-  }
-  const id = _consumePendingSteerForStartedUser(text);
-  if (!id) return;
-  _lastConsumedSteerText = text;
-  _broadcastToActive({ type: "steer_consumed", id });
-}
-
-function _maybeDrainQueuedItem(): void {
-  if (_isBusyForQueueDrain()) return;
-  const item = _queuedItems.shift();
-  if (!item) return;
-  _broadcastQueuedState();
-
-  const previousTurnId = _currentTurnId;
-  _currentTurnId = item.id;
-  const msg: ClientUserMessage = {
-    type: "user_message",
-    id: item.id,
-    text: item.text,
-  };
-  const wake = _wakeAgent(
-    item.text,
-    `queued app user_message id=${item.id}`,
-    "steer",
-  );
-  if (!wake.ok) {
-    _currentTurnId = previousTurnId;
-    _queuedItems = [item, ..._queuedItems];
-    _broadcastQueuedState();
-    _broadcastToActive({
-      type: "error",
-      code: "internal_error",
-      in_reply_to: item.id,
-      message: `Agent rejected queued message: ${wake.detail}`,
-    });
-    return;
-  }
-  _echoUserMessage(msg, false);
-}
 
 /** Test-only override of the message buffer. */
 /**
@@ -1263,6 +1138,15 @@ export function _resetBridgeOwnersForTest(): void {
   _extensionUiBridge = null;
 }
 
+/** Test-only: reset the keyed per-session state at a TEST BOUNDARY (beforeEach).
+ *  Must NOT be folded into _resetBridgeOwnersForTest — that fires mid-test on
+ *  every captureEventHandler call and would wipe state a test seeds across two
+ *  captures (e.g. input seeds turnId, message_update reads it). */
+export function _resetSessionsForTest(): void {
+  _sessions.clear();
+  _rootSessionId = null;
+}
+
 /** Test-only: set the auto-init gate for lifecycle replacement tests. */
 export function _setAutoInitedForTest(value: boolean): void {
   _autoInited = value;
@@ -1312,12 +1196,12 @@ export function _getCachedPublicKeyForTest(): string | null {
 }
 
 export function _setMessageBufferForTest(msgs: unknown[]): void {
-  _messageBuffer = msgs as BufferMsg[];
+  _rootState().buffer = msgs as BufferMsg[];
 }
 
 /** Test-only accessor: returns a defensive copy of the buffer. */
 export function _getMessageBufferForTest(): unknown[] {
-  return [..._messageBuffer];
+  return [..._rootState().buffer];
 }
 
 /** Test-only override of session started timestamp. */
@@ -1332,14 +1216,7 @@ export function _setCurrentModelForTest(name: string | undefined): void {
 
 /** Test-only: read the active turn id used for plain `cancel` routing. */
 export function _getCurrentTurnIdForTest(): string | null {
-  return _currentTurnId;
-}
-
-export function _getPendingSteerIdsForTest(text: string): string[] {
-  const key = _normalizeSteerText(text);
-  return _pendingSteers
-    .filter((item) => item.text === key)
-    .map((item) => item.id);
+  return _rootState().turnId;
 }
 
 /** Test-only: override the bound AgentSession so a spy can capture the
@@ -1384,8 +1261,59 @@ function _persistModelDefault(provider: string, modelId: string): void {
 
 type ClientUserMessage = Extract<ClientMessage, { type: "user_message" }>;
 
-// Per-turn messaging state
-let _currentTurnId: string | null = null;
+// ── Per-session state, keyed by pi sessionId ──────────────────────────────
+// The fork re-activates IN-PROCESS for every subagent — each is its own pi
+// AgentSession with its OWN sessionId. Turn/agent/buffer state is therefore
+// PER-SESSION: every event handler records into its FIRING session's record
+// (sid = ctx.sessionManager.getSessionId()); app-facing reads use the ROOT
+// session's record. Subagent records accumulate (held for later surfacing);
+// a root-only broadcast gate keeps app display identical for now. This mirrors
+// pi's own per-AgentSession model rather than a flat fork-authored projection.
+interface SessionState {
+  turnId: string | null;
+  working: boolean;
+  agentRun: { active: boolean; generation: number };
+  buffer: BufferMsg[];
+  sessionManager: ExtensionContext["sessionManager"] | null;
+  model: string | null;
+}
+const _sessions = new Map<string, SessionState>();
+// The session bound to the app room. null until the ROOT session_start fires;
+// while null, everything is treated as root (single-session / test harness).
+let _rootSessionId: string | null = null;
+// Stable key for the root record even before _rootSessionId is known.
+function _rootKey(): string {
+  return _rootSessionId ?? "__root__";
+}
+function _stateFor(sid: string): SessionState {
+  let st = _sessions.get(sid);
+  if (!st) {
+    st = {
+      turnId: null,
+      working: false,
+      agentRun: { active: false, generation: 0 },
+      buffer: [],
+      sessionManager: null,
+      model: null,
+    };
+    _sessions.set(sid, st);
+  }
+  return st;
+}
+/** The root session's record (always defined; lazily created). */
+function _rootState(): SessionState {
+  return _stateFor(_rootKey());
+}
+/** sessionId of the firing handler's ctx, defaulting to the root key. */
+function _sidOf(
+  ctx: { sessionManager?: { getSessionId(): string } } | undefined,
+): string {
+  return ctx?.sessionManager?.getSessionId() ?? _rootKey();
+}
+/** True only when the firing session is NOT the app-room root (subagent). */
+function _isNonRootSid(sid: string): boolean {
+  return _rootSessionId !== null && sid !== _rootSessionId;
+}
 
 // Module-level pi reference
 let _pi: ExtensionAPI | null = null;
@@ -1521,6 +1449,318 @@ function _anyPeerActive(): boolean {
   return _activePeers.size > 0;
 }
 
+// ── Hidden e2e UI test harness (dev-only, undocumented) ───────────────────
+// Broadcasts CANNED frames to paired apps so the app UI can be exercised
+// end-to-end without a real agent turn. For plan/subagents/rich-ask it EMITS the
+// underlying BUS events and lets the REAL bridges produce the frames (faithful);
+// the simple ExtensionUIPromptView methods (select/confirm/input/editor) + media
+// have no bus producer, so they're broadcast directly. See design 01M152YD….
+const _TEST_SVG_B64 = Buffer.from(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 60">' +
+    '<rect width="120" height="60" rx="8" fill="#4c8bf5"/>' +
+    '<text x="60" y="37" font-size="16" fill="white" text-anchor="middle"' +
+    ' font-family="sans-serif">un-bien</text></svg>',
+).toString("base64");
+
+function _emitTestBus(channel: string, data: unknown): void {
+  try {
+    (
+      _pi as unknown as { events?: { emit(c: string, d: unknown): void } }
+    )?.events?.emit(channel, data);
+  } catch {
+    /* bus absent — best effort */
+  }
+}
+
+/** Run one canned UI-test scenario. Returns a short status for the notify. */
+function _runTestScenario(scenario: string): string {
+  const s = (scenario.trim().split(/\s+/)[0] || "help").toLowerCase();
+  const id = `test-${Date.now()}`;
+  switch (s) {
+    case "ask-select":
+      _broadcastEnvelope({
+        rpc: {
+          type: "extension_ui_request",
+          id,
+          method: "select",
+          title: "Pick one (test)",
+          options: ["Alpha", "Beta", "Gamma"],
+        },
+      });
+      return "sent ask-select";
+    case "ask-confirm":
+      _broadcastEnvelope({
+        rpc: {
+          type: "extension_ui_request",
+          id,
+          method: "confirm",
+          title: "Confirm (test)",
+          message: "Proceed with the test action?",
+        },
+      });
+      return "sent ask-confirm";
+    case "ask-input":
+      _broadcastEnvelope({
+        rpc: {
+          type: "extension_ui_request",
+          id,
+          method: "input",
+          title: "Input (test)",
+          placeholder: "Type something…",
+        },
+      });
+      return "sent ask-input";
+    case "ask-editor":
+      _broadcastEnvelope({
+        rpc: {
+          type: "extension_ui_request",
+          id,
+          method: "editor",
+          title: "Editor (test)",
+          prefill: "edit me",
+        },
+      });
+      return "sent ask-editor";
+    case "ask-notify":
+      _broadcastEnvelope({
+        rpc: {
+          type: "extension_ui_request",
+          id,
+          method: "notify",
+          message: "This is a test notice.",
+          notify_type: "info",
+        },
+      });
+      return "sent ask-notify";
+    case "ask-rich":
+      _emitTestBus("@eko24ive/pi-ask:started", {
+        version: 1,
+        flowId: `test-flow-${Date.now()}`,
+        source: "test",
+        title: "Rich ask (test)",
+        questions: [
+          {
+            id: "q1",
+            prompt: "Which approach?",
+            type: "single",
+            options: [
+              { value: "a", label: "Approach A", description: "the safe one" },
+              { value: "b", label: "Approach B", preview: "preview text here" },
+            ],
+          },
+          {
+            id: "q2",
+            prompt: "Anything to add?",
+            type: "single",
+            options: [{ value: "ok", label: "Looks good", freeform: true }],
+          },
+        ],
+      });
+      return "emitted pi-ask:started (rich)";
+    case "plan":
+      _emitTestBus("plan:snapshot", {
+        ns: "test",
+        seq: 1,
+        items: [
+          {
+            id: "t1",
+            kind: "plan",
+            title: "Design the thing",
+            status: "done",
+            deps: [],
+          },
+          {
+            id: "t2",
+            kind: "plan",
+            title: "Build the thing",
+            status: "in_progress",
+            deps: ["t1"],
+          },
+          {
+            id: "t3",
+            kind: "plan",
+            title: "Test the thing",
+            status: "pending",
+            deps: ["t2"],
+          },
+        ],
+      });
+      return "emitted plan:snapshot";
+    case "subagents":
+      _emitTestBus("subagents:created", {
+        id: "sa1",
+        type: "explore",
+        description: "Explore the codebase",
+      });
+      _emitTestBus("subagents:started", { id: "sa1" });
+      _emitTestBus("subagents:created", {
+        id: "sa2",
+        type: "plan",
+        description: "Draft an implementation plan",
+      });
+      _emitTestBus("subagents:completed", { id: "sa2" });
+      return "emitted subagents lifecycle";
+    case "svg": {
+      // A TOOL card renders standalone; the app pulls tool-emitted images from
+      // INSIDE the tool_execution_end `result` (imagesFromToolResult unwraps
+      // `{content:[{type:"image",data,mimeType}]}`) and renders them below the
+      // card (WireImageView -> SVGImageView). Deliver the SVG that way.
+      const tc = `tc-svg-${Date.now()}`;
+      _broadcastEnvelope({ rpc: { type: "turn_start" } });
+      _broadcastEnvelope({
+        rpc: {
+          type: "tool_execution_start",
+          toolCallId: tc,
+          toolName: "render_svg",
+          args: { note: "test svg" },
+        },
+      });
+      _broadcastEnvelope({
+        rpc: {
+          type: "tool_execution_end",
+          toolCallId: tc,
+          result: {
+            content: [
+              { type: "text", text: "rendered a test SVG" },
+              {
+                type: "image",
+                data: _TEST_SVG_B64,
+                mimeType: "image/svg+xml",
+              },
+            ],
+          },
+          isError: false,
+        },
+      });
+      _broadcastEnvelope({ rpc: { type: "agent_settled" } });
+      return "sent svg (envelope tool_execution_end + image)";
+    }
+    case "tool": {
+      const tc = `tc-${Date.now()}`;
+      _broadcastEnvelope({ rpc: { type: "turn_start" } });
+      _broadcastEnvelope({
+        rpc: {
+          type: "tool_execution_start",
+          toolCallId: tc,
+          toolName: "bash",
+          args: { command: "echo hello" },
+        },
+      });
+      _broadcastEnvelope({
+        rpc: {
+          type: "tool_execution_end",
+          toolCallId: tc,
+          result: "hello\n",
+          isError: false,
+        },
+      });
+      _broadcastEnvelope({ rpc: { type: "agent_settled" } });
+      return "sent tool pair (envelope)";
+    }
+    case "diff": {
+      // Exercise the rich diff rendering: aux `{hunks}` rides ALONGSIDE the raw
+      // edit `tool_execution_start`, and aux `{output:{kind:"diff"}}` rides the
+      // `tool_execution_end`. The rpc frames stay byte-faithful (raw args/result).
+      const tc = `tc-diff-${Date.now()}`;
+      const hunks = [
+        {
+          lines: [
+            { kind: "context", oldLine: 1, newLine: 1, text: "const a = 1;" },
+            { kind: "remove", oldLine: 2, text: "const b = 2;" },
+            { kind: "add", newLine: 2, text: "const b = 3;" },
+            { kind: "context", oldLine: 3, newLine: 3, text: "const c = 4;" },
+          ],
+        },
+      ];
+      _broadcastEnvelope({ rpc: { type: "turn_start" } });
+      _broadcastEnvelope({
+        rpc: {
+          type: "tool_execution_start",
+          toolCallId: tc,
+          toolName: "edit",
+          args: {
+            path: "demo.ts",
+            old_string: "const b = 2;",
+            new_string: "const b = 3;",
+          },
+        },
+        aux: { hunks },
+      });
+      _broadcastEnvelope({
+        rpc: {
+          type: "tool_execution_end",
+          toolCallId: tc,
+          result: "edited demo.ts",
+          isError: false,
+        },
+        aux: { output: { kind: "diff", hunks } },
+      });
+      _broadcastEnvelope({ rpc: { type: "agent_settled" } });
+      return "sent diff (envelope edit + aux hunks)";
+    }
+    case "agent": {
+      _broadcastEnvelope({ rpc: { type: "turn_start" } });
+      _broadcastEnvelope({
+        rpc: {
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "text_delta",
+            delta: "This is a ",
+          },
+        },
+      });
+      _broadcastEnvelope({
+        rpc: {
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "text_delta",
+            delta: "test agent message.",
+          },
+        },
+      });
+      _broadcastEnvelope({
+        rpc: {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "This is a test agent message." }],
+          },
+        },
+      });
+      _broadcastEnvelope({ rpc: { type: "agent_settled" } });
+      return "sent agent message (envelope)";
+    }
+    case "error":
+      _broadcastEnvelope({
+        rpc: {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            stopReason: "error",
+            errorMessage: "This is a test error.",
+          },
+        },
+      });
+      _broadcastEnvelope({ rpc: { type: "agent_settled" } });
+      return "sent error (envelope message_end/error)";
+    case "all":
+      for (const sc of [
+        "ask-notify",
+        "plan",
+        "subagents",
+        "svg",
+        "tool",
+        "diff",
+        "agent",
+        "error",
+      ])
+        _runTestScenario(sc);
+      return "sent all (ask-notify, plan, subagents, svg, tool, diff, agent, error)";
+    default:
+      return "usage: /unbien test <ask-select|ask-confirm|ask-input|ask-editor|ask-notify|ask-rich|plan|subagents|svg|tool|diff|agent|error|all>";
+  }
+}
+
 /**
  * New-protocol inbound: dispatch an envelope-carried pi `RpcCommand` to the SDK
  * and answer with a `{ rpc: response }` envelope to the SENDER. Native to the
@@ -1540,62 +1780,59 @@ function _routeRpcCommandFrom(
     _extensionUiBridge?.respond(frame as unknown as ExtensionUiResponseWire);
     return;
   }
-  // Envelope-native resume: reply with a {rpc} history replay the app folds via
-  // applyRPC (replaces the stock session_sync -> session_history round-trip).
-  if ((frame as Record<string, unknown>).type === "session_sync") {
-    const f = frame as Record<string, unknown>;
-    // Full per-peer sync on the envelope wire: queued-message state, in-flight
-    // ask_user (extension_ui) flows, the transcript, and panels. (The retired
-    // stock session_sync handler used to own queued/extension_ui/panels; they
-    // all replay here now.)
-    _sendQueuedState(sender);
-    // Server clamps the client's requested limit to its own cap (the envelope
-    // wire MUST keep the stock guarantee — a client can't pull more than the
-    // server allows). `truncated` says older history exists beyond the slice.
-    const serverLimit = _getSyncLimit();
-    const requested = typeof f.limit === "number" ? f.limit : serverLimit;
-    const limit = Math.min(requested, serverLimit);
-    const msgs = _sessionHistoryMessages();
-    const events = _mapAgentMessagesToEvents(msgs);
-    const slice = limit > 0 ? events.slice(-limit) : [];
-    const truncated = events.length > slice.length;
-    const replayFrames = _historyReplayEnvelopes(slice);
-    envLog(
-      `session_sync(env): msgs=${msgs.length} (buffer=${_messageBuffer.length}, sm=${_sessionManager ? "y" : "n"}) events=${events.length} replay=${replayFrames.length} limit=${limit} truncated=${truncated}`,
-    );
-    for (const replay of replayFrames) sender.sendEnvelope(replay);
-    // Envelope-native terminator: carries the sync metadata stock used to bundle
-    // on `session_history` (session_started_at + truncated), keyed by the
-    // request id. Its arrival IS the `eos` — no separate flag. Always sent, even
-    // for empty history, so the app reliably learns the session clock.
-    sender.sendEnvelope({
-      rpc: {
-        type: "session_sync_end",
-        in_reply_to: f.id,
-        session_started_at: _sessionStartedAt ?? 0,
-        truncated,
-      },
-    });
-    for (const req of _extensionUiBridge?.pendingRequests() ?? [])
-      sender.send(req);
-    // Replay current side-panels to THIS peer too. Until this consolidation the
-    // envelope session_sync replayed ONLY the transcript, so plan/subagents
-    // panels (emitted before/independent of this peer's attach) never reached
-    // envelope clients. Panels are {evt channel:"panel"}, same shape as live.
-    for (const panel of _panelBridge?.pendingPanels() ?? []) {
-      sender.sendEnvelope({ evt: { channel: "panel", data: panel } });
-      envLog(`session_sync(env): replayed panel`);
-    }
-    return;
-  }
+  // session_sync (reconstruction) is un-bien's OWN protocol — dispatched on the
+  // un plane by _routeUnBienPlaneFrom, NOT here. Only byte-faithful pi rpc
+  // commands + extension_ui_response ride this rpc dispatch.
   const handlers: RpcCommandHandlers = {
     prompt: async (message, opts) => {
+      // Full parity with the retired stock user_message handler:
+      //  - ALWAYS hand off with deliverAs:"steer" — the SDK ignores it while idle
+      //    but REQUIRES it when a turn is running or still settling right after
+      //    agent return; without it the message is rejected as busy.
+      //  - `shouldSteer` (echo label + steer tracking) = requested OR inferred
+      //    busy-room send.
+      //  - seed `_rootState().turnId` for a fresh (non-steer) turn so the agent's
+      //    reply chunks/done have a target; restore it if the handoff fails.
+      const requestedSteer = opts.streamingBehavior === "steer";
+      // Authoritative busy signal from pi's OWN state (AgentSession.isStreaming).
+      // `_rootState().turnId` / `_myRoomMeta.working` are NOT reinitialized after a
+      // SUBAGENT run, so they stick "busy" — making an IDLE prompt steer, which
+      // queues with no running turn to attach to ("goes to the void").
+      // isStreaming is correct across subagent lifecycles. Idle -> fresh run (no
+      // deliverAs); streaming -> steer.
+      const streaming =
+        (_pi as unknown as { isStreaming?: boolean } | null)?.isStreaming ===
+        true;
+      const shouldSteer = requestedSteer || streaming;
+      const msg: ClientUserMessage = {
+        type: "user_message",
+        id: opts.id ?? _rootState().turnId ?? String(Date.now()),
+        text: message,
+        images: opts.images as ClientUserMessage["images"],
+      };
+      // Image path mirrors the stock handler (SDK handoff WITH images + echo).
+      if (msg.images && msg.images.length > 0) {
+        await _deliverImageUserMessage(sender, msg, shouldSteer);
+        return;
+      }
+      const previousTurnId = _rootState().turnId;
+      const seededTurnId = !shouldSteer || _rootState().turnId === null;
+      if (seededTurnId) _rootState().turnId = msg.id;
+      // deliverAs:"steer" ONLY when busy. pi 0.84.3 QUEUES a steer message with
+      // no running turn to attach to (idle -> "goes to the void"); an idle
+      // prompt must start a FRESH run (no deliverAs). Busy sends steer so the
+      // SDK doesn't reject them.
       const wake = _wakeAgent(
         message,
         "app rpc prompt",
-        opts.streamingBehavior === "steer" ? "steer" : undefined,
+        shouldSteer ? "steer" : undefined,
       );
-      if (!wake.ok) throw new Error(wake.detail);
+      if (!wake.ok) {
+        if (seededTurnId) _rootState().turnId = previousTurnId;
+        throw new Error(wake.detail);
+      }
+      // The app renders the user's own message ONLY from this echo.
+      _echoUserMessage(msg, shouldSteer);
     },
     steer: async (message) => {
       const wake = _wakeAgent(message, "app rpc steer", "steer");
@@ -1628,14 +1865,116 @@ function _routeRpcCommandFrom(
       if (!_pi) throw new Error("agent session not bound");
       _pi.setThinkingLevel(level as ThinkingLevel);
     },
+    getAvailableModels: async () => {
+      const actionCtx = (_lastEventCtx ?? _lastCtx) as ActionCtx | null;
+      const reg = actionCtx?.modelRegistry ?? ensureModelRegistry(actionCtx);
+      reg.refresh();
+      const models = reg.getAvailable().map(wireFromModel);
+      const current = actionCtx?.getModel?.();
+      return { models, current: current ? wireFromModel(current) : undefined };
+    },
+    compact: async (customInstructions) => {
+      const actionCtx = (_lastEventCtx ?? _lastCtx) as ActionCtx | null;
+      if (!actionCtx?.compact)
+        throw new Error("compact unavailable (no active session ctx)");
+      actionCtx.compact(
+        customInstructions ? { customInstructions } : undefined,
+      );
+      return {};
+    },
+    newSession: async () => {
+      const actionCtx = (_lastEventCtx ?? _lastCtx) as ActionCtx | null;
+      if (!actionCtx?.newSession)
+        throw new Error("new_session unavailable (no command ctx)");
+      await actionCtx.newSession({ withSession: async () => {} });
+      return { cancelled: false };
+    },
+    clearQueue: async () => {
+      if (!_pi) throw new Error("agent session not bound");
+      return (
+        _pi as unknown as {
+          clearQueue(): { steering: string[]; followUp: string[] };
+        }
+      ).clearQueue();
+    },
   };
   void dispatchRpcCommand(frame as Record<string, unknown>, handlers)
     .then((resp) => {
+      // Envelope-native ONLY: no stock fallback. An unhandled rpc type is
+      // ignored (forward-compat). un-bien's own commands (session_sync,
+      // session_launch) ride the un plane via _routeUnBienPlaneFrom.
       if (resp) sender.sendEnvelope(resp);
     })
     .catch((err) => {
       console.error(`[un-bien] rpc inbound dispatch failed: ${String(err)}`);
     });
+}
+
+/**
+ * un-bien plane inbound (`type:"un"`): dispatch un-bien's OWN protocol frames by
+ * their inner `.type`. app->ext today: `session_sync` (reconstruction request)
+ * and `session_launch` (mesh remote-launch). These are NOT pi rpc — the
+ * EXTENSION acts. The reconstruction REPLAY frames it emits stay byte-faithful
+ * pi rpc frames on the rpc plane; only the request + `session_sync_end`
+ * terminator are un-plane frames.
+ */
+function _routeUnBienPlaneFrom(
+  sender: PlainPeerChannel,
+  env: EnvelopeMessage,
+): void {
+  const frame = env.un;
+  if (!frame || typeof frame !== "object") return;
+  const type = (frame as Record<string, unknown>).type;
+  envLog(`un inbound: ${String(type)}`);
+
+  if (type === "session_sync") {
+    const f = frame as Record<string, unknown>;
+    const serverLimit = _getSyncLimit();
+    const requested = typeof f.limit === "number" ? f.limit : serverLimit;
+    const limit = Math.min(requested, serverLimit);
+    const msgs = _sessionHistoryMessages();
+    const events = _mapAgentMessagesToEvents(msgs);
+    const slice = limit > 0 ? events.slice(-limit) : [];
+    const truncated = events.length > slice.length;
+    const replayFrames = _historyReplayEnvelopes(slice);
+    envLog(
+      `session_sync(un): msgs=${msgs.length} events=${events.length} replay=${replayFrames.length} limit=${limit} truncated=${truncated}`,
+    );
+    for (const replay of replayFrames) sender.sendEnvelope(replay);
+    // Terminator on the un plane (un-bien's own reconstruction protocol); its
+    // arrival IS the eos. session_started_at + truncated ride here.
+    sender.sendEnvelope({
+      un: {
+        type: "session_sync_end",
+        ...(typeof f.id === "string" ? { in_reply_to: f.id } : {}),
+        session_started_at: _sessionStartedAt ?? 0,
+        truncated,
+      } as EnvelopeMessage["un"],
+    });
+    for (const req of _extensionUiBridge?.pendingRequests() ?? [])
+      sender.send(req);
+    for (const panel of _panelBridge?.pendingPanels() ?? []) {
+      sender.sendEnvelope({ evt: { channel: "panel", data: panel } });
+    }
+    return;
+  }
+
+  if (type === "session_launch") {
+    const f = frame as Record<string, unknown>;
+    const cwd =
+      typeof f.cwd === "string" && f.cwd.length > 0 ? f.cwd : process.cwd();
+    if (!effectiveAllowRemoteLaunch(loadLocalConfig(cwd))) {
+      envLog("session_launch(un): remote launch disabled on this machine");
+      return;
+    }
+    const launchError = _launchSession(
+      f.mode === "rpc" ? "rpc" : "tmux",
+      cwd,
+      typeof f.name === "string" ? f.name : undefined,
+    );
+    if (launchError) envLog(`session_launch(un) error: ${launchError}`);
+    return;
+  }
 }
 
 /** Broadcast for the extension_ui bridge. extension_ui is ENVELOPE-ONLY
@@ -1952,22 +2291,10 @@ async function _findKnownPeer(
 
 /**
  * Full teardown: stop listener, detach channel, close relay → idle.
- *
- * `byeReason` (optional): when present and the channel is up, sends a
- * `{type:"bye", reason}` to the app before detaching so it sees offline
- * immediately instead of waiting ~50s for a ping miss. Fire-and-forget —
- * if the WS already failed (e.g., `relay.on("close")` callback) skip it
- * by omitting the reason; app falls back to ping miss naturally.
  */
-function _goIdle(byeReason?: import("./protocol/types.js").ByeReason): void {
+function _goIdle(): void {
   _rootLifecycleGeneration += 1;
   _relayLifecycleGeneration += 1;
-
-  // Broadcast bye to every still-attached owner so each app surfaces
-  // "offline" immediately instead of waiting ~50s for a ping miss.
-  if (byeReason && _state !== "idle" && _anyPeerActive()) {
-    _broadcastToActive({ type: "bye", reason: byeReason });
-  }
 
   // Cancel any pending reconnect attempt. Critical: /unbien stop must
   // win the race against a scheduled reconnect.
@@ -1980,8 +2307,6 @@ function _goIdle(byeReason?: import("./protocol/types.js").ByeReason): void {
   _stopAutoListener?.();
   _stopAutoListener = null;
 
-  if (_queuedItems.length > 0) _resetQueuedItems({ broadcast: true });
-
   // Tear down every per-owner channel and clear the map.
   for (const ch of _activePeers.values()) {
     try {
@@ -1992,11 +2317,8 @@ function _goIdle(byeReason?: import("./protocol/types.js").ByeReason): void {
   }
   _activePeers.clear();
   _peerShort = "";
-  _currentTurnId = null;
+  _rootState().turnId = null;
   _pendingReceivedImagePreviews.length = 0;
-  _pendingSteers = [];
-  _lastConsumedSteerText = null;
-  _resetQueuedItems();
 
   // Invalidate async producers and bridge ownership before closing the host
   // Relay. A synchronous/delayed close callback must observe stale identity.
@@ -2053,13 +2375,9 @@ function _onRelayClose(closedRelay: RelayClient): void {
       /* best-effort */
     }
   }
-  if (_queuedItems.length > 0) _resetQueuedItems({ broadcast: true });
   _activePeers.clear();
   _peerShort = "";
-  _currentTurnId = null;
-  _pendingSteers = [];
-  _lastConsumedSteerText = null;
-  _resetQueuedItems();
+  _rootState().turnId = null;
 
   _relay = null; // _relayUrl preserved for retry
 
@@ -2260,12 +2578,12 @@ export async function _handleControl(cmd: string): Promise<void> {
       if (_getState() === "idle") {
         _rootLifecycleGeneration += 1;
         _relayLifecycleGeneration += 1;
-      } else _goIdle("peer_stop");
+      } else _goIdle();
       _emitRelayState(true);
       return;
     case "relay:toggle":
       if (_getState() === "idle") await _cmdStart(_controlCtx());
-      else _goIdle("peer_stop");
+      else _goIdle();
       _emitRelayState(true);
       return;
     case "relay:status":
@@ -2307,7 +2625,7 @@ async function _renameAgent(newName: string): Promise<void> {
   // first (also detaches the bridge) so the broker re-register below starts
   // clean; bring it back up after with the new name.
   const wasStarted = _getState() !== "idle";
-  if (wasStarted) _goIdle("peer_stop");
+  if (wasStarted) _goIdle();
 
   let assigned = newName;
   try {
@@ -2348,7 +2666,7 @@ export function _onPeerDisconnect(appPeerId?: string): void {
 
   _detachPeerChannel(target);
   if (_anyPeerActive()) {
-    // Other owners still attached — keep _currentTurnId so they continue
+    // Other owners still attached — keep _rootState().turnId so they continue
     // seeing the in-flight agent stream.
     _refreshFooter();
     return;
@@ -2356,7 +2674,7 @@ export function _onPeerDisconnect(appPeerId?: string): void {
 
   // No owner left. Conservatively clear the turn so the next pair_request
   // starts cleanly.
-  _currentTurnId = null;
+  _rootState().turnId = null;
   _refreshFooter();
   _safeNotify(
     "[un-bien] All app peers disconnected, listening for reconnect",
@@ -2399,14 +2717,17 @@ function _attachOwner(
         (_liveCtx() as typeof _noopCtx) ?? _noopCtx,
       ),
     () => _onPeerDisconnect(appPeerId),
-    (env) => _routeRpcCommandFrom(channel, env),
+    (env) =>
+      env.un === undefined
+        ? _routeRpcCommandFrom(channel, env)
+        : _routeUnBienPlaneFrom(channel, env),
   );
 
   _attachPeerChannel(appPeerId, channel);
   // Envelope-native capability handshake: advertise caps up front so the app can
   // enable the {rpc|evt} route + suppress stock before any session content
   // arrives. Additive to the stock session_history caps (parity transition).
-  const _sid = _sessionManager?.getSessionId();
+  const _sid = _rootState().sessionManager?.getSessionId();
   channel.sendEnvelope(helloEnvelope(_capabilities(), _sid));
   envLog(
     `attach: peer=${appPeerId.slice(0, 8)} hello sent (caps + sessionId=${_sid ?? "?"}); active=${_activePeers.size}`,
@@ -2508,7 +2829,12 @@ function _installAutoListener(relay: RelayClient): () => void {
         innerObj.rpc !== undefined ||
         innerObj.evt !== undefined
       ) {
-        _routeRpcCommandFrom(channel, inner as unknown as EnvelopeMessage);
+        {
+          const innerEnv = inner as unknown as EnvelopeMessage;
+          if (innerEnv.un === undefined)
+            _routeRpcCommandFrom(channel, innerEnv);
+          else _routeUnBienPlaneFrom(channel, innerEnv);
+        }
       } else {
         _routeClientMessageFrom(
           channel,
@@ -2830,8 +3156,6 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   if (applied.has(pi)) return; // this session's pi was already wired
   applied.add(pi);
 
-  _pi = pi;
-
   // Plan/57 — bridge @eko24ive/pi-ask clarification flows to the paired app.
   // Inert when pi-ask isn't installed (no events fire) or the SDK exposes no
   // events bus. ask_user without pi-ask doesn't exist, so this never breaks a
@@ -2839,13 +3163,29 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // the root session (pi-ask UI + plan/subagents panels). A subagent child
   // re-runs this factory but must not tear down the root's bridges mid-turn;
   // only the root's ownership claim creates them, children skip.
+  //
+  // CRITICAL: `_pi` is set ONLY for the root session. A subagent re-activates
+  // this extension IN-PROCESS with its OWN pi; letting it hijack `_pi` means
+  // app prompts (sendUserMessage) + busy checks (isStreaming) target the
+  // subagent's (dead, post-run) session — the 'prompt goes to the void
+  // post-subagent' bug. Children skip; `_pi` stays the root's. (Turn/session
+  // state no longer relies on a root-claim closure flag — handlers key by the
+  // firing session's id via ctx.sessionManager.getSessionId(); see _sidOf /
+  // _isNonRootSid.)
   if (_claimRootSession(pi)) {
+    _pi = pi;
     _extensionUiBridge?.dispose();
     _extensionUiBridge = createExtensionUiBridge(pi, _uiBroadcast);
     _panelBridge?.dispose();
     _panelBridge = createPanelBridge(pi, _panelBroadcast);
     _rpcEnvelope?.dispose();
-    _rpcEnvelope = createRpcEnvelope(pi, _broadcastEnvelope);
+    _rpcEnvelope = createRpcEnvelope(pi, _broadcastEnvelope, {
+      enrichArgs: (tool, args) => {
+        const e = _enrichToolArgs(tool, args) as { hunks?: unknown[] };
+        return Array.isArray(e.hunks) ? { hunks: e.hunks } : null;
+      },
+      classifyOutput: (tool, result) => classifyToolOutput(tool, result),
+    });
   }
 
   // Plano 19: ensure ~/.pi/un-bien/{sessions,skills}/ exist and deploy the
@@ -2885,7 +3225,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
 
   // Mirror input typed in the Pi terminal (or sent via RPC) to every
   // connected owner. 'extension' source is our own sendUserMessage call
-  // from routeClientMessage, which already set _currentTurnId — skip to
+  // from routeClientMessage, which already set _rootState().turnId — skip to
   // avoid a double turnId.
   pi.on("input", (event) => {
     // Transparent control channel: a `CTRL_PREFIX`-tagged input from an RPC
@@ -2898,9 +3238,9 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     }
     if (!_anyPeerActive()) return;
     if (event.source === "extension") return;
-    const turnId = `local_${randomUUID()}`;
-    _currentTurnId = turnId;
-    _broadcastToActive({ type: "user_input", id: turnId, text: event.text });
+    // Turn id still stamped for queue/turn correlation; the app renders the
+    // user bubble from the envelope message_end (role:user), not a stock frame.
+    _rootState().turnId = `local_${randomUUID()}`;
     return undefined;
   });
 
@@ -2936,65 +3276,15 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     });
   });
 
-  pi.on("agent_start", () => {
-    _agentRunActive = true;
-    _agentRunGeneration += 1;
+  pi.on("agent_start", (_event, ctx) => {
+    const st = _stateFor(_sidOf(ctx));
+    st.agentRun.active = true;
+    st.agentRun.generation += 1;
   });
 
-  pi.on("message_start", (event) => {
-    const message = event?.message as BufferMsg | undefined;
-    if (!_anyPeerActive() || message?.role !== "user") return;
-    _broadcastConsumedSteerForUserContent(message.content);
-  });
-
-  pi.on("message_update", (event) => {
-    if (!_anyPeerActive() || !_currentTurnId) return;
-    const ae = event.assistantMessageEvent;
-    if (ae.type === "text_delta") {
-      _broadcastToActive({
-        type: "agent_chunk",
-        in_reply_to: _currentTurnId,
-        delta: ae.delta,
-      });
-    } else if (ae.type === "thinking_delta") {
-      // un-bien extension: stream model reasoning so paired apps can render a
-      // (collapsible) thinking block. Additive — stock clients ignore it.
-      _broadcastToActive({
-        type: "agent_reasoning",
-        in_reply_to: _currentTurnId,
-        delta: ae.delta,
-      });
-    }
-  });
-
-  // Notify every connected owner that a tool is about to run (visibility
-  // only, NOT approval). tool_execution_start fires before the tool
-  // executes; tool_execution_end closes the loop with the result. Together
-  // they render a "Tool running… done" timeline in each paired app.
-  pi.on("tool_execution_start", (event) => {
-    if (!_anyPeerActive()) return;
-    _broadcastToActive({
-      type: "tool_request",
-      tool_call_id: event.toolCallId,
-      tool: event.toolName,
-      args: _enrichToolArgs(event.toolName, event.args),
-    });
-  });
-
-  pi.on("tool_execution_end", (event) => {
-    if (!_anyPeerActive()) return;
-    // Stringify like the history mapper (same helper) so the live text == what
-    // a session_sync replays for this tool. Raw `String(event.result)` turned
-    // a content-array/object into "[object Object]" and the success branch sent
-    // the object unstringified — both diverging from re-sync.
-    const text = _stringifyToolResult(event.result);
-    const images = _imagesFromToolResult(event.result);
-    const msg: ServerMessage = event.isError
-      ? { type: "tool_result", tool_call_id: event.toolCallId, error: text }
-      : { type: "tool_result", tool_call_id: event.toolCallId, result: text };
-    if (images.length > 0) msg.images = images;
-    _broadcastToActive(msg);
-  });
+  // Live transcript (assistant text/thinking deltas + tool_request/tool_result)
+  // is produced by the rpc-envelope producer (createRpcEnvelope) from the same
+  // pi.on(message_update / tool_execution_*) events — no stock broadcast here.
 
   // Cumulative session buffer fed via `message_end`, which fires once per
   // persisted message (user, assistant, toolResult) — same hook the SDK uses
@@ -3003,7 +3293,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // turn — including turns initiated from the Pi terminal (source:"interactive")
   // or RPC. Previous impl overwrote on `agent_end` and lost everything but the
   // last turn (see diagnostics 14, 15).
-  pi.on("message_end", (event) => {
+  pi.on("message_end", (event, ctx) => {
     const m = event?.message as
       | {
           role?: string;
@@ -3013,81 +3303,45 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         }
       | undefined;
     if (!m) return;
-    if (m.role === "user" && _anyPeerActive()) {
-      _broadcastConsumedSteerForUserContent(m.content);
-    }
+    const sid = _sidOf(ctx);
+    const st = _stateFor(sid);
+    // Buffer is PER-SESSION: a subagent's messages stay in the subagent's
+    // record and never leak into the root's session_sync replay.
     if (
       m.role === "user" ||
       m.role === "assistant" ||
       m.role === "toolResult"
     ) {
-      _messageBuffer.push(m as unknown as BufferMsg);
+      st.buffer.push(m as unknown as BufferMsg);
     }
-    // un-bien: agent-emitted inline graphics. The live stream is text deltas
-    // only; image blocks settle here on the assistant message. Broadcast an
-    // agent_message carrying the (already base64-encoded) images so the app
-    // renders them in the conversation flow. Text-only messages are unchanged
-    // (still the chunk+agent_done path) — we only send this when images exist.
-    if (m.role === "assistant" && _anyPeerActive() && _currentTurnId) {
-      const images = _imagesFromContent(m.content);
-      if (images.length > 0) {
-        _broadcastToActive({
-          type: "agent_message",
-          in_reply_to: _currentTurnId,
-          text: _stringifyContent(m.content),
-          images,
-        });
-      }
-    }
-    // Forward a failed turn to connected owners. Without this the app just
-    // hangs with no response when the provider errors (e.g. the TUI's
-    // "Provider finish_reason: error"): the SDK surfaces the failure as an
-    // assistant message with stopReason "error" + an `errorMessage` (pi-ai).
-    // `error` is an existing ServerMessage the app already renders — no
-    // protocol/app change. `in_reply_to` ties it to the turn the app awaits.
-    if (
-      m.role === "assistant" &&
-      m.stopReason === "error" &&
-      _anyPeerActive()
-    ) {
-      const message =
-        typeof m.errorMessage === "string" && m.errorMessage
-          ? m.errorMessage
-          : "Provider error";
-      const errMsg: ServerMessage = _currentTurnId
-        ? {
-            type: "error",
-            in_reply_to: _currentTurnId,
-            code: "provider_error",
-            message,
-          }
-        : { type: "error", code: "provider_error", message };
-      _broadcastToActive(errMsg);
-    }
+    // Transcript content (assistant text, inline images, provider errors) now
+    // rides the rpc-envelope message_end — the app renders it via applyRPC.
+    // Only the per-session buffer push (above, for session_sync replay)
+    // remains here.
   });
 
-  pi.on("agent_end", () => {
-    // Buffer is fed by `message_end`; here we only finalize the outbound
-    // turn signal to every connected owner. No buffer mutation.
-    if (_anyPeerActive() && _currentTurnId) {
-      _broadcastToActive({ type: "agent_done", in_reply_to: _currentTurnId });
-      _currentTurnId = null;
+  pi.on("agent_end", (_event, ctx) => {
+    const sid = _sidOf(ctx);
+    const st = _stateFor(sid);
+    // Clear THIS session's run flag on the next tick (generation guards a
+    // queued continuation that started first).
+    const endedGeneration = st.agentRun.generation;
+    const settleRun = () =>
+      setTimeout(() => {
+        if (st.agentRun.generation !== endedGeneration) return;
+        st.agentRun.active = false;
+        if (!_isNonRootSid(sid)) _scheduleMeshMessageDrain();
+      }, 0);
+    if (_isNonRootSid(sid)) {
+      settleRun();
+      return; // subagent end has no app-facing effect
     }
+    // Root: close the outbound turn. The app renders turn completion from the
+    // envelope (turn_end / agent_settled), so no stock agent_done is sent; we
+    // only clear the turn id used for queue/turn correlation.
+    if (st.turnId) st.turnId = null;
     _flushPendingReceivedImagePreviews();
-    _lastConsumedSteerText = null;
-    _maybeDrainQueuedItem();
-
-    // agent_end listeners finish before pi-agent-core clears its active run.
-    // Defer mesh delivery to the next event-loop turn so triggerTurn cannot
-    // collide with the prompt that emitted this event. A queued continuation
-    // may start first; its generation keeps the older timer from clearing the
-    // new run's busy flag.
-    const endedGeneration = _agentRunGeneration;
-    setTimeout(() => {
-      if (_agentRunGeneration !== endedGeneration) return;
-      _agentRunActive = false;
-      _scheduleMeshMessageDrain();
-    }, 0);
+    settleRun();
   });
 
   // plan/34: the broker no longer gates delivery on busy state, so we no
@@ -3095,9 +3349,12 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // room_meta over the relay (plan/32) below — that's independent of the
   // broker and drives the app's working indicator.
   pi.on("turn_start", (_event, ctx) => {
-    // Only adopt a real manager — a ctx without one must NOT clobber a good
-    // reference with undefined (also keeps the handler robust to a bare ctx).
-    if (ctx?.sessionManager) _sessionManager = ctx.sessionManager;
+    const sid = _sidOf(ctx);
+    const st = _stateFor(sid);
+    // Each session records its OWN sessionManager (no cross-session clobber).
+    if (ctx?.sessionManager) st.sessionManager = ctx.sessionManager;
+    st.working = true;
+    if (_isNonRootSid(sid)) return; // model hydration + room_meta are root-only
     // Late model hydration: if the model was still unknown at connect (resolved
     // lazily by the SDK), grab it on the first turn and fan it out — so a daemon
     // whose model only materialises at turn 1 still reports it to the app.
@@ -3116,6 +3373,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     }
     // Plan/32 Part B: publish working=true as room_meta (raw, no debounce —
     // the debounce lives in the app). Same shape as the model/thinking updates.
+    // _myRoomMeta is the ROOM projection (driven only by the root session).
     if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working: true };
     if (_relay && _myRoomId) {
       _relay.sendControl({
@@ -3125,7 +3383,10 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       });
     }
   });
-  pi.on("turn_end", () => {
+  pi.on("turn_end", (_event, ctx) => {
+    const sid = _sidOf(ctx);
+    _stateFor(sid).working = false;
+    if (_isNonRootSid(sid)) return; // room_meta is root-only
     // Plan/32 Part B: publish working=false as room_meta (raw, no debounce).
     if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working: false };
     if (_relay && _myRoomId) {
@@ -3135,7 +3396,6 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         meta: { working: false },
       });
     }
-    _maybeDrainQueuedItem();
   });
 
   // Plan/32: compaction feedback. compact() doesn't run a turn, so bracket it
@@ -3164,22 +3424,15 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // (2) Persist in history: the CompactionEntry never reaches _messageBuffer
     // via message_end (only user/assistant/toolResult), so push a synthetic
     // marker the mapper turns into a `compaction` event — survives session_sync.
-    _messageBuffer.push({
+    _rootState().buffer.push({
       role: "compaction",
       content: summary,
       timestamp: ts,
       tokensBefore,
     });
-    // (1) Live result to every connected owner.
-    _broadcastToActive({
-      type: "compaction",
-      summary,
-      tokens_before: tokensBefore,
-      ts,
-    });
+    // (1) Live result rides the rpc-envelope compaction_end (app applyRPC).
     // (3) Working ends.
     _publishWorking(false);
-    _maybeDrainQueuedItem();
   });
 
   // Re-capture the freshest base ctx on every session replacement so compact
@@ -3189,18 +3442,32 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // bound to the current session.
   pi.on("session_start", (_event, ctx) => {
     _lastEventCtx = ctx;
-    _sessionManager = ctx.sessionManager;
+    // Register THIS session's record (root + every subagent get their own
+    // session_start with their own ctx). Each records its OWN sessionManager —
+    // no cross-session clobber (was the unguarded `_sessionManager = ...` bug).
+    const sid = _sidOf(ctx);
+    if (ctx?.sessionManager) _stateFor(sid).sessionManager = ctx.sessionManager;
     // session_shutdown disposes per-session pi-ask subscriptions. A host that
     // reuses this module instance does NOT re-run the factory, so rebind the
     // bridge here; fresh-module hosts already created theirs in the factory.
     // Only the ROOT owner rebinds (re-claims a slot freed by its own shutdown);
     // a subagent child's session_start must not seize it. Covers both bridges.
+    // The root claim also fixes _rootSessionId (re-captured across replacement);
+    // only when a real sessionManager is present (ctx-less test events stay in
+    // null-root mode where every event is treated as root).
     if (_claimRootSession(pi)) {
+      if (ctx?.sessionManager) _rootSessionId = sid;
       if (!_extensionUiBridge)
         _extensionUiBridge = createExtensionUiBridge(pi, _uiBroadcast);
       if (!_panelBridge) _panelBridge = createPanelBridge(pi, _panelBroadcast);
       if (!_rpcEnvelope)
-        _rpcEnvelope = createRpcEnvelope(pi, _broadcastEnvelope);
+        _rpcEnvelope = createRpcEnvelope(pi, _broadcastEnvelope, {
+          enrichArgs: (tool, args) => {
+            const e = _enrichToolArgs(tool, args) as { hunks?: unknown[] };
+            return Array.isArray(e.hunks) ? { hunks: e.hunks } : null;
+          },
+          classifyOutput: (tool, result) => classifyToolOutput(tool, result),
+        });
     }
     // Rearm a reused-but-disposed instance. The session_shutdown teardown (below)
     // sets _disposed=true assuming the host re-evaluates THIS module fresh for the
@@ -3309,6 +3576,14 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // ends) must NOT dispose the root's bridges mid-turn. The root disposes both
     // and releases ownership so a replacement root session can re-claim it.
     if (_isRootSession(pi)) {
+      // Pi surfaces session end ONLY as this extension event — there is no
+      // native rpc frame. Forward it faithfully on the rpc plane so a paired
+      // app can mark the session ended. Emit EXPLICITLY here, BEFORE the
+      // producer dispose below: `_rpcEnvelope` gates on its `disposed` flag,
+      // so once disposed it can no longer build/broadcast this frame.
+      if (_anyPeerActive()) {
+        _broadcastEnvelope({ rpc: { type: "session_shutdown" } });
+      }
       _extensionUiBridge?.dispose();
       _extensionUiBridge = null;
       _panelBridge?.dispose();
@@ -3392,6 +3667,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         "relay status",
         "relay url",
         "config",
+        "test", // hidden e2e UI harness (dev-only)
         "peers", // plan/25 Wave D — local + cross-PC inventory
         "create",
         "remove",
@@ -3440,6 +3716,12 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         await _cmdRelay(sub.slice("relay".length).trim(), ctx);
       } else if (sub === "config") {
         _cmdConfig(ctx);
+      } else if (sub === "test" || sub.startsWith("test ")) {
+        // Hidden dev-only e2e UI harness: broadcast canned frames to paired apps.
+        _safeNotify(
+          `[un-bien test] ${_runTestScenario(sub.slice("test".length).trim())}`,
+          "info",
+        );
       } else if (sub === "rename" || sub.startsWith("rename ")) {
         await _renameAgent(sub.slice("rename".length).trim());
       } else if (sub === "peers") {
@@ -4333,10 +4615,10 @@ async function _cmdStop(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
     return;
   }
 
-  // Preserve bye ordering, but revoke Relay/SelfRevoke/bridge authority while
-  // the global node is still visible and before close() begins UDS leave.
+  // Revoke Relay/SelfRevoke/bridge authority while the global node is still
+  // visible and before close() begins UDS leave.
   if (relayUp) {
-    _goIdle("peer_stop");
+    _goIdle();
   } else {
     _relayLifecycleGeneration += 1;
     _meshNode?.detachBridge();
@@ -4398,9 +4680,9 @@ async function _cmdRevoke(
     return;
   }
 
-  // Revoke needs the relay so the revoked device gets a `bye` and its live
-  // channel is torn down — not just a silent peers.json edit. Auto-bootstrap
-  // the mesh + relay when down, mirroring `_cmdPair`.
+  // Revoke needs the relay so the revoked device's live channel is torn down
+  // — not just a silent peers.json edit. Auto-bootstrap the mesh + relay when
+  // down, mirroring `_cmdPair`.
   const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : "";
   if (_state === "idle") {
     if (!localConfigExists(cwd)) {
@@ -4454,12 +4736,6 @@ async function _cmdRevoke(
   // Storage removal uses the exact saved representation; the active channel
   // is indexed by its canonical identity.
   if (peer.runtimeKey !== null && _activePeers.has(peer.runtimeKey)) {
-    const channel = _activePeers.get(peer.runtimeKey);
-    try {
-      channel?.send({ type: "bye", reason: "session_replaced" });
-    } catch {
-      /* best-effort */
-    }
     _detachPeerChannel(peer.runtimeKey);
     _refreshFooter();
   }
@@ -4583,7 +4859,7 @@ async function _cmdRelay(arg: string, ctx: ExtensionContext): Promise<void> {
       if (_getState() === "idle") {
         ctx.ui.notify("[un-bien] Relay already disconnected.", "info");
       } else {
-        _goIdle("peer_stop");
+        _goIdle();
         ctx.ui.notify(
           "[un-bien] Relay disconnected (local mesh untouched).",
           "info",
@@ -5444,11 +5720,16 @@ function _scheduleMeshMessageDrain(): void {
   queueMicrotask(() => {
     _meshDrainScheduled = false;
     const pi = _pi;
-    if (_agentRunActive || !pi || _pendingMeshMessages.length === 0) return;
+    if (
+      _rootState().agentRun.active ||
+      !pi ||
+      _pendingMeshMessages.length === 0
+    )
+      return;
 
     const batch = _pendingMeshMessages.splice(0);
     let delivered = 0;
-    _agentRunActive = true;
+    _rootState().agentRun.active = true;
     try {
       batch.forEach((env, index) => {
         const isLast = index === batch.length - 1;
@@ -5461,7 +5742,7 @@ function _scheduleMeshMessageDrain(): void {
         delivered += 1;
       });
     } catch (err) {
-      _agentRunActive = false;
+      _rootState().agentRun.active = false;
       _pendingMeshMessages = [
         ...batch.slice(delivered),
         ..._pendingMeshMessages,
@@ -5730,6 +6011,17 @@ function _abortCurrentTurn(
   return false;
 }
 
+// action_ok/action_error acks ride the mesh envelope (`{ rpc }`) — the app
+// consumes them in its envelope block. Fall back to the stock frame only when no
+// envelope sink is wired (legacy/test senders), mirroring the models_list path.
+function _emitAck(sender: PlainPeerChannel, rpc: ServerMessage): void {
+  if (sender.sendEnvelope) {
+    sender.sendEnvelope({ rpc });
+  } else {
+    sender.send(rpc);
+  }
+}
+
 export function _routeClientMessageFrom(
   sender: PlainPeerChannel,
   msg: ClientMessage,
@@ -5747,11 +6039,9 @@ export function _routeClientMessageFrom(
         });
         return;
       }
-      sender.send({
-        type: "cancelled",
-        in_reply_to: msg.id,
-        target_id: msg.target_id,
-      });
+      // The cancel took effect (pi abort). No stock `cancelled` frame is
+      // emitted — the app already sees the turn wind down via the envelope
+      // turn_end/agent_settled. Kept the abort; dropped the redundant ack.
     } catch (err) {
       sender.send({
         type: "error",
@@ -5765,24 +6055,6 @@ export function _routeClientMessageFrom(
   // extension_ui_response is envelope-only now — handled in _routeRpcCommandFrom.
   if (!_pi) return;
   switch (msg.type) {
-    case "queued_message_set": {
-      const text = msg.text.trim();
-      if (!text) {
-        _clearQueuedItems(msg.id);
-        break;
-      }
-      _upsertQueuedItem({
-        id: msg.id,
-        text,
-        editable: true,
-        created_at: Date.now(),
-      });
-      _maybeDrainQueuedItem();
-      break;
-    }
-    case "queued_message_clear":
-      _clearQueuedItems(msg.target_id);
-      break;
     case "user_message": {
       // Source-of-truth rebroadcast (plan/24 W2D fix). Echo the message
       // back to every attached owner (sender included) after the SDK accepts
@@ -5821,10 +6093,10 @@ export function _routeClientMessageFrom(
         break;
       }
 
-      const previousTurnId = _currentTurnId;
-      const seededTurnId = !shouldSteer || _currentTurnId === null;
+      const previousTurnId = _rootState().turnId;
+      const seededTurnId = !shouldSteer || _rootState().turnId === null;
       if (seededTurnId) {
-        _currentTurnId = msg.id;
+        _rootState().turnId = msg.id;
       }
       // Always include a streaming delivery mode for app-originated messages.
       // The SDK ignores `deliverAs` when idle, but requires it when a turn is
@@ -5836,7 +6108,7 @@ export function _routeClientMessageFrom(
         "steer",
       );
       if (!wake.ok) {
-        if (seededTurnId) _currentTurnId = previousTurnId;
+        if (seededTurnId) _rootState().turnId = previousTurnId;
         sender.send({
           type: "error",
           code: "internal_error",
@@ -5845,7 +6117,6 @@ export function _routeClientMessageFrom(
         });
         break;
       }
-      if (shouldSteer) _trackPendingSteer(msg.id, msg.text);
       _echoUserMessage(msg, shouldSteer);
       break;
     }
@@ -5888,7 +6159,7 @@ export function _routeClientMessageFrom(
           ? msg.cwd
           : process.cwd();
       if (!effectiveAllowRemoteLaunch(loadLocalConfig(cwd))) {
-        sender.send({
+        _emitAck(sender, {
           type: "action_error",
           in_reply_to: msg.id,
           action: "session_launch",
@@ -5898,7 +6169,8 @@ export function _routeClientMessageFrom(
         break;
       }
       const launchError = _launchSession(msg.mode, cwd, msg.name);
-      sender.send(
+      _emitAck(
+        sender,
         launchError
           ? {
               type: "action_error",
@@ -5926,7 +6198,7 @@ export function _routeClientMessageFrom(
       // replacement", which previously surfaced to the app as a hard failure
       // ("session_new failed") and left New Context wedged.
       const restartFresh = () => {
-        sender.send({
+        _emitAck(sender, {
           type: "action_ok",
           in_reply_to: msg.id,
           action: "session_new",
@@ -5939,7 +6211,7 @@ export function _routeClientMessageFrom(
           restartFresh();
           break;
         }
-        sender.send({
+        _emitAck(sender, {
           type: "action_error",
           in_reply_to: msg.id,
           action: "session_new",
@@ -5962,7 +6234,7 @@ export function _routeClientMessageFrom(
             },
           });
           if (result?.cancelled) {
-            sender.send({
+            _emitAck(sender, {
               type: "action_error",
               in_reply_to: msg.id,
               action: "session_new",
@@ -5970,7 +6242,7 @@ export function _routeClientMessageFrom(
             });
             return;
           }
-          sender.send({
+          _emitAck(sender, {
             type: "action_ok",
             in_reply_to: msg.id,
             action: "session_new",
@@ -5983,7 +6255,7 @@ export function _routeClientMessageFrom(
             restartFresh();
             return;
           }
-          sender.send({
+          _emitAck(sender, {
             type: "action_error",
             in_reply_to: msg.id,
             action: "session_new",
@@ -6045,31 +6317,13 @@ export function routeClientMessage(
  * New Session clears its local store on `action_ok`, but that alone isn't
  * durable: `_messageBuffer` (which answers `session_sync`) is append-only and
  * `_sessionStartedAt` is stamped once, so a later reconnect/restart would
- * replay the OLD history. We clear the buffer, restamp the clock, and
- * broadcast an EMPTY `session_history` (`events: []`) so every attached owner
- * drops the stale conversation. The app's `_applyHistory` substitutes its cache wholesale, so
- * no new app-side code is needed.
- *
- * Unlike a per-request session_history reply (which must go to the sender
- * channel only — see `_broadcastToActive`), this is an intentional fan-out:
- * a new session is global state, so every owner must see the reset.
+ * replay the OLD history. We clear the buffer and restamp the clock so the
+ * envelope `session_sync` reconstructs from a clean slate. The app drops the
+ * stale conversation off the new-session `hello` (changed `sessionId`).
  */
-function _resetSessionForNew(inReplyTo: string): void {
-  _messageBuffer = [];
-  _pendingSteers = [];
-  _lastConsumedSteerText = null;
-  _resetQueuedItems({ broadcast: true });
+function _resetSessionForNew(_inReplyTo: string): void {
+  _rootState().buffer = [];
   _sessionStartedAt = Date.now();
-  _broadcastToActive({
-    type: "session_history",
-    in_reply_to: inReplyTo,
-    session_started_at: _sessionStartedAt,
-    events: [],
-    eos: true,
-    truncated: false,
-    protocol_version: PROTOCOL_VERSION,
-    capabilities: _capabilities(),
-  });
 }
 
 type ToolArgs = Record<string, unknown>;
@@ -6079,7 +6333,7 @@ type DiffLine =
   | { kind: "add"; newLine?: number; text: string }
   | { kind: "ellipsis" };
 
-function _enrichToolArgs(tool: string, args: unknown): ToolArgs {
+export function _enrichToolArgs(tool: string, args: unknown): ToolArgs {
   if (!args || typeof args !== "object") return {};
   const base = args as ToolArgs;
 
@@ -6321,18 +6575,6 @@ function _imagesFromContent(content: unknown): WireImage[] {
     }
   }
   return out;
-}
-
-/** Image blocks from a tool result. The LIVE `tool_execution_end` result is a
- *  wrapper `{ content: [...], details }`; the history path carries the bare
- *  content array. Unwrap `content` before scanning (mirrors _stringifyToolResult). */
-function _imagesFromToolResult(value: unknown): WireImage[] {
-  if (Array.isArray(value)) return _imagesFromContent(value);
-  if (value && typeof value === "object") {
-    const obj = value as { content?: unknown };
-    if (Array.isArray(obj.content)) return _imagesFromContent(obj.content);
-  }
-  return [];
 }
 
 /**

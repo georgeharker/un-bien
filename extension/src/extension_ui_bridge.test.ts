@@ -1,7 +1,10 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createExtensionUiBridge } from "./extension_ui_bridge.js";
-import type { ExtensionUiResponseWire, ServerMessage } from "./protocol/types.js";
+import type {
+  ExtensionUiResponseWire,
+  ServerMessage,
+} from "./protocol/types.js";
 
 // ── Fake pi.events bus ──────────────────────────────────────────────────────
 // Records every emit (name + data) so tests can assert what the bridge forwarded
@@ -92,9 +95,14 @@ describe("extension_ui_bridge", () => {
     expect(req.ask?.tool_call_id).toBe("tc_1");
     expect(req.ask?.source).toBe("tool");
     expect(req.ask?.questions).toHaveLength(1);
-    expect(req.ask?.questions[0]?.options.map((o) => o.value)).toEqual(["a", "b"]);
+    expect(req.ask?.questions[0]?.options.map((o) => o.value)).toEqual([
+      "a",
+      "b",
+    ]);
     // description survives (pi-ask addition rides in the envelope)
-    expect(req.ask?.questions[0]?.options[1]?.description).toBe("second choice");
+    expect(req.ask?.questions[0]?.options[1]?.description).toBe(
+      "second choice",
+    );
   });
 
   it("forwards a rich answer back to pi-ask as a single submit", () => {
@@ -228,8 +236,16 @@ describe("extension_ui_bridge", () => {
     createExtensionUiBridge(fakePi(bus), (m) => sent.push(m));
 
     bus.emit("@eko24ive/pi-ask:started", { version: 1 }); // no flowId / questions
-    bus.emit("@eko24ive/pi-ask:started", { version: 2, flowId: "x", questions: [] }); // wrong version
-    bus.emit("@eko24ive/pi-ask:started", { version: 1, flowId: "z", questions: [] }); // no questions
+    bus.emit("@eko24ive/pi-ask:started", {
+      version: 2,
+      flowId: "x",
+      questions: [],
+    }); // wrong version
+    bus.emit("@eko24ive/pi-ask:started", {
+      version: 1,
+      flowId: "z",
+      questions: [],
+    }); // no questions
 
     expect(sent).toHaveLength(0);
   });
@@ -244,7 +260,15 @@ describe("extension_ui_bridge", () => {
     bus.emit("@eko24ive/pi-ask:started", {
       version: 1,
       flowId: "y",
-      questions: [{ id: "q", prompt: "Describe the goal", type: "single", required: false, options: [] }],
+      questions: [
+        {
+          id: "q",
+          prompt: "Describe the goal",
+          type: "single",
+          required: false,
+          options: [],
+        },
+      ],
     });
 
     expect(sent).toHaveLength(1);
@@ -256,7 +280,11 @@ describe("extension_ui_bridge", () => {
     });
 
     // Degraded reply (typed text, no matching label) lands as customText.
-    bridge.respond({ type: "extension_ui_response", id: "y", value: "ship it" });
+    bridge.respond({
+      type: "extension_ui_response",
+      id: "y",
+      value: "ship it",
+    });
     const submits = bus.emitted.filter((e) => e.name === SUBMIT);
     expect(submits).toHaveLength(1);
     const data = submits[0]?.data as {
@@ -270,11 +298,18 @@ describe("extension_ui_bridge", () => {
     const bridge = createExtensionUiBridge(fakePi(bus), () => {})!;
 
     bus.emit("@eko24ive/pi-ask:started", singleQuestionFlow());
-    bridge.respond({ type: "extension_ui_response", id: "tool:tc_1", cancelled: true });
+    bridge.respond({
+      type: "extension_ui_response",
+      id: "tool:tc_1",
+      cancelled: true,
+    });
 
     const submits = bus.emitted.filter((e) => e.name === SUBMIT);
     expect(submits).toHaveLength(1);
-    const data = submits[0]?.data as { flowId: string; response: { kind: string } };
+    const data = submits[0]?.data as {
+      flowId: string;
+      response: { kind: string };
+    };
     expect(data.flowId).toBe("tool:tc_1");
     expect(data.response).toEqual({ kind: "cancel" });
   });
@@ -283,7 +318,11 @@ describe("extension_ui_bridge", () => {
     const bus = fakeBus();
     const bridge = createExtensionUiBridge(fakePi(bus), () => {})!;
 
-    bridge.respond({ type: "extension_ui_response", id: "never-seen", cancelled: true });
+    bridge.respond({
+      type: "extension_ui_response",
+      id: "never-seen",
+      cancelled: true,
+    });
 
     expect(bus.emitted.filter((e) => e.name === SUBMIT)).toHaveLength(0);
   });
@@ -292,7 +331,11 @@ describe("extension_ui_bridge", () => {
     const bus = fakeBus();
     const bridge = createExtensionUiBridge(fakePi(bus), () => {})!;
 
-    bridge.respond({ type: "extension_ui_response", id: "never-seen", value: "x" });
+    bridge.respond({
+      type: "extension_ui_response",
+      id: "never-seen",
+      value: "x",
+    });
 
     expect(bus.emitted.filter((e) => e.name === SUBMIT)).toHaveLength(0);
   });
@@ -393,7 +436,10 @@ describe("extension_ui_bridge", () => {
 
       // A resolved flow must NOT replay — otherwise every later sync would
       // reopen a modal the user already answered.
-      bus.emit("@eko24ive/pi-ask:completed", { version: 1, flowId: "tool:tc_1" });
+      bus.emit("@eko24ive/pi-ask:completed", {
+        version: 1,
+        flowId: "tool:tc_1",
+      });
       expect(bridge.pendingRequests()).toEqual([]);
     });
 
@@ -419,10 +465,9 @@ describe("extension_ui_bridge", () => {
         singleQuestionFlow({ flowId: "tool:tc_2", toolCallId: "tc_2" }),
       );
 
-      expect(bridge.pendingRequests().map((r) => r.id)).toEqual([
-        "tool:tc_1",
-        "tool:tc_2",
-      ]);
+      expect(
+        bridge.pendingRequests().map((r) => (r as { id: string }).id),
+      ).toEqual(["tool:tc_1", "tool:tc_2"]);
     });
 
     it("stays answerable after a replay (flow state survives)", () => {
@@ -434,7 +479,11 @@ describe("extension_ui_bridge", () => {
 
       // The degraded path needs activeFlows to map label→value; a replay that
       // consumed or mutated the flow would silently break the answer.
-      bridge.respond({ type: "extension_ui_response", id: "tool:tc_1", value: "Alpha" });
+      bridge.respond({
+        type: "extension_ui_response",
+        id: "tool:tc_1",
+        value: "Alpha",
+      });
       const submits = bus.emitted.filter((e) => e.name === SUBMIT);
       expect(submits).toHaveLength(1);
       expect(submits[0]?.data).toMatchObject({
@@ -469,7 +518,11 @@ describe("extension_ui_bridge", () => {
       });
       // ...and the flow is gone: a degraded response through the SAME bridge
       // is dropped (rich responses still work — they carry flow_id).
-      bridge.respond({ type: "extension_ui_response", id: "tool:tc_1", value: "Alpha" });
+      bridge.respond({
+        type: "extension_ui_response",
+        id: "tool:tc_1",
+        value: "Alpha",
+      });
       expect(bus.emitted.filter((e) => e.name === SUBMIT)).toHaveLength(0);
     });
 
@@ -480,7 +533,10 @@ describe("extension_ui_bridge", () => {
       createExtensionUiBridge(fakePi(bus), (m) => sent.push(m));
 
       bus.emit("@eko24ive/pi-ask:started", singleQuestionFlow());
-      bus.emit("@eko24ive/pi-ask:completed", { version: 1, flowId: "tool:tc_1" });
+      bus.emit("@eko24ive/pi-ask:completed", {
+        version: 1,
+        flowId: "tool:tc_1",
+      });
       sent.length = 0;
 
       vi.advanceTimersByTime(10 * 60 * 1000 + 1);

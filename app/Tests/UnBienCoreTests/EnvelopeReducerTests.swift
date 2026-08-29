@@ -32,6 +32,33 @@ final class EnvelopeReducerTests: XCTestCase {
         state.items.compactMap { if case let .tool(card) = $0 { return card } else { return nil } }
     }
 
+    private func notices(_ state: SessionState) -> [NoticeItem] {
+        state.items.compactMap { if case let .notice(n) = $0 { return n } else { return nil } }
+    }
+
+    /// Command acks ride the envelope now: `action_error` surfaces a transcript
+    /// notice ("<action> failed: <error>"), `action_ok` is silent, and an
+    /// enveloped `error` (e.g. malformed models.json) surfaces a notice too.
+    func testEnvelopedAcksSurfaceNotices() throws {
+        let lines = [
+            #"{"rpc":{"type":"action_ok","in_reply_to":"r1","action":"session_new"}}"#,
+            #"{"rpc":{"type":"action_error","in_reply_to":"r2","action":"model_set","error":"no auth configured"}}"#,
+            #"{"rpc":{"type":"error","in_reply_to":"r3","code":"internal_error","message":"models.json malformed"}}"#,
+        ]
+        let decoder = JSONDecoder()
+        let messages = try lines.map { try decoder.decode(EnvelopeMessage.self, from: Data($0.utf8)) }
+        var reducer = EnvelopeReducer()
+        reducer.apply(messages)
+
+        let noticeRows = notices(reducer.session)
+        // action_ok is silent; only action_error + error produce notices.
+        XCTAssertEqual(noticeRows.count, 2)
+        XCTAssertEqual(noticeRows[0].code, "action_error")
+        XCTAssertEqual(noticeRows[0].message, "model_set failed: no auth configured")
+        XCTAssertEqual(noticeRows[1].code, "internal_error")
+        XCTAssertEqual(noticeRows[1].message, "models.json malformed")
+    }
+
     /// The full app-end read: fold the combined {rpc|evt} envelope from a real
     /// subagent run and check both planes land in the interpreted state.
     func testSubagentRunConnects() throws {
