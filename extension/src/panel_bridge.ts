@@ -70,8 +70,9 @@ export function createPanelBridge(
 
   // Opt-in tracing: shows whether bus events land and whether a panel frame is
   // broadcast, to isolate capture vs render. Enabled by the `debug.panels` pref
-  // in the global config (`extensions/un-bien.json`) — logs to stderr AND appends
-  // to `<state>/panel-bridge.log`. stderr scrolls too fast — tail the file.
+  // in the global config (`extensions/un-bien.json`) — appends to
+  // `<state>/panel-bridge.log` only. Direct stderr writes corrupt the TUI, so
+  // `tail -f` the file instead.
   const debug: (msg: string) => void = (() => {
     if (loadConfig().debug?.panels !== true) return () => {};
     // Stable, findable location: `<state>/panel-bridge.log`.
@@ -84,11 +85,6 @@ export function createPanelBridge(
     const logFile = join(dir, "panel-bridge.log");
     return (msg: string) => {
       const line = `${new Date().toISOString()} [panel-bridge] ${msg}`;
-      try {
-        console.error(line);
-      } catch {
-        /* stderr closed */
-      }
       try {
         appendFileSync(logFile, `${line}\n`);
       } catch {
