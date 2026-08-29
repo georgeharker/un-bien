@@ -260,13 +260,10 @@ const {
   default: extension,
   _getState,
   _onPeerDisconnect,
-  routeClientMessage,
   _buildTmuxLaunchArgs,
   _resetBridgeOwnersForTest,
-  _setMessageBufferForTest,
   _setSessionStartedAtForTest,
   _hasPendingReconnect,
-  _getMessageBufferForTest,
   _setCurrentModelForTest,
   _setPiForTest,
   _getCurrentTurnIdForTest,
@@ -3381,7 +3378,6 @@ describe("session sync", () => {
     });
     const stop = captureHandler("unbien stop");
     await stop("", makeMockCtx());
-    _setMessageBufferForTest([]);
     _setSessionStartedAtForTest(null);
   });
 
@@ -5265,40 +5261,21 @@ describe("relay reconnect", () => {
     }
   });
 
-  test("successful reconnect preserves _sessionStartedAt and _messageBuffer", async () => {
+  test("successful reconnect keeps the session started (clock survives the drop)", async () => {
     vi.useFakeTimers();
     try {
       captureHandler("unbien");
       await _connectForTest(makeMockCtx());
-      const sessionTs = 1_700_000_000_000;
-      _setSessionStartedAtForTest(sessionTs);
-      _setMessageBufferForTest([
-        { role: "user", content: "hi", timestamp: sessionTs + 100 },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "yo" }],
-          timestamp: sessionTs + 200,
-        },
-      ]);
+      _setSessionStartedAtForTest(1_700_000_000_000);
 
       relayInstances[0]!.emit("close");
       await vi.advanceTimersByTimeAsync(1_000);
       expect(relayInstances).toHaveLength(2);
 
-      // Now issue session_sync — should still see the 2 events
-      const sendsBefore = relayInstances[1]!.send.mock.calls.length;
-      routeClientMessage(
-        { type: "session_sync", id: "post-reconnect" },
-        { abort: () => undefined },
-      );
-      // _peerChannel is null after reconnect (peer hadn't reconnected yet), so
-      // session_sync's reply goes through the relay only if a channel exists.
-      // After reconnect we're 'started' without peer — sanity: state stays started
+      // A reconnect must NOT reset the session: _sessionStartedAt is preserved
+      // (session_sync_end carries it for pi-restart detection) and the transcript
+      // itself re-fetches via the app's get_entries rpc — no buffer to preserve.
       expect(_getState()).toBe("started");
-      void sendsBefore;
-      // The internal _sessionStartedAt / _messageBuffer were preserved if we
-      // can still answer session_sync once the peer reconnects. That path is
-      // covered indirectly: we check the values weren't reset by the close.
     } finally {
       vi.useRealTimers();
     }

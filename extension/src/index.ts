@@ -1012,24 +1012,10 @@ function _refreshFooter(
 // replay). Cleared on _goIdle.
 let _sessionStartedAt: number | null = null;
 
-// Snapshot of agent messages, captured on every agent_end event. Used to
-// answer session_sync. Cleared on _goIdle.
-type BufferMsg = {
-  role: "user" | "assistant" | "toolResult" | string;
-  content?: unknown;
-  timestamp?: number;
-  toolCallId?: string;
-  toolName?: string;
-  isError?: boolean;
-  usage?: { input?: number; output?: number };
-  /** Plan/32: pre-compaction token count, set on the synthetic
-   *  `role:"compaction"` marker pushed in `session_compact`. */
-  tokensBefore?: number;
-};
-// _messageBuffer + _sessionManager now live PER-SESSION in _stateFor(sid); the
-// root session's records back reconstruction/session_sync (_rootState().buffer /
-// .sessionManager). Both are captured from event ctx (survive fork restarts via
-// the persisted session log).
+// _sessionManager lives PER-SESSION in _stateFor(sid); the root session's record
+// backs reconstruction — the app reads the transcript via the native get_entries
+// rpc over _rootState().sessionManager.getEntries() (captured from event ctx;
+// survives fork restarts via the persisted session log).
 
 type MeshEnvelope = {
   id: string;
@@ -1151,15 +1137,6 @@ export function _getCachedPublicKeyForTest(): string | null {
     : null;
 }
 
-export function _setMessageBufferForTest(msgs: unknown[]): void {
-  _rootState().buffer = msgs as BufferMsg[];
-}
-
-/** Test-only accessor: returns a defensive copy of the buffer. */
-export function _getMessageBufferForTest(): unknown[] {
-  return [..._rootState().buffer];
-}
-
 /** Test-only override of session started timestamp. */
 export function _setSessionStartedAtForTest(ts: number | null): void {
   _sessionStartedAt = ts;
@@ -1229,7 +1206,6 @@ interface SessionState {
   turnId: string | null;
   working: boolean;
   agentRun: { active: boolean; generation: number };
-  buffer: BufferMsg[];
   sessionManager: ExtensionContext["sessionManager"] | null;
   model: string | null;
 }
@@ -1248,7 +1224,6 @@ function _stateFor(sid: string): SessionState {
       turnId: null,
       working: false,
       agentRun: { active: false, generation: 0 },
-      buffer: [],
       sessionManager: null,
       model: null,
     };
@@ -3151,40 +3126,6 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // is produced by the rpc-envelope producer (createRpcEnvelope) from the same
   // pi.on(message_update / tool_execution_*) events — no stock broadcast here.
 
-  // Cumulative session buffer fed via `message_end`, which fires once per
-  // persisted message (user, assistant, toolResult) — same hook the SDK uses
-  // to persist to sessionManager (see agent-session.js:298-309). Pushing here
-  // accumulates the whole session over time, so session_sync can replay every
-  // turn — including turns initiated from the Pi terminal (source:"interactive")
-  // or RPC. Previous impl overwrote on `agent_end` and lost everything but the
-  // last turn (see diagnostics 14, 15).
-  pi.on("message_end", (event, ctx) => {
-    const m = event?.message as
-      | {
-          role?: string;
-          content?: unknown;
-          stopReason?: string;
-          errorMessage?: string;
-        }
-      | undefined;
-    if (!m) return;
-    const sid = _sidOf(ctx);
-    const st = _stateFor(sid);
-    // Buffer is PER-SESSION: a subagent's messages stay in the subagent's
-    // record and never leak into the root's session_sync replay.
-    if (
-      m.role === "user" ||
-      m.role === "assistant" ||
-      m.role === "toolResult"
-    ) {
-      st.buffer.push(m as unknown as BufferMsg);
-    }
-    // Transcript content (assistant text, inline images, provider errors) now
-    // rides the rpc-envelope message_end — the app renders it via applyRPC.
-    // Only the per-session buffer push (above, for session_sync replay)
-    // remains here.
-  });
-
   pi.on("agent_end", (_event, ctx) => {
     const sid = _sidOf(ctx);
     const st = _stateFor(sid);
@@ -3278,25 +3219,10 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     }
     _publishWorking(true);
   });
-  pi.on("session_compact", (event) => {
-    const entry = event?.compactionEntry as
-      | { summary?: unknown; tokensBefore?: unknown }
-      | undefined;
-    const summary = typeof entry?.summary === "string" ? entry.summary : "";
-    const tokensBefore =
-      typeof entry?.tokensBefore === "number" ? entry.tokensBefore : 0;
-    const ts = Date.now();
-    // (2) Persist in history: the CompactionEntry never reaches _messageBuffer
-    // via message_end (only user/assistant/toolResult), so push a synthetic
-    // marker the mapper turns into a `compaction` event — survives session_sync.
-    _rootState().buffer.push({
-      role: "compaction",
-      content: summary,
-      timestamp: ts,
-      tokensBefore,
-    });
-    // (1) Live result rides the rpc-envelope compaction_end (app applyRPC).
-    // (3) Working ends.
+  pi.on("session_compact", () => {
+    // Live compaction result rides the rpc-envelope compaction_end (app applyRPC),
+    // and the persisted CompactionEntry surfaces natively via get_entries. Only
+    // the working=false bracket remains here.
     _publishWorking(false);
   });
 
@@ -6187,7 +6113,9 @@ export function routeClientMessage(
  * stale conversation off the new-session `hello` (changed `sessionId`).
  */
 function _resetSessionForNew(_inReplyTo: string): void {
-  _rootState().buffer = [];
+  // Restamp the session clock so the app detects the pi restart (session_sync_end
+  // carries it). The transcript resets naturally: the app re-fetches via
+  // get_entries against the fresh session and drops the old one on the new hello.
   _sessionStartedAt = Date.now();
 }
 
