@@ -4,6 +4,9 @@
     ".build/**",
     ".build",
     "**/.swiftpm/**",
-    ".swiftpm/**"
+    ".swiftpm/**",
+    "app/build/**",
+    "**/Intermediates.noindex/**",
+    "**/GeneratedModuleMaps-*/**"
   ]
 }

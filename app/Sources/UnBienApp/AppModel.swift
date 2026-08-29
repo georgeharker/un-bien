@@ -212,6 +212,20 @@ public final class AppModel: ObservableObject {
         mesh.removeRelay(id: id)
     }
 
+    /// Edit a relay's name/URL, then reconnect on the (possibly new) endpoint.
+    /// Tears down the old connection first so a URL change takes effect.
+    public func updateRelay(id: UUID, name: String, url: String) async {
+        mesh.updateRelay(id: id, name: name, url: url)
+        reconnectTasks[id]?.cancel()
+        reconnectTasks[id] = nil
+        reconnectAttempts[id] = nil
+        connections[id] = nil
+        relayHealth[id] = nil
+        if let relay = mesh.config.relays.first(where: { $0.id == id }) {
+            await connect(relay)
+        }
+    }
+
     private func connectAll() async {
         for relay in mesh.config.relays { await connect(relay) }
     }

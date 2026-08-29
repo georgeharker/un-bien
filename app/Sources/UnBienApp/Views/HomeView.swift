@@ -8,6 +8,7 @@ struct HomeView: View {
     @EnvironmentObject var fonts: FontLibrary
     @State private var showAddRelay = false
     @State private var pairingRelay: RelayConfig?
+    @State private var settingsRelay: RelayConfig?
     @State private var showSettings = false
     @Environment(\.appTheme) private var theme
 
@@ -34,6 +35,9 @@ struct HomeView: View {
         }
         .sheet(isPresented: $showAddRelay) {
             AddRelaySheet().environmentObject(model)
+        }
+        .sheet(item: $settingsRelay) { relay in
+            RelaySettingsSheet(relay: relay).environmentObject(model)
         }
         .sheet(item: $pairingRelay) { relay in
             PairSheet(relay: relay).environmentObject(model)
@@ -70,10 +74,13 @@ struct HomeView: View {
                     } label: {
                         Label("Pair a machine", systemImage: "qrcode.viewfinder")
                     }
-                    Button(role: .destructive) {
-                        model.removeRelay(id: relay.id)
+                    // Relay config (edit URL/name + remove) lives one level in,
+                    // in the settings sheet — keeps the row calm and the
+                    // destructive delete off the row.
+                    Button {
+                        settingsRelay = relay
                     } label: {
-                        Label("Remove relay", systemImage: "trash")
+                        Label("Relay settings", systemImage: "gearshape")
                     }
                 } header: {
                     RelayHeader(relay: relay, health: model.relayHealth[relay.id] ?? .offline)

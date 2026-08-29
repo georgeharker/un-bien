@@ -46,6 +46,15 @@ public final class MeshStore: ObservableObject {
         persist()
     }
 
+    /// Edit an existing relay's name/URL in place (keeps its id + paired
+    /// machines). No-op if the id isn't found.
+    public func updateRelay(id: UUID, name: String, url: String) {
+        guard let idx = config.relays.firstIndex(where: { $0.id == id }) else { return }
+        config.relays[idx].name = name
+        config.relays[idx].url = url
+        persist()
+    }
+
     public func upsertMachine(_ machine: PairedMachine) {
         config.upsert(machine)
         persist()
