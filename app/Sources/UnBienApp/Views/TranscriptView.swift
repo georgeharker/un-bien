@@ -11,7 +11,6 @@ struct TranscriptView: View {
     let session: LiveSession
     @EnvironmentObject var model: AppModel
     @State private var selectedPanelKey: String?
-    @State private var showLaunch = false
     @Environment(\.appTheme) private var theme
     @Environment(\.typography) private var typography
 
@@ -63,11 +62,6 @@ struct TranscriptView: View {
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 controlMenu
-                if model.supports("remote_launch", session: session) {
-                    Button { showLaunch = true } label: {
-                        Image(systemName: "plus.bubble")
-                    }
-                }
                 ForEach(model.panels(for: session)) { panel in
                     Button {
                         model.markPanelViewed(panel.key, session: session)
@@ -87,9 +81,6 @@ struct TranscriptView: View {
             if let key = selectedPanelKey, let panel = model.panels[session.id]?[key] {
                 PanelHostView(panel: panel)
             }
-        }
-        .sheet(isPresented: $showLaunch) {
-            LaunchSessionSheet(session: session).environmentObject(model)
         }
         .sheet(isPresented: promptPresented) {
             if let request = model.prompts[session.id] {

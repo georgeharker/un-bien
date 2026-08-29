@@ -10,7 +10,6 @@ struct LaunchSessionSheet: View {
     @Environment(\.appTheme) private var theme
     @Environment(\.dismiss) private var dismiss
 
-    @State private var mode = "tmux"
     @State private var cwd = ""
     @State private var name = ""
 
@@ -18,12 +17,9 @@ struct LaunchSessionSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    Picker("Mode", selection: $mode) {
-                        Text("tmux (detached)").tag("tmux")
-                        Text("rpc").tag("rpc")
-                    }
-                } footer: {
-                    Text("tmux launches a detached session running pi. rpc is not wired yet.")
+                    Text("Starts a new pi session on this machine using its configured backend (tmux or herdr). Set the backend in the machine's un-bien settings.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
                 Section("Folder") {
                     TextField("Working directory (defaults to session cwd)", text: $cwd)
@@ -52,7 +48,7 @@ struct LaunchSessionSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Launch") {
-                        Task { await model.launchSession(mode: mode, cwd: cwd, name: name, session: session) }
+                        Task { await model.launchSession(cwd: cwd, name: name, session: session) }
                         dismiss()
                     }
                 }

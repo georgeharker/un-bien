@@ -26,7 +26,7 @@ export type UnBienConfig = {
    * file into every repo. See `session/local_config.ts`. Absent by default, so
    * omitting it preserves the historical per-cwd-only behaviour exactly.
    */
-  defaults?: { auto_start_relay?: boolean };
+  defaults?: { auto_start_relay?: boolean; allow_remote_launch?: boolean };
   /**
    * Machine-identity storage. `storage` selects the PRIMARY backend for this
    * Pi's long-term Ed25519 seed — `"keychain"` (OS-secured, the default) or
@@ -37,6 +37,19 @@ export type UnBienConfig = {
    * a genuine first run. See `pairing/storage.ts`. Absent ⇒ keychain default.
    */
   identity?: { storage?: "keychain" | "file"; path?: string };
+  /**
+   * Remote-launch backend selection (pick-one). Which session backend a
+   * honored `session_launch` uses on THIS machine: `tmux` (default) or `herdr`
+   * — both PTY-hosted / reattachable. `rpc` is a fast-follow, not yet a choice
+   * here. This picks the mechanism machine-wide; whether remote launch is
+   * enabled at all stays the per-cwd `allow_remote_launch` LocalConfig flag.
+   * See `session_launch` handling in index.ts. Absent ⇒ tmux.
+   *
+   * `tmux_session` names the ONE shared tmux session that launched pis become
+   * WINDOWS of (a window per pi, via clean `new-window`; single `tmux attach`
+   * point). Absent ⇒ `"un-bien"`.
+   */
+  launch?: { backend?: "tmux" | "herdr"; tmux_session?: string };
 };
 
 export function loadConfig(): UnBienConfig {

@@ -219,3 +219,34 @@ describe("effectiveAllowRemoteLaunch — default OFF (authority-sensitive)", () 
     );
   });
 });
+
+describe("global defaults — allow_remote_launch flows machine-wide", () => {
+  let cwd: string;
+  beforeEach(() => {
+    cwd = makeCwd();
+    delete process.env[ENV];
+  });
+  afterEach(() => {
+    delete process.env[ENV];
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  function writeGlobalDefaults(defaults: Record<string, unknown>): void {
+    const dir = join(_globalHome, "extensions");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "un-bien.json"), JSON.stringify({ defaults }));
+  }
+
+  test("defaults.allow_remote_launch:true -> enabled for a cwd with no local file", () => {
+    writeGlobalDefaults({ allow_remote_launch: true });
+    const cfg = loadLocalConfig(cwd);
+    expect(cfg.allow_remote_launch).toBe(true);
+    expect(effectiveAllowRemoteLaunch(cfg)).toBe(true);
+  });
+
+  test("a per-cwd file still overrides the global default (opt OUT)", () => {
+    writeGlobalDefaults({ allow_remote_launch: true });
+    writeFileConfig(cwd, { agent_name: "x", allow_remote_launch: false });
+    expect(effectiveAllowRemoteLaunch(loadLocalConfig(cwd))).toBe(false);
+  });
+});

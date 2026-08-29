@@ -24,8 +24,10 @@ public enum ClientMessage: Equatable, Sendable {
     case listModels(id: String)
     /// un-bien remote launch: spawn a NEW pi session on the paired machine
     /// (owner-key + config gated; shown only when the `remote_launch` cap is
-    /// advertised). `mode` = "tmux" | "rpc".
-    case sessionLaunch(id: String, mode: String, cwd: String?, name: String?)
+    /// advertised). `mode` is optional and normally omitted — the machine's
+    /// `launch.backend` config decides the backend (tmux | herdr; rpc is a
+    /// fast-follow).
+    case sessionLaunch(id: String, mode: String?, cwd: String?, name: String?)
     /// Response to an `extension_ui_request` (select/confirm/input/editor).
     case extensionUiResponse(ExtensionUiResponse)
 

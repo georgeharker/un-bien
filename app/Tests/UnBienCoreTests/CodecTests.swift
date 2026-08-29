@@ -32,10 +32,13 @@ final class CodecTests: XCTestCase {
         XCTAssertEqual(obj["name"] as? String, "job")
     }
 
-    func testSessionLaunchOmitsNilCwdName() throws {
+    func testSessionLaunchOmitsNilModeCwdName() throws {
+        // The app no longer chooses the backend — mode is omitted; the machine's
+        // `launch.backend` config decides.
         let data = try JSONEncoder().encode(
-            ClientMessage.sessionLaunch(id: "l1", mode: "tmux", cwd: nil, name: nil))
+            ClientMessage.sessionLaunch(id: "l1", mode: nil, cwd: nil, name: nil))
         let obj = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertNil(obj["mode"])
         XCTAssertNil(obj["cwd"])
         XCTAssertNil(obj["name"])
     }

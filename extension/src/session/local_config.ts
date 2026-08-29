@@ -136,6 +136,8 @@ function globalLocalDefaults(): LocalConfig {
   const cfg: LocalConfig = {};
   if (d && typeof d.auto_start_relay === "boolean")
     cfg.auto_start_relay = d.auto_start_relay;
+  if (d && typeof d.allow_remote_launch === "boolean")
+    cfg.allow_remote_launch = d.allow_remote_launch;
   return cfg;
 }
 

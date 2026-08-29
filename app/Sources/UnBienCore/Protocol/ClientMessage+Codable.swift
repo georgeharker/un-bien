@@ -75,7 +75,7 @@ extension ClientMessage: Codable {
             try container.encode(id, forKey: .id)
         case let .sessionLaunch(id, mode, cwd, name):
             try container.encode(id, forKey: .id)
-            try container.encode(mode, forKey: .mode)
+            try container.encodeIfPresent(mode, forKey: .mode)
             try container.encodeIfPresent(cwd, forKey: .cwd)
             try container.encodeIfPresent(name, forKey: .name)
         case let .extensionUiResponse(response):

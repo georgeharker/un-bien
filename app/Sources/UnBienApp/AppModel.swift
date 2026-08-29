@@ -540,12 +540,13 @@ public final class AppModel: ObservableObject {
     /// Ask the paired machine to spawn a NEW pi session (`session_launch`). Only
     /// meaningful when the pi advertised the `remote_launch` capability; the
     /// launched session appears via the normal room-announce discovery.
-    public func launchSession(mode: String, cwd: String?, name: String?, session: LiveSession) async {
+    public func launchSession(cwd: String?, name: String?, session: LiveSession) async {
         guard let connection = connections[session.relayID] else { return }
         let trimmedCwd = cwd?.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedName = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        // No mode: the machine's `launch.backend` config decides the backend.
         try? await connection.send(
-            .sessionLaunch(id: UUID().uuidString, mode: mode,
+            .sessionLaunch(id: UUID().uuidString, mode: nil,
                            cwd: (trimmedCwd?.isEmpty ?? true) ? nil : trimmedCwd,
                            name: (trimmedName?.isEmpty ?? true) ? nil : trimmedName),
             toPeer: session.peerEPK, room: session.roomID)

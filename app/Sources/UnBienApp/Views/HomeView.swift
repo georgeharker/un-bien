@@ -10,6 +10,7 @@ struct HomeView: View {
     @State private var pairingRelay: RelayConfig?
     @State private var settingsRelay: RelayConfig?
     @State private var showSettings = false
+    @State private var launchSession: LiveSession?
     @Environment(\.appTheme) private var theme
 
     var body: some View {
@@ -42,6 +43,14 @@ struct HomeView: View {
         .sheet(item: $pairingRelay) { relay in
             PairSheet(relay: relay).environmentObject(model)
         }
+        // Launch a NEW session on a machine straight from Home. remote_launch is
+        // a ROOM-scoped cap, so gate on the row's own session; that room is also
+        // a valid carrier for the session_launch frame (the fork spawns a fresh
+        // session regardless of carrier room). Idle machines with no session are
+        // regime 2 (daemon control-room) — deferred.
+        .sheet(item: $launchSession) { session in
+            LaunchSessionSheet(session: session).environmentObject(model)
+        }
     }
 
     private var emptyState: some View {
@@ -65,7 +74,25 @@ struct HomeView: View {
                     } else {
                         ForEach(sessions) { session in
                             NavigationLink(value: session) {
-                                SessionRow(session: session)
+                                HStack {
+                                    SessionRow(session: session)
+                                    // A NEW-conversation launch on THIS machine.
+                                    // remote_launch is a room-scoped cap and this
+                                    // row's room is a valid carrier; borderless so
+                                    // the tap doesn't trigger row navigation.
+                                    if model.supports("remote_launch", session: session) {
+                                        Spacer(minLength: 8)
+                                        Button {
+                                            launchSession = session
+                                        } label: {
+                                            Image(systemName: "plus.circle")
+                                                .imageScale(.large)
+                                        }
+                                        .buttonStyle(.borderless)
+                                        .tint(theme.accent)
+                                        .accessibilityLabel("New conversation on this machine")
+                                    }
+                                }
                             }
                         }
                     }

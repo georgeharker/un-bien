@@ -151,10 +151,11 @@ import {
   realpathSync,
 } from "node:fs";
 import { createInterface } from "node:readline";
-import { spawn, spawnSync } from "node:child_process";
-import { hostname, tmpdir } from "node:os";
+import { spawn, spawnSync, execFile } from "node:child_process";
+import { hostname, tmpdir, homedir } from "node:os";
 import {
   resolveRelayUrl,
+  loadConfig,
   saveConfig,
   isValidRelayUrl,
   isWebSocketScheme,
@@ -1051,7 +1052,7 @@ export function _resetAutoInitedForTest(): void {
  *  `extension(pi)` in a shared test process can (re)claim and rebuild bridges. */
 export function _resetBridgeOwnersForTest(): void {
   const g = globalThis as typeof globalThis & {
-    [_ROOT_SESSION_OWNER_KEY]?: object;
+    [_ROOT_SESSION_OWNER_KEY]?: ExtensionAPI;
   };
   delete g[_ROOT_SESSION_OWNER_KEY];
   _panelBridge?.dispose();
@@ -1231,6 +1232,19 @@ function _isNonRootSid(sid: string): boolean {
 // Module-level pi reference
 let _pi: ExtensionAPI | null = null;
 
+// Minimal structural views of pi SDK internals the fork reaches for but the
+// public ExtensionAPI type does not surface. Each names exactly the member(s)
+// known to exist on the concrete AgentSession at runtime.
+interface PiEventBusInternals {
+  events?: { emit(channel: string, data: unknown): void };
+}
+interface PiStreamingInternals {
+  isStreaming?: boolean;
+}
+interface PiQueueControl {
+  clearQueue(): { steering: string[]; followUp: string[] };
+}
+
 // Plan/57 — Bridge to pi-ask's clarification-flow events. null until the
 // extension factory wires it (and null if the SDK exposes no events bus).
 let _extensionUiBridge: ExtensionUiBridge | null = null;
@@ -1343,9 +1357,7 @@ const _TEST_SVG_B64 = Buffer.from(
 
 function _emitTestBus(channel: string, data: unknown): void {
   try {
-    (
-      _pi as unknown as { events?: { emit(c: string, d: unknown): void } }
-    )?.events?.emit(channel, data);
+    (_pi as PiEventBusInternals | null)?.events?.emit(channel, data);
   } catch {
     /* bus absent — best effort */
   }
@@ -1760,6 +1772,8 @@ function _routeRpcCommandFrom(
   // extension_ui_response is a reply to a fork-issued dialog, not a command —
   // route it straight to the ui bridge (same target as the stock path).
   if ((frame as Record<string, unknown>).type === "extension_ui_response") {
+    // SAFETY: the type-discriminator check directly above proves this frame is
+    // an extension_ui_response envelope, which is the ExtensionUiResponseWire shape.
     _extensionUiBridge?.respond(frame as unknown as ExtensionUiResponseWire);
     return;
   }
@@ -1785,8 +1799,7 @@ function _routeRpcCommandFrom(
       // correct across subagent lifecycles (turnId/working stick busy after a
       // subagent run).
       const streaming =
-        (_pi as unknown as { isStreaming?: boolean } | null)?.isStreaming ===
-        true;
+        (_pi as PiStreamingInternals | null)?.isStreaming === true;
       const shouldSteer = requestedSteer || streaming;
       const msg: ClientUserMessage = {
         type: "user_message",
@@ -1844,6 +1857,9 @@ function _routeRpcCommandFrom(
       // Route via the minimal ActionPi view (matches handleModelSet): the
       // registry's `find` returns the minimal SdkModelLike, structurally fine
       // for setModel at runtime.
+      // SAFETY: _pi (checked non-null above) is the concrete AgentSession; its
+      // setModel accepts the minimal SdkModelLike the registry's find() returns,
+      // matching handleModelSet's ActionPi view.
       const ok = await (_pi as unknown as ActionPi).setModel(model);
       if (!ok) throw new Error("no auth configured for this model");
       _persistModelDefault(model.provider, model.id); // survive restart, mirrors stock model_set
@@ -1905,11 +1921,9 @@ function _routeRpcCommandFrom(
     },
     clearQueue: async () => {
       if (!_pi) throw new Error("agent session not bound");
-      return (
-        _pi as unknown as {
-          clearQueue(): { steering: string[]; followUp: string[] };
-        }
-      ).clearQueue();
+      // SAFETY: _pi (checked non-null above) is the concrete AgentSession,
+      // which implements clearQueue(); the public ExtensionAPI type omits it.
+      return (_pi as unknown as PiQueueControl).clearQueue();
     },
     getEntries: async (since?: string) => {
       // Native pi get_entries: the app reconstructs the transcript itself from
@@ -1989,14 +2003,18 @@ function _routeUnBienPlaneFrom(
 
   if (type === "session_launch") {
     const f = frame as Record<string, unknown>;
-    const cwd =
-      typeof f.cwd === "string" && f.cwd.length > 0 ? f.cwd : process.cwd();
+    const cwd = _expandTilde(
+      typeof f.cwd === "string" && f.cwd.length > 0 ? f.cwd : process.cwd(),
+    );
     if (!effectiveAllowRemoteLaunch(loadLocalConfig(cwd))) {
       envLog("session_launch(ub): remote launch disabled on this machine");
       return;
     }
+    // Backend is a MACHINE config choice (pick-one via launch.backend), not
+    // app-chosen; rpc is a fast-follow so only tmux|herdr resolve here.
+    const backend = loadConfig().launch?.backend === "herdr" ? "herdr" : "tmux";
     const launchError = _launchSession(
-      f.mode === "rpc" ? "rpc" : "tmux",
+      backend,
       cwd,
       typeof f.name === "string" ? f.name : undefined,
     );
@@ -2454,6 +2472,9 @@ function _emitRelayState(force = false): void {
  *  ctx is available in the `input` hook). cwd matches the daemon's launch dir,
  *  so the derived relay room is identical to the one `_cmdStart` first used. */
 function _controlCtx(): Pick<ExtensionContext, "ui" | "cwd"> {
+  // SAFETY: _headlessUi() implements every ui method the relay start/stop path
+  // actually calls; the notify-forwarding shim is structurally narrower than the
+  // full ExtensionContext["ui"] but complete for this headless control path.
   return {
     ui: _headlessUi(),
     cwd: process.cwd(),
@@ -2752,9 +2773,11 @@ function _installAutoListener(relay: RelayClient): () => void {
       // now, so the first message is normally the ub session_sync (or the rpc
       // get_entries) — routing that through the stock switch dropped it. Use
       // _liveCtx (session_start-fresh), not #55.
-      const innerObj = inner as unknown as Record<string, unknown>;
+      const innerObj = inner as Record<string, unknown>;
       if (isEnvelopeFrame(innerObj)) {
         {
+          // SAFETY: isEnvelopeFrame confirmed rpc/evt/ub envelope keys are
+          // present, so this ClientMessage is byte-compatible with EnvelopeMessage.
           const innerEnv = inner as unknown as EnvelopeMessage;
           if (innerEnv.ub === undefined)
             _routeRpcCommandFrom(channel, innerEnv);
@@ -2843,6 +2866,16 @@ function _capabilities(): string[] {
   return caps;
 }
 
+/** Expand a leading `~`/`~/` to the fork machine's home dir. Node's `fs` does
+ *  NOT expand `~`, so a launch cwd like `~/proj` would fail the existsSync
+ *  check and silently abort the launch. Machine-side (the phone's `~` is
+ *  meaningless here). Exported for tests. */
+export function _expandTilde(p: string): string {
+  if (p === "~") return homedir();
+  if (p.startsWith("~/")) return join(homedir(), p.slice(2));
+  return p;
+}
+
 /** Sanitize a tmux session name: keep it shell-safe and tmux-legal. */
 function _safeTmuxName(name: string | undefined, fallback: string): string {
   const base = (name ?? "").trim() || fallback;
@@ -2854,34 +2887,166 @@ function _safeTmuxName(name: string | undefined, fallback: string): string {
   return clean.slice(0, 40) || "pi";
 }
 
-/** Build the argv for a detached tmux launch of `pi` in `cwd`. Args are an
- *  ARRAY (never a shell string) so cwd/name can't inject. Exported for tests. */
-export function _buildTmuxLaunchArgs(name: string, cwd: string): string[] {
-  return ["new-session", "-d", "-s", name, "-c", cwd, "pi"];
+/** Build the argv for launching `pi` in `cwd` as a WINDOW of the shared tmux
+ *  session `session` (one named session, a window per pi — clean `new-window`,
+ *  NO keystrokes/prefix). First launch creates the detached session; later ones
+ *  add a window. Array (never a shell string) so cwd/names can't inject.
+ *  Exported for tests. */
+export function _buildTmuxLaunchArgs(
+  session: string,
+  windowName: string,
+  cwd: string,
+  sessionExists: boolean,
+): string[] {
+  return sessionExists
+    ? ["new-window", "-t", session, "-n", windowName, "-c", cwd, "pi"]
+    : ["new-session", "-d", "-s", session, "-n", windowName, "-c", cwd, "pi"];
+}
+
+/** Sanitize a herdr agent name: must match [a-z][a-z0-9_-]{0,31}. */
+function _safeHerdrName(name: string | undefined, fallback: string): string {
+  const base = (name ?? "").trim().toLowerCase() || fallback;
+  let clean = base
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!/^[a-z]/.test(clean)) clean = `pi-${clean}`;
+  return clean.slice(0, 32).replace(/-+$/g, "") || "pi";
+}
+
+/** argv for creating a detached herdr workspace in `cwd` (JSON response).
+ *  ARRAY (never a shell string) so cwd/label can't inject. Exported for tests. */
+export function _buildHerdrWorkspaceArgs(label: string, cwd: string): string[] {
+  return [
+    "workspace",
+    "create",
+    "--cwd",
+    cwd,
+    "--label",
+    label,
+    "--no-focus",
+    "--json",
+  ];
+}
+
+/** argv for exec-launching `pi` as a named herdr agent in an existing pane —
+ *  herdr's canonical-executable launch (NOT keystroke injection). */
+export function _buildHerdrAgentStartArgs(
+  agentName: string,
+  paneId: string,
+): string[] {
+  return ["agent", "start", agentName, "--kind", "pi", "--pane", paneId];
+}
+
+/** Extract `.result.root_pane.pane_id` from `herdr workspace create --json`. */
+export function _herdrPaneIdFromCreate(stdout: string): string | null {
+  try {
+    const j = JSON.parse(stdout) as {
+      result?: { root_pane?: { pane_id?: unknown } };
+    };
+    const id = j.result?.root_pane?.pane_id;
+    return typeof id === "string" && id.length > 0 ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Is a launch backend's binary present on PATH? A `--version` probe: a missing
+ *  binary (ENOENT) sets `error`; anything that runs counts as present. */
+function _backendAvailable(backend: "tmux" | "herdr"): boolean {
+  try {
+    return (
+      spawnSync(backend, ["--version"], {
+        stdio: "ignore",
+        timeout: 5_000,
+      }).error === undefined
+    );
+  } catch {
+    return false;
+  }
+}
+
+function _execFileCapture(cmd: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(cmd, args, { timeout: 15_000 }, (err, stdout) => {
+      if (err) reject(err);
+      else resolve(stdout);
+    });
+  });
 }
 
 /**
- * Honor a `session_launch` request. Gated by the caller: config opt-in already
- * checked. `tmux` mode spawns a detached tmux running `pi` in `cwd` (which
- * joins the relay if that cwd has un-bien auto-start); `rpc` is not wired yet.
- * Returns null on success or an error string.
+ * herdr launch (clean exec, no keystrokes): create a detached workspace in
+ * `cwd`, then start `pi` as its agent via herdr's canonical-executable path
+ * (`agent start --kind pi`). Fire-and-forget — the launched pi joins the relay
+ * and the app attaches there; create/start errors are logged, not returned.
+ */
+async function _launchHerdr(cwd: string, agentName: string): Promise<void> {
+  try {
+    const created = await _execFileCapture(
+      "herdr",
+      _buildHerdrWorkspaceArgs(agentName, cwd),
+    );
+    const paneId = _herdrPaneIdFromCreate(created);
+    if (!paneId) {
+      envLog("herdr launch: no root_pane_id in `workspace create` output");
+      return;
+    }
+    await _execFileCapture(
+      "herdr",
+      _buildHerdrAgentStartArgs(agentName, paneId),
+    );
+    envLog(`herdr launch: agent '${agentName}' started in pane ${paneId}`);
+  } catch (error) {
+    envLog(
+      `herdr launch failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+/**
+ * Honor a `session_launch` request. The caller checked the per-cwd opt-in and
+ * picked `mode` from `launch.backend` (machine config). PTY-hosted backends
+ * exec `pi` cleanly (no keystrokes): `tmux` = detached `new-session … pi`;
+ * `herdr` = `workspace create` then `agent start --kind pi`. `rpc` is a
+ * fast-follow (stubbed). Returns null when the launch is initiated, else an
+ * error string.
  */
 function _launchSession(
-  mode: "tmux" | "rpc",
+  mode: "tmux" | "herdr" | "rpc",
   cwd: string,
   name: string | undefined,
 ): string | null {
   if (mode === "rpc") return "launch mode 'rpc' is not supported yet";
-  if (mode !== "tmux") return `unknown launch mode '${mode}'`;
+  if (mode !== "tmux" && mode !== "herdr") {
+    return `unknown launch mode '${mode}'`;
+  }
   if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
     return `cwd does not exist or is not a directory: ${cwd}`;
   }
-  const sessionName = _safeTmuxName(name, `pi-${basename(cwd) || "session"}`);
-  try {
-    const child = spawn("tmux", _buildTmuxLaunchArgs(sessionName, cwd), {
-      detached: true,
+  if (!_backendAvailable(mode)) {
+    return `launch backend '${mode}' is not installed`;
+  }
+  if (mode === "herdr") {
+    const agentName = _safeHerdrName(name, `pi-${basename(cwd) || "session"}`);
+    void _launchHerdr(cwd, agentName);
+    return null;
+  }
+  // One shared, named tmux session; each launch is a WINDOW in it (single
+  // attach point). Clean `new-window` via the CLI — never a prefix keystroke.
+  const session = _safeTmuxName(loadConfig().launch?.tmux_session, "un-bien");
+  const windowName = _safeTmuxName(name, `pi-${basename(cwd) || "session"}`);
+  const sessionExists =
+    spawnSync("tmux", ["has-session", "-t", session], {
       stdio: "ignore",
-    });
+      timeout: 5_000,
+    }).status === 0;
+  try {
+    const child = spawn(
+      "tmux",
+      _buildTmuxLaunchArgs(session, windowName, cwd, sessionExists),
+      { detached: true, stdio: "ignore" },
+    );
     child.unref();
     return null;
   } catch (error) {
@@ -3055,23 +3220,23 @@ function _appliedRegistry(): WeakSet<object> {
 // session can re-claim. One owner gates all bridges (no per-bridge slots).
 const _ROOT_SESSION_OWNER_KEY = Symbol.for("un-bien.rootSession.owner");
 /** True if `pi` owns the root slot (or just claimed a free one); false if another pi owns it. */
-function _claimRootSession(pi: object): boolean {
+function _claimRootSession(pi: ExtensionAPI): boolean {
   const g = globalThis as typeof globalThis & {
-    [_ROOT_SESSION_OWNER_KEY]?: object;
+    [_ROOT_SESSION_OWNER_KEY]?: ExtensionAPI;
   };
   if (g[_ROOT_SESSION_OWNER_KEY]) return g[_ROOT_SESSION_OWNER_KEY] === pi;
   g[_ROOT_SESSION_OWNER_KEY] = pi;
   return true;
 }
-function _isRootSession(pi: object): boolean {
+function _isRootSession(pi: ExtensionAPI): boolean {
   const g = globalThis as typeof globalThis & {
-    [_ROOT_SESSION_OWNER_KEY]?: object;
+    [_ROOT_SESSION_OWNER_KEY]?: ExtensionAPI;
   };
   return g[_ROOT_SESSION_OWNER_KEY] === pi;
 }
-function _releaseRootSession(pi: object): void {
+function _releaseRootSession(pi: ExtensionAPI): void {
   const g = globalThis as typeof globalThis & {
-    [_ROOT_SESSION_OWNER_KEY]?: object;
+    [_ROOT_SESSION_OWNER_KEY]?: ExtensionAPI;
   };
   if (g[_ROOT_SESSION_OWNER_KEY] === pi) delete g[_ROOT_SESSION_OWNER_KEY];
 }
@@ -4024,6 +4189,9 @@ async function _cmdRootInner(
 
   // First-time wizard: no local config in this cwd → run interactive setup.
   if (!localConfigExists(cwd)) {
+    // SAFETY: ctx.ui MIGHT carry the wizard's select/input methods (interactive
+    // Pi) or not (headless); the `typeof ui.select !== "function"` guard on the
+    // next line validates the structural assumption before any method call.
     const ui = ctx.ui as unknown as WizardUI;
     if (typeof ui.select !== "function") {
       _cmdStatus(ctx);
@@ -4079,6 +4247,9 @@ async function _cmdSetup(
 ): Promise<void> {
   const cwd =
     "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd();
+  // SAFETY: ctx.ui MIGHT carry the wizard's select/input methods (interactive
+  // Pi) or not (headless); the `typeof ui.select !== "function"` guard on the
+  // next line validates the structural assumption before any method call.
   const ui = ctx.ui as unknown as WizardUI;
   if (typeof ui.select !== "function") {
     ctx.ui.notify("[un-bien] Setup requires an interactive UI.", "warning");
@@ -4213,10 +4384,14 @@ async function _cmdStart(
         const provider = sm.getDefaultProvider();
         const modelId = sm.getDefaultModel();
         if (modelId) {
+          // SAFETY: ensureModelRegistry only reads modelRegistry/getModel off
+          // the ctx; c (and the _lastEventCtx/_lastCtx fallbacks) carry those
+          // when present, and it tolerates null.
+          const regCtx = (c ??
+            _lastEventCtx ??
+            _lastCtx) as unknown as ActionCtx | null;
           const found = provider
-            ? ensureModelRegistry(
-                (c ?? _lastEventCtx ?? _lastCtx) as unknown as ActionCtx | null,
-              ).find(provider, modelId)
+            ? ensureModelRegistry(regCtx).find(provider, modelId)
             : undefined;
           _currentModel = found?.name ?? modelId;
         }
@@ -6363,6 +6538,15 @@ export async function probeListPeers(
   });
 }
 
+function _cliStubUi(): ExtensionContext["ui"] {
+  // SAFETY: the CLI fleet/daemon/setup handlers only ever call ui.notify; the
+  // other ExtensionContext["ui"] methods (select/input/editor/…) are never
+  // reached on the direct-run path, so a notify-only console shim is safe.
+  return {
+    notify: (msg: string) => console.log(msg),
+  } as unknown as ExtensionContext["ui"];
+}
+
 if (_isDirectRun()) {
   const [, , subcmd, ...cliArgs] = process.argv;
   if (subcmd === "devices" || subcmd === "list") {
@@ -6421,26 +6605,14 @@ if (_isDirectRun()) {
     // parser (shared with the slash-command path) sees the same shape
     // as it would from a Pi interactive prompt.
     const joined = cliArgs.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ");
-    await _cmdCreate(joined, {
-      ui: {
-        notify: (msg: string) => console.log(msg),
-      } as unknown as ExtensionContext["ui"],
-    });
+    await _cmdCreate(joined, { ui: _cliStubUi() });
   } else if (subcmd === "remove") {
     const id = (cliArgs[0] ?? "").trim();
-    await _cmdRemove(id, {
-      ui: {
-        notify: (msg: string) => console.log(msg),
-      } as unknown as ExtensionContext["ui"],
-    });
+    await _cmdRemove(id, { ui: _cliStubUi() });
   } else if (subcmd === "daemons") {
     // Mirror the slash handler: ask the supervisor when reachable,
     // fall back to registry-only when not.
-    const stubCtx = {
-      ui: {
-        notify: (msg: string) => console.log(msg),
-      } as unknown as ExtensionContext["ui"],
-    };
+    const stubCtx = { ui: _cliStubUi() };
     await _cmdDaemonsList(stubCtx);
   } else if (subcmd === "daemon") {
     // `unbien daemon <op> [args]`. Reuse the fleet-ops handlers — they
@@ -6450,11 +6622,7 @@ if (_isDirectRun()) {
       .slice(1)
       .map((a) => (/\s/.test(a) ? `"${a}"` : a))
       .join(" ");
-    const stubCtx = {
-      ui: {
-        notify: (msg: string) => console.log(msg),
-      } as unknown as ExtensionContext["ui"],
-    };
+    const stubCtx = { ui: _cliStubUi() };
     if (op === "start") {
       await _cmdDaemonStart(stubCtx, cliArgs[1]);
     } else if (op === "stop") {
@@ -6474,11 +6642,7 @@ if (_isDirectRun()) {
     // `unbien cron <op> [args]`. Re-quote args with spaces so the shared
     // parser sees the same shape as a Pi slash prompt.
     const joined = cliArgs.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ");
-    const stubCtx = {
-      ui: {
-        notify: (msg: string) => console.log(msg),
-      } as unknown as ExtensionContext["ui"],
-    };
+    const stubCtx = { ui: _cliStubUi() };
     await _cmdCron(joined, stubCtx);
   } else if (subcmd === "peers") {
     // Read-only roster of the local + cross-PC mesh. Unlike `devices` (which
@@ -6501,20 +6665,12 @@ if (_isDirectRun()) {
     // `un-bien` / `pi-supervisord` bins are already on $PATH via npm's
     // global prefix. Explicit `linkCli: false` so we never stomp those
     // with symlinks pointing at a parallel Pi-extension install.
-    const stubCtx = {
-      ui: {
-        notify: (msg: string) => console.log(msg),
-      } as unknown as ExtensionContext["ui"],
-    };
+    const stubCtx = { ui: _cliStubUi() };
     // Propagate failure as a non-zero exit so callers (Cockpit / CI) detect it
     // — installService throws on a failed schtasks/launchctl/systemctl step.
     if (!_cmdInstall(stubCtx, { linkCli: false })) process.exit(1);
   } else if (subcmd === "uninstall") {
-    const stubCtx = {
-      ui: {
-        notify: (msg: string) => console.log(msg),
-      } as unknown as ExtensionContext["ui"],
-    };
+    const stubCtx = { ui: _cliStubUi() };
     // `linkCli: true` even from the CLI: unlinking is ALWAYS safe and must run
     // regardless of how install ran. `unlinkCliBinaries` only removes OUR
     // reserved symlinks (`un-bien` / `pi-supervisord`) under `~/.local/bin`;
