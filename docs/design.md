@@ -1,10 +1,13 @@
 ---
-title: "Design & protocol"
+title: "Design & development"
 ---
 
-The decision records and wire specs behind un-bien. Start here if you want to
-understand *how* it works — the client architecture, the on-the-wire protocol,
-and the identity/trust model — rather than how to install and run it.
+The decision records, wire specs, and developer references behind un-bien. Start
+here if you want to understand *how* it works — the client architecture, the
+on-the-wire protocol, the identity/trust model — or how to build, sign, and test
+it, rather than how to install and run it.
+
+## Design & protocol
 
 | Document | What it covers |
 | --- | --- |
@@ -23,3 +26,12 @@ canonical Pi keys; that authorizes routing, it does not prove the Owner controls
 either Pi, and there is no transitivity across blobs. Because of all this,
 un-bien ships with **no default relay** and recommends you self-host one behind
 a VPN. See [rpc-envelope](rpc-envelope.md) for the exact boundaries.
+
+## Building, signing & testing
+
+| Document | What it covers |
+| --- | --- |
+| [Install & setup](install.md#3-build--install-the-app) | Building the iOS/macOS app with Xcode + XcodeGen, and standing up the relay. |
+| [Deployment & signing](../DEPLOY.md) | Signing, entitlements, and the Info.plist checklist for a shippable app target (iCloud Keychain sync, macOS network-client sandbox, camera usage). |
+| [Feature test drive](../TESTING.md) | Exercising the features by hand end to end. |
+| [Self-host the relay](../relay/README.md) | The relay's own build, environment variables, mesh endpoint, and reverse-proxy setup. |

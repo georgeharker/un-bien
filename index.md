@@ -14,7 +14,7 @@ or launches a new one**, and lets you drive it from your phone.
 
 Pair your device once by QR, over a relay you host yourself, and Pi's session
 comes with you: streaming responses, **styled summaries of edits and tool
-results**, tool-call cards you can approve or reject, and live model/thinking
+results**, interactive prompts you can answer, and live model/thinking
 controls — all rendered natively.
 
 The same plumbing carries a second capability: a **local agent mesh**, where
@@ -27,9 +27,10 @@ multiple Pi sessions on your machines can discover and message each other.
   your machine. No default relay, no third party in the path.
 - **Styled transcripts** — Markdown + syntax highlighting, with readable
   summaries for edits and tool results rather than raw diffs and JSON.
-- **Tool approval from your phone** — approve or reject tool calls remotely.
+- **Interactive prompts** — answer Pi's confirm / select / input prompts from
+  the app.
 - **Model & thinking control** — switch models and thinking levels on the fly.
-- **Image attach** — send a photo inline with your prompt to vision models.
+- **Image display** — renders images your tools and the agent produce.
 - **Local agent mesh** — several Pi sessions coordinating over a local broker,
   optionally bridged across machines through the relay.
 - **Daemon mode** — keep a Pi running in the background, answering prompts and
@@ -47,9 +48,7 @@ multiple Pi sessions on your machines can discover and message each other.
 | Get the big picture            | [Overview (README)](README.md)                  |
 | Install & set everything up    | [Install & setup](docs/install.md)              |
 | Use the extension & commands   | [Extension guide](extension/README.md)          |
-| Understand how it works        | [Design & protocol](docs/design.md)             |
-| Deploy / sign the app          | [Deployment & signing](DEPLOY.md)               |
-| Try the features by hand       | [Feature test drive](TESTING.md)                |
+| Go deeper (design, protocol, building & signing) | [Design & development](docs/design.md) |
 
 ---
 

@@ -114,9 +114,9 @@ over — the failover is invisible to the LLMs.
 
 The companion native iOS/macOS app lets you **attach to a running Pi session — or
 launch a new one** — and drive it from your phone: send prompts, read responses,
-approve tool calls, switch models. The phone and the Pi process find each other
-through a **relay**: a small WebSocket server that ferries messages between them.
-Pairing is one-time and per device, via QR code.
+answer Pi's interactive prompts, and switch models. The phone and the Pi process
+find each other through a **relay**: a small WebSocket server that ferries
+messages between them. Pairing is one-time and per device, via QR code.
 
 Communication uses WebSocket over TLS to the relay. Fields such as `ct` are
 wire containers, not a systemwide end-to-end confidentiality guarantee: current
@@ -154,18 +154,21 @@ SDK call.
 
 ### Images
 
-The app can attach **one image** (camera or gallery) to a message. It's
-compressed on the device and rides **inline** in the `user_message` — the
-optional `images` field carries `{ data: <base64>, mime }`. The extension
-turns it into the SDK's multimodal content (an `ImageContent` followed by the
-caption `TextContent`) and calls `sendUserMessage(content)`, so the model sees
-the picture plus your text.
+un-bien **displays images produced during a session** — when a tool or the agent
+emits an image, the extension surfaces it to the app as a preview (customType
+`un-bien:received-image`), capped at 10 MB.
+
+On the inbound side, the wire and extension also support **image ingest**: a
+`user_message` may carry an optional `images` field (`{ data: <base64>, mime }`),
+which the extension turns into the SDK's multimodal content (an `ImageContent`
+followed by the caption `TextContent`) and feeds to `sendUserMessage(content)`.
+The mobile app does **not** yet expose an attach control, so this path is
+available to clients but not surfaced in the app today.
 
 Whether a model accepts images is surfaced as a `vision` flag on each
-`WireModel` (derived from the SDK's `Model.input` including `"image"`); the app
-greys out the attach button when the active model is text-only.
+`WireModel` (derived from the SDK's `Model.input` including `"image"`).
 
-The **relay is unchanged** — the image travels inside the same application
+The **relay is unchanged** — an image travels inside the same application
 message container as the text, so there's no binary channel (large files are a
 future track). Base64 or a field named `ct` is not an E2E confidentiality
 boundary; the current Relay visibility follows the trust model above. Text-only
@@ -554,9 +557,9 @@ registered daemon back. To wipe the registry entirely, `rm
 Each spawned daemon's stderr is forwarded into the supervisor's log
 with a `[<cwd>]` prefix, so a single log stream shows every agent.
 
-### Caveats (plan/26 trade-offs)
+### Caveats
 
-- **Tool approval is not gated.** Daemons inherit the same Pi config
+- **Tool execution is not gated.** Daemons inherit the same Pi config
   the interactive run uses — Bash, Edit, Write etc. all execute without
   prompting. Configure Pi's tool permissions to taste before promoting
   a folder to daemon.

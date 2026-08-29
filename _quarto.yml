@@ -47,10 +47,10 @@ website:
             href: extension/README.md
           - text: "Daemon mode & troubleshooting"
             href: extension/docs/daemon.md
-      - section: "Design & protocol"
+      - section: "Design & development"
         href: docs/design.md
         contents:
-          - text: "Design overview"
+          - text: "Overview"
             href: docs/design.md
           - text: "Architecture & design"
             href: DESIGN.md
@@ -60,14 +60,14 @@ website:
             href: docs/rpc-on-event-map.md
           - text: "Machine identity"
             href: docs/identity.md
-      - section: "Operations"
-        contents:
-          - text: "Self-host the relay"
-            href: relay/README.md
           - text: "Deployment & signing"
             href: DEPLOY.md
           - text: "Feature test drive"
             href: TESTING.md
+      - section: "Reference"
+        contents:
+          - text: "Self-host the relay"
+            href: relay/README.md
 
 format:
   html:

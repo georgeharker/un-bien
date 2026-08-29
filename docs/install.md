@@ -132,18 +132,9 @@ Full daemon walkthrough and troubleshooting:
 
 ## 3. Build & install the app
 
-The client is a SwiftUI app in `app/` targeting **iOS 17+ / macOS 14+**.
-
-### Quick macOS run (SwiftPM)
-
-```bash
-cd app
-swift build
-swift run un-bien-mac     # native macOS executable target (UnBienMac)
-swift test                # UnBienCore conformance tests
-```
-
-### Full iOS/macOS app (Xcode)
+The client is a SwiftUI app in `app/` targeting **iOS 17+ / macOS 14+**. Build
+and run it from **Xcode** — the interactive app needs the real app targets, not a
+command-line runner.
 
 The Xcode project is generated with [XcodeGen](https://github.com/yonaskolb/XcodeGen)
 from `app/project.yml`:
@@ -151,7 +142,7 @@ from `app/project.yml`:
 ```bash
 cd app
 xcodegen generate        # writes UnBien.xcodeproj
-open UnBien.xcodeproj     # then build the UnBien-iOS / UnBien-macOS scheme
+open UnBien.xcodeproj     # then build/run the UnBien-iOS / UnBien-macOS scheme
 ```
 
 Signing, entitlements, and the Info.plist checklist (iCloud Keychain sync, the
