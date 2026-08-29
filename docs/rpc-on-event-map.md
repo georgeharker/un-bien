@@ -20,7 +20,7 @@ the first cue that sees the turn's committed entries.
 
 ## A. Session-content frames the consumer renders — all available via `pi.on()`
 
-The un-bien consumer (`SessionState.applyRPC`, SessionState.swift:237) renders
+The Un Bien consumer (`SessionState.applyRPC`, SessionState.swift:237) renders
 exactly these. Every one is deliverable from a `pi.on()` payload (± a known
 transform).
 

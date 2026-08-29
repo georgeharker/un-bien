@@ -1,14 +1,14 @@
 ---
-title: "un-bien"
+title: "Un Bien"
 ---
 
 <p align="center">
-  <img src="app/icons/un-bien.svg" width="140" alt="un-bien logo" />
+  <img src="app/icons/un-bien.svg" width="140" alt="Un Bien logo" />
 </p>
 
-## What is un-bien?
+## What is Un Bien?
 
-**un-bien is remote control for your [Pi coding agent](https://github.com/earendil-works/pi)
+**Un Bien is remote control for your [Pi coding agent](https://github.com/earendil-works/pi)
 sessions** — a native macOS and iOS app that **attaches to a running Pi session,
 or launches a new one**, and lets you drive it from your phone.
 
@@ -52,5 +52,5 @@ multiple Pi sessions on your machines can discover and message each other.
 
 ---
 
-un-bien is derived from [remote-pi](https://github.com/jacobaraujo7/remote_pi)
+Un Bien is derived from [remote-pi](https://github.com/jacobaraujo7/remote_pi)
 by Jacob Moura (MIT); see the [README](README.md#attribution) for attribution.

@@ -2,7 +2,7 @@
 title: "Install & setup"
 ---
 
-un-bien is three pieces that work together:
+Un Bien is three pieces that work together:
 
 - the **Pi extension** — adds `/unbien`, the agent mesh, and relay connectivity
   to your terminal Pi sessions;
@@ -13,7 +13,7 @@ un-bien is three pieces that work together:
 A typical setup is: **stand up a relay**, **install the extension** and point it
 at that relay, then **build/install the app** and pair it. Do them in that order.
 
-> **There is no default relay.** un-bien ships pointing at nobody's
+> **There is no default relay.** Un Bien ships pointing at nobody's
 > infrastructure — you must run your own (or point at one you trust) before the
 > app can connect. This is deliberate: the relay operator can see routed
 > plaintext (see [Design & protocol](design.md#trust-model-in-one-paragraph)).

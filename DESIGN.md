@@ -1,7 +1,7 @@
-# un-bien — a native iOS/macOS client for Pi
+# Un Bien — a native iOS/macOS client for Pi
 
 > A modern, native iOS/macOS app that **attaches to running Pi coding agent
-> sessions — or launches new ones** — over the un-bien relay protocol, renders
+> sessions — or launches new ones** — over the Un Bien relay protocol, renders
 > their chats beautifully, and aggregates **multiple relays** in one place.
 >
 > Not paseo. Same "client → server-hosted sessions" shape, but pi-only, native
@@ -12,7 +12,7 @@ The app lives under `app/` (`Sources/UnBienCore`), the Pi extension under
 `extension/`, and the relay under `relay/`. This doc is the consolidated decision
 record + architecture. The wire protocol and crypto were originally extracted
 from the **remote-pi** reference implementation (MIT, Jacob Moura,
-<https://github.com/jacobaraujo7/remote_pi>) and have since evolved as un-bien's
+<https://github.com/jacobaraujo7/remote_pi>) and have since evolved as Un Bien's
 own.
 
 ---
@@ -20,6 +20,7 @@ own.
 ## 1. Goals / non-goals
 
 **Goals**
+
 + Attach to a running Pi session (or launch a new one) through a **relay** and
   render its transcript in real time — streaming text, tool-call cards,
   interactive prompts.
@@ -29,6 +30,7 @@ own.
 + Native iOS. No cross-platform toolkit.
 
 **Non-goals**
+
 + No multi-provider abstraction (paseo's Claude Code / Codex / OpenCode layer).
   This is pi-only. There is nothing to abstract.
 + No embedded Python. The wire, crypto, keychain, and websocket work are all
@@ -144,6 +146,7 @@ All Ed25519 (RFC 8032): `@noble/ed25519` (ext) / `ed25519-dalek` (relay) →
 | **App-key** | ephemeral, per pairing session | authenticated channel during pair |
 
 ### QR pairing (`pairing/qr.ts`)
+
 + Pi issues a **16-byte random, base64url** token; TTL **60s**, rotating,
   **single-use** (atomic consume). Pair TTL clamp 10s–600s.
 + Phone scans (VisionKit) → `pair_request { token, device_name }` → `pair_ok`.
@@ -186,6 +189,7 @@ Ed25519 sig, **then** assert `sha256(owner_pk)` matches the expected hash slot
   design-token `Environment` for chrome — both fed by the selected theme (§11).
 
 **Streaming gotcha (the one real engineering nuance):**
+
 + **Debounce/coalesce** deltas (~50–100 ms) before re-parsing — never per token.
 + **Defer code-block highlighting until the closing fence arrives** — render an
   open ``` block as plain monospace; highlight on close (avoids flicker + wasted
@@ -205,7 +209,7 @@ over the `Codable` events — no Markdown involved.
    and lift the reference **test vectors** (MIT) into Swift unit tests for
    byte-for-byte conformance before trusting the handshake.
 2. **Protocol stability.** The protocol descends from a single upstream
-   maintainer's evolving project and now evolves under un-bien. Pin a protocol
+   maintainer's evolving project and now evolves under Un Bien. Pin a protocol
    revision; version the codec.
 3. **Trust boundary.** The relay sees routed **plaintext** (not E2E). Fine on a
    private Tailnet; matters the moment "multiple relays" spans networks you don't
@@ -239,6 +243,7 @@ app-level design-token `Environment` (chrome), and a Highlightr/highlight.js
 style (code blocks).
 
 Curated set (developer-recognizable; dark + light):
+
 + **Tokyo Night** (default — matches the terminal setup)
 + Catppuccin (Mocha / Latte)
 + Dracula
@@ -257,10 +262,10 @@ code-style mapping, **no view changes**.
 
 ## 12. Feature-parity floor + UX bar
 
-un-bien must do **at least** what the reference app (`remote_pi` Flutter,
+Un Bien must do **at least** what the reference app (`remote_pi` Flutter,
 `app/lib/ui/*`) ships — then exceed it on polish (paseo-grade).
 
-| Reference surface | un-bien |
+| Reference surface | Un Bien |
 | --- | --- |
 | Onboarding (choose relay) | ✔ + multi-relay setup |
 | QR pairing **+ “paste code” fallback** (60s single-use) | ✔ |
@@ -276,7 +281,7 @@ un-bien must do **at least** what the reference app (`remote_pi` Flutter,
 **UX bar (the paseo-grade delta):** themed animated transcript; tool cards with
 collapsible input/output; sticky streaming indicator; per-relay session
 grouping; keyboard-first prompt bar with queued-message chips; graceful
-reconnect. The reference app is functional-plain — un-bien's differentiator is
+reconnect. The reference app is functional-plain — Un Bien's differentiator is
 **render quality + theming + multi-relay**.
 
 ---
@@ -292,6 +297,7 @@ before trusting any of this.
 `mesh/encoding.ts` documents a real bug: Dart emitted **standard** base64
 (`+ / =`-padded) while the pairing layer emitted **URL-safe** (`- _`, no pad) —
 same 32 bytes, different strings → **silent self-revocations**. Rules:
+
 + Ed25519 pubkeys / signatures / nonces at the **relay + mesh** boundary are
   **RFC 4648 STANDARD base64, padded**. Not URL-safe.
 + **Never compare keys as base64 strings.** Decode to the 32 raw bytes and
@@ -327,6 +333,7 @@ Source: `relay/src/auth/challenge.rs`, `transport/relay_client.ts`.
 ← { "type": "challenge",  "nonce":  "<32 random bytes, std b64>" }
 → { "type": "auth",       "sig":    "<64B Ed25519 sig, std b64>" }
 ```
+
 + **Sign the DECODED 32 nonce bytes**, NOT the base64 string: relay does
   `vk.verify(nonce_bytes, sig)` where `nonce_bytes: [u8;32]`. In Swift:
   `key.signature(for: Data(base64Encoded: nonceB64)!)`.
@@ -337,12 +344,13 @@ Source: `relay/src/auth/challenge.rs`, `transport/relay_client.ts`.
 ### 10.3 Mesh canonical JSON — only when SIGNING mesh_versions
 
 Source: `mesh/canonical.ts`. **Bit-compatibility contract across Dart/Rust/TS:**
+
 + object keys sorted by **UTF-16 code-unit order**; **no whitespace** between
   tokens; RFC-8259 string escapes; arrays keep insertion order; integers only
   (`version`, `issued_at`). Signed bytes = UTF-8 of that canonical string.
 + **Verification never re-serializes**: the receiver verifies the **raw blob
   bytes as-received** against `sig` with `owner_pk`, then asserts
-  `sha256(owner_pk)` fills the expected slot. So un-bien needs the canonicalizer
+  `sha256(owner_pk)` fills the expected slot. So Un Bien needs the canonicalizer
   **only when the phone mints a mesh_version** (pairing/authorizing a PC);
   attaching + reading needs verify-only.
 + Swift risk: `JSONEncoder([.sortedKeys])` is **not guaranteed byte-identical**
@@ -351,6 +359,7 @@ Source: `mesh/canonical.ts`. **Bit-compatibility contract across Dart/Rust/TS:**
   the single highest-conformance-risk item.**
 
 ### 10.4 Envelope, framing, pair token
+
 + **Framing:** one JSON object per WS **text frame** (JSONL semantics).
 + **Envelope:** `{ from, to, id (UUIDv7), re, body }`; addresses opaque — echo verbatim.
 + **QR pair token:** 16 random bytes, base64url — but treat as an **opaque
@@ -366,7 +375,7 @@ Source: `mesh/canonical.ts`. **Bit-compatibility contract across Dart/Rust/TS:**
 
 ## Reference map
 
-un-bien monorepo sources (the current source of truth):
+Un Bien monorepo sources (the current source of truth):
 
 + Wire types/codec: `extension/src/protocol/{types,codec}.ts`
 + Pairing: `extension/src/pairing/{qr,crypto,storage}.ts`

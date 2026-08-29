@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="app/icons/un-bien-macos-1024.png" alt="un-bien" width="128" />
+  <img src="app/icons/un-bien-macos-1024.png" alt="Un Bien" width="128" />
 </p>
 
-# un-bien
+# Un Bien
 
 Remote-control your [Pi coding agent](https://github.com/earendil-works/pi)
 sessions from your phone: a native iOS/macOS client that pairs to your machine
@@ -25,13 +25,13 @@ sessions (and agents) can talk to each other.
 
 ## Attribution
 
-un-bien is derived from **[remote-pi](https://github.com/jacobaraujo7/remote_pi)**
+Un Bien is derived from **[remote-pi](https://github.com/jacobaraujo7/remote_pi)**
 by **Jacob Moura** ([@jacobaraujo7](https://github.com/jacobaraujo7)), used under
 the MIT License. The `extension/` and `relay/` trees began as forks of that
 project — thank you to Jacob and the remote-pi contributors for the original
-design and implementation, which un-bien builds on.
+design and implementation, which Un Bien builds on.
 
 The original MIT license and copyright are preserved in
-[`extension/LICENSE`](extension/LICENSE). un-bien's own changes (the native app,
-the rpc-envelope protocol, the monorepo consolidation, and the un-bien rename)
+[`extension/LICENSE`](extension/LICENSE). Un Bien's own changes (the native app,
+the rpc-envelope protocol, the monorepo consolidation, and the Un Bien rename)
 are © 2026 George Harker, likewise under the MIT License.

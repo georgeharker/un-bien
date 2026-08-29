@@ -2,7 +2,7 @@
 title: "Design & development"
 ---
 
-The decision records, wire specs, and developer references behind un-bien. Start
+The decision records, wire specs, and developer references behind Un Bien. Start
 here if you want to understand *how* it works — the client architecture, the
 on-the-wire protocol, the identity/trust model — or how to build, sign, and test
 it, rather than how to install and run it.
@@ -20,11 +20,11 @@ it, rather than how to install and run it.
 
 The relay is a **routing pipe**, not a confidentiality boundary. TLS protects
 transit, but the relay operator can see routed plaintext protocol content and
-metadata — un-bien is **not** end-to-end encrypted. Route eligibility for
+metadata — Un Bien is **not** end-to-end encrypted. Route eligibility for
 Pi↔Pi traffic comes from Owner-signed membership blobs that directly list both
 canonical Pi keys; that authorizes routing, it does not prove the Owner controls
 either Pi, and there is no transitivity across blobs. Because of all this,
-un-bien ships with **no default relay** and recommends you self-host one behind
+Un Bien ships with **no default relay** and recommends you self-host one behind
 a VPN. See [rpc-envelope](rpc-envelope.md) for the exact boundaries.
 
 ## Building, signing & testing

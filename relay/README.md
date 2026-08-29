@@ -1,11 +1,11 @@
 > **Derived from [remote-pi](https://github.com/jacobaraujo7/remote_pi)** by Jacob
 > Moura, used under the MIT License. This tree is part of the
-> [un-bien](../README.md) monorepo (Cargo package `un-bien-relay`).
+> [Un Bien](../README.md) monorepo (Cargo package `un-bien-relay`).
 
-# un-bien — Relay
+# Un Bien — Relay
 
-A lightweight WebSocket relay server that connects the **un-bien** mobile app to
-un-bien **extension** processes running on your machine. It handles peer routing,
+A lightweight WebSocket relay server that connects the **Un Bien** mobile app to
+Un Bien **extension** processes running on your machine. It handles peer routing,
 presence, authorized Pi-to-Pi forwarding, and signed membership metadata.
 
 For a full overview of the project, see the
@@ -60,7 +60,7 @@ plane — it is never used for App↔Pi frames.)
 
 ## No public relay — self-host
 
-**un-bien ships with no default relay and runs no shared infrastructure.** You
+**Un Bien ships with no default relay and runs no shared infrastructure.** You
 host your own (below), which keeps the relay operator role in your hands. The
 extension reports its relay as `unset` and refuses to connect until you point it
 at one with `/unbien set-relay <url>`.

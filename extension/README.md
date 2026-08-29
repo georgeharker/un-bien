@@ -1,12 +1,12 @@
 > **Derived from [remote-pi](https://github.com/jacobaraujo7/remote_pi)** by Jacob
 > Moura, used under the MIT License (preserved in [`LICENSE`](LICENSE)). This tree
-> is part of the [un-bien](../README.md) monorepo.
+> is part of the [Un Bien](../README.md) monorepo.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/georgeharker/un-bien/main/app/icons/un-bien-macos-1024.png" width="160" alt="un-bien logo" />
+  <img src="https://raw.githubusercontent.com/georgeharker/un-bien/main/app/icons/un-bien-macos-1024.png" width="160" alt="Un Bien logo" />
 </p>
 
-<h1 align="center">un-bien</h1>
+<h1 align="center">Un Bien</h1>
 
 > Extend the [Pi coding agent](https://github.com/earendil-works/pi) with two
 > superpowers: **remote-control Pi from your phone** (native iOS/macOS app over a
@@ -44,7 +44,7 @@ whether to use the relay on this terminal). On every following run, `/unbien`
 joins the local agent session and starts the relay automatically — no extra
 typing.
 
-> **You must configure a relay before the mobile app can connect.** un-bien ships
+> **You must configure a relay before the mobile app can connect.** Un Bien ships
 > pointing at **nobody's** infrastructure — there is no built-in default relay.
 > Self-host one (see [The relay](#the-relay)) and point the extension at it with
 > `/unbien set-relay <url>`.
@@ -82,7 +82,7 @@ normalize it.
 
 ## What it does
 
-un-bien adds two independent layers on top of Pi. You can use either, or both:
+Un Bien adds two independent layers on top of Pi. You can use either, or both:
 
 ### 1) Agent network (local broker, optional cross-PC relay)
 
@@ -154,7 +154,7 @@ SDK call.
 
 ### Images
 
-un-bien **displays images produced during a session** — when a tool or the agent
+Un Bien **displays images produced during a session** — when a tool or the agent
 emits an image, the extension surfaces it to the app as a preview (customType
 `un-bien:received-image`), capped at 10 MB.
 
@@ -209,11 +209,11 @@ The bare command is the everyday entry point:
 
 Behavior depends on whether there's a local config for this directory:
 
-| State                                     | What happens                                                                             |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------- |
-| First run (no `.pi/un-bien/config.json`)  | Interactive wizard → saves config → joins agent session → starts relay (if you opted in) |
-| Returning user, auto-start enabled        | Joins agent session + starts relay automatically, then prints status                     |
-| Returning user, auto-start disabled       | Prints status only; join/relay must be run manually                                      |
+| State                                    | What happens                                                                             |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------- |
+| First run (no `.pi/un-bien/config.json`) | Interactive wizard → saves config → joins agent session → starts relay (if you opted in) |
+| Returning user, auto-start enabled       | Joins agent session + starts relay automatically, then prints status                     |
+| Returning user, auto-start disabled      | Prints status only; join/relay must be run manually                                      |
 
 The wizard asks three questions:
 
@@ -238,7 +238,7 @@ Once the relay is up (`/unbien relay status` shows `started` or `paired`):
 /unbien pair
 ```
 
-A QR code is printed in the terminal. Scan it with the un-bien mobile app.
+A QR code is printed in the terminal. Scan it with the Un Bien mobile app.
 Pairing is **per machine** — once a device is paired, every Pi process on
 this machine accepts it (it lives in `~/.pi/un-bien/peers.json`).
 
@@ -267,7 +267,7 @@ forwarding, the Relay currently permits a route when any correctly signed Owner
 blob lists both canonical Pi keys. That does not prove the Owner paired with or
 controls either Pi.
 
-**un-bien ships with no default relay** — `/unbien config` reports `unset` until
+**Un Bien ships with no default relay** — `/unbien config` reports `unset` until
 you configure one, and the extension refuses to connect until you do.
 
 ### Self-host the relay
@@ -415,20 +415,20 @@ real name to the peer.
 | ------------------------------------------- | ----------------------------------------------------------------------------- |
 | `/unbien create <cwd> [--name X]`           | Register a folder as a daemon                                                 |
 | `/unbien remove <id>`                       | Unregister a daemon (local config preserved)                                  |
-| `/unbien daemons`                           | List registered daemons + state                                              |
-| `/unbien daemon start`                      | Start every registered daemon                                                |
-| `/unbien daemon stop`                       | Stop every running daemon (`/unbien stop` stops only the local terminal)     |
-| `/unbien daemon restart`                    | Stop + start all daemons                                                     |
-| `/unbien daemon status`                     | Detailed runtime status (pid, uptime, restart count)                         |
-| `/unbien daemon send <id> "<text>"`         | Send a prompt to a specific daemon                                           |
+| `/unbien daemons`                           | List registered daemons + state                                               |
+| `/unbien daemon start`                      | Start every registered daemon                                                 |
+| `/unbien daemon stop`                       | Stop every running daemon (`/unbien stop` stops only the local terminal)      |
+| `/unbien daemon restart`                    | Stop + start all daemons                                                      |
+| `/unbien daemon status`                     | Detailed runtime status (pid, uptime, restart count)                          |
+| `/unbien daemon send <id> "<text>"`         | Send a prompt to a specific daemon                                            |
 | `/unbien cron add <id> "<expr>" "<prompt>"` | Schedule a recurring prompt (`--tz`, `--wake`, `--no-skip-busy`, `--catchup`) |
-| `/unbien cron list`                         | List scheduled jobs (schedule, enabled, next run, last status)               |
-| `/unbien cron run <jobId>`                  | Fire a job now (ignores its schedule)                                        |
-| `/unbien cron enable\|disable <jobId>`      | Toggle a job on/off                                                          |
-| `/unbien cron remove <jobId>`               | Delete a job                                                                 |
-| `/unbien cron log [<jobId>] [--tail N]`     | Read the fire/skip audit log                                                 |
-| `/unbien install`                           | Install `pi-supervisord` as a system service                                 |
-| `/unbien uninstall`                         | Remove the system service (registry preserved)                              |
+| `/unbien cron list`                         | List scheduled jobs (schedule, enabled, next run, last status)                |
+| `/unbien cron run <jobId>`                  | Fire a job now (ignores its schedule)                                         |
+| `/unbien cron enable\|disable <jobId>`      | Toggle a job on/off                                                           |
+| `/unbien cron remove <jobId>`               | Delete a job                                                                  |
+| `/unbien cron log [<jobId>] [--tail N]`     | Read the fire/skip audit log                                                  |
+| `/unbien install`                           | Install `pi-supervisord` as a system service                                  |
+| `/unbien uninstall`                         | Remove the system service (registry preserved)                                |
 
 All commands above work both as Pi slash commands (interactive) and as
 shell-level `unbien <subcommand>` when the package is installed
@@ -549,10 +549,10 @@ registered daemon back. To wipe the registry entirely, `rm
 
 ### Where to find logs
 
-| Platform | Command                                          |
-| -------- | ------------------------------------------------ |
-| Linux    | `journalctl --user -u unbien-supervisord -f`     |
-| macOS    | `tail -f ~/.pi/un-bien/supervisord.log`          |
+| Platform | Command                                      |
+| -------- | -------------------------------------------- |
+| Linux    | `journalctl --user -u unbien-supervisord -f` |
+| macOS    | `tail -f ~/.pi/un-bien/supervisord.log`      |
 
 Each spawned daemon's stderr is forwarded into the supervisor's log
 with a `[<cwd>]` prefix, so a single log stream shows every agent.
@@ -578,17 +578,17 @@ with a `[<cwd>]` prefix, so a single log stream shows every agent.
 
 ### Files
 
-| Path                                          | Scope                 | What's in it                                                                          |
-| --------------------------------------------- | --------------------- | ------------------------------------------------------------------------------------- |
-| `~/.pi/extensions/un-bien.json`               | Per-user (global)     | `relay` URL, `defaults`, `identity`, `debug` — the global settings (see below)        |
-| `<cwd>/.pi/un-bien/config.json`               | Per-directory         | `agent_name`, `auto_start_relay`, `allow_remote_launch`                               |
-| `~/.pi/un-bien/identity.json`                 | Per-machine           | Paired identity keypair (file identity backend; `0600`)                               |
-| `~/.pi/un-bien/peers.json`                    | Per-machine           | Paired mobile devices                                                                  |
-| `~/.pi/un-bien/sessions/<name>/`              | Per-session           | Broker socket + `audit.jsonl`                                                          |
-| `~/.pi/un-bien/daemons.json`                  | Per-machine           | Daemon registry                                                                        |
-| `~/.pi/un-bien/cron.json` · `cron.jsonl`      | Per-machine           | Cron registry + fire/skip audit log                                                   |
-| `~/.pi/un-bien/supervisor.sock`               | Per-machine           | Supervisor control socket                                                              |
-| `~/.pi/un-bien/skills/agent-network/SKILL.md` | Per-user              | Agent skill the LLM reads                                                              |
+| Path                                          | Scope             | What's in it                                                                   |
+| --------------------------------------------- | ----------------- | ------------------------------------------------------------------------------ |
+| `~/.pi/extensions/un-bien.json`               | Per-user (global) | `relay` URL, `defaults`, `identity`, `debug` — the global settings (see below) |
+| `<cwd>/.pi/un-bien/config.json`               | Per-directory     | `agent_name`, `auto_start_relay`, `allow_remote_launch`                        |
+| `~/.pi/un-bien/identity.json`                 | Per-machine       | Paired identity keypair (file identity backend; `0600`)                        |
+| `~/.pi/un-bien/peers.json`                    | Per-machine       | Paired mobile devices                                                          |
+| `~/.pi/un-bien/sessions/<name>/`              | Per-session       | Broker socket + `audit.jsonl`                                                  |
+| `~/.pi/un-bien/daemons.json`                  | Per-machine       | Daemon registry                                                                |
+| `~/.pi/un-bien/cron.json` · `cron.jsonl`      | Per-machine       | Cron registry + fire/skip audit log                                            |
+| `~/.pi/un-bien/supervisor.sock`               | Per-machine       | Supervisor control socket                                                      |
+| `~/.pi/un-bien/skills/agent-network/SKILL.md` | Per-user          | Agent skill the LLM reads                                                      |
 
 ### Global settings — `~/.pi/extensions/un-bien.json`
 
@@ -616,7 +616,7 @@ fields are optional:
 
   // File-based diagnostic logs. Off by default. Read from config (not env)
   // because the daemon fork usually runs detached without a shell's env.
-  "debug": { "envelope": false, "panels": false }
+  "debug": { "envelope": false, "panels": false },
 }
 ```
 
@@ -624,21 +624,21 @@ fields are optional:
 
 Written by the `/unbien` setup wizard:
 
-| Field                 | Default              | Meaning                                                                                    |
-| --------------------- | -------------------- | ------------------------------------------------------------------------------------------ |
-| `agent_name`          | directory name       | Presentation leaf name for this agent (senders still use the opaque `list_peers` address)  |
-| `auto_start_relay`    | `true`               | On a fresh terminal, `/unbien` auto-joins the mesh and starts the relay                     |
-| `allow_remote_launch` | `false`              | Honor `session_launch` requests from a paired owner (spawn a new Pi session). Opt-in only.  |
+| Field                 | Default        | Meaning                                                                                    |
+| --------------------- | -------------- | ------------------------------------------------------------------------------------------ |
+| `agent_name`          | directory name | Presentation leaf name for this agent (senders still use the opaque `list_peers` address)  |
+| `auto_start_relay`    | `true`         | On a fresh terminal, `/unbien` auto-joins the mesh and starts the relay                    |
+| `allow_remote_launch` | `false`        | Honor `session_launch` requests from a paired owner (spawn a new Pi session). Opt-in only. |
 
 ### Environment variables
 
-| Variable              | Purpose                                                                                                                    |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `UNBIEN_RELAY`        | Relay URL override (highest precedence, ahead of the config file). CI / one-off use.                                       |
-| `UNBIEN_DIR`          | Absolute override of the **state** dir itself (no `.pi/un-bien` suffix). The knob for an XDG-style relocation.             |
-| `UNBIEN_HOME`         | Stand-in `$HOME`; state lives at `<UNBIEN_HOME>/.pi/un-bien`. When both are set, `UNBIEN_DIR` wins.                        |
-| `PI_CODING_AGENT_DIR` | The Pi host's settings root (default `~/.pi`); the global config lives at `<PI_CODING_AGENT_DIR>/extensions/un-bien.json`.  |
-| `UNBIEN_DIRECT_CONFIG`| Inline per-cwd config (JSON) instead of a `.pi/un-bien/config.json` file — used by the daemon supervisor.                   |
+| Variable               | Purpose                                                                                                                    |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `UNBIEN_RELAY`         | Relay URL override (highest precedence, ahead of the config file). CI / one-off use.                                       |
+| `UNBIEN_DIR`           | Absolute override of the **state** dir itself (no `.pi/un-bien` suffix). The knob for an XDG-style relocation.             |
+| `UNBIEN_HOME`          | Stand-in `$HOME`; state lives at `<UNBIEN_HOME>/.pi/un-bien`. When both are set, `UNBIEN_DIR` wins.                        |
+| `PI_CODING_AGENT_DIR`  | The Pi host's settings root (default `~/.pi`); the global config lives at `<PI_CODING_AGENT_DIR>/extensions/un-bien.json`. |
+| `UNBIEN_DIRECT_CONFIG` | Inline per-cwd config (JSON) instead of a `.pi/un-bien/config.json` file — used by the daemon supervisor.                  |
 
 `UNBIEN_DIR`/`UNBIEN_HOME` relocate un-bien **state** (sessions, daemon
 registries, cwd locks, paired identity). `PI_CODING_AGENT_DIR` relocates only
@@ -664,7 +664,7 @@ release; report a bug if it recurs).
 on both sides. If you self-host behind a VPN, your phone must also be on the
 VPN (Tailscale on iOS/Android works fine).
 
-**`/unbien config` says the relay is `unset`.** un-bien has no default relay.
+**`/unbien config` says the relay is `unset`.** Un Bien has no default relay.
 Self-host one and set it with `/unbien set-relay <url>` (or `UNBIEN_RELAY`).
 
 **`agent_request` keeps timing out.** It is deprecated because it blocks the

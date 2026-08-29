@@ -1,4 +1,4 @@
-# un-bien — deployment & signing notes
+# Un Bien — deployment & signing notes
 
 What the app needs to be signed/entitled with when you build a shippable target.
 Today the repo builds as SwiftPM executables (`swift run un-bien-mac`) with **no

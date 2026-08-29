@@ -1,4 +1,4 @@
-# un-bien — Relay (Rust)
+# Un Bien — Relay (Rust)
 
 WebSocket server that authenticates connections by `peer_id`, routes App↔Pi
 traffic, authorizes and forwards Pi→Pi envelopes, and keeps Owner-signed

@@ -1,6 +1,6 @@
 # rpc-envelope protocol (inner session channel)
 
-The un-bien ↔ fork wire wraps pi's rpc log inside the mesh/relay/multisession
+The Un Bien ↔ fork wire wraps pi's rpc log inside the mesh/relay/multisession
 envelope. The **outer** envelope (mesh) owns pairing, owner-key auth, session
 routing, lifecycle, remote launch, multi-relay — **out of scope here**. This
 doc specifies the **inner per-session-channel payload** as built in the fork
@@ -11,7 +11,7 @@ wire — there is no stock `ServerMessage`/`ClientMessage` session protocol. The
 one non-envelope frame is the pre-attach `pair_request` (before any plane
 exists), plus the outer relay/transport control (auth, rooms, keepalive).
 
-Governing decisions: *envelope tx is tagged `{rpc | evt | ub}`* · *un-bien = pi's
+Governing decisions: *envelope tx is tagged `{rpc | evt | ub}`* · *Un Bien = pi's
 first-class rpc surface + a thin mesh/display layer on top (never replace pi
 primitives)* · *transcript = native `get_entries`; `session_sync` = panels + ui
 only* · *queue display is app-owned (pi does not deliver `queue_update` to
@@ -32,7 +32,7 @@ interface EnvelopeMessage {
    *    "rpc" — the `.rpc` plane: a byte-faithful pi rpc frame, handled by the rpc
    *            handler on the RECEIVING side (fork → pi/SDK ACTS; app → RENDERS).
    *    "evt" — the `.evt` plane: an ephemeral forwarded pi bus event (fork→app).
-   *    "ub"  — the `.ub` plane: un-bien's OWN protocol (both directions); the
+   *    "ub"  — the `.ub` plane: Un Bien's OWN protocol (both directions); the
    *            inner `.type` (hello / session_sync / session_launch / …) picks
    *            the handler + direction.
    *  Direction is NOT encoded here — the receiver knows its own role, and the
@@ -53,12 +53,12 @@ interface EnvelopeMessage {
    *  plane): plan/subagents/… The fork produces these; they never appear on
    *  `pi --mode rpc` stdout. */
   evt?: Evt;
-  /** un-bien's OWN protocol plane. The inner `.type` discriminates: hello
+  /** Un Bien's OWN protocol plane. The inner `.type` discriminates: hello
    *  (fork→app handshake), session_sync (app→fork), session_sync_end (fork→app),
    *  session_launch (app→fork). Handshake caps/sessionId nest in the `hello`
    *  inner frame, NOT at the envelope top level. */
   ub?: UbFrame;
-  /** OPTIONAL un-bien display sidecar riding ALONGSIDE `rpc` in the same
+  /** OPTIONAL Un Bien display sidecar riding ALONGSIDE `rpc` in the same
    *  envelope (the `rpc` frame stays byte-faithful). Sole tenant: best-effort
    *  LIVE input-Edit diff `hunks` on a `tool_execution_start` frame. OUTPUT is
    *  classified app-side from the persisted result (no `aux.output` on the
@@ -89,7 +89,7 @@ alongside `rpc`.
   `extension_ui_request`). **Both directions.**
 - **`evt`** — pi's in-process bus events, forwarded to the app view plane.
   **fork→app only.**
-- **`ub`** — un-bien's OWN protocol (handshake, reconstruction request, mesh
+- **`ub`** — Un Bien's OWN protocol (handshake, reconstruction request, mesh
   launch). **Both directions**; the inner `.type` + receiver decide who acts.
 
 Direction is recovered from the inner frame's `.type` + receiver role, the same
@@ -150,10 +150,10 @@ compacted/completed/failed`. Observed payloads:
 A subagent surfaces three ways and the reducer renders each once: the `Agent`
 **tool_execution** is the transcript card (`{rpc}`); `subagents:*` **evt** drives
 the live panel; `subagents:record` **entry_appended** is the persist/reconstruct
-copy (picked up by `get_entries`). Panels are **evt-only** — un-bien keeps no
+copy (picked up by `get_entries`). Panels are **evt-only** — Un Bien keeps no
 parallel panel buffer beyond the bridge's `pendingPanels()` replay.
 
-## ub plane — un-bien's own protocol
+## ub plane — Un Bien's own protocol
 
 | inner `.type` | direction | payload | purpose |
 | --- | --- | --- | --- |
@@ -169,7 +169,7 @@ app-custom because it spawns a separate pi process (mesh) — pi's `new_session`
 
 ## aux — display sidecar
 
-`aux` carries un-bien display elaboration ALONGSIDE a byte-faithful `{rpc}` frame
+`aux` carries Un Bien display elaboration ALONGSIDE a byte-faithful `{rpc}` frame
 in the same envelope, so the rpc plane stays pi-faithful while the app still gets
 richer rendering. Sole tenant now: Edit-family `tool_execution_start` frames
 carry `aux.hunks` (pre-computed input diff hunks) next to the raw tool args.
@@ -212,15 +212,15 @@ payload.
 DEFERRED escape hatch (not built): if input-diff replay fidelity is ever wanted,
 the extension could `addEntry` a SIBLING aux-wrapper entry into the ledger
 (keeping the tool entry pi-faithful) that rides the ledger's own persistence and
-`get_entries` delivery — pending a check that pi's ledger accepts an un-bien-typed
+`get_entries` delivery — pending a check that pi's ledger accepts an Un Bien-typed
 entry it ignores and returns.
 
 ## App→fork command taxonomy (who acts)
 
 Rule: if pi provides a command **first-class**, the app issues that pi rpc verb
-on `.rpc` and **pi acts** — no invented extension hop. un-bien's two own concerns
+on `.rpc` and **pi acts** — no invented extension hop. Un Bien's two own concerns
 (app **display** and multi-owner **fan-out**) layer on top of pi's native events,
-never replacing them. A frame rides `.ub` only when it is un-bien's own protocol.
+never replacing them. A frame rides `.ub` only when it is Un Bien's own protocol.
 
 The app encodes a stock-shaped `ClientMessage` and maps it to the wire at ONE
 seam (`RelayConnection.mapToWire`); app call sites stay unchanged. Field renames
@@ -250,7 +250,7 @@ replies (`session_sync_end` / none). `pair_request` is a bare pre-attach frame.
 
 ### Queue = pi's native queue, display = app-owned
 
-un-bien keeps **no** parallel queue buffer. Queuing IS pi's native mechanism: a
+Un Bien keeps **no** parallel queue buffer. Queuing IS pi's native mechanism: a
 `prompt` with `streamingBehavior:"followUp"` queues after the turn,
 `streamingBehavior:"steer"` interrupts mid-turn; the app decides the verb
 (idle→prompt, busy Send→steer, Queue→followUp) and the fork passes it straight to

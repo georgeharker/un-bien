@@ -1,4 +1,4 @@
-# un-bien — Pi Extension (Node + TypeScript)
+# Un Bien — Pi Extension (Node + TypeScript)
 
 Extension for the [Pi coding agent](https://github.com/earendil-works/pi) that
 adds the `/unbien` slash command. It embeds the Pi SDK

@@ -1,4 +1,4 @@
-# un-bien — feature test drive
+# Un Bien — feature test drive
 
 Manual test checklist. Column meaning: **Trigger** = what you do (in the app, or
 from a Pi agent on a paired machine); **Expect** = what the app should show.
