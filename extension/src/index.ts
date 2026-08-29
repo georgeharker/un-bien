@@ -81,7 +81,7 @@ import {
 import { createPanelBridge, type PanelBridge } from "./panel_bridge.js";
 import {
   createRpcEnvelope,
-  ENVELOPE_KIND,
+  isEnvelopeFrame,
   helloEnvelope,
   type EnvelopeMessage,
 } from "./session/rpc_envelope.js";
@@ -2678,12 +2678,7 @@ function _installAutoListener(relay: RelayClient): () => void {
       // get_entries) — routing that through the stock switch dropped it. Use
       // _liveCtx (session_start-fresh), not #55.
       const innerObj = inner as unknown as Record<string, unknown>;
-      if (
-        innerObj.type === ENVELOPE_KIND ||
-        innerObj.rpc !== undefined ||
-        innerObj.evt !== undefined ||
-        innerObj.ub !== undefined
-      ) {
+      if (isEnvelopeFrame(innerObj)) {
         {
           const innerEnv = inner as unknown as EnvelopeMessage;
           if (innerEnv.ub === undefined)

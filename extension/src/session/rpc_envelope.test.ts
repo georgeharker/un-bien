@@ -3,6 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   createRpcEnvelope,
   envelopeForEvent,
+  isEnvelopeFrame,
   RPC_EVENT_NAMES,
 } from "./rpc_envelope.js";
 
@@ -10,6 +11,30 @@ import {
 // (un-bien Tests/Fixtures/rpc-stream/message-turn-clean.jsonl): a message_update
 // wire frame is `{ type, usage, assistantMessageEvent }` with NO cumulative
 // `message` and NO `assistantMessageEvent.partial`.
+
+describe("isEnvelopeFrame — shared inbound guard (both dispatch sites)", () => {
+  it("accepts every plane by REAL wrapper type", () => {
+    expect(isEnvelopeFrame({ type: "rpc", rpc: {} })).toBe(true);
+    expect(isEnvelopeFrame({ type: "evt", evt: {} })).toBe(true);
+    expect(isEnvelopeFrame({ type: "ub", ub: {} })).toBe(true);
+    expect(isEnvelopeFrame({ type: "env" })).toBe(true); // legacy, one transition
+  });
+
+  it("accepts every plane by FIELD-PRESENCE (untyped / racing frame)", () => {
+    expect(isEnvelopeFrame({ rpc: { type: "prompt" } })).toBe(true);
+    expect(isEnvelopeFrame({ evt: { channel: "panel" } })).toBe(true);
+    // The reconnect regression: a ub session_sync as the FIRST post-reconnect
+    // frame must route to the envelope dispatcher, not the dead stock switch.
+    expect(isEnvelopeFrame({ ub: { type: "session_sync" } })).toBe(true);
+  });
+
+  it("rejects stock ClientMessages (no plane, no envelope type)", () => {
+    expect(isEnvelopeFrame({ type: "user_message", text: "hi" })).toBe(false);
+    expect(isEnvelopeFrame({ type: "pair_request" })).toBe(false);
+    expect(isEnvelopeFrame({ type: "ping" })).toBe(false);
+    expect(isEnvelopeFrame({})).toBe(false);
+  });
+});
 
 describe("envelopeForEvent — live plane", () => {
   it("message_update strips the cumulative snapshot and lifts usage", () => {

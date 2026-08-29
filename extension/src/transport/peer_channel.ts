@@ -1,9 +1,9 @@
 import type { ClientMessage, ServerMessage } from "../protocol/types.js";
 import {
-  ENVELOPE_KIND,
   UB_KIND,
   RPC_KIND,
   EVT_KIND,
+  isEnvelopeFrame,
   type EnvelopeMessage,
 } from "../session/rpc_envelope.js";
 import { envLog } from "../session/debug_log.js";
@@ -167,19 +167,11 @@ export class PlainPeerChannel implements PeerChannel {
       `inbound<-${this.remotePeerId.slice(0, 8)}: type=${String(obj.type)} rpc=${obj.rpc !== undefined} evt=${obj.evt !== undefined}`,
     );
 
-    // Mesh-envelope inbound: a real-typed wrapper ("rpc"/"evt"/"ub", or legacy
-    // "env" accepted one transition) OR a bare rpc/evt/ub body routes to the
-    // envelope dispatcher, NOT the stock ClientMessage switch. The dispatcher
-    // branches by plane (rpc vs ub) itself.
-    if (
-      obj.type === ENVELOPE_KIND ||
-      obj.type === UB_KIND ||
-      obj.type === RPC_KIND ||
-      obj.type === EVT_KIND ||
-      obj.rpc !== undefined ||
-      obj.evt !== undefined ||
-      obj.ub !== undefined
-    ) {
+    // Mesh-envelope inbound (any plane, real-typed or legacy "env" or bare
+    // field-presence) routes to the envelope dispatcher, NOT the stock
+    // ClientMessage switch. Shared predicate with index.ts's reconnect guard so
+    // they can't drift; the dispatcher branches by plane (rpc vs ub) itself.
+    if (isEnvelopeFrame(obj)) {
       this.onRpc?.(obj as EnvelopeMessage, this);
       return;
     }

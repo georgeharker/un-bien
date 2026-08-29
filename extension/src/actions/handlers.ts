@@ -1,40 +1,21 @@
 /**
- * Plan/28 Wave B — typed action handlers.
+ * Model registry projection + the narrow SDK/ctx views the rpc command
+ * dispatch (`index.ts`) uses for `set_model` / `get_available_models` /
+ * `compact` / `new_session`.
  *
- * Each handler maps one `ClientMessage` action to a public Pi SDK call,
- * and replies with `action_ok` or `action_error`. Handlers take their
- * dependencies as parameters so the index.ts wiring is one-liner and
- * unit tests can pass fakes without touching global state.
- *
- * `models_list` lives next door because it shares the `ModelRegistry`
- * helper and the same wire vocabulary.
- *
- * SDK API surface used (see plan/28 Wave 0 for the full table):
- *
- *   - `ctx.compact()`            — non-blocking, fires `session_compact`
- *                                  event when done
- *   - `ctx.newSession()`         — only on `ExtensionCommandContext`;
- *                                  resolves with `{cancelled}` flag
- *   - `pi.setModel(model)`       — returns `false` if no auth configured
- *   - `pi.setThinkingLevel(lvl)` — synchronous
- *   - `ctx.getModel()`           — optional, undefined before first turn
- *   - `ModelRegistry.{refresh,getAvailable,find}` — see `registry.ts`
+ * The former stock action handlers (session_compact/new/model_set/thinking_set/
+ * list_models) were retired when those app commands migrated to the rpc plane
+ * (dispatchRpcCommand). Only the shared model types + `wireFromModel` + the
+ * narrow ctx/pi/registry views the rpc handlers still take remain.
  */
 
-import type {
-  ClientMessage,
-  ServerMessage,
-  WireModel,
-  ActionName,
-} from "../protocol/types.js";
-import type { EnvelopeMessage } from "../session/rpc_envelope.js";
+import type { WireModel } from "../protocol/types.js";
 
 /**
  * Structural subset of the SDK's `Model<Api>` interface (defined in
- * `@earendil-works/pi-ai`, which is a transitive dep — not re-exported by
- * `@earendil-works/pi-coding-agent`'s main entry). Capturing just the
- * fields we touch keeps the handler decoupled from the SDK's full Model
- * surface and avoids a direct dep on `pi-ai`.
+ * `@earendil-works/pi-ai`, a transitive dep not re-exported by
+ * `@earendil-works/pi-coding-agent`'s main entry). Capturing just the fields we
+ * touch keeps this decoupled from the SDK's full Model surface.
  */
 export interface SdkModelLike {
   id: string;
@@ -48,27 +29,13 @@ export interface SdkModelLike {
   input?: ("text" | "image")[];
 }
 // `Model` is the alias used throughout the file. Real SDK models structurally
-// satisfy this — `pi.setModel(model)` accepts them because TypeScript
-// validates structurally at the call site (the SDK's full Model has more
-// fields than we declare here, which is fine for an input parameter).
+// satisfy this — `pi.setModel(model)` accepts them because TypeScript validates
+// structurally at the call site.
 type Model<_TApi = unknown> = SdkModelLike;
 
 /**
- * Minimal channel surface needed to reply. Mirrors `PlainPeerChannel`'s
- * `.send` signature; tests pass an array-backed fake.
- */
-export interface ActionReplySender {
-  send(msg: ServerMessage): void;
-  /** Envelope sink. When present, `models_list` rides the mesh envelope
-   *  (`{ rpc }`, docs/rpc-envelope.md) instead of the stock frame. Optional so
-   *  legacy/test senders without an envelope surface still fall back to send. */
-  sendEnvelope?(env: EnvelopeMessage): void;
-}
-
-/**
- * Narrow shape of the `ExtensionAPI` surface action handlers actually
- * call. Lets the test layer stub just these without rebuilding the full
- * SDK type (which has 30+ methods we don't use here).
+ * Narrow shape of the `ExtensionAPI` surface the rpc dispatch calls (setModel /
+ * setThinkingLevel). Lets the test layer stub just these.
  */
 export interface ActionPi {
   setModel(model: Model<any>): Promise<boolean>;
@@ -78,12 +45,8 @@ export interface ActionPi {
 /**
  * Narrow shape of the per-call context. Drawn from the union of
  * `ExtensionContextActions` (compact, getModel) and
- * `ExtensionCommandContextActions` (newSession), since index.ts caches
- * the most-recent ctx and that's typically the command one.
- *
- * All fields are optional so a missing method (e.g. when only a plain
- * `ExtensionContext` was seen) becomes a typed `action_error` instead of
- * a runtime TypeError.
+ * `ExtensionCommandContextActions` (newSession). All fields optional so a
+ * missing method becomes a typed error instead of a runtime TypeError.
  */
 export interface ActionCtx {
   compact?: (options?: Record<string, unknown>) => void;
@@ -106,8 +69,8 @@ export interface ActionCtx {
 }
 
 /**
- * Minimal shape of the registry surface. Maps 1:1 onto `ModelRegistry`
- * but lets tests fake catalogs without instantiating the real one.
+ * Minimal shape of the registry surface. Maps 1:1 onto `ModelRegistry` but lets
+ * tests fake catalogs without instantiating the real one.
  */
 export interface ActionModelRegistry {
   refresh(): void;
@@ -115,8 +78,8 @@ export interface ActionModelRegistry {
   find(provider: string, modelId: string): Model<any> | undefined;
 }
 
-/** Project a SDK `Model<Api>` onto the wire schema. Shared by list_models
- *  and the `current` echo, so both stay in lockstep. */
+/** Project a SDK `Model<Api>` onto the wire schema. Shared by the rpc
+ *  `get_available_models` / `set_model` dispatch so both stay in lockstep. */
 export function wireFromModel(model: Model<any>): WireModel {
   return {
     id: model.id,
@@ -129,214 +92,4 @@ export function wireFromModel(model: Model<any>): WireModel {
     // a fake/partial model in tests → treated as text-only.
     vision: model.input?.includes("image") ?? false,
   };
-}
-
-// ── ack helpers ────────────────────────────────────────────────────────────
-
-// action_ok/action_error ride the mesh envelope (`{ rpc }`) — the app consumes
-// them in its envelope block, no stock ServerMessage receive path. Fall back to
-// the stock frame only when no envelope sink is wired (legacy/test senders).
-function emitAck(sender: ActionReplySender, rpc: ServerMessage): void {
-  if (sender.sendEnvelope) {
-    sender.sendEnvelope({ rpc });
-  } else {
-    sender.send(rpc);
-  }
-}
-
-function ok(
-  sender: ActionReplySender,
-  msg: { id: string },
-  action: ActionName,
-): void {
-  emitAck(sender, { type: "action_ok", in_reply_to: msg.id, action });
-}
-
-function fail(
-  sender: ActionReplySender,
-  msg: { id: string },
-  action: ActionName,
-  err: unknown,
-): void {
-  const error = err instanceof Error ? err.message : String(err);
-  emitAck(sender, { type: "action_error", in_reply_to: msg.id, action, error });
-}
-
-/** Run a synchronous action with uniform success/failure replies. */
-function runSync(
-  sender: ActionReplySender,
-  msg: { id: string },
-  action: ActionName,
-  body: () => void,
-): void {
-  try {
-    body();
-    ok(sender, msg, action);
-  } catch (e) {
-    fail(sender, msg, action, e);
-  }
-}
-
-/** Run an async action with uniform success/failure replies. */
-async function runAsync(
-  sender: ActionReplySender,
-  msg: { id: string },
-  action: ActionName,
-  body: () => Promise<void>,
-): Promise<boolean> {
-  try {
-    await body();
-    ok(sender, msg, action);
-    return true;
-  } catch (e) {
-    fail(sender, msg, action, e);
-    return false;
-  }
-}
-
-// ── individual handlers ───────────────────────────────────────────────────
-
-type SessionCompactMsg = Extract<ClientMessage, { type: "session_compact" }>;
-type SessionNewMsg = Extract<ClientMessage, { type: "session_new" }>;
-type ModelSetMsg = Extract<ClientMessage, { type: "model_set" }>;
-type ThinkingSetMsg = Extract<ClientMessage, { type: "thinking_set" }>;
-type ListModelsMsg = Extract<ClientMessage, { type: "list_models" }>;
-
-export function handleSessionCompact(
-  ctx: ActionCtx | null,
-  sender: ActionReplySender,
-  msg: SessionCompactMsg,
-): void {
-  runSync(sender, msg, "session_compact", () => {
-    if (!ctx?.compact)
-      throw new Error("compact unavailable (no active session ctx)");
-    // Force the summary to English regardless of the conversation language —
-    // the summary is surfaced to the app via the `compaction` message, which
-    // is an English-only surface. `customInstructions` is appended to the SDK's
-    // compaction prompt (best-effort: the model writes the summary).
-    ctx.compact({
-      customInstructions:
-        "Always write the compaction summary in English, even if the conversation is in another language.",
-    });
-  });
-}
-
-export async function handleSessionNew(
-  ctx: ActionCtx | null,
-  sender: ActionReplySender,
-  msg: SessionNewMsg,
-  onReplaced?: (freshCtx: ActionCtx) => void,
-): Promise<boolean> {
-  // Returns true only when a fresh session was actually created. index.ts
-  // keys the Pi-side reset (clear _messageBuffer, restamp _sessionStartedAt,
-  // fan out an empty session_history) off this signal — a `cancelled`/errored
-  // new-session must NOT reset, so we return runAsync's success boolean.
-  return runAsync(sender, msg, "session_new", async () => {
-    if (!ctx?.newSession)
-      throw new Error("newSession unavailable (no command ctx yet)");
-    // newSession marks the caller's captured ctx (index.ts's `_lastCtx`) STALE
-    // — reusing it later throws "stale after session replacement" (the
-    // compact-after-New-session crash). `withSession` hands back a fresh,
-    // command-capable ctx bound to the new session; forward it via onReplaced
-    // so the caller re-captures and keeps later actions off the stale ctx.
-    const result = await ctx.newSession({
-      withSession: async (freshCtx) => {
-        onReplaced?.(freshCtx);
-      },
-    });
-    // `cancelled: true` happens when the SDK's hook chain vetoes the new
-    // session (e.g. an extension's `session_before_switch` returned a
-    // refusal). Surface as a typed error rather than silent success.
-    if (result.cancelled) throw new Error("cancelled by extension hook");
-  });
-}
-
-export function handleThinkingSet(
-  pi: ActionPi,
-  sender: ActionReplySender,
-  msg: ThinkingSetMsg,
-): void {
-  runSync(sender, msg, "thinking_set", () => {
-    pi.setThinkingLevel(msg.level);
-  });
-}
-
-export async function handleModelSet(
-  pi: ActionPi,
-  ctx: ActionCtx | null,
-  reg: ActionModelRegistry,
-  sender: ActionReplySender,
-  msg: ModelSetMsg,
-  onPersist?: (provider: string, modelId: string) => void,
-): Promise<void> {
-  await runAsync(sender, msg, "model_set", async () => {
-    // Prefer Pi's LIVE session registry when available so the app sees models
-    // registered dynamically by extensions via `pi.registerProvider(...)`.
-    // Fall back to un-bien's own disk-backed registry when no ctx exists.
-    const liveReg = ctx?.modelRegistry ?? reg;
-    // Refresh first so a model just-added via `/login` is visible.
-    liveReg.refresh();
-    const model = liveReg.find(msg.provider, msg.model_id);
-    if (!model) {
-      throw new Error(
-        `model "${msg.provider}/${msg.model_id}" not in registry`,
-      );
-    }
-    const success = await pi.setModel(model);
-    if (!success) throw new Error("no auth configured for this model");
-    // `pi.setModel` only sets the LIVE model — it does NOT persist. Without
-    // this, a model picked from the app reverts to the saved default on the
-    // next Pi/daemon restart (the TUI persists because AgentSession.setModel
-    // writes the default; this path doesn't). `onPersist` writes the new
-    // default so the app's choice survives. Best-effort — the caller's writer
-    // must not throw, so a failed settings write never fails the model change.
-    onPersist?.(model.provider, model.id);
-  });
-}
-
-export function handleListModels(
-  ctx: ActionCtx | null,
-  reg: ActionModelRegistry,
-  sender: ActionReplySender,
-  msg: ListModelsMsg,
-): void {
-  // refresh() can throw if `models.json` is malformed — wrap in try so the
-  // app gets an explicit error reply instead of a silent drop.
-  try {
-    // Prefer Pi's LIVE session registry when available so the app sees models
-    // registered dynamically by extensions via `pi.registerProvider(...)`.
-    // Fall back to un-bien's own disk-backed registry when no ctx exists.
-    const liveReg = ctx?.modelRegistry ?? reg;
-    liveReg.refresh();
-    const models = liveReg.getAvailable().map(wireFromModel);
-    const current = ctx?.getModel?.();
-    const rpc = {
-      type: "models_list",
-      in_reply_to: msg.id,
-      models,
-      current: current ? wireFromModel(current) : undefined,
-    };
-    // models_list rides the mesh envelope (`{ rpc }`) — the app consumes it in
-    // its envelope block, no stock ServerMessage receive path. Fall back to the
-    // stock frame only when no envelope sink is wired (legacy/test senders).
-    if (sender.sendEnvelope) {
-      sender.sendEnvelope({ rpc });
-    } else {
-      sender.send(rpc as ServerMessage);
-    }
-  } catch (e) {
-    // The malformed-models.json error also rides the envelope (`{ rpc }`) — the
-    // app surfaces it as a transcript notice. Stock fallback for legacy senders.
-    const rpc: ServerMessage = {
-      type: "error",
-      in_reply_to: msg.id,
-      code: "internal_error",
-      message: e instanceof Error ? e.message : String(e),
-    };
-    if (sender.sendEnvelope) {
-      sender.sendEnvelope({ rpc });
-    } else {
-      sender.send(rpc);
-    }
-  }
 }

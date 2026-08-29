@@ -91,6 +91,26 @@ export const UB_KIND = "ub";
 /** pi-owned plane wrapper markers: the rpc spine + the evt view plane. */
 export const RPC_KIND = "rpc";
 export const EVT_KIND = "evt";
+
+/**
+ * True if a decoded inbound object is a mesh-envelope frame (any plane) rather
+ * than a stock ClientMessage — by REAL wrapper type ("rpc"/"evt"/"ub", or legacy
+ * "env" accepted one transition) OR by payload FIELD-PRESENCE. The single source
+ * of truth for both inbound guards (PlainPeerChannel._onLine + index.ts's
+ * reconnect attach path) so they cannot drift — kept intentionally permissive so
+ * it routes correctly regardless of which plane's frame arrives first.
+ */
+export function isEnvelopeFrame(obj: Record<string, unknown>): boolean {
+  return (
+    obj.type === RPC_KIND ||
+    obj.type === EVT_KIND ||
+    obj.type === UB_KIND ||
+    obj.type === ENVELOPE_KIND ||
+    obj.rpc !== undefined ||
+    obj.evt !== undefined ||
+    obj.ub !== undefined
+  );
+}
 /** un-bien-plane INNER frame type for the capability handshake. */
 export const HELLO_KIND = "hello";
 
