@@ -96,10 +96,6 @@ import { registerAgentTools } from "./session/tools.js";
 import { formatPeerInventory } from "./session/peer_inventory.js";
 import { MeshNode } from "./session/mesh_node.js";
 import {
-  handleSessionCompact,
-  handleModelSet,
-  handleThinkingSet,
-  handleListModels,
   wireFromModel,
   type ActionCtx,
   type ActionPi,
@@ -114,13 +110,13 @@ import {
 } from "./session/global_config.js";
 import { acquireCwdLock, type AcquiredLock } from "./session/cwd_lock.js";
 import { addDaemon, listDaemons, removeDaemon } from "./daemon/registry.js";
+import { EXIT_DAEMON_FRESH_SESSION } from "./daemon/rpc_child.js";
 import {
   callSupervisor,
   supervisorOnline,
   SupervisorOfflineError,
 } from "./daemon/client.js";
 import type { ControlRequest, DaemonInfo } from "./daemon/control_protocol.js";
-import { EXIT_DAEMON_FRESH_SESSION } from "./daemon/rpc_child.js";
 import {
   installService,
   uninstallService,
@@ -1328,15 +1324,15 @@ export function _hasActivePeerForTest(appPeerIdStd: string): boolean {
 // ── Multi-channel helpers ─────────────────────────────────────────────────────
 
 /**
- * Sends `msg` to every currently-attached owner channel. The default
- * dispatch for application-level events that are part of "the agent
- * session is doing X" (agent_chunk, tool_request, tool_result, agent_done,
- * user_input mirror, room_meta_update, etc.) — all paired devices see the
- * same stream.
+ * Sends a raw stock `msg` to every currently-attached owner channel. The stock
+ * transcript drive-stream that once rode this (agent_chunk/tool_request/
+ * tool_result/agent_done/user_input mirror) is retired — the app is
+ * envelope-only. It survives ONLY as the non-transcript fallback inside
+ * `_uiBroadcast`/`_panelBroadcast` for any message that isn't the
+ * extension_ui/panel frame those bridges wrap as `{rpc}`/`{evt}`.
  *
- * Per-request responses (e.g. `session_history` answering a specific
- * `session_sync` query, or `pair_ok` answering `pair_request`) must NOT
- * use this — they go to the sender channel directly.
+ * Per-request responses (e.g. `pair_ok` answering `pair_request`) must NOT use
+ * this — they go to the sender channel directly.
  */
 function _broadcastToActive(msg: ServerMessage): void {
   for (const ch of _activePeers.values()) {
@@ -1793,9 +1789,35 @@ function _routeRpcCommandFrom(
     },
     newSession: async () => {
       const actionCtx = (_lastEventCtx ?? _lastCtx) as ActionCtx | null;
-      if (!actionCtx?.newSession)
+      const daemonMode = process.env["UNBIEN_DAEMON"] === "1";
+      // Daemon fresh-restart (ported from the retired stock session_new): with no
+      // command ctx — or when the drive below fails on a STALE ctx — the supervisor
+      // relaunches with a genuinely fresh session via process.exit. Ack first (the
+      // response goes out before the 100ms-deferred exit); interactive mode has no
+      // supervisor so it still surfaces the error.
+      const restartFresh = () => {
+        _resetSessionForNew();
+        setTimeout(() => process.exit(EXIT_DAEMON_FRESH_SESSION), 100);
+      };
+      if (!actionCtx?.newSession) {
+        if (daemonMode) {
+          restartFresh();
+          return { cancelled: false };
+        }
         throw new Error("new_session unavailable (no command ctx)");
-      await actionCtx.newSession({ withSession: async () => {} });
+      }
+      try {
+        await actionCtx.newSession({ withSession: async () => {} });
+      } catch (err) {
+        if (daemonMode) {
+          restartFresh();
+          return { cancelled: false };
+        }
+        throw err;
+      }
+      // Restamp the session clock (parity with the retired stock session_new):
+      // session_sync_end carries it so the app can detect the pi restart.
+      _resetSessionForNew();
       return { cancelled: false };
     },
     clearQueue: async () => {
@@ -5540,23 +5562,11 @@ function _scheduleMeshMessageDrain(): void {
 }
 
 function _deliverMeshMessageToAgent(env: MeshEnvelope): void {
-  const bodyText =
-    typeof env.body === "string" ? env.body : JSON.stringify(env.body);
-  const toolCallId = `mesh_${env.id}`;
-  _broadcastToActive({
-    type: "tool_request",
-    tool_call_id: toolCallId,
-    tool: "agent-network",
-    args: env.re
-      ? { from: env.from, re: env.re, message: bodyText }
-      : { from: env.from, message: bodyText },
-  });
-  _broadcastToActive({
-    type: "tool_result",
-    tool_call_id: toolCallId,
-    result: { from: env.from, message: bodyText },
-  });
-
+  // The inbound mesh message is surfaced to the app via the agent message it is
+  // delivered as (pi.sendMessage with display:true in _scheduleMeshMessageDrain
+  // -> message_start/message_end forwarded by createRpcEnvelope as `{rpc}`), NOT
+  // via a bespoke stock tool_request/tool_result card. Those stock transcript
+  // frames were the last of the retired drive-stream producer.
   if (!_pi) {
     console.error(
       `[un-bien] agent-network message from "${env.from}": agent session not bound yet — message dropped`,
@@ -5793,17 +5803,6 @@ function _abortCurrentTurn(
   return false;
 }
 
-// action_ok/action_error acks ride the mesh envelope (`{ rpc }`) — the app
-// consumes them in its envelope block. Fall back to the stock frame only when no
-// envelope sink is wired (legacy/test senders), mirroring the models_list path.
-function _emitAck(sender: PlainPeerChannel, rpc: ServerMessage): void {
-  if (sender.sendEnvelope) {
-    sender.sendEnvelope({ rpc });
-  } else {
-    sender.send(rpc);
-  }
-}
-
 export function _routeClientMessageFrom(
   sender: PlainPeerChannel,
   msg: ClientMessage,
@@ -5836,172 +5835,18 @@ export function _routeClientMessageFrom(
   }
   // extension_ui_response is envelope-only now — handled in _routeRpcCommandFrom.
   if (!_pi) return;
+  // Pre-attach / transport-control only. Every stock ACTION case (model_set,
+  // thinking_set, list_models, session_compact, session_new → rpc plane;
+  // session_launch → un plane; approve_tool → removed feature) is MIGRATED off
+  // this switch. ping + pair_request stay: they must work before/independent of
+  // an attached rpc peer.
   switch (msg.type) {
-    case "approve_tool":
-      // Approval gate was removed (plano 10.2 revisado). Type kept in
-      // ClientMessage for forward-compat with a future permissions model;
-      // ignore silently if the app still sends it from an older build.
-      break;
     case "ping":
       sender.send({ type: "pong", in_reply_to: msg.id });
       break;
     case "pair_request":
       // Already paired — ignore subsequent pair_request to maintain idempotency.
       // (Token is already consumed and peer is in peers.json.)
-      break;
-    // Plan/28 — Typed app actions. Each delegates to the pure handler in
-    // `actions/handlers.ts`; the only thing this layer does is unify the
-    // dep injection (sender, _pi, _lastCtx, registry). `_lastCtx` may be
-    // null or a narrower Pick than the handlers want, so we cast to
-    // `ActionCtx` — fields that aren't present at runtime are surfaced
-    // as `action_error` by the handlers, not as a TypeError.
-    case "session_compact":
-      // Route through _lastEventCtx (refreshed on every session_start), NOT the
-      // capturable-stale _lastCtx — compact must never hit a ctx left stale by
-      // a prior New session. compact() is a base-ctx method, so the
-      // session_start ctx suffices. Fall back to _lastCtx defensively if no
-      // session_start has landed yet (keeps the pre-replacement happy path).
-      handleSessionCompact(
-        (_lastEventCtx ?? _lastCtx) as ActionCtx | null,
-        sender,
-        msg,
-      );
-      break;
-    case "session_launch": {
-      // Remote launch: owner-key gate (sender is an authenticated owner) +
-      // config opt-in. Advertised via the `remote_launch` capability only when
-      // enabled, so a compliant app won't even show the affordance otherwise.
-      const cwd =
-        typeof msg.cwd === "string" && msg.cwd.length > 0
-          ? msg.cwd
-          : process.cwd();
-      if (!effectiveAllowRemoteLaunch(loadLocalConfig(cwd))) {
-        _emitAck(sender, {
-          type: "action_error",
-          in_reply_to: msg.id,
-          action: "session_launch",
-          error:
-            "remote launch is disabled on this machine (set allow_remote_launch)",
-        });
-        break;
-      }
-      const launchError = _launchSession(msg.mode, cwd, msg.name);
-      _emitAck(
-        sender,
-        launchError
-          ? {
-              type: "action_error",
-              in_reply_to: msg.id,
-              action: "session_launch",
-              error: launchError,
-            }
-          : {
-              type: "action_ok",
-              in_reply_to: msg.id,
-              action: "session_launch",
-            },
-      );
-      break;
-    }
-    case "session_new": {
-      const actionCtx = _lastCtx as ActionCtx | null;
-      const daemonMode = process.env["UNBIEN_DAEMON"] === "1";
-      // Fresh Pi session via the supervisor: ack, clear un-bien's mirror, then
-      // exit with the private code so the supervisor relaunches without
-      // --continue → a genuinely fresh session. Used when there's NO command ctx
-      // AND as recovery when the captured _lastCtx has gone STALE after an
-      // external session replacement (compact, a /new typed in the TUI,
-      // reload/resume). Reusing a stale ctx throws "stale after session
-      // replacement", which previously surfaced to the app as a hard failure
-      // ("session_new failed") and left New Context wedged.
-      const restartFresh = () => {
-        _emitAck(sender, {
-          type: "action_ok",
-          in_reply_to: msg.id,
-          action: "session_new",
-        });
-        _resetSessionForNew(msg.id);
-        setTimeout(() => process.exit(EXIT_DAEMON_FRESH_SESSION), 100);
-      };
-      if (!actionCtx?.newSession) {
-        if (daemonMode) {
-          restartFresh();
-          break;
-        }
-        _emitAck(sender, {
-          type: "action_error",
-          in_reply_to: msg.id,
-          action: "session_new",
-          error: "newSession unavailable (no command ctx yet)",
-        });
-        break;
-      }
-      // Fast path: drive newSession in-process on the (hopefully fresh) command
-      // ctx, re-capturing the replacement ctx via withSession so later command
-      // ops target the current session. If the ctx turns out stale, recover by
-      // restarting fresh (daemon) instead of failing the action.
-      // Capture the method past the guard above: TS drops the `!actionCtx?.newSession`
-      // narrowing inside the async closure, so bind it to a local const first.
-      const newSession = actionCtx.newSession;
-      void (async () => {
-        try {
-          const result = await newSession({
-            withSession: async (freshCtx) => {
-              _lastCtx = freshCtx as unknown as typeof _lastCtx;
-            },
-          });
-          if (result?.cancelled) {
-            _emitAck(sender, {
-              type: "action_error",
-              in_reply_to: msg.id,
-              action: "session_new",
-              error: "cancelled by extension hook",
-            });
-            return;
-          }
-          _emitAck(sender, {
-            type: "action_ok",
-            in_reply_to: msg.id,
-            action: "session_new",
-          });
-          _resetSessionForNew(msg.id);
-        } catch (e) {
-          const emsg = String((e as Error)?.message ?? e ?? "");
-          const stale = /stale|session replacement or reload/i.test(emsg);
-          if (daemonMode && stale) {
-            restartFresh();
-            return;
-          }
-          _emitAck(sender, {
-            type: "action_error",
-            in_reply_to: msg.id,
-            action: "session_new",
-            error: emsg || "session_new failed",
-          });
-        }
-      })();
-      break;
-    }
-    case "model_set":
-      void handleModelSet(
-        _pi,
-        (_lastEventCtx ?? _lastCtx) as ActionCtx | null,
-        ensureModelRegistry((_lastEventCtx ?? _lastCtx) as ActionCtx | null),
-        sender,
-        msg,
-        _persistModelDefault,
-      );
-      break;
-    case "thinking_set":
-      handleThinkingSet(_pi, sender, msg);
-      break;
-    case "list_models":
-      handleListModels(
-        (_lastEventCtx ?? _lastCtx) as ActionCtx | null,
-        ensureModelRegistry((_lastEventCtx ?? _lastCtx) as ActionCtx | null),
-        sender,
-        msg,
-      );
       break;
   }
 }
@@ -6038,7 +5883,7 @@ export function routeClientMessage(
  * envelope `session_sync` reconstructs from a clean slate. The app drops the
  * stale conversation off the new-session `hello` (changed `sessionId`).
  */
-function _resetSessionForNew(_inReplyTo: string): void {
+function _resetSessionForNew(): void {
   // Restamp the session clock so the app detects the pi restart (session_sync_end
   // carries it). The transcript resets naturally: the app re-fetches via
   // get_entries against the fresh session and drops the old one on the new hello.

@@ -2592,7 +2592,6 @@ describe("multi-channel broadcast (W2D)", () => {
       .map(decodeSentCt);
     expect(sent.some((d) => d.inner.type === "error")).toBe(false);
   });
-
 });
 
 // ── /unbien set-relay + /unbien config ──────────────────────────────────
