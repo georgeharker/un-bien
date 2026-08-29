@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { roomIdForCwd, roomIdFor } from "./rooms.js";
+import { roomIdForCwd, roomIdFor, roomIdForControl } from "./rooms.js";
 import { defaultAgentName } from "./session/local_config.js";
 
 describe("roomIdForCwd", () => {
@@ -81,5 +81,28 @@ describe("roomIdFor (plan/41 — App↔Pi room per (cwd, name))", () => {
 
   test("scoped id is 12-char base64url", () => {
     expect(roomIdFor(cwd, "reviewer")).toMatch(/^[A-Za-z0-9_-]{12}$/);
+  });
+});
+
+describe("roomIdForControl", () => {
+  const epk = "5lF-komk2FY0abcdefghijklmnopqrstuvwxyz012"; // base64url-ish
+
+  test("deterministic for the same epk", () => {
+    expect(roomIdForControl(epk)).toBe(roomIdForControl(epk));
+  });
+
+  test("different epks produce different ids", () => {
+    expect(roomIdForControl(epk)).not.toBe(roomIdForControl(epk + "z"));
+  });
+
+  test("id is 12-char base64url", () => {
+    expect(roomIdForControl(epk)).toMatch(/^[A-Za-z0-9_-]{12}$/);
+  });
+
+  test("NUL-sentinel: control room can't collide with a cwd/name room", () => {
+    // Even if some cwd/name hashed identical bytes, the "\0control\0" prefix
+    // means no roomIdFor* input reproduces this id (paths/names can't hold NUL).
+    expect(roomIdForControl(epk)).not.toBe(roomIdForCwd(epk));
+    expect(roomIdForControl(epk)).not.toBe(roomIdFor("/tmp/x", epk));
   });
 });

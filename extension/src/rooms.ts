@@ -75,3 +75,26 @@ export function roomIdFor(cwd: string, name?: string): string {
     .digest("base64url")
     .slice(0, 12);
 }
+
+/**
+ * THE machine-level "control" room id — a sibling of `roomIdFor(cwd,name)` keyed
+ * on the machine's long-term ed25519 public key (`epk`) instead of a session or
+ * cwd. The idle-machine presence daemon (regime 2) joins THIS room so a paired
+ * app can reach a machine that currently has NO live pi session.
+ *
+ * The `\0control\0` NUL-sentinel prefix keeps it from ever colliding with a
+ * cwd/name/session room: a path can't contain NUL and a sanitized name strips
+ * it, so no `roomIdFor*` input can reproduce this string. That matters because
+ * two peers deriving the SAME room id trip the relay's `PeerAlreadyOpen` reject.
+ *
+ * `epk` is the base64url encoding of the 32-byte public key — the exact form the
+ * app receives at pairing (see `qr.ts`) — so both sides derive the same id.
+ * Stable across restarts. 12-char `base64url(sha256("\0control\0" + epk))`.
+ */
+export function roomIdForControl(epk: string): string {
+  const sep = String.fromCharCode(0);
+  return createHash("sha256")
+    .update(sep + "control" + sep + epk)
+    .digest("base64url")
+    .slice(0, 12);
+}
