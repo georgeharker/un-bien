@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { _enrichToolArgs } from "./index.js";
+import { _enrichToolArgs } from "./enrich_tool_args.js";
 
 type DiffLine =
   | { kind: "context"; oldLine?: number; newLine?: number; text: string }
