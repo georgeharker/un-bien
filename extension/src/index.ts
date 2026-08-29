@@ -37,7 +37,7 @@ import type {
   ExtensionContext,
   ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
-import { SettingsManager, convertToPng } from "@earendil-works/pi-coding-agent";
+import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { Ed25519Keypair } from "./pairing/crypto.js";
 import {
   buildQRUri,
@@ -140,7 +140,6 @@ import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   chmodSync,
-  mkdtempSync,
   mkdirSync,
   copyFileSync,
   existsSync,
@@ -162,6 +161,16 @@ import {
 } from "./config.js";
 import { _expandTilde, _launchSession } from "./launch.js";
 import { _enrichToolArgs } from "./enrich_tool_args.js";
+import {
+  IMAGE_PREVIEW_MIME,
+  _imageCacheRootDir,
+  _imageExtension,
+  _safeFilenameToken,
+  _safePreviewPath,
+  _cleanupPreviewFile,
+  _renderablePngPathFromImage,
+  _decodeImagePayload,
+} from "./image_codec.js";
 import { Box, Container, Image, Text } from "@earendil-works/pi-tui";
 
 // ── State machine ─────────────────────────────────────────────────────────────
@@ -214,7 +223,6 @@ const _activePeers = new Map<string, PlainPeerChannel>();
 let _peerShort = ""; // shortid of the most recently attached peer (UX hint only)
 
 const UNBIEN_RECEIVED_IMAGE_TYPE = "un-bien:received-image";
-const RECEIVED_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 
 type ReceivedImageDetails = {
   messageId: string;
@@ -228,38 +236,8 @@ type ReceivedImageDetails = {
   reason?: string;
 };
 
-const IMAGE_PREVIEW_MIME = "image/png";
-const IMAGE_CACHE_PREFIX = "pi-app-";
 type ReceivedImagePreviewDelivery = "immediate" | "defer";
-let _imageCacheDir: string | undefined;
 const _pendingReceivedImagePreviews: ReceivedImageDetails[] = [];
-
-function _isBase64Char(code: number): boolean {
-  return (
-    (code >= 48 && code <= 57) || // 0-9
-    (code >= 65 && code <= 90) || // A-Z
-    (code >= 97 && code <= 122) || // a-z
-    code === 43 || // +
-    code === 47
-  ); // /
-}
-
-function _isStrictBase64(data: string): boolean {
-  if (data.length === 0 || data.length % 4 !== 0) return false;
-  if (data.startsWith("=")) return false;
-
-  const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
-  for (let i = 0; i < data.length; i += 1) {
-    const code = data.charCodeAt(i);
-    if (i >= data.length - padding) {
-      if (code !== 61) return false;
-      continue;
-    }
-    if (!_isBase64Char(code)) return false;
-  }
-
-  return true;
-}
 
 let _myRoomId: string | null = null; // this Pi's room id (derived from the session id)
 
@@ -392,133 +370,6 @@ function _publishWorking(working: boolean): void {
       meta: { working },
     });
   }
-}
-
-function _imageCacheRootDir(): string {
-  if (_imageCacheDir) {
-    try {
-      mkdirSync(_imageCacheDir, { recursive: true, mode: 0o700 });
-    } catch {}
-    try {
-      chmodSync(_imageCacheDir, 0o700);
-    } catch {
-      /* best-effort permission hardening */
-    }
-    return _imageCacheDir;
-  }
-  const dir = mkdtempSync(join(tmpdir(), IMAGE_CACHE_PREFIX));
-  try {
-    chmodSync(dir, 0o700);
-  } catch {
-    /* best-effort permission hardening */
-  }
-  _imageCacheDir = dir;
-  return dir;
-}
-
-function _imageExtension(mime: string): string | undefined {
-  if (mime === "image/jpeg") return "jpg";
-  if (mime === "image/png") return "png";
-  if (mime === "image/webp") return "webp";
-  if (mime === "image/gif") return "gif";
-  return undefined;
-}
-
-function _safeFilenameToken(value: string): string {
-  return (
-    value
-      .trim()
-      .replace(/[^A-Za-z0-9._-]+/g, "-")
-      .replace(/-+/g, "-")
-      .replace(/^-+|-+$/g, "") || "message"
-  );
-}
-
-function _safePreviewPath(
-  dir: string,
-  messageId: string,
-  index: number,
-): string {
-  return join(dir, `${_safeFilenameToken(messageId)}-${index}.preview.png`);
-}
-
-function _cleanupPreviewFile(previewPath: string): void {
-  try {
-    if (existsSync(previewPath)) unlinkSync(previewPath);
-  } catch {
-    // best effort
-  }
-}
-
-async function _renderablePngPathFromImage(
-  imageData: string,
-  mime: string,
-  previewPath: string,
-): Promise<string | undefined> {
-  if (mime === IMAGE_PREVIEW_MIME) return undefined;
-
-  try {
-    const converted = await convertToPng(imageData, mime);
-    if (
-      !converted ||
-      converted.mimeType !== IMAGE_PREVIEW_MIME ||
-      !converted.data
-    ) {
-      return undefined;
-    }
-
-    const previewBytes = Buffer.from(converted.data, "base64");
-    if (
-      previewBytes.length === 0 ||
-      previewBytes.length > RECEIVED_IMAGE_MAX_BYTES
-    ) {
-      return undefined;
-    }
-
-    try {
-      writeFileSync(previewPath, previewBytes, { mode: 0o600 });
-      try {
-        chmodSync(previewPath, 0o600);
-      } catch {
-        /* best-effort permission hardening */
-      }
-      return previewPath;
-    } catch {
-      _cleanupPreviewFile(previewPath);
-    }
-  } catch {
-    _cleanupPreviewFile(previewPath);
-  }
-
-  return undefined;
-}
-
-function _decodeImagePayload(
-  data: string,
-  mime: string,
-): { ok: true; decoded: Buffer; size: number } | { ok: false; reason: string } {
-  if (!_imageExtension(mime))
-    return { ok: false, reason: `unsupported mime: ${mime}` };
-  if (data.startsWith("data:"))
-    return { ok: false, reason: "data URI payloads are not supported" };
-  if (!_isStrictBase64(data))
-    return { ok: false, reason: "invalid base64 payload" };
-
-  const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
-  const estimate = (data.length / 4) * 3 - padding;
-  if (estimate > RECEIVED_IMAGE_MAX_BYTES) {
-    return { ok: false, reason: `image too large (${estimate} bytes)` };
-  }
-
-  const decoded = Buffer.from(data, "base64");
-  if (decoded.length === 0 || decoded.length > RECEIVED_IMAGE_MAX_BYTES) {
-    return {
-      ok: false,
-      reason: `invalid decoded image size (${decoded.length} bytes)`,
-    };
-  }
-
-  return { ok: true, decoded, size: decoded.length };
 }
 
 function _sendReceivedImagePreviewNow(details: ReceivedImageDetails): void {
