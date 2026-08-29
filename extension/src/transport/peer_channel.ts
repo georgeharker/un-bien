@@ -1,7 +1,9 @@
 import type { ClientMessage, ServerMessage } from "../protocol/types.js";
 import {
   ENVELOPE_KIND,
-  UN_KIND,
+  UB_KIND,
+  RPC_KIND,
+  EVT_KIND,
   type EnvelopeMessage,
 } from "../session/rpc_envelope.js";
 import { envLog } from "../session/debug_log.js";
@@ -105,9 +107,16 @@ export class PlainPeerChannel implements PeerChannel {
     // Stamp the wrapper kind + timestamp at the single outbound choke.
     const wire: EnvelopeMessage = {
       ...env,
-      // Namespace: un-bien plane -> "un"; rpc/evt still stamp legacy "env" this
-      // wave (the explicit rpc/evt split lands later).
-      type: env.type ?? (env.un !== undefined ? UN_KIND : ENVELOPE_KIND),
+      // Namespace stamp: each plane stamps its REAL type — ub-plane -> "ub",
+      // evt -> "evt", rpc (the spine / default) -> "rpc". Legacy "env" is no
+      // longer stamped (still accepted on read one transition).
+      type:
+        env.type ??
+        (env.ub !== undefined
+          ? UB_KIND
+          : env.evt !== undefined
+            ? EVT_KIND
+            : RPC_KIND),
       ts: env.ts ?? Date.now(),
     };
     const ct = Buffer.from(JSON.stringify(wire)).toString("base64");
@@ -158,16 +167,18 @@ export class PlainPeerChannel implements PeerChannel {
       `inbound<-${this.remotePeerId.slice(0, 8)}: type=${String(obj.type)} rpc=${obj.rpc !== undefined} evt=${obj.evt !== undefined}`,
     );
 
-    // New-protocol mesh-envelope inbound: an `env`/`un` wrapper (or a bare
-    // rpc/evt/un body, for transition robustness) routes to the envelope
-    // dispatcher, NOT the stock ClientMessage switch. The dispatcher branches
-    // by plane (rpc vs un) itself.
+    // Mesh-envelope inbound: a real-typed wrapper ("rpc"/"evt"/"ub", or legacy
+    // "env" accepted one transition) OR a bare rpc/evt/ub body routes to the
+    // envelope dispatcher, NOT the stock ClientMessage switch. The dispatcher
+    // branches by plane (rpc vs ub) itself.
     if (
       obj.type === ENVELOPE_KIND ||
-      obj.type === UN_KIND ||
+      obj.type === UB_KIND ||
+      obj.type === RPC_KIND ||
+      obj.type === EVT_KIND ||
       obj.rpc !== undefined ||
       obj.evt !== undefined ||
-      obj.un !== undefined
+      obj.ub !== undefined
     ) {
       this.onRpc?.(obj as EnvelopeMessage, this);
       return;

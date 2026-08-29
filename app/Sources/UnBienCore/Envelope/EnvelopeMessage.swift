@@ -4,7 +4,7 @@ import Foundation
 /// a verbatim pi rpc frame and/or an ephemeral forwarded bus event. At least
 /// one of `rpc` / `evt` is present.
 public struct EnvelopeMessage: Codable, Sendable {
-    /// Protocol-namespace discriminator: `"rpc"` / `"evt"` / `"un"` (legacy
+    /// Protocol-namespace discriminator: `"rpc"` / `"evt"` / `"ub"` (legacy
     /// `"env"` accepted on read during the transition). Names the payload plane;
     /// direction is carried by the inner frame `.type` + receiver, not here.
     public let type: String?
@@ -14,24 +14,24 @@ public struct EnvelopeMessage: Codable, Sendable {
     public let protocolVersion: Int?
     public let rpc: JSONValue?
     public let evt: EnvelopeEvt?
-    /// un-bien's own protocol plane (`type == "un"`): an inner frame with its own
+    /// un-bien's own protocol plane (`type == "ub"`): an inner frame with its own
     /// `.type` (hello / session_sync / session_launch / …). Handshake caps +
     /// sessionId nest inside the `hello` inner frame, NOT at the top level.
-    public let un: JSONValue?
-    /// Optional bidirectional sidecar carried ALONGSIDE `rpc`/`evt`/`un` (e.g.
+    public let ub: JSONValue?
+    /// Optional bidirectional sidecar carried ALONGSIDE `rpc`/`evt`/`ub` (e.g.
     /// pre-rendered Edit-diff `hunks` for a `tool_execution_start` frame).
     /// Absent on most frames — decode must tolerate its absence.
     public let aux: JSONValue?
 
     public init(type: String? = nil, ts: Double? = nil, protocolVersion: Int? = nil,
-                rpc: JSONValue? = nil, evt: EnvelopeEvt? = nil, un: JSONValue? = nil,
+                rpc: JSONValue? = nil, evt: EnvelopeEvt? = nil, ub: JSONValue? = nil,
                 aux: JSONValue? = nil) {
         self.type = type
         self.ts = ts
         self.protocolVersion = protocolVersion
         self.rpc = rpc
         self.evt = evt
-        self.un = un
+        self.ub = ub
         self.aux = aux
     }
 }

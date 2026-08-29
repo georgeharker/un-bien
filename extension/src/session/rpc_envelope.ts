@@ -36,13 +36,13 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
  * PROTOCOL-NAMESPACE discriminator (NOT direction) and names the payload field:
  *   "rpc" -> `.rpc` — byte-faithful pi rpc frame (pi's rpc handler acts).
  *   "evt" -> `.evt` — forwarded pi bus event (app view plane).
- *   "un"  -> `.un`  — un-bien's OWN protocol; inner `.type` = hello /
+ *   "ub"  -> `.ub`  — un-bien's OWN protocol; inner `.type` = hello /
  *                     session_sync / session_launch / ...; the inner type +
  *                     receiver role decide who acts and which direction.
  * Direction is carried by the inner frame `.type` + receiver role, never `type`.
  * `ts` (epoch ms) and `protocolVersion` (decode-guard) are cross-cutting and stay
- * top-level. NOTE: legacy `"env"` is still ACCEPTED on read + stamped for the
- * rpc/evt plane during the transition; the explicit rpc/evt split is a later wave.
+ * top-level. Each plane now stamps its real type ("rpc"/"evt"/"ub"); legacy
+ * `"env"` is still ACCEPTED on read for one transition, never stamped.
  */
 export interface EnvelopeMessage {
   type?: string;
@@ -55,10 +55,10 @@ export interface EnvelopeMessage {
    *  diff data; the `rpc` frame itself stays byte-faithful (raw args). */
   aux?: { hunks?: unknown[] } & Record<string, unknown>;
   evt?: { channel: string; data: unknown };
-  /** un-bien's own protocol plane (`type:"un"`). The inner frame is one of
-   *  ``UnFrame`` — handshake fields (caps, sessionId) nest in the `hello`
+  /** un-bien's own protocol plane (`type:"ub"`). The inner frame is one of
+   *  ``UbFrame`` — handshake fields (caps, sessionId) nest in the `hello`
    *  variant, NOT at the envelope top level. */
-  un?: UnFrame;
+  ub?: UbFrame;
 }
 
 /**
@@ -66,7 +66,7 @@ export interface EnvelopeMessage {
  * they are typed, unlike the opaque byte-faithful pi `rpc` frame). The inner
  * `.type` + receiver role decide who acts and which direction it flows.
  */
-export type UnFrame =
+export type UbFrame =
   | { type: "hello"; caps: string[]; sessionId?: string } // ext->app: app acts
   | { type: "session_sync"; id?: string; limit?: number } // app->ext: reconstruction request
   | {
@@ -87,14 +87,17 @@ export type UnFrame =
  *  the transition (the explicit rpc/evt namespace split is a later wave). */
 export const ENVELOPE_KIND = "env";
 /** un-bien-owned plane wrapper marker. */
-export const UN_KIND = "un";
+export const UB_KIND = "ub";
+/** pi-owned plane wrapper markers: the rpc spine + the evt view plane. */
+export const RPC_KIND = "rpc";
+export const EVT_KIND = "evt";
 /** un-bien-plane INNER frame type for the capability handshake. */
 export const HELLO_KIND = "hello";
 
 /**
  * Build the capability handshake sent to a peer on attach — the envelope-native
  * replacement for the stock `session_history.capabilities`. Rides the un-bien
- * plane (`type:"un"`) as a `hello` inner frame the APP handles; caps + sessionId
+ * plane (`type:"ub"`) as a `hello` inner frame the APP handles; caps + sessionId
  * nest inside it, protocolVersion stays top-level.
  */
 export function helloEnvelope(
@@ -102,10 +105,10 @@ export function helloEnvelope(
   sessionId?: string,
   protocolVersion = 1,
 ): EnvelopeMessage {
-  const hello: UnFrame = sessionId
+  const hello: UbFrame = sessionId
     ? { type: "hello", caps, sessionId }
     : { type: "hello", caps };
-  return { type: UN_KIND, protocolVersion, un: hello };
+  return { type: UB_KIND, protocolVersion, ub: hello };
 }
 
 type Frame = Record<string, unknown>;

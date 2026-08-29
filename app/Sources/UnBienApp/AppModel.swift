@@ -270,15 +270,15 @@ public final class AppModel: ObservableObject {
                 // from stock session_history) so the {rpc|evt} route + stock
                 // suppression turn on before any session content arrives.
                 // Envelope-native capability handshake on the un-bien plane: a
-                // {type:"un", un:{type:"hello", caps, sessionId}} frame the APP
+                // {type:"ub", ub:{type:"hello", caps, sessionId}} frame the APP
                 // acts on (learn caps + session identity) so the {rpc|evt} route
                 // + stock suppression turn on before any session content arrives.
-                if env.type == "un", let un = env.un, un["type"]?.stringValue == "hello" {
+                if env.type == "ub", let ub = env.ub, ub["type"]?.stringValue == "hello" {
                     // Last NON-EMPTY wins: re-hellos (session_sync/attach, N clients)
                     // carry the pi's current caps; a legit change is still a
                     // non-empty set. But an empty/degraded hello must NOT clobber a
                     // good set — that silently gates off thinking/models/panels.
-                    let caps = un["caps"]?.arrayValue?.compactMap { $0.stringValue }
+                    let caps = ub["caps"]?.arrayValue?.compactMap { $0.stringValue }
                     if let caps, !caps.isEmpty {
                         capabilities[key] = Set(caps)
                     } else if capabilities[key] == nil {
@@ -288,7 +288,7 @@ public final class AppModel: ObservableObject {
                     // new pi sessionId here means a different session reused it. Reset
                     // so the prior transcript/panels/prompt don't leak in; a fresh
                     // session_sync + live frames rebuild the new one.
-                    let sid = un["sessionId"]?.stringValue
+                    let sid = ub["sessionId"]?.stringValue
                     if let sid, let prev = sessionIds[key], prev != sid {
                         transcripts[key] = nil
                         envelopeReducers[key] = nil
@@ -302,9 +302,9 @@ public final class AppModel: ObservableObject {
                 // Other un-bien-plane frames (the session_sync_end terminator):
                 // fold via the reducer as a frame — its inner `.type` drives
                 // applyRPC, exactly like an rpc-plane frame.
-                if env.type == "un", let un = env.un {
+                if env.type == "ub", let ub = env.ub {
                     var reducer = envelopeReducers[key] ?? EnvelopeReducer()
-                    reducer.apply(EnvelopeMessage(rpc: un))
+                    reducer.apply(EnvelopeMessage(rpc: ub))
                     envelopeReducers[key] = reducer
                     transcripts[key] = reducer.session
                     return

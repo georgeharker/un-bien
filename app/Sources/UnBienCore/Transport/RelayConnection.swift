@@ -72,7 +72,7 @@ public actor RelayConnection {
 
     /// Route a ``ClientMessage`` to a Pi peer/room. The app's stock command frame
     /// is mapped at THIS single seam to pi's first-class rpc verb (rpc plane, pi
-    /// acts) or an un-bien-owned frame (un plane, extension acts) — so AppModel
+    /// acts) or an un-bien-owned frame (ub plane, extension acts) — so AppModel
     /// call sites stay unchanged. See the app->pi command taxonomy decision.
     public func send(_ message: ClientMessage, toPeer peer: String, room: String) async throws {
         let data = try Codec.encodeClientBody(message)
@@ -81,15 +81,15 @@ public actor RelayConnection {
         switch plane {
         case .rpc:
             try await sendEnvelope(EnvelopeMessage(rpc: mapped), toPeer: peer, room: room)
-        case .un:
-            try await sendEnvelope(EnvelopeMessage(un: mapped), toPeer: peer, room: room)
+        case .ub:
+            try await sendEnvelope(EnvelopeMessage(ub: mapped), toPeer: peer, room: room)
         }
     }
 
-    private enum WirePlane { case rpc, un }
+    private enum WirePlane { case rpc, ub }
 
     /// Map a stock-encoded ``ClientMessage`` frame to its pi first-class rpc verb
-    /// (rpc plane) or un-bien-owned frame (un plane), per the command taxonomy.
+    /// (rpc plane) or un-bien-owned frame (ub plane), per the command taxonomy.
     /// user_message->prompt, cancel->abort, model_set->set_model,
     /// thinking_set->set_thinking_level, list_models->get_available_models,
     /// session_compact->compact, session_new->new_session. The message queue is
@@ -135,7 +135,7 @@ public actor RelayConnection {
         case "session_sync", "session_launch":
             // un-bien's OWN protocol (reconstruction request / mesh remote-launch)
             // — the extension acts. The frame keeps its inner type verbatim.
-            return (.un, frame)
+            return (.ub, frame)
         default:
             // extension_ui_response (matches pi's SDK ui contract) / ping /
             // approve_tool: pass through on the rpc plane.
@@ -151,14 +151,15 @@ public actor RelayConnection {
         try await channel.send(encode(envelope))
     }
 
-    /// Route an rpc-envelope (`{rpc|evt}`) to a Pi peer/room. Stamps the wrapper
-    /// kind (`type:"env"`) + timestamp, mirroring the fork's outbound choke.
+    /// Route an rpc-envelope (`{rpc|evt|ub}`) to a Pi peer/room. Stamps each
+    /// plane's REAL wrapper type ("rpc"/"evt"/"ub", no legacy "env") + timestamp,
+    /// mirroring the fork's outbound choke.
     public func sendEnvelope(_ message: EnvelopeMessage, toPeer peer: String, room: String) async throws {
         let stamped = EnvelopeMessage(
-            type: message.type ?? (message.un != nil ? "un" : "env"),
+            type: message.type ?? (message.ub != nil ? "ub" : message.evt != nil ? "evt" : "rpc"),
             ts: message.ts ?? Date().timeIntervalSince1970 * 1000,
             protocolVersion: message.protocolVersion,
-            rpc: message.rpc, evt: message.evt, un: message.un)
+            rpc: message.rpc, evt: message.evt, ub: message.ub)
         let routed = try RoutedEnvelope(peer: peer, room: room, envelope: stamped)
         try await channel.send(encode(routed))
     }

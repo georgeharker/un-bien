@@ -1860,7 +1860,7 @@ function _routeRpcCommandFrom(
 }
 
 /**
- * un-bien plane inbound (`type:"un"`): dispatch un-bien's OWN protocol frames by
+ * un-bien plane inbound (`type:"ub"`): dispatch un-bien's OWN protocol frames by
  * their inner `.type`. app->ext today: `session_sync` (reconstruction request)
  * and `session_launch` (mesh remote-launch). These are NOT pi rpc — the
  * EXTENSION acts. The reconstruction REPLAY frames it emits stay byte-faithful
@@ -1871,10 +1871,10 @@ function _routeUnBienPlaneFrom(
   sender: PlainPeerChannel,
   env: EnvelopeMessage,
 ): void {
-  const frame = env.un;
+  const frame = env.ub;
   if (!frame || typeof frame !== "object") return;
   const type = (frame as Record<string, unknown>).type;
-  envLog(`un inbound: ${String(type)}`);
+  envLog(`ub inbound: ${String(type)}`);
 
   if (type === "session_sync") {
     const f = frame as Record<string, unknown>;
@@ -1889,17 +1889,17 @@ function _routeUnBienPlaneFrom(
     for (const panel of panels)
       sender.sendEnvelope({ evt: { channel: "panel", data: panel } });
     envLog(
-      `session_sync(un): panels=${panels.length} + ui (transcript is the app's get_entries rpc)`,
+      `session_sync(ub): panels=${panels.length} + ui (transcript is the app's get_entries rpc)`,
     );
-    // Terminator/ack on the un plane; carries the session clock so the app can
+    // Terminator/ack on the ub plane; carries the session clock so the app can
     // detect a pi restart. `truncated`/`limit` are gone (a replay concern;
     // get_entries is unbounded / since-delta).
     sender.sendEnvelope({
-      un: {
+      ub: {
         type: "session_sync_end",
         ...(typeof f.id === "string" ? { in_reply_to: f.id } : {}),
         session_started_at: _sessionStartedAt ?? 0,
-      } as EnvelopeMessage["un"],
+      } as EnvelopeMessage["ub"],
     });
     return;
   }
@@ -1909,7 +1909,7 @@ function _routeUnBienPlaneFrom(
     const cwd =
       typeof f.cwd === "string" && f.cwd.length > 0 ? f.cwd : process.cwd();
     if (!effectiveAllowRemoteLaunch(loadLocalConfig(cwd))) {
-      envLog("session_launch(un): remote launch disabled on this machine");
+      envLog("session_launch(ub): remote launch disabled on this machine");
       return;
     }
     const launchError = _launchSession(
@@ -1917,7 +1917,7 @@ function _routeUnBienPlaneFrom(
       cwd,
       typeof f.name === "string" ? f.name : undefined,
     );
-    if (launchError) envLog(`session_launch(un) error: ${launchError}`);
+    if (launchError) envLog(`session_launch(ub) error: ${launchError}`);
     return;
   }
 }
@@ -2569,7 +2569,7 @@ function _attachOwner(
       ),
     () => _onPeerDisconnect(appPeerId),
     (env) =>
-      env.un === undefined
+      env.ub === undefined
         ? _routeRpcCommandFrom(channel, env)
         : _routeUnBienPlaneFrom(channel, env),
   );
@@ -2671,20 +2671,22 @@ function _installAutoListener(relay: RelayClient): () => void {
       const channel = _attachOwner(relay, appPeerId, known.name);
       // The channel listener didn't see the line that triggered the attach, so
       // route it explicitly — MIRRORING the channel's own dispatch (peer_channel
-      // _onLine): an envelope ({type:"env"} / rpc / evt) goes to the rpc
-      // dispatcher, a stock ClientMessage to the stock switch. Everything is on
-      // the envelope proto now, so the first message is normally the {rpc}
-      // session_sync — routing that through the stock switch dropped it (the
-      // un-migrated attach path). Use _liveCtx (session_start-fresh), not #55.
+      // _onLine): a real-typed envelope ("rpc"/"evt"/"ub", legacy "env") or a
+      // bare rpc/evt/ub body goes to the envelope dispatcher, a stock
+      // ClientMessage to the stock switch. Everything is on the envelope proto
+      // now, so the first message is normally the ub session_sync (or the rpc
+      // get_entries) — routing that through the stock switch dropped it. Use
+      // _liveCtx (session_start-fresh), not #55.
       const innerObj = inner as unknown as Record<string, unknown>;
       if (
         innerObj.type === ENVELOPE_KIND ||
         innerObj.rpc !== undefined ||
-        innerObj.evt !== undefined
+        innerObj.evt !== undefined ||
+        innerObj.ub !== undefined
       ) {
         {
           const innerEnv = inner as unknown as EnvelopeMessage;
-          if (innerEnv.un === undefined)
+          if (innerEnv.ub === undefined)
             _routeRpcCommandFrom(channel, innerEnv);
           else _routeUnBienPlaneFrom(channel, innerEnv);
         }

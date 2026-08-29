@@ -392,7 +392,7 @@ function emitEnvelopeSync(
       peer,
       ct: Buffer.from(
         JSON.stringify({
-          un: {
+          ub: {
             type: "session_sync",
             id,
             ...(limit == null ? {} : { limit }),
@@ -412,11 +412,11 @@ function rpcFramesFrom(raws: string[]): Array<Record<string, unknown>> {
     .filter((r): r is Record<string, unknown> => !!r && typeof r === "object");
 }
 
-/** Decoded `{un}` frames (un-bien plane) from a slice of relay sends, in order. */
-function unFramesFrom(raws: string[]): Array<Record<string, unknown>> {
+/** Decoded `{ub}` frames (un-bien plane) from a slice of relay sends, in order. */
+function ubFramesFrom(raws: string[]): Array<Record<string, unknown>> {
   return raws
     .map(decodeSentCt)
-    .map((d) => d.inner["un"])
+    .map((d) => d.inner["ub"])
     .filter((r): r is Record<string, unknown> => !!r && typeof r === "object");
 }
 
@@ -453,7 +453,7 @@ function replayMessageEnds(raws: string[]): Array<{
 /** The single `session_sync_end` terminator frame from a slice of sends. */
 function syncEndFrame(raws: string[]): Record<string, unknown> | undefined {
   // session_sync_end is un-bien's own terminator on the un plane.
-  return unFramesFrom(raws).find((f) => f["type"] === "session_sync_end");
+  return ubFramesFrom(raws).find((f) => f["type"] === "session_sync_end");
 }
 
 const OWNER_PUBLIC_FIXTURE = Buffer.from(
@@ -1726,7 +1726,7 @@ describe("multi-channel broadcast (W2D)", () => {
         peer: "ownerA__1234567890",
         ct: Buffer.from(
           JSON.stringify({
-            un: { type: "session_sync", id: "sync-1", limit: 50 },
+            ub: { type: "session_sync", id: "sync-1", limit: 50 },
           }),
         ).toString("base64"),
       }),
@@ -1742,7 +1742,7 @@ describe("multi-channel broadcast (W2D)", () => {
     // (Caps now ride the `hello` handshake, not the sync reply.)
     const ends = sent.filter(
       (d) =>
-        (d.inner["un"] as Record<string, unknown> | undefined)?.["type"] ===
+        (d.inner["ub"] as Record<string, unknown> | undefined)?.["type"] ===
         "session_sync_end",
     );
     expect(ends).toHaveLength(1);
