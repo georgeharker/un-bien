@@ -275,10 +275,6 @@ export function createRpcEnvelope(
   broadcast: (env: EnvelopeMessage) => void,
   opts?: {
     enrichArgs?: (tool: string, args: unknown) => { hunks: unknown[] } | null;
-    classifyOutput?: (
-      toolName: string,
-      result: unknown,
-    ) => { kind: string; [k: string]: unknown } | null;
   },
 ): { dispose(): void } {
   let disposed = false;
@@ -301,12 +297,9 @@ export function createRpcEnvelope(
           env = { ...env, aux: { hunks: enriched.hunks } };
         }
       }
-      if (name === "tool_execution_end" && opts?.classifyOutput) {
-        const out = opts.classifyOutput(p.toolName as string, p.result);
-        if (out) {
-          env = { ...env, aux: { ...(env.aux ?? {}), output: out } };
-        }
-      }
+      // OUTPUT enrichment is app-side (design 01M177AF): the app classifies the
+      // persisted result in its reducer (live + get_entries replay). No
+      // aux.output is emitted here; only aux.hunks (input Edit diff) rides live.
       try {
         broadcast(env);
       } catch {

@@ -276,16 +276,12 @@ describe("createRpcEnvelope — wiring", () => {
     expect((out[0] as { rpc: { args: unknown } }).rpc.args).toBe(rawArgs);
   });
 
-  it("rides classified output in aux on tool_execution_end; rpc.result stays RAW", () => {
+  it("emits NO aux on tool_execution_end — OUTPUT classification is app-side", () => {
     const { pi, handlers } = fakePi();
     const out: unknown[] = [];
     const rawResult = "@@ -1 +1 @@\n-a\n+b";
-    const classified = {
-      kind: "diff",
-      hunks: [{ lines: [{ kind: "remove", oldLine: 1, text: "a" }] }],
-    };
     createRpcEnvelope(pi, (env) => out.push(env), {
-      classifyOutput: () => classified,
+      enrichArgs: (tool) => (tool === "edit" ? { hunks: [] } : null),
     });
     handlers.get("tool_execution_end")?.({
       type: "tool_execution_end",
@@ -294,39 +290,9 @@ describe("createRpcEnvelope — wiring", () => {
       result: rawResult,
       isError: false,
     });
-    const env = out[0] as {
-      rpc: { result: unknown };
-      aux?: { output?: unknown };
-    };
-    expect(env.aux?.output).toEqual(classified);
-    // rpc.result is the RAW input, unmodified.
-    expect(env.rpc.result).toBe(rawResult);
-  });
-
-  it("emits NO aux.output on tool_execution_end when the classifier returns null", () => {
-    const { pi, handlers } = fakePi();
-    const out: unknown[] = [];
-    createRpcEnvelope(pi, (env) => out.push(env), {
-      classifyOutput: () => null,
-    });
-    handlers.get("tool_execution_end")?.({
-      type: "tool_execution_end",
-      toolCallId: "tc_2",
-      toolName: "bash",
-      result: "plain text",
-      isError: false,
-    });
-    expect(out).toEqual([
-      {
-        rpc: {
-          type: "tool_execution_end",
-          toolCallId: "tc_2",
-          toolName: "bash",
-          result: "plain text",
-          isError: false,
-        },
-      },
-    ]);
+    // rpc.result stays raw; the end frame carries NO aux — the app classifies
+    // the result in its reducer (live + get_entries replay), design 01M177AF.
+    expect((out[0] as { rpc: { result: unknown } }).rpc.result).toBe(rawResult);
     expect("aux" in (out[0] as object)).toBe(false);
   });
 

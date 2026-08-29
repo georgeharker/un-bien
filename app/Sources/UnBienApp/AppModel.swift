@@ -93,12 +93,24 @@ public final class AppModel: ObservableObject {
     @Published public var monoFontName: String? {
         didSet { UserDefaults.standard.set(monoFontName, forKey: Self.monoFontKey) }
     }
+    /// Chosen body/UI font family (bubbles, markdown); nil = system.
+    @Published public var bodyFontName: String? {
+        didSet { UserDefaults.standard.set(bodyFontName, forKey: Self.bodyFontKey) }
+    }
+    /// Show rich tool-result cards (diff/code) UNROLLED by default.
+    @Published public var expandRichToolResults: Bool {
+        didSet { UserDefaults.standard.set(expandRichToolResults, forKey: Self.expandRichKey) }
+    }
+    /// Hide the raw input block on a tool card when its output renders richly.
+    @Published public var hideInputWhenRich: Bool {
+        didSet { UserDefaults.standard.set(hideInputWhenRich, forKey: Self.hideInputRichKey) }
+    }
 
     /// The active theme palette for the selected `themeID`.
     public var theme: AppTheme { themeID.theme }
-    /// Current typography (text scale + mono font) for environment injection.
+    /// Current typography (text scale + mono + body font) for environment injection.
     public var typography: Typography {
-        Typography(textScale: textScale, monoFontName: monoFontName)
+        Typography(textScale: textScale, monoFontName: monoFontName, bodyFontName: bodyFontName)
     }
 
     public let mesh: MeshStore
@@ -120,6 +132,9 @@ public final class AppModel: ObservableObject {
     private static let showThinkingKey = "com.georgeharker.un-bien.show-thinking"
     private static let textScaleKey = "com.georgeharker.un-bien.text-scale"
     private static let monoFontKey = "com.georgeharker.un-bien.mono-font"
+    private static let bodyFontKey = "com.georgeharker.un-bien.body-font"
+    private static let expandRichKey = "com.georgeharker.un-bien.expand-rich-tool-results"
+    private static let hideInputRichKey = "com.georgeharker.un-bien.hide-input-when-rich"
     /// Backstop grace for an UNCONSUMED optimistic queued chip (design 01M158S7).
     /// Long by design: consumption (user message_end) is the primary clear, so
     /// this only catches truly-stuck chips (text-normalization miss / dropped
@@ -140,6 +155,11 @@ public final class AppModel: ObservableObject {
         let scale = UserDefaults.standard.object(forKey: Self.textScaleKey) as? Double ?? 1.0
         self.textScale = min(max(scale, 0.8), 1.8)
         self.monoFontName = UserDefaults.standard.string(forKey: Self.monoFontKey)
+        self.bodyFontName = UserDefaults.standard.string(forKey: Self.bodyFontKey)
+        self.expandRichToolResults =
+            UserDefaults.standard.object(forKey: Self.expandRichKey) as? Bool ?? true
+        self.hideInputWhenRich =
+            UserDefaults.standard.object(forKey: Self.hideInputRichKey) as? Bool ?? true
         self.identityStore = identityStore
             ?? KeychainOwnerIdentityStore(syncsToICloud: syncOn)
     }

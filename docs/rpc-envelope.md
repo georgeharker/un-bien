@@ -59,9 +59,11 @@ interface EnvelopeMessage {
    *  inner frame, NOT at the envelope top level. */
   ub?: UbFrame;
   /** OPTIONAL un-bien display sidecar riding ALONGSIDE `rpc` in the same
-   *  envelope (the `rpc` frame stays byte-faithful). First tenant: pre-rendered
-   *  Edit-family diff `hunks` on a `tool_execution_start` frame. */
-  aux?: { hunks?: unknown[] } & Record<string, unknown>;
+   *  envelope (the `rpc` frame stays byte-faithful). Sole tenant: best-effort
+   *  LIVE input-Edit diff `hunks` on a `tool_execution_start` frame. OUTPUT is
+   *  classified app-side from the persisted result (no `aux.output` on the
+   *  wire) — design 01M177AF. */
+  aux?: { hunks?: unknown[] };
 }
 
 type UbFrame =
@@ -169,9 +171,49 @@ app-custom because it spawns a separate pi process (mesh) — pi's `new_session`
 
 `aux` carries un-bien display elaboration ALONGSIDE a byte-faithful `{rpc}` frame
 in the same envelope, so the rpc plane stays pi-faithful while the app still gets
-richer rendering. First tenant: Edit-family `tool_execution_start` frames carry
-`aux.hunks` (pre-computed diff hunks) next to the raw tool args. Absent on most
-frames; decode tolerates its absence.
+richer rendering. Sole tenant now: Edit-family `tool_execution_start` frames
+carry `aux.hunks` (pre-computed input diff hunks) next to the raw tool args.
+Absent on most frames; decode tolerates its absence.
+
+**`aux.hunks` is BEST-EFFORT LIVE (design 01M177AF).** The extension computes
+the input Edit diff while the file is still fresh (it needs the pre-edit file on
+disk, which the app can't reach and which the edit destroys). It is NOT
+persisted and NOT reconstructable after the fact — a `get_entries` replay simply
+has no `aux.hunks`, and the card degrades to its Content view (the new text from
+the persisted args, shown as a code block). A diff cannot be reconstructed later,
+so there is no app-side floor for it; only capture-or-lose.
+
+**OUTPUT classification is APP-SIDE — there is NO `aux.output` on the wire.**
+Because a tool `result` PERSISTS in the session log, the app classifies it in its
+own reducer (`ToolOutputClassifier` in `fillToolCard`), which runs identically
+for a live `tool_execution_end` frame AND a `get_entries` replay entry (the
+reducer synthesizes the end frame from the `toolResult`). So replay is enriched
+by construction, from one implementation, with the extension out of the loop.
+The produced container matches the shape the card renders:
+
+```ts
+card.output = { v: 1, blocks: OutputBlock[], truncated?: boolean }
+type OutputBlock =
+  | { kind: "diff"; hunks: { lines: DiffLine[] }[] }  // result already IS a diff
+  | { kind: "code"; text: string; lang?: string }     // bash/read-family output
+```
+
+`code` carries plain output text the app SYNTAX-HIGHLIGHTS (shared HighlightEngine
+/ highlight.js, cached + theme-matched); ANSI is stripped, not parsed. Emitted
+for code-ish tools only: bash-family (`lang:"shell"`) and read-family (`lang`
+from the file extension in `args.path`); unknown language is OMITTED so the
+highlighter auto-detects. A `diff` block is produced only when the RESULT already
+embeds a unified diff (re-reading persisted text, never reconstructing). The
+classifier NEVER throws, returns nil when nothing is recognised (most tools → raw
+`rpc.result` JSON), skips unknown kinds per-block, and caps block count /
+bytes-per-block / total bytes, setting `truncated:true` rather than an unbounded
+payload.
+
+DEFERRED escape hatch (not built): if input-diff replay fidelity is ever wanted,
+the extension could `addEntry` a SIBLING aux-wrapper entry into the ledger
+(keeping the tool entry pi-faithful) that rides the ledger's own persistence and
+`get_entries` delivery — pending a check that pi's ledger accepts an un-bien-typed
+entry it ignores and returns.
 
 ## App→fork command taxonomy (who acts)
 

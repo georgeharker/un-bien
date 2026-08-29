@@ -170,14 +170,6 @@ public struct SessionState: Equatable, Sendable {
         items[index] = .tool(card)
     }
 
-    /// Attach a classified tool OUTPUT sidecar (from the envelope `aux.output`) to
-    /// an already-opened tool card. No-op if the card isn't found.
-    public mutating func attachToolOutput(toolCallID: String, output: JSONValue) {
-        guard let index = toolIndex[toolCallID], case var .tool(card) = items[index] else { return }
-        card.output = output
-        items[index] = .tool(card)
-    }
-
     private mutating func fillToolCard(toolCallID: String, result: JSONValue?, error: String?,
                                        images: [WireImage] = []) {
         guard let index = toolIndex[toolCallID], case var .tool(card) = items[index] else { return }
@@ -185,6 +177,11 @@ public struct SessionState: Equatable, Sendable {
         card.error = error
         card.state = error == nil ? .ok : .failed
         if !images.isEmpty { card.images = images }
+        // OUTPUT classification is APP-SIDE (design 01M177AF): classify the
+        // persisted result here so a get_entries replay (which synthesizes
+        // tool_execution_end → this same path) is enriched identically to live.
+        card.output = ToolOutputClassifier.classify(tool: card.tool, result: result,
+                                                    args: .object(card.args))
         items[index] = .tool(card)
     }
 

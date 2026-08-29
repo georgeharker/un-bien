@@ -85,6 +85,12 @@ struct SettingsView: View {
                     Text(family).tag(String?.some(family))
                 }
             }
+            Picker("Body font", selection: $model.bodyFontName) {
+                Text("System").tag(String?.none)
+                ForEach(fonts.installedFamilies, id: \.self) { family in
+                    Text(family).tag(String?.some(family))
+                }
+            }
             VStack(alignment: .leading, spacing: 4) {
                 Text("Preview").font(.caption).foregroundStyle(theme.secondaryText)
                 TextField("Type to preview the font", text: $fontPreview, axis: .vertical)
@@ -139,8 +145,14 @@ struct SettingsView: View {
     }
 
     private var transcriptSection: some View {
-        Section("Transcript") {
+        Section {
             Toggle("Show thinking", isOn: $model.showThinking)
+            Toggle("Expand rich tool results", isOn: $model.expandRichToolResults)
+            Toggle("Hide input on rich results", isOn: $model.hideInputWhenRich)
+        } header: {
+            Text("Transcript")
+        } footer: {
+            Text("Rich results (diff / code) can auto-expand, and their raw input block can be hidden to keep cards compact.")
         }
     }
 

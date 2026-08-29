@@ -11,16 +11,29 @@ import UIKit
 public struct Typography: Sendable, Equatable {
     public var textScale: Double
     public var monoFontName: String?
+    /// Registered family name for body/UI text (bubbles, markdown); nil = system.
+    public var bodyFontName: String?
 
-    public init(textScale: Double = 1.0, monoFontName: String? = nil) {
+    public init(textScale: Double = 1.0, monoFontName: String? = nil,
+                bodyFontName: String? = nil) {
         self.textScale = textScale
         self.monoFontName = monoFontName
+        self.bodyFontName = bodyFontName
     }
 
     /// Base body point size (bubbles, markdown) after scaling.
     public var bodySize: CGFloat { 15 * textScale }
     /// Code / monospace point size after scaling.
     public var codeSize: CGFloat { 13 * textScale }
+
+    /// SwiftUI body font honoring the chosen family + size (nil family = system).
+    public func bodyFont(size: CGFloat? = nil) -> Font {
+        let pt = size ?? bodySize
+        if let name = bodyFontName, !name.isEmpty {
+            return .custom(name, fixedSize: pt)
+        }
+        return .system(size: pt)
+    }
 
     /// SwiftUI monospaced font honoring the chosen family + size.
     public func monoFont(size: CGFloat? = nil) -> Font {

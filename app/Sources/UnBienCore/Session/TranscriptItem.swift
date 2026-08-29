@@ -99,9 +99,10 @@ public struct ToolCard: Equatable, Sendable {
     /// Raw Edit-diff `hunks` array from the envelope `aux` sidecar; when present,
     /// the card renders a diff instead of raw args JSON.
     public var hunks: [JSONValue]?
-    /// Classified tool OUTPUT sidecar from the envelope `aux.output` (e.g.
-    /// `{ kind:"diff", hunks:[...] }`); when a known `kind` is present the card
-    /// renders it instead of the raw `result` JSON. Unknown/absent → raw fallback.
+    /// Classified tool OUTPUT container from the envelope `aux.output`: the
+    /// versioned multi-block shape `{ v:1, blocks:[{kind,...}], truncated? }`.
+    /// The card renders each block whose `kind` it knows (diff, code) in order
+    /// and skips the rest; an empty/all-unknown list → raw `result` JSON fallback.
     public var output: JSONValue?
     public init(toolCallID: String, tool: String, args: [String: JSONValue],
                 result: JSONValue? = nil, error: String? = nil, state: State = .running,

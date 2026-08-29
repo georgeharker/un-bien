@@ -18,3 +18,6 @@ target/
 
 # relay runtime DB (UNBIEN_MESH_DB_PATH default: data/mesh.db)
 data/
+
+# Xcode build products (iOS/mac device builds)
+app/build/

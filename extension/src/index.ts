@@ -85,7 +85,6 @@ import {
   helloEnvelope,
   type EnvelopeMessage,
 } from "./session/rpc_envelope.js";
-import { classifyToolOutput } from "./session/classify_output.js";
 import {
   dispatchRpcCommand,
   type RpcCommandHandlers,
@@ -1558,9 +1557,9 @@ function _runTestScenario(scenario: string): string {
       return "sent tool pair (envelope)";
     }
     case "diff": {
-      // Exercise the rich diff rendering: aux `{hunks}` rides ALONGSIDE the raw
-      // edit `tool_execution_start`, and aux `{output:{kind:"diff"}}` rides the
-      // `tool_execution_end`. The rpc frames stay byte-faithful (raw args/result).
+      // Exercise the rich diff rendering: aux `{hunks}` (input Edit diff) rides
+      // ALONGSIDE the raw edit `tool_execution_start`. OUTPUT is classified
+      // app-side from the result, so no aux.output rides the end frame.
       const tc = `tc-diff-${Date.now()}`;
       const hunks = [
         {
@@ -1593,10 +1592,110 @@ function _runTestScenario(scenario: string): string {
           result: "edited demo.ts",
           isError: false,
         },
-        aux: { output: { kind: "diff", hunks } },
       });
       _broadcastEnvelope({ rpc: { type: "agent_settled" } });
-      return "sent diff (envelope edit + aux hunks)";
+      return "sent diff (edit + aux hunks — shows the Diff⇄Content toggle)";
+    }
+    case "code-shell": {
+      // bash-family result → the app classifies it into a `code` block (lang
+      // shell), syntax-highlighted. OUTPUT is app-side now — no aux stamped.
+      const tc = `tc-sh-${Date.now()}`;
+      _broadcastEnvelope({ rpc: { type: "turn_start" } });
+      _broadcastEnvelope({
+        rpc: {
+          type: "tool_execution_start",
+          toolCallId: tc,
+          toolName: "bash",
+          args: { command: "ls -la" },
+        },
+      });
+      _broadcastEnvelope({
+        rpc: {
+          type: "tool_execution_end",
+          toolCallId: tc,
+          result:
+            "total 24\ndrwxr-xr-x  5 geo staff  160 Aug 29 10:00 .\n-rw-r--r--  1 geo staff 1024 index.ts\n-rw-r--r--  1 geo staff  512 README.md",
+          isError: false,
+        },
+      });
+      _broadcastEnvelope({ rpc: { type: "agent_settled" } });
+      return "sent code-shell (bash output → code block, lang shell)";
+    }
+    case "code-file": {
+      // read-family with a *.swift path → `code` block, lang inferred from the
+      // extension (swift) and highlighted.
+      const tc = `tc-rd-${Date.now()}`;
+      _broadcastEnvelope({ rpc: { type: "turn_start" } });
+      _broadcastEnvelope({
+        rpc: {
+          type: "tool_execution_start",
+          toolCallId: tc,
+          toolName: "read",
+          args: { path: "/src/Greeter.swift" },
+        },
+      });
+      _broadcastEnvelope({
+        rpc: {
+          type: "tool_execution_end",
+          toolCallId: tc,
+          result:
+            'struct Greeter {\n    let name: String\n    func greet() -> String {\n        return "Hello, \\(name)!"\n    }\n}',
+          isError: false,
+        },
+      });
+      _broadcastEnvelope({ rpc: { type: "agent_settled" } });
+      return "sent code-file (read .swift → highlighted code block)";
+    }
+    case "diff-output": {
+      // A tool whose RESULT already embeds a unified diff → the app parses it
+      // into a `diff` block (re-reading persisted text; replay-safe).
+      const tc = `tc-do-${Date.now()}`;
+      _broadcastEnvelope({ rpc: { type: "turn_start" } });
+      _broadcastEnvelope({
+        rpc: {
+          type: "tool_execution_start",
+          toolCallId: tc,
+          toolName: "bash",
+          args: { command: "git diff" },
+        },
+      });
+      _broadcastEnvelope({
+        rpc: {
+          type: "tool_execution_end",
+          toolCallId: tc,
+          result:
+            'diff --git a/app.ts b/app.ts\n--- a/app.ts\n+++ b/app.ts\n@@ -1,3 +1,3 @@\n const port = 3000;\n-const host = "127.0.0.1";\n+const host = "0.0.0.0";\n start(host, port);',
+          isError: false,
+        },
+      });
+      _broadcastEnvelope({ rpc: { type: "agent_settled" } });
+      return "sent diff-output (result embeds a unified diff → diff block)";
+    }
+    case "write": {
+      // write carries the new file text in args.content; no live diff → the
+      // card shows the Content view (new text as a code block, replay-safe).
+      const tc = `tc-wr-${Date.now()}`;
+      const content =
+        "export function add(a: number, b: number): number {\n  return a + b;\n}";
+      _broadcastEnvelope({ rpc: { type: "turn_start" } });
+      _broadcastEnvelope({
+        rpc: {
+          type: "tool_execution_start",
+          toolCallId: tc,
+          toolName: "write",
+          args: { path: "/src/math.ts", content },
+        },
+      });
+      _broadcastEnvelope({
+        rpc: {
+          type: "tool_execution_end",
+          toolCallId: tc,
+          result: "wrote /src/math.ts",
+          isError: false,
+        },
+      });
+      _broadcastEnvelope({ rpc: { type: "agent_settled" } });
+      return "sent write (args.content → content-as-code block)";
     }
     case "agent": {
       _broadcastEnvelope({ rpc: { type: "turn_start" } });
@@ -1651,13 +1750,17 @@ function _runTestScenario(scenario: string): string {
         "svg",
         "tool",
         "diff",
+        "code-shell",
+        "code-file",
+        "diff-output",
+        "write",
         "agent",
         "error",
       ])
         _runTestScenario(sc);
-      return "sent all (ask-notify, plan, subagents, svg, tool, diff, agent, error)";
+      return "sent all (ask-notify, plan, subagents, svg, tool, diff, code-shell, code-file, diff-output, write, agent, error)";
     default:
-      return "usage: /unbien test <ask-select|ask-confirm|ask-input|ask-editor|ask-notify|ask-rich|plan|subagents|svg|tool|diff|agent|error|all>";
+      return "usage: /unbien test <ask-select|ask-confirm|ask-input|ask-editor|ask-notify|ask-rich|plan|subagents|svg|tool|diff|code-shell|code-file|diff-output|write|agent|error|all>";
   }
 }
 
@@ -3034,7 +3137,6 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         const e = _enrichToolArgs(tool, args) as { hunks?: unknown[] };
         return Array.isArray(e.hunks) ? { hunks: e.hunks } : null;
       },
-      classifyOutput: (tool, result) => classifyToolOutput(tool, result),
     });
   }
 
@@ -3267,7 +3369,6 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
             const e = _enrichToolArgs(tool, args) as { hunks?: unknown[] };
             return Array.isArray(e.hunks) ? { hunks: e.hunks } : null;
           },
-          classifyOutput: (tool, result) => classifyToolOutput(tool, result),
         });
     }
     // Rearm a reused-but-disposed instance. The session_shutdown teardown (below)

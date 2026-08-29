@@ -94,12 +94,9 @@ public struct EnvelopeReducer {
                let hunks = aux?["hunks"]?.arrayValue {
                 session.attachToolHunks(toolCallID: toolCallID, hunks: hunks)
             }
-            // On tool_execution_end, attach any classified OUTPUT sidecar the
-            // envelope carried (rpc.result stays raw — untouched above).
-            if rpc["type"]?.stringValue == "tool_execution_end",
-               let output = aux?["output"] {
-                session.attachToolOutput(toolCallID: rpc["toolCallId"]?.stringValue ?? "", output: output)
-            }
+            // OUTPUT enrichment is app-side (design 01M177AF): SessionState
+            // classifies the raw result in fillToolCard, covering live AND
+            // get_entries replay. No aux.output is read from the wire.
         }
     }
 

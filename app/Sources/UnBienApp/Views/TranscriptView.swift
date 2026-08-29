@@ -31,7 +31,9 @@ struct TranscriptView: View {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         ForEach(items) { item in
                             TranscriptRow(item: item, themeID: model.themeID,
-                                          theme: theme, typography: typography)
+                                          theme: theme, typography: typography,
+                                          expandRich: model.expandRichToolResults,
+                                          hideInputRich: model.hideInputWhenRich)
                                 .equatable()
                                 .id(item.id)
                         }
@@ -228,26 +230,27 @@ struct TranscriptView: View {
     private var queuedChips: some View {
         let items = model.queued[session.id] ?? []
         if !items.isEmpty {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(items, id: \.id) { item in
-                        // Mirror pi's TUI tracking: BLUE = queued (followUp, runs
-                        // after the turn), GREY = steer (interrupts mid-turn). Both
-                        // are optimistic until the model consumes them.
-                        let isSteer = item.kind == "steer"
-                        let tint: Color = isSteer ? .gray : .blue
-                        HStack(spacing: 4) {
-                            Image(systemName: isSteer ? "arrow.turn.up.right" : "clock")
-                            Text(item.text).lineLimit(1)
-                        }
-                        .font(.caption)
-                        .padding(.horizontal, 8).padding(.vertical, 5)
-                        .background(tint.opacity(0.12), in: Capsule())
-                        .foregroundStyle(tint.opacity(0.7))
+            // Vertical stack, oldest at top (natural array order) so the queue
+            // reads top-to-bottom like the transcript it precedes.
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(items, id: \.id) { item in
+                    // Mirror pi's TUI tracking: BLUE = queued (followUp, runs
+                    // after the turn), GREY = steer (interrupts mid-turn). Both
+                    // are optimistic until the model consumes them.
+                    let isSteer = item.kind == "steer"
+                    let tint: Color = isSteer ? .gray : .blue
+                    HStack(spacing: 4) {
+                        Image(systemName: isSteer ? "arrow.turn.up.right" : "clock")
+                        Text(item.text).lineLimit(2)
                     }
+                    .font(.caption)
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .background(tint.opacity(0.12), in: Capsule())
+                    .foregroundStyle(tint.opacity(0.7))
                 }
-                .padding(.horizontal, 10)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
             .padding(.top, 4)
         }
     }
@@ -321,9 +324,12 @@ private struct TranscriptRow: View, Equatable {
     let themeID: ThemeID
     let theme: AppTheme
     let typography: Typography
+    let expandRich: Bool
+    let hideInputRich: Bool
 
     nonisolated static func == (lhs: TranscriptRow, rhs: TranscriptRow) -> Bool {
         lhs.item == rhs.item && lhs.themeID == rhs.themeID && lhs.typography == rhs.typography
+            && lhs.expandRich == rhs.expandRich && lhs.hideInputRich == rhs.hideInputRich
     }
 
     var body: some View {
@@ -335,7 +341,8 @@ private struct TranscriptRow: View, Equatable {
         case let .assistant(bubble):
             assistantView(bubble)
         case let .tool(card):
-            ToolCardView(card: card, theme: theme, typography: typography)
+            ToolCardView(card: card, theme: theme, typography: typography,
+                         expandRich: expandRich, hideInputRich: hideInputRich)
         case let .compaction(marker):
             Label("Context compacted (\(marker.tokensBefore) tokens)", systemImage: "arrow.triangle.merge")
                 .font(.caption).foregroundStyle(theme.secondaryText)
@@ -360,7 +367,13 @@ private struct TranscriptRow: View, Equatable {
                     .markdownCodeSyntaxHighlighter(.highlightr(
                         style: theme.codeHighlightStyle,
                         font: typography.monoPlatformFont()))
-                    .markdownTextStyle { ForegroundColor(theme.text); FontSize(typography.bodySize) }
+                    .markdownTextStyle {
+                        ForegroundColor(theme.text)
+                        FontSize(typography.bodySize)
+                        if let body = typography.bodyFontName, !body.isEmpty {
+                            FontFamily(.custom(body))
+                        }
+                    }
                     .markdownBlockStyle(\.codeBlock) { configuration in
                         ScrollView(.horizontal, showsIndicators: false) {
                             configuration.label
@@ -384,7 +397,7 @@ private struct TranscriptRow: View, Equatable {
         VStack(alignment: align, spacing: 4) {
             Text(role).font(.caption.weight(.semibold)).foregroundStyle(tint)
             Text(text).foregroundStyle(theme.text)
-                .font(.system(size: typography.bodySize))
+                .font(typography.bodyFont())
                 .padding(10)
                 .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
         }
@@ -547,22 +560,77 @@ private struct ToolCardView: View {
     let card: ToolCard
     let theme: AppTheme
     let typography: Typography
-    @State private var expanded = false
+    let expandRich: Bool
+    let hideInputRich: Bool
+    @State private var expanded: Bool
+    /// Edit-family Diff⇄Content toggle (design 01M177AF). false = Diff (default,
+    /// most informative live); true = Content (the new text as a code block).
+    @State private var showContent = false
+
+    init(card: ToolCard, theme: AppTheme, typography: Typography,
+         expandRich: Bool, hideInputRich: Bool) {
+        self.card = card
+        self.theme = theme
+        self.typography = typography
+        self.expandRich = expandRich
+        self.hideInputRich = hideInputRich
+        // Pref: rich cards (diff/code/content) start expanded when enabled.
+        _expanded = State(initialValue: expandRich && Self.isRich(card))
+    }
+
+    /// A card is "rich" when it has a renderable output block, an input diff, or
+    /// new content from args — i.e. something better than raw JSON to show.
+    static func isRich(_ card: ToolCard) -> Bool {
+        if card.output?["v"]?.intValue == 1,
+           let blocks = card.output?["blocks"]?.arrayValue,
+           blocks.contains(where: { renderableKinds.contains($0["kind"]?.stringValue ?? "") }) {
+            return true
+        }
+        if let hunks = card.hunks, !hunks.isEmpty { return true }
+        for key in ["content", "contents", "text", "new_string", "new_str", "newText"] {
+            if let value = card.args[key]?.stringValue, !value.isEmpty { return true }
+        }
+        return false
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             DisclosureGroup(isExpanded: $expanded) {
                 VStack(alignment: .leading, spacing: 6) {
-                    if let hunks = card.hunks, !hunks.isEmpty {
-                        diffView(hunks)
-                    } else if !card.args.isEmpty {
-                        labeled("input", JSONValue.object(card.args).prettyString)
-                    }
-                    if card.output?["kind"]?.stringValue == "diff",
-                       let hunks = card.output?["hunks"]?.arrayValue, !hunks.isEmpty {
-                        diffView(hunks)
-                    } else if let result = card.result {
-                        labeled("output", result.prettyString)
+                    if let hunks = inputHunks, let content = contentText {
+                        // Both present (live edit): toggle between the diff and
+                        // the new text as a code block. Default Diff.
+                        Picker("view", selection: $showContent) {
+                            Text("Diff").tag(false)
+                            Text("Content").tag(true)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        if showContent {
+                            codeView(content.text, lang: content.lang)
+                        } else {
+                            diffView(hunks)
+                        }
+                    } else {
+                        if let hunks = inputHunks {
+                            diffView(hunks)
+                        } else if contentText == nil, !card.args.isEmpty,
+                                  !(hideInputRich && !knownOutputBlocks.isEmpty) {
+                            labeled("input", JSONValue.object(card.args).prettyString)
+                        }
+                        if !knownOutputBlocks.isEmpty {
+                            outputBlocksView
+                        } else if let content = contentText {
+                            // Replay floor: no live diff, so show the new text
+                            // (from persisted args) as a code block.
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("CONTENT").font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(theme.secondaryText)
+                                codeView(content.text, lang: content.lang)
+                            }
+                        } else if let result = card.result {
+                            labeled("output", result.prettyString)
+                        }
                     }
                     if let error = card.error {
                         labeled("error", error).foregroundStyle(theme.error)
@@ -586,6 +654,51 @@ private struct ToolCardView: View {
         }
         .padding(10)
         .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    // Input Edit diff (best-effort LIVE aux.hunks); nil when absent (e.g. replay).
+    private var inputHunks: [JSONValue]? {
+        if let hunks = card.hunks, !hunks.isEmpty { return hunks }
+        return nil
+    }
+
+    // The new text an edit/write is applying, from persisted args — the Content
+    // view / replay floor. `lang` inferred from the target file path.
+    private var contentText: (text: String, lang: String?)? {
+        for key in ["content", "contents", "text", "new_string", "new_str", "newText"] {
+            if let text = card.args[key]?.stringValue, !text.isEmpty {
+                return (text, contentLang)
+            }
+        }
+        return nil
+    }
+
+    private var contentLang: String? {
+        for key in ["path", "file", "filename", "filepath"] {
+            if let path = card.args[key]?.stringValue {
+                return ToolOutputClassifier.language(forPath: path)
+            }
+        }
+        return nil
+    }
+
+    @ViewBuilder private var outputBlocksView: some View {
+        ForEach(Array(knownOutputBlocks.enumerated()), id: \.offset) { _, block in
+            switch block["kind"]?.stringValue {
+            case "diff":
+                if let hunks = block["hunks"]?.arrayValue, !hunks.isEmpty { diffView(hunks) }
+            case "code":
+                if let text = block["text"]?.stringValue, !text.isEmpty {
+                    codeView(text, lang: block["lang"]?.stringValue)
+                }
+            default:
+                EmptyView()
+            }
+        }
+        if card.output?["truncated"]?.boolValue == true {
+            Text("\u{2026} output truncated").font(.system(size: 9))
+                .foregroundStyle(theme.secondaryText)
+        }
     }
 
     @ViewBuilder
@@ -627,6 +740,33 @@ private struct ToolCardView: View {
             Text(label.uppercased()).font(.system(size: 9, weight: .bold))
                 .foregroundStyle(theme.secondaryText)
             Text(value).foregroundStyle(theme.text).textSelection(.enabled)
+        }
+    }
+
+    // Renderable blocks from the versioned `aux.output` container. Guards on
+    // `v==1` and keeps only kinds the app knows how to draw; unknown kinds are
+    // skipped so an empty result falls back to raw JSON.
+    private static let renderableKinds: Set<String> = ["diff", "code"]
+    private var knownOutputBlocks: [JSONValue] {
+        guard card.output?["v"]?.intValue == 1,
+              let blocks = card.output?["blocks"]?.arrayValue else { return [] }
+        return blocks.filter { Self.renderableKinds.contains($0["kind"]?.stringValue ?? "") }
+    }
+
+    // `code` block: plain output text syntax-highlighted via the shared
+    // HighlightEngine (Highlightr/highlight.js, cached + theme-matched, same path
+    // as assistant-bubble code blocks). `lang` may be nil → highlight.js
+    // auto-detects; a highlighter miss falls back to plain mono Text.
+    @ViewBuilder
+    private func codeView(_ text: String, lang: String?) -> some View {
+        let font = typography.monoPlatformFont()
+        if let highlighted = HighlightEngine.shared.highlighted(
+            text, language: lang, style: theme.codeHighlightStyle, font: font) {
+            Text(highlighted).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            Text(text).foregroundStyle(theme.text).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -692,7 +832,8 @@ private struct TranscriptPerfPreview: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
                 ForEach(items) { item in
-                    TranscriptRow(item: item, themeID: .tokyoNight, theme: theme, typography: typography)
+                    TranscriptRow(item: item, themeID: .tokyoNight, theme: theme,
+                                  typography: typography, expandRich: true, hideInputRich: true)
                         .equatable()
                         .id(item.id)
                 }

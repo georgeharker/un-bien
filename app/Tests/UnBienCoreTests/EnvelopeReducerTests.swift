@@ -139,4 +139,65 @@ final class EnvelopeReducerTests: XCTestCase {
         XCTAssertEqual(card.state, .ok)
         XCTAssertEqual(card.images, [WireImage(data: "BBBB", mime: "image/jpeg")])
     }
+
+    /// OUTPUT enrichment is app-side (design 01M177AF): the reducer classifies
+    /// the raw `tool_execution_end` result into `card.output` — no wire aux.
+    /// An edit result that IS a unified diff becomes a `diff` block; the raw
+    /// rpc.result stays untouched on the card.
+    func testEditResultClassifiedToDiffBlock() throws {
+        let lines = [
+            #"{"rpc":{"type":"tool_execution_start","toolCallId":"tc9","toolName":"edit","args":{}}}"#,
+            #"{"rpc":{"type":"tool_execution_end","toolCallId":"tc9","toolName":"edit","isError":false,"result":"@@ -1 +1 @@\n-a\n+b"}}"#,
+        ]
+        let decoder = JSONDecoder()
+        let messages = try lines.map { try decoder.decode(EnvelopeMessage.self, from: Data($0.utf8)) }
+        var reducer = EnvelopeReducer()
+        reducer.apply(messages)
+
+        let card = try XCTUnwrap(toolCards(reducer.session).first)
+        XCTAssertEqual(card.tool, "edit")
+        XCTAssertEqual(card.output?["v"]?.intValue, 1)
+        let blocks = try XCTUnwrap(card.output?["blocks"]?.arrayValue)
+        XCTAssertEqual(blocks.count, 1)
+        XCTAssertEqual(blocks[0]["kind"]?.stringValue, "diff")
+        XCTAssertEqual(card.result?.stringValue, "@@ -1 +1 @@\n-a\n+b")   // raw untouched
+    }
+
+    /// A read result is classified into a `code` block, with `lang` inferred
+    /// from the tool's `args.path` extension. Raw rpc.result stays untouched.
+    func testReadResultClassifiedToCodeBlock() throws {
+        let lines = [
+            #"{"rpc":{"type":"tool_execution_start","toolCallId":"tc7","toolName":"read","args":{"path":"/a/Foo.swift"}}}"#,
+            #"{"rpc":{"type":"tool_execution_end","toolCallId":"tc7","toolName":"read","isError":false,"result":"let x = 1"}}"#,
+        ]
+        let decoder = JSONDecoder()
+        let messages = try lines.map { try decoder.decode(EnvelopeMessage.self, from: Data($0.utf8)) }
+        var reducer = EnvelopeReducer()
+        reducer.apply(messages)
+
+        let card = try XCTUnwrap(toolCards(reducer.session).first)
+        let blocks = try XCTUnwrap(card.output?["blocks"]?.arrayValue)
+        XCTAssertEqual(blocks[0]["kind"]?.stringValue, "code")
+        XCTAssertEqual(blocks[0]["text"]?.stringValue, "let x = 1")
+        XCTAssertEqual(blocks[0]["lang"]?.stringValue, "swift")
+        XCTAssertEqual(card.result?.stringValue, "let x = 1")
+    }
+
+    /// The whole point of moving classification app-side: a `get_entries` REPLAY
+    /// (no wire aux at all) still enriches tool output. The reducer synthesizes
+    /// tool_execution_end from the toolResult entry → fillToolCard → classify.
+    func testGetEntriesReplayEnrichesOutput() throws {
+        let assistant = #"{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":"tcR","name":"edit","arguments":{}}]}}"#
+        let toolResult = #"{"type":"message","message":{"role":"toolResult","toolCallId":"tcR","content":"@@ -1 +1 @@\n-x\n+y","isError":false}}"#
+        let line = #"{"rpc":{"type":"response","command":"get_entries","data":{"entries":["# + assistant + "," + toolResult + #"],"leafId":"L1"}}}"#
+        let msg = try JSONDecoder().decode(EnvelopeMessage.self, from: Data(line.utf8))
+        var reducer = EnvelopeReducer()
+        reducer.apply(msg)
+
+        let card = try XCTUnwrap(toolCards(reducer.session).first)
+        XCTAssertEqual(card.tool, "edit")
+        let blocks = try XCTUnwrap(card.output?["blocks"]?.arrayValue)
+        XCTAssertEqual(blocks[0]["kind"]?.stringValue, "diff")
+        XCTAssertEqual(reducer.leafId, "L1")
+    }
 }
