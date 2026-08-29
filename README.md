@@ -4,14 +4,15 @@
 
 # un-bien
 
-Mobile remote control and local agent mesh for the [Pi coding agent](https://github.com/earendil-works/pi):
-a native iOS/macOS client that pairs to your machine over a relay, watches tool
-calls in real time, and drives Pi from your phone — plus a local agent mesh so
-multiple Pi sessions (and agents) can talk to each other.
+Remote-control your [Pi coding agent](https://github.com/earendil-works/pi)
+sessions from your phone: a native iOS/macOS client that pairs to your machine
+over a relay you host, **attaches to running Pi sessions (or launches new ones)**,
+renders their transcripts with styled edit/tool-result summaries, and lets you
+approve tools and steer the agent — plus a local agent mesh so multiple Pi
+sessions (and agents) can talk to each other.
 
-> **Status:** early / in flux. The READMEs and docs (including the per-package
-> `extension/README.md` and `relay/README.md`, still carrying upstream branding)
-> are being reworked — this top-level README is a placeholder while that lands.
+> **Status:** WIP, actively maturing — functional and usable, with polish
+> ongoing toward the first public release.
 
 ## Monorepo layout
 
@@ -19,7 +20,7 @@ multiple Pi sessions (and agents) can talk to each other.
 | ------------ | ----------------------------------------------------------------------- |
 | `app/`       | Native SwiftUI client (iOS + macOS). Build/test with `swift build` / `swift test`. |
 | `extension/` | The Pi extension (TypeScript). Loaded by pointing `pi` at the repo root (`pi.extensions` → `./extension/dist`). Build with `pnpm -C extension build`. |
-| `relay/`     | The WebSocket relay (Rust, package `un-bien-relay`). A dumb, end-to-end-encrypted pipe. |
+| `relay/`     | The WebSocket relay (Rust, package `un-bien-relay`). A dumb routing pipe — TLS in transit; the operator can see routed plaintext, so self-host one you trust. |
 | `docs/`      | Protocol notes and fixtures.                                            |
 
 ## Attribution

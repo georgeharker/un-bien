@@ -1,7 +1,6 @@
 > **Derived from [remote-pi](https://github.com/jacobaraujo7/remote_pi)** by Jacob
 > Moura, used under the MIT License (preserved in [`LICENSE`](LICENSE)). This tree
-> is part of the [un-bien](../README.md) monorepo and is mid-rework — the content
-> below still carries upstream branding and is being rebranded to un-bien.
+> is part of the [un-bien](../README.md) monorepo.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/georgeharker/un-bien/main/app/icons/un-bien-macos-1024.png" width="160" alt="un-bien logo" />
@@ -10,13 +9,12 @@
 <h1 align="center">un-bien</h1>
 
 > Extend the [Pi coding agent](https://github.com/earendil-works/pi) with two
-> superpowers: agents that talk to each other on the same machine, and a mobile
-> app that drives Pi from your phone.
+> superpowers: **remote-control Pi from your phone** (native iOS/macOS app over a
+> relay you host), and a **local agent mesh** where several Pi sessions talk to
+> each other.
 
-**Homepage:** <https://remote-pi.jacobmoura.work>
-
-`/remote-pi` is a single slash command that wires both at once. Run it; the
-first time it asks a couple of questions and you are done.
+`/unbien` is a single slash command that wires both at once. Run it; the first
+time it asks a couple of questions and you are done.
 
 ## Protocol & Security
 
@@ -32,22 +30,28 @@ document — this README only covers user-facing setup.
 Install the extension (one-time):
 
 ```bash
-pi install npm:remote-pi
+pi install npm:@geohar/un-bien
 ```
 
 Then in any Pi terminal:
 
 ```text
-/remote-pi
+/unbien
 ```
 
 The first run shows a short interactive wizard (agent name, default session,
-whether to auto-start the relay). On every following run, `/remote-pi` joins
-the local agent session and starts the relay automatically — no extra typing.
+whether to use the relay on this terminal). On every following run, `/unbien`
+joins the local agent session and starts the relay automatically — no extra
+typing.
+
+> **You must configure a relay before the mobile app can connect.** un-bien ships
+> pointing at **nobody's** infrastructure — there is no built-in default relay.
+> Self-host one (see [The relay](#the-relay)) and point the extension at it with
+> `/unbien set-relay <url>`.
 
 ### Try the agent network in 30 seconds
 
-Open **two** Pi terminals in the same directory and run `/remote-pi` in each.
+Open **two** Pi terminals in the same directory and run `/unbien` in each.
 Both join the same session. Now just talk to the LLM — it has the tools.
 
 In terminal A (say it ended up named `agent-A`):
@@ -78,8 +82,7 @@ normalize it.
 
 ## What it does
 
-Remote Pi adds two independent layers on top of Pi. You can use either, or
-both:
+un-bien adds two independent layers on top of Pi. You can use either, or both:
 
 ### 1) Agent network (local broker, optional cross-PC relay)
 
@@ -97,7 +100,7 @@ current turn, and receive any later reply through the inbox/turn flow with
 `re` correlating it to the original message id.
 
 Peers on the same machine talk over a Unix domain socket at
-`~/.pi/remote/sessions/<session-name>/broker.sock`. When sibling PCs are paired,
+`~/.pi/un-bien/sessions/<session-name>/broker.sock`. When sibling PCs are paired,
 a leader-capable Extension or MCP participant bridges the opaque cross-PC
 addresses over the relay; local-only use stays on UDS when relay access is off.
 Useful for splitting work across roles (`backend`, `frontend`, `tests`,
@@ -109,9 +112,10 @@ over — the failover is invisible to the LLMs.
 
 ### 2) Mobile app (over the relay)
 
-The companion mobile app lets you send prompts to Pi and read its responses
-from your phone. The phone and the Pi process find each other through a
-**relay**: a small WebSocket server that ferries messages between them.
+The companion native iOS/macOS app lets you **attach to a running Pi session — or
+launch a new one** — and drive it from your phone: send prompts, read responses,
+approve tool calls, switch models. The phone and the Pi process find each other
+through a **relay**: a small WebSocket server that ferries messages between them.
 Pairing is one-time and per device, via QR code.
 
 Communication uses WebSocket over TLS to the relay. Fields such as `ct` are
@@ -119,12 +123,8 @@ wire containers, not a systemwide end-to-end confidentiality guarantee: current
 Pi-forward, cross-PC, app, and control envelopes visible to the relay are not
 fully opaque or E2E encrypted. A relay operator can see routed plaintext
 protocol content and metadata; see [`rpc-envelope`](../docs/rpc-envelope.md) for the exact
-trust boundaries.
-
-**Get the app** — all current download options (Google Play, App Store, and
-direct builds while public releases roll out):
-
-<https://remote-pi.jacobmoura.work/#get-the-app>
+trust boundaries. **Host the relay yourself** to keep that operator role in your
+own hands.
 
 ---
 
@@ -150,14 +150,13 @@ under "App actions".
 It is **not** a generic slash-command picker. The Pi SDK does not expose
 programmatic invocation for most builtins (those live in the TUI's
 interactive loop), so the app exposes only the actions that have a clean
-SDK call. The [`pi-telegram`](https://github.com/llblab/pi-telegram) adapter
-follows the same pattern.
+SDK call.
 
 ### Images
 
 The app can attach **one image** (camera or gallery) to a message. It's
 compressed on the device and rides **inline** in the `user_message` — the
-optional `images` field carries `{ data: <base64>, mime }`. The pi-extension
+optional `images` field carries `{ data: <base64>, mime }`. The extension
 turns it into the SDK's multimodal content (an `ImageContent` followed by the
 caption `TextContent`) and calls `sendUserMessage(content)`, so the model sees
 the picture plus your text.
@@ -179,39 +178,39 @@ messages are unaffected.
 Requirements: Node 20+, Pi (the host coding agent).
 
 ```bash
-pi install npm:remote-pi
+pi install npm:@geohar/un-bien
 ```
 
-The extension self-registers the `/remote-pi` slash command and deploys an
+The extension self-registers the `/unbien` slash command and deploys an
 agent skill that teaches the LLM how to use `list_peers`, `agent_send`, and the
 event-driven inbox/reply flow.
 
 To verify:
 
 ```text
-/remote-pi config
+/unbien config
 ```
 
 It should print the effective relay URL and where it came from
-(`env` / `config` / `default`).
+(`env` / `config` / `unset`).
 
 ---
 
-## Using `/remote-pi`
+## Using `/unbien`
 
 The bare command is the everyday entry point:
 
 ```text
-/remote-pi
+/unbien
 ```
 
 Behavior depends on whether there's a local config for this directory:
 
-| State                                      | What happens                                                                             |
-| ------------------------------------------ | ---------------------------------------------------------------------------------------- |
-| First run (no `.pi/remote-pi/config.json`) | Interactive wizard → saves config → joins agent session → starts relay (if you opted in) |
-| Returning user, auto-start enabled         | Joins agent session + starts relay automatically, then prints status                     |
-| Returning user, auto-start disabled        | Prints status only; join/relay must be run manually                                      |
+| State                                     | What happens                                                                             |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------- |
+| First run (no `.pi/un-bien/config.json`)  | Interactive wizard → saves config → joins agent session → starts relay (if you opted in) |
+| Returning user, auto-start enabled        | Joins agent session + starts relay automatically, then prints status                     |
+| Returning user, auto-start disabled       | Prints status only; join/relay must be run manually                                      |
 
 The wizard asks three questions:
 
@@ -220,36 +219,36 @@ The wizard asks three questions:
    an address from this name. Defaults to the directory name.
 2. **Default session** — the name of the agent-network room for this
    directory. Multiple terminals in the same directory join the same session.
-3. **Auto-start relay (for mobile app access)?** — `Yes` if you want
-   `/remote-pi` to also connect to the relay so the mobile app can reach this
-   Pi. `No` for local-only use (agent network without mobile access).
+3. **Use the relay on this terminal?** — `Yes` if you want `/unbien` to also
+   connect to the relay so the mobile app (and paired PCs) can reach this Pi.
+   `No` for local-only use (agent network without mobile access).
 
-Re-run the wizard later with `/remote-pi setup`.
+Re-run the wizard later with `/unbien setup`.
 
 ---
 
 ## Pairing a mobile device
 
-Once the relay is up (`/remote-pi relay status` shows `started` or `paired`):
+Once the relay is up (`/unbien relay status` shows `started` or `paired`):
 
 ```text
-/remote-pi pair
+/unbien pair
 ```
 
-A QR code is printed in the terminal. Scan it with the Remote Pi mobile app.
+A QR code is printed in the terminal. Scan it with the un-bien mobile app.
 Pairing is **per machine** — once a device is paired, every Pi process on
-this machine accepts it (it lives in `~/.pi/remote/peers.json`).
+this machine accepts it (it lives in `~/.pi/un-bien/peers.json`).
 
 To list paired devices:
 
 ```text
-/remote-pi devices
+/unbien devices
 ```
 
 To remove one:
 
 ```text
-/remote-pi revoke <shortid>
+/unbien revoke <shortid>
 ```
 
 The shortid is the first 8 chars shown by `devices`.
@@ -259,60 +258,36 @@ The shortid is the first 8 chars shown by `devices`.
 ## The relay
 
 The relay is the network boundary. TLS protects transit, but the Relay can see
-routed plaintext protocol content and metadata; use a relay you trust or
-self-host. There is no systemwide or PC-mesh E2E guarantee. For Pi-to-Pi
+routed plaintext protocol content and metadata; **use a relay you trust or
+self-host**. There is no systemwide or PC-mesh E2E guarantee. For Pi-to-Pi
 forwarding, the Relay currently permits a route when any correctly signed Owner
 blob lists both canonical Pi keys. That does not prove the Owner paired with or
 controls either Pi.
 
-### Upgrade order (Relay 0.3 first, then Extension 0.6)
+**un-bien ships with no default relay** — `/unbien config` reports `unset` until
+you configure one, and the extension refuses to connect until you do.
 
-Upgrade the **Relay to 0.3 first**: an old Extension can consume the new
-Relay's UUID errors. Extension 0.6 carries a one-release legacy wire-label
-shim, so mixed new/old Extensions interoperate when both select the same unique
-colon-free signed nickname label, or when neither has one and both use the
-canonical standard-padded key prefix. Delimiter or collision cases, like
-divergent nickname views, are unsupported and may be silently dropped by the
-old receiver. Upgrade all Extension/MCP participants in one maintenance window.
-The shim does not replace the receiver-local aliases returned by `list_peers`;
-addresses remain opaque.
+### Self-host the relay
 
-Extension 0.6 accepts an old Relay's lowercase 32-hex trusted error ID only as
-a narrow shim for an old Relay or Relay rollback; that shim is not why
-Relay-first is safe.
-
-You have two options:
-
-### Option A — Use the community relay
-
-`https://relay-rp1.jacobmoura.work` (default). Zero setup. Good for trying
-things out or for casual use. (The extension converts to `wss://…`
-internally when opening the connection — both schemes point at the same
-endpoint.)
-
-Caveats:
-
-- Shared infrastructure — availability is best-effort.
-- **There is no IP allow-listing or VPN gating**.
-
-### Option B — Self-host (recommended for privacy)
-
-Run the relay yourself in Docker and put it behind a VPN like
+Run the relay yourself and put it behind a VPN like
 [Tailscale](https://tailscale.com), [WireGuard](https://www.wireguard.com),
 or your own VPC. Because the relay's network-level protection is just TLS +
 keypair authentication, layering a VPN on top means **only your devices** can
 even reach the WebSocket port — defense in depth.
 
-Quick Docker outline (see the
-[relay README](https://github.com/jacobaraujo7/remote_pi/blob/main/relay/README.md#self-hosted-relay-recommended-for-privacy)
-for the full setup, environment variables, and reverse-proxy guidance):
+Build and run from the `relay/` crate in this monorepo (see the
+[relay README](../relay/README.md) for environment variables and reverse-proxy
+guidance):
 
 ```bash
+# From the monorepo root:
+docker build -t un-bien-relay ./relay
 docker run -d \
-  --name remote-pi-relay \
+  --name un-bien-relay \
   -p 3000:3000 \
+  -v un-bien-data:/data \
   --restart unless-stopped \
-  ghcr.io/jacobaraujo7/remote-pi-relay:latest
+  un-bien-relay
 ```
 
 Bind the container to your VPN interface, terminate TLS in a reverse proxy,
@@ -323,7 +298,7 @@ and point both your Pi and your phone at the resulting `https://…` URL.
 Once your relay is reachable, tell the extension:
 
 ```text
-/remote-pi relay url https://relay.yourdomain.tld
+/unbien relay url https://relay.yourdomain.tld
 ```
 
 The URL **must** be `http://` or `https://` — `ws://` / `wss://` are
@@ -331,21 +306,23 @@ rejected at validation. The extension converts to WebSocket internally when
 it opens the connection. Same canonical form for the mobile app and any
 self-hosting docs: paste the URL your reverse proxy exposes.
 
-This writes `~/.pi/remote/config.json` with `{ "relay": "..." }`. Resolution
-order (highest precedence first):
+This writes the `relay` field into the global config at
+`~/.pi/extensions/un-bien.json`. Resolution order (highest precedence first):
 
-1. `REMOTE_PI_RELAY` environment variable (CI / one-off overrides)
-2. `~/.pi/remote/config.json`
-3. The built-in default (`https://relay-rp1.jacobmoura.work`)
+1. `UNBIEN_RELAY` environment variable (CI / one-off overrides)
+2. `relay` field in `~/.pi/extensions/un-bien.json`
+
+There is **no built-in default** — when neither is set, the extension refuses
+to connect and prompts you to configure a relay.
 
 Verify the active URL and its source with:
 
 ```text
-/remote-pi config
+/unbien config
 ```
 
-If you change the URL while connected, run `/remote-pi relay stop` then
-`/remote-pi relay start` (or `/remote-pi relay` to toggle).
+If you change the URL while connected, run `/unbien relay stop` then
+`/unbien relay start` (or `/unbien relay` to toggle).
 
 The mobile app has its own relay-URL setting in its preferences pane — keep
 both pointing at the same relay.
@@ -394,16 +371,16 @@ original message id.
 
 The wire format is a 5-field envelope `{ from, to, id, re, body }` serialized
 as one JSON line per message. The leader's broker writes an `audit.jsonl`
-log at `~/.pi/remote/sessions/<name>/audit.jsonl` for postmortem inspection.
+log at `~/.pi/un-bien/sessions/<name>/audit.jsonl` for postmortem inspection.
 
 Useful commands:
 
-| Command                   | What it does                                          |
-| ------------------------- | ----------------------------------------------------- |
-| `/remote-pi`              | Join the local mesh (and start the relay, if enabled) |
-| `/remote-pi peers`        | List local + cross-PC mesh peers, grouped by PC       |
-| `/remote-pi rename <new>` | Rename this agent in the current session              |
-| `/remote-pi stop`         | Leave the local mesh and disconnect the relay         |
+| Command                | What it does                                          |
+| ---------------------- | ----------------------------------------------------- |
+| `/unbien`              | Join the local mesh (and start the relay, if enabled) |
+| `/unbien peers`        | List local + cross-PC mesh peers, grouped by PC       |
+| `/unbien rename <new>` | Rename this agent in the current session              |
+| `/unbien stop`         | Leave the local mesh and disconnect the relay         |
 
 Name collisions inside a session get a numeric suffix automatically
 (`backend`, `backend#2`, `backend#3`). The broker assigns it and returns the
@@ -415,48 +392,48 @@ real name to the peer.
 
 ### Local session (one Pi, one terminal)
 
-| Command                                  | Description                                                                    |
-| ---------------------------------------- | ------------------------------------------------------------------------------ |
-| `/remote-pi`                             | Connect (join local mesh + start relay), or run setup on first use             |
-| `/remote-pi setup`                       | Run the setup wizard and update local config                                   |
-| `/remote-pi status`                      | Show local mesh + relay status                                                 |
-| `/remote-pi stop`                        | Stop everything for **this** terminal (mesh + relay)                           |
-| `/remote-pi pair`                        | Show QR code + copy-paste pairing URI for a new mobile device                  |
-| `/remote-pi devices`                     | List paired mobile devices (online/offline per device)                         |
-| `/remote-pi revoke <shortid>`            | Revoke a paired device by its shortid                                          |
-| `/remote-pi set-relay <url>`             | Persist a new relay URL (http:// or https://)                                  |
-| `/remote-pi relay [start\|stop\|status]` | Relay-only control — leaves local mesh membership untouched (no verb = toggle) |
-| `/remote-pi relay url <url>`             | Same as `set-relay`                                                            |
-| `/remote-pi config`                      | Show the effective relay URL and its source (env / config / default)           |
+| Command                               | Description                                                                    |
+| ------------------------------------- | ------------------------------------------------------------------------------ |
+| `/unbien`                             | Connect (join local mesh + start relay), or run setup on first use             |
+| `/unbien setup`                       | Run the setup wizard and update local config                                   |
+| `/unbien status`                      | Show local mesh + relay status                                                 |
+| `/unbien stop`                        | Stop everything for **this** terminal (mesh + relay)                           |
+| `/unbien pair`                        | Show QR code + copy-paste pairing URI for a new mobile device                  |
+| `/unbien devices`                     | List paired mobile devices (online/offline per device)                         |
+| `/unbien revoke <shortid>`            | Revoke a paired device by its shortid                                          |
+| `/unbien set-relay <url>`             | Persist a new relay URL (http:// or https://)                                  |
+| `/unbien relay [start\|stop\|status]` | Relay-only control — leaves local mesh membership untouched (no verb = toggle) |
+| `/unbien relay url <url>`             | Same as `set-relay`                                                            |
+| `/unbien config`                      | Show the effective relay URL and its source (env / config / unset)             |
 
 ### Daemon fleet (one supervisor, N background Pis — see [Daemon mode](#daemon-mode))
 
-| Command                                        | Description                                                                   |
-| ---------------------------------------------- | ----------------------------------------------------------------------------- |
-| `/remote-pi create <cwd> [--name X]`           | Register a folder as a daemon                                                 |
-| `/remote-pi remove <id>`                       | Unregister a daemon (local config preserved)                                  |
-| `/remote-pi daemons`                           | List registered daemons + state                                               |
-| `/remote-pi daemon start`                      | Start every registered daemon                                                 |
-| `/remote-pi daemon stop`                       | Stop every running daemon (`/remote-pi stop` stops only the local terminal)   |
-| `/remote-pi daemon restart`                    | Stop + start all daemons                                                      |
-| `/remote-pi daemon status`                     | Detailed runtime status (pid, uptime, restart count)                          |
-| `/remote-pi daemon send <id> "<text>"`         | Send a prompt to a specific daemon                                            |
-| `/remote-pi cron add <id> "<expr>" "<prompt>"` | Schedule a recurring prompt (`--tz`, `--wake`, `--no-skip-busy`, `--catchup`) |
-| `/remote-pi cron list`                         | List scheduled jobs (schedule, enabled, next run, last status)                |
-| `/remote-pi cron run <jobId>`                  | Fire a job now (ignores its schedule)                                         |
-| `/remote-pi cron enable\|disable <jobId>`      | Toggle a job on/off                                                           |
-| `/remote-pi cron remove <jobId>`               | Delete a job                                                                  |
-| `/remote-pi cron log [<jobId>] [--tail N]`     | Read the fire/skip audit log                                                  |
-| `/remote-pi install`                           | Install `pi-supervisord` as a system service                                  |
-| `/remote-pi uninstall`                         | Remove the system service (registry preserved)                                |
+| Command                                     | Description                                                                   |
+| ------------------------------------------- | ----------------------------------------------------------------------------- |
+| `/unbien create <cwd> [--name X]`           | Register a folder as a daemon                                                 |
+| `/unbien remove <id>`                       | Unregister a daemon (local config preserved)                                  |
+| `/unbien daemons`                           | List registered daemons + state                                              |
+| `/unbien daemon start`                      | Start every registered daemon                                                |
+| `/unbien daemon stop`                       | Stop every running daemon (`/unbien stop` stops only the local terminal)     |
+| `/unbien daemon restart`                    | Stop + start all daemons                                                     |
+| `/unbien daemon status`                     | Detailed runtime status (pid, uptime, restart count)                         |
+| `/unbien daemon send <id> "<text>"`         | Send a prompt to a specific daemon                                           |
+| `/unbien cron add <id> "<expr>" "<prompt>"` | Schedule a recurring prompt (`--tz`, `--wake`, `--no-skip-busy`, `--catchup`) |
+| `/unbien cron list`                         | List scheduled jobs (schedule, enabled, next run, last status)               |
+| `/unbien cron run <jobId>`                  | Fire a job now (ignores its schedule)                                        |
+| `/unbien cron enable\|disable <jobId>`      | Toggle a job on/off                                                          |
+| `/unbien cron remove <jobId>`               | Delete a job                                                                 |
+| `/unbien cron log [<jobId>] [--tail N]`     | Read the fire/skip audit log                                                 |
+| `/unbien install`                           | Install `pi-supervisord` as a system service                                 |
+| `/unbien uninstall`                         | Remove the system service (registry preserved)                              |
 
 All commands above work both as Pi slash commands (interactive) and as
-shell-level `remote-pi <subcommand>` when the package is installed
-globally (`npm install -g remote-pi`).
+shell-level `unbien <subcommand>` when the package is installed
+globally (`npm install -g @geohar/un-bien`).
 
 ### Scheduled prompts (`cron`)
 
-`remote-pi cron` schedules **recurring prompts** to daemons through the
+`unbien cron` schedules **recurring prompts** to daemons through the
 supervisor — e.g. a daily "summarise new PRs". Output flows fire-and-forget to
 the mesh/app like any prompt; the cron layer only audits the dispatch.
 
@@ -464,22 +441,20 @@ the mesh/app like any prompt; the cron layer only audits the dispatch.
   field is supported), with an optional IANA timezone via `--tz`:
 
   ```sh
-  remote-pi cron add a1b2c3d4 "0 9 * * *" "Summarise new PRs" --tz America/Sao_Paulo
+  unbien cron add a1b2c3d4 "0 9 * * *" "Summarise new PRs" --tz America/Sao_Paulo
   ```
 
 - **Minimum interval is 60s** — more frequent schedules are rejected (guards
   token cost + pileup). A fire is **skipped when the daemon is mid-turn**
   (`--no-skip-busy` to override); `--wake` starts a stopped daemon first;
   `--catchup` runs once on supervisor start if the previous run was missed.
-- **Prerequisite**: the supervisor must run as a service (`remote-pi install`).
+- **Prerequisite**: the supervisor must run as a service (`unbien install`).
   Without it there is no scheduler, and `cron` commands say so instead of
   silently pretending to schedule.
 - **Audit**: every fire **and** every skip appends one line to
-  `~/.pi/remote/cron.jsonl` with a `result` of `delivered`,
+  `~/.pi/un-bien/cron.jsonl` with a `result` of `delivered`,
   `woke_and_delivered`, `deliver_failed`, `skipped_busy`, `skipped_down`, or
-  `skipped_disabled` — read it with `remote-pi cron log`.
-
-Step-by-step walkthrough: the [daemon tutorial](https://remote-pi.jacobmoura.work/tutorials/daemon).
+  `skipped_disabled` — read it with `unbien cron log`.
 
 ### Footer + title
 
@@ -506,22 +481,22 @@ See [`docs/daemon.md`](./docs/daemon.md) for troubleshooting.
 ### One-time setup
 
 ```bash
-# Install the package globally so `remote-pi` and `pi-supervisord`
-# are on your PATH (`pi install npm:remote-pi` alone makes the Pi
+# Install the package globally so `unbien` and `pi-supervisord`
+# are on your PATH (`pi install npm:@geohar/un-bien` alone makes the Pi
 # extension available but does NOT expose the CLI binaries — see
 # https://docs.npmjs.com/cli/v10/configuring-npm/package-json#bin).
-npm install -g remote-pi
+npm install -g @geohar/un-bien
 
 # Install the supervisor as a user-level system service. Linux uses
 # systemd --user; macOS uses launchd LaunchAgent. Both auto-start at
 # login and survive reboots.
-remote-pi install
+unbien install
 ```
 
 The `install` command:
 
-- Writes `~/.config/systemd/user/remote-pi-supervisord.service` (Linux)
-  or `~/Library/LaunchAgents/dev.remotepi.supervisord.plist` (macOS)
+- Writes `~/.config/systemd/user/unbien-supervisord.service` (Linux)
+  or `~/Library/LaunchAgents/dev.unbien.supervisord.plist` (macOS)
 - Activates it via `systemctl --user enable --now` or `launchctl bootstrap`
 - The supervisor starts immediately and re-starts on every login
 
@@ -532,25 +507,25 @@ For each agent you want to keep alive 24/7:
 ```bash
 # 1. Configure the agent interactively first (one time).
 cd ~/Movies
-pi                                 # /remote-pi → setup wizard, /remote-pi pair, etc
+pi                                 # /unbien → setup wizard, /unbien pair, etc
 
 # 2. Promote to a daemon. The id is derived from the cwd
 #    (sha256(realpath)[:8]), stable across machines.
-remote-pi create ~/Movies --name "Video Editor"
+unbien create ~/Movies --name "Video Editor"
 # → Daemon registered: id=4e39152d name="Video Editor" cwd=/Users/x/Movies
 
 # 3. Start it (supervisor spawns `pi --mode rpc` for this folder).
-remote-pi daemon start
+unbien daemon start
 ```
 
 Now you can:
 
 ```bash
-remote-pi daemons                  # list + state
-remote-pi daemon status            # uptime, pid, restart count
-remote-pi daemon send 4e39152d "Cut the first 30 seconds of latest clip"
-remote-pi daemon stop              # stop all
-remote-pi daemon restart           # restart all
+unbien daemons                     # list + state
+unbien daemon status               # uptime, pid, restart count
+unbien daemon send 4e39152d "Cut the first 30 seconds of latest clip"
+unbien daemon stop                 # stop all
+unbien daemon restart              # restart all
 ```
 
 The agent receives the prompt as if a user typed it; its response flows
@@ -561,20 +536,20 @@ via the local UDS mesh.
 ### Removing or uninstalling
 
 ```bash
-remote-pi remove <id>              # unregister one daemon (config preserved)
-remote-pi uninstall                # remove the supervisor service (registry kept)
+unbien remove <id>                 # unregister one daemon (config preserved)
+unbien uninstall                   # remove the supervisor service (registry kept)
 ```
 
 `uninstall` is reversible — re-running `install` later brings every
 registered daemon back. To wipe the registry entirely, `rm
-~/.pi/remote/daemons.json`.
+~/.pi/un-bien/daemons.json`.
 
 ### Where to find logs
 
-| Platform | Command                                         |
-| -------- | ----------------------------------------------- |
-| Linux    | `journalctl --user -u remote-pi-supervisord -f` |
-| macOS    | `tail -f ~/.pi/remote/supervisord.log`          |
+| Platform | Command                                          |
+| -------- | ------------------------------------------------ |
+| Linux    | `journalctl --user -u unbien-supervisord -f`     |
+| macOS    | `tail -f ~/.pi/un-bien/supervisord.log`          |
 
 Each spawned daemon's stderr is forwarded into the supervisor's log
 with a `[<cwd>]` prefix, so a single log stream shows every agent.
@@ -596,65 +571,80 @@ with a `[<cwd>]` prefix, so a single log stream shows every agent.
 
 ---
 
-## Configuration files
+## Configuration & settings
 
-| Path                                         | Scope         | What's in it                                                                                        |
-| -------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------- |
-| `<cwd>/.pi/remote-pi/config.json`            | Per-directory | `agent_name`, `session_name`, `auto_start_relay`                                                    |
-| `~/.pi/remote/config.json`                   | Per-user      | `relay` URL; optional `defaults.auto_start_relay` (machine-wide fallback for per-directory configs) |
-| `~/.pi/remote/peers.json`                    | Per-machine   | Paired mobile devices                                                                               |
-| `~/.pi/remote/sessions/<name>/`              | Per-session   | Broker socket + `audit.jsonl`                                                                       |
-| `~/.pi/remote/skills/agent-network/SKILL.md` | Per-user      | Agent skill the LLM reads                                                                           |
+### Files
 
-Every path above **except the global `config.json`** derives from a single
-**state root** — by default `~/.pi/remote`. Two environment variables relocate
-that state root:
+| Path                                          | Scope                 | What's in it                                                                          |
+| --------------------------------------------- | --------------------- | ------------------------------------------------------------------------------------- |
+| `~/.pi/extensions/un-bien.json`               | Per-user (global)     | `relay` URL, `defaults`, `identity`, `debug` — the global settings (see below)        |
+| `<cwd>/.pi/un-bien/config.json`               | Per-directory         | `agent_name`, `auto_start_relay`, `allow_remote_launch`                               |
+| `~/.pi/un-bien/identity.json`                 | Per-machine           | Paired identity keypair (file identity backend; `0600`)                               |
+| `~/.pi/un-bien/peers.json`                    | Per-machine           | Paired mobile devices                                                                  |
+| `~/.pi/un-bien/sessions/<name>/`              | Per-session           | Broker socket + `audit.jsonl`                                                          |
+| `~/.pi/un-bien/daemons.json`                  | Per-machine           | Daemon registry                                                                        |
+| `~/.pi/un-bien/cron.json` · `cron.jsonl`      | Per-machine           | Cron registry + fire/skip audit log                                                   |
+| `~/.pi/un-bien/supervisor.sock`               | Per-machine           | Supervisor control socket                                                              |
+| `~/.pi/un-bien/skills/agent-network/SKILL.md` | Per-user              | Agent skill the LLM reads                                                              |
 
-| Variable         | Behaviour                                                                                                                                                        |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `REMOTE_PI_DIR`  | Absolute path to the state root. No suffix appended — set this to an XDG-style location like `~/.config/pi/remote-pi`. Takes priority over every other variable. |
-| `REMOTE_PI_HOME` | Stand-in for `$HOME`; state lives at `<REMOTE_PI_HOME>/.pi/remote`. Kept for backward compatibility.                                                             |
+### Global settings — `~/.pi/extensions/un-bien.json`
 
-When both are set, `REMOTE_PI_DIR` wins. Use these to put remote-pi **state**
-(sessions, daemon registries, cwd locks, paired identity) on a specific disk,
-inside an XDG directory, or anywhere your system's conventions dictate.
-
-The global `config.json` (relay URL + defaults) is resolved separately, so it
-can sit beside the coding agent's own settings rather than the state tree:
-
-| Variable              | Behaviour                                                                                                                                                                                                                     |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PI_CODING_AGENT_DIR` | The Pi host's settings root (default `~/.pi`). `config.json` lives at `<PI_CODING_AGENT_DIR>/remote/config.json`, so with the default agent dir the path stays exactly `~/.pi/remote/config.json`. Takes priority for config. |
-
-When `PI_CODING_AGENT_DIR` is unset, `config.json` falls back to the state root
-above (so a pure `REMOTE_PI_DIR` relocation still keeps config beside the rest).
-
-### Global defaults
-
-The global `~/.pi/remote/config.json` can include a `defaults` block that acts
-as a fallback for every per-directory config that doesn't set the field:
+This is a Pi **extension config** (it lives beside the coding agent's own
+settings, under `PI_CODING_AGENT_DIR/extensions/`, not in the state tree). All
+fields are optional:
 
 ```jsonc
 {
+  // Relay URL in canonical http(s):// form. No default — unset means the
+  // extension refuses to connect. Set via `/unbien set-relay <url>`.
   "relay": "https://relay.yourdomain.tld",
-  "defaults": {
-    "auto_start_relay": true,
-  },
+
+  // Machine-wide fallback for every per-cwd config that doesn't set the field.
+  // Pin auto-start once instead of dropping a file into every repo.
+  "defaults": { "auto_start_relay": true },
+
+  // Machine-identity storage. `storage` selects the PRIMARY backend for this
+  // Pi's long-term Ed25519 seed: "keychain" (OS-secured, default) or "file"
+  // (a 0600 seed file — the SSH-private-key model: cat-able, portable,
+  // works headless). `path` overrides the file-backend location
+  // (default ~/.pi/un-bien/identity.json). The unselected backend is still
+  // READ to recover an existing identity, but never written.
+  "identity": { "storage": "keychain", "path": "~/.pi/un-bien/identity.json" },
+
+  // File-based diagnostic logs. Off by default. Read from config (not env)
+  // because the daemon fork usually runs detached without a shell's env.
+  "debug": { "envelope": false, "panels": false }
 }
 ```
 
-This lets you pin `auto_start_relay` once — beside `relay` — instead of
-dropping a `config.json` into every repo. A per-directory file (or the
-`REMOTE_PI_DIRECT_CONFIG` env var) still overrides the global default.
+### Per-directory settings — `<cwd>/.pi/un-bien/config.json`
 
-The `defaults` block is read from wherever the global `config.json` resolves, so
-it follows a relocated config: with `PI_CODING_AGENT_DIR` set it lives at
-`<PI_CODING_AGENT_DIR>/remote/config.json` (see the environment overrides above).
+Written by the `/unbien` setup wizard:
+
+| Field                 | Default              | Meaning                                                                                    |
+| --------------------- | -------------------- | ------------------------------------------------------------------------------------------ |
+| `agent_name`          | directory name       | Presentation leaf name for this agent (senders still use the opaque `list_peers` address)  |
+| `auto_start_relay`    | `true`               | On a fresh terminal, `/unbien` auto-joins the mesh and starts the relay                     |
+| `allow_remote_launch` | `false`              | Honor `session_launch` requests from a paired owner (spawn a new Pi session). Opt-in only.  |
+
+### Environment variables
+
+| Variable              | Purpose                                                                                                                    |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `UNBIEN_RELAY`        | Relay URL override (highest precedence, ahead of the config file). CI / one-off use.                                       |
+| `UNBIEN_DIR`          | Absolute override of the **state** dir itself (no `.pi/un-bien` suffix). The knob for an XDG-style relocation.             |
+| `UNBIEN_HOME`         | Stand-in `$HOME`; state lives at `<UNBIEN_HOME>/.pi/un-bien`. When both are set, `UNBIEN_DIR` wins.                        |
+| `PI_CODING_AGENT_DIR` | The Pi host's settings root (default `~/.pi`); the global config lives at `<PI_CODING_AGENT_DIR>/extensions/un-bien.json`.  |
+| `UNBIEN_DIRECT_CONFIG`| Inline per-cwd config (JSON) instead of a `.pi/un-bien/config.json` file — used by the daemon supervisor.                   |
+
+`UNBIEN_DIR`/`UNBIEN_HOME` relocate un-bien **state** (sessions, daemon
+registries, cwd locks, paired identity). `PI_CODING_AGENT_DIR` relocates only
+the global **config**, so it can sit beside the coding agent's own settings.
 
 Override the relay for a single run without persisting:
 
 ```bash
-REMOTE_PI_RELAY=https://staging.example.tld pi
+UNBIEN_RELAY=https://staging.example.tld pi
 ```
 
 ---
@@ -664,12 +654,15 @@ REMOTE_PI_RELAY=https://staging.example.tld pi
 **Footer says `🟡 relay waiting for pairing` even though I paired a device.**
 The icon reflects whether _any_ device has been paired on this machine, not
 whether one is connected right now. If you really have a paired device in
-`/remote-pi devices`, restart Pi — the cache may be stale (fixed in current
+`/unbien devices`, restart Pi — the cache may be stale (fixed in current
 release; report a bug if it recurs).
 
 **Mobile app times out connecting.** Verify the same relay URL is configured
 on both sides. If you self-host behind a VPN, your phone must also be on the
 VPN (Tailscale on iOS/Android works fine).
+
+**`/unbien config` says the relay is `unset`.** un-bien has no default relay.
+Self-host one and set it with `/unbien set-relay <url>` (or `UNBIEN_RELAY`).
 
 **`agent_request` keeps timing out.** It is deprecated because it blocks the
 turn while waiting for another agent's content reply. Migrate to `agent_send`;
@@ -683,44 +676,17 @@ other terminal first.
 
 ---
 
-## Branding
-
-Official brand assets live in
-[`/branding`](https://github.com/jacobaraujo7/remote_pi/tree/main/branding) —
-SVG sources for the logo (full, foreground, background, monochrome) plus a
-banner. See the
-[branding README](https://github.com/jacobaraujo7/remote_pi/blob/main/branding/README.md)
-for palette and export sizes.
-
-<table>
-  <tr>
-    <td align="center">
-      <img src="https://raw.githubusercontent.com/jacobaraujo7/remote_pi/main/branding/logo-full.svg" width="96" alt="logo-full" /><br/>
-      <sub><code>logo-full</code></sub>
-    </td>
-    <td align="center">
-      <img src="https://raw.githubusercontent.com/jacobaraujo7/remote_pi/main/branding/logo-foreground.svg" width="96" alt="logo-foreground" /><br/>
-      <sub><code>logo-foreground</code></sub>
-    </td>
-    <td align="center">
-      <img src="https://raw.githubusercontent.com/jacobaraujo7/remote_pi/main/branding/logo-monochrome.svg" width="96" alt="logo-monochrome" /><br/>
-      <sub><code>logo-monochrome</code></sub>
-    </td>
-  </tr>
-</table>
-
----
-
 ## Links
 
-- Homepage: <https://remote-pi.jacobmoura.work>
-- Source: <https://github.com/jacobaraujo7/remote_pi>
+- Repository: <https://github.com/georgeharker/un-bien>
+- Documentation: <https://docs.georgeharker.com/un-bien>
 - Pi coding agent: <https://github.com/earendil-works/pi>
-- Relay (self-hosting guide): <https://github.com/jacobaraujo7/remote_pi/blob/main/relay/README.md>
-- Issues / bugs: <https://github.com/jacobaraujo7/remote_pi/issues>
+- Relay (self-hosting guide): [`../relay/README.md`](../relay/README.md)
+- Upstream project (remote-pi, MIT): <https://github.com/jacobaraujo7/remote_pi>
 
 ---
 
 ## License
 
-MIT
+MIT — derived from [remote-pi](https://github.com/jacobaraujo7/remote_pi) by
+Jacob Moura. See [`LICENSE`](LICENSE).

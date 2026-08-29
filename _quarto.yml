@@ -3,11 +3,17 @@ project:
   render:
     - index.md
     - README.md # README files must be listed explicitly; globs skip them
+    - docs/install.md
+    - extension/README.md
+    - extension/docs/daemon.md
+    - relay/README.md
+    - docs/design.md
     - DESIGN.md
-    - DEPLOY.md
-    - TESTING.md
     - docs/rpc-envelope.md
     - docs/rpc-on-event-map.md
+    - docs/identity.md
+    - DEPLOY.md
+    - TESTING.md
 
 # gfm_auto_identifiers makes heading anchors match GitHub's slugs, which the
 # docs' cross-links use. Keep pandoc's full markdown reader otherwise —
@@ -17,10 +23,12 @@ from: markdown+gfm_auto_identifiers
 website:
   title: "un-bien"
   description: "Mobile remote control + local agent mesh for the Pi agent."
+  favicon: app/icons/un-bien.svg
   search: true
   repo-url: https://github.com/georgeharker/un-bien
   sidebar:
     style: docked
+    logo: app/icons/un-bien.svg
     tools:
       - icon: github
         href: https://github.com/georgeharker/un-bien
@@ -30,16 +38,32 @@ website:
         href: index.md
       - text: "Overview (README)"
         href: README.md
-      - section: "Design & protocol"
+      - text: "Install & setup"
+        href: docs/install.md
+      - section: "Extension"
+        href: extension/README.md
         contents:
+          - text: "Extension guide"
+            href: extension/README.md
+          - text: "Daemon mode & troubleshooting"
+            href: extension/docs/daemon.md
+      - section: "Design & protocol"
+        href: docs/design.md
+        contents:
+          - text: "Design overview"
+            href: docs/design.md
           - text: "Architecture & design"
             href: DESIGN.md
           - text: "rpc-envelope protocol"
             href: docs/rpc-envelope.md
           - text: "pi.on() ↔ frame map"
             href: docs/rpc-on-event-map.md
+          - text: "Machine identity"
+            href: docs/identity.md
       - section: "Operations"
         contents:
+          - text: "Self-host the relay"
+            href: relay/README.md
           - text: "Deployment & signing"
             href: DEPLOY.md
           - text: "Feature test drive"

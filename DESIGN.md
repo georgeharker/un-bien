@@ -1,24 +1,28 @@
-# un-bien — a native iOS client for the remote-pi mesh
+# un-bien — a native iOS/macOS client for Pi
 
-> A modern, native iOS app that attaches to running **Pi coding agent** sessions
-> over the **remote-pi** relay protocol, renders their chats beautifully, and
-> aggregates **multiple relays** in one place.
+> A modern, native iOS/macOS app that **attaches to running Pi coding agent
+> sessions — or launches new ones** — over the un-bien relay protocol, renders
+> their chats beautifully, and aggregates **multiple relays** in one place.
 >
 > Not paseo. Same "client → server-hosted sessions" shape, but pi-only, native
 > Swift, and multi-relay.
 
-Status: design. Nothing built yet. This doc is the consolidated decision record
-
-+ architecture extracted from the remote-pi reference implementation
-(`~/Development/ext/pi/remote_pi`, MIT, Jacob Moura).
+Status: **built, actively maturing** (WIP; functional by first public release).
+The app lives under `app/` (`Sources/UnBienCore`), the Pi extension under
+`extension/`, and the relay under `relay/`. This doc is the consolidated decision
+record + architecture. The wire protocol and crypto were originally extracted
+from the **remote-pi** reference implementation (MIT, Jacob Moura,
+<https://github.com/jacobaraujo7/remote_pi>) and have since evolved as un-bien's
+own.
 
 ---
 
 ## 1. Goals / non-goals
 
 **Goals**
-+ Attach to a running Pi session through a remote-pi **relay** and render its
-  transcript in real time — streaming text, tool-call cards, interactive prompts.
++ Attach to a running Pi session (or launch a new one) through a **relay** and
+  render its transcript in real time — streaming text, tool-call cards,
+  interactive prompts.
 + **Multiple relays** at once, sessions aggregated into one list.
 + First-class UX: proper Markdown + syntax-highlighted code, nice theming
   (match the terminal's tokyo-night).
@@ -26,9 +30,9 @@ Status: design. Nothing built yet. This doc is the consolidated decision record
 
 **Non-goals**
 + No multi-provider abstraction (paseo's Claude Code / Codex / OpenCode layer).
-  This is pi-only, via remote-pi. There is nothing to abstract.
+  This is pi-only. There is nothing to abstract.
 + No embedded Python. The wire, crypto, keychain, and websocket work are all
-  native-Swift strengths; there is no remote-pi Python to reuse.
+  native-Swift strengths; there is no Python to reuse.
 + Not a session *host*. The Pi process + relay host the session; we are a client.
 
 ---
@@ -37,9 +41,9 @@ Status: design. Nothing built yet. This doc is the consolidated decision record
 
 | Decision | Rationale |
 | --- | --- |
-| **Native iOS (SwiftUI), no toolkit** | remote-pi's security model is iOS-native by design — Owner-key in iOS Keychain, iCloud-synced; Ed25519 first-class in CryptoKit. A toolkit *adds* a bridge here; native removes one. |
+| **Native iOS (SwiftUI), no toolkit** | The security model is iOS-native by design — Owner-key in iOS Keychain, iCloud-synced; Ed25519 first-class in CryptoKit. A toolkit *adds* a bridge here; native removes one. |
 | **pi-only (drop multi-provider)** | Protocol is already pi-centric (`model_set`/`list_models` = pi's `ModelRegistry`). No abstraction to build. |
-| **Multiple relays** | The differentiator over both paseo (multi-provider, own daemon) and remote-pi's stock app (single-relay, basic UI). Pure client composition — no protocol change. |
+| **Multiple relays** | The differentiator over both paseo (multi-provider, own daemon) and the upstream remote-pi app (single-relay, basic UI). Pure client composition — no protocol change. |
 | **Markdown: `gonzalezreal/swift-markdown-ui`** | CommonMark + GFM, SwiftUI-native, themeable, pluggable `CodeSyntaxHighlighter`. Apple's `AttributedString(markdown:)` is inline-only — insufficient. |
 | **Highlighting: `Highlightr`** | highlight.js under the hood → 180+ languages + themes. Agents emit arbitrary languages, so Splash (Swift-focused) is wrong; tree-sitter is a v2 quality pass. |
 | **Reference impl is MIT** | Reuse/reference freely; lift its test vectors to verify the Swift codec + handshake byte-for-byte. |
@@ -69,7 +73,7 @@ Multi-relay = N **Relay actors** feeding one aggregated store; sessions keyed
 
 ## 4. Wire protocol → Swift `Codable`
 
-Source of truth: `pi-extension/src/protocol/types.ts` (+ `codec.ts`). Every
+Source of truth: `extension/src/protocol/types.ts` (+ `codec.ts`). Every
 message is a tagged union discriminated by `type`; each side maps to a Swift
 `enum` with associated values and a custom `Codable` switching on `type`.
 
@@ -126,8 +130,8 @@ in-flight assistant message until `agent_done`.
 
 ## 5. Auth & pairing → CryptoKit
 
-Sources: `pi-extension/src/pairing/{qr,crypto,storage}.ts`,
-`relay/src/auth/challenge.rs`, `pi-extension/src/mesh/{verify,canonical}.ts`.
+Sources: `extension/src/pairing/{qr,crypto,storage}.ts`,
+`relay/src/auth/challenge.rs`, `extension/src/mesh/{verify,canonical}.ts`.
 All Ed25519 (RFC 8032): `@noble/ed25519` (ext) / `ed25519-dalek` (relay) →
 **CryptoKit `Curve25519.Signing`** is wire-identical. SHA-256 → CryptoKit.
 
@@ -200,8 +204,9 @@ over the `Codable` events — no Markdown involved.
    diverge. Mitigation: read `mesh/canonical.ts` + the relay auth line format,
    and lift the reference **test vectors** (MIT) into Swift unit tests for
    byte-for-byte conformance before trusting the handshake.
-2. **Protocol stability.** remote-pi is essentially one maintainer's evolving
-   project. Pin a protocol revision; track the repo; version the codec.
+2. **Protocol stability.** The protocol descends from a single upstream
+   maintainer's evolving project and now evolves under un-bien. Pin a protocol
+   revision; version the codec.
 3. **Trust boundary.** The relay sees routed **plaintext** (not E2E). Fine on a
    private Tailnet; matters the moment "multiple relays" spans networks you don't
    control. Surface which relays are trusted in the UI.
@@ -297,8 +302,8 @@ same 32 bytes, different strings → **silent self-revocations**. Rules:
 ### 10.2 Relay auth handshake (JSONL over WS, all standard base64)
 
 > **Verified against the reference *app* (`app/lib/data/transport/`), not just
-> the pi-extension.** The APP's wire model has three layers, and differs from
-> the pi-extension's `pi_envelope`/`to_pc` shape below (that shape is how a PC
+> the extension.** The APP's wire model has three layers, and differs from
+> the extension's `pi_envelope`/`to_pc` shape below (that shape is how a PC
 > connects, not the phone):
 >
 > 1. **Auth control** — `hello`/`challenge`/`auth`, raw JSON frames. The app's
@@ -359,12 +364,18 @@ Source: `mesh/canonical.ts`. **Bit-compatibility contract across Dart/Rust/TS:**
 
 ---
 
-## Reference map (remote_pi, MIT)
+## Reference map
 
-+ Wire types/codec: `pi-extension/src/protocol/{types,codec}.ts`
-+ Pairing: `pi-extension/src/pairing/{qr,crypto,storage}.ts`
-+ Mesh authority: `pi-extension/src/mesh/{verify,canonical,siblings}.ts`
+un-bien monorepo sources (the current source of truth):
+
++ Wire types/codec: `extension/src/protocol/{types,codec}.ts`
++ Pairing: `extension/src/pairing/{qr,crypto,storage}.ts`
++ Mesh authority: `extension/src/mesh/{verify,canonical,siblings}.ts`
 + Relay auth (Rust): `relay/src/auth/{challenge,mod}.rs`
-+ Relay transport: `pi-extension/src/transport/relay_client.ts`
-+ Device identity (Flutter, for comparison): `app/packages/remote_pi_identity/`
++ Relay transport: `extension/src/transport/relay_client.ts`
++ Wire protocol doc: [`docs/rpc-envelope.md`](docs/rpc-envelope.md)
+
+Upstream **remote-pi** (MIT, Jacob Moura) for comparison / test vectors:
+
++ Device identity (Flutter): `app/packages/remote_pi_identity/`
 + Canonical protocol doc (terse, PT-BR): `PROTOCOL.md`

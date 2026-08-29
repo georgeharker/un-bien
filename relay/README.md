@@ -1,12 +1,11 @@
 > **Derived from [remote-pi](https://github.com/jacobaraujo7/remote_pi)** by Jacob
 > Moura, used under the MIT License. This tree is part of the
-> [un-bien](../README.md) monorepo (Cargo package `un-bien-relay`) and is
-> mid-rework — the content below still carries upstream branding.
+> [un-bien](../README.md) monorepo (Cargo package `un-bien-relay`).
 
-# Remote Pi — Relay
+# un-bien — Relay
 
-A lightweight WebSocket relay server that connects the **Remote Pi** mobile app to
-`pi-extension` processes running on your operating system. It handles peer routing,
+A lightweight WebSocket relay server that connects the **un-bien** mobile app to
+un-bien **extension** processes running on your machine. It handles peer routing,
 presence, authorized Pi-to-Pi forwarding, and signed membership metadata.
 
 For a full overview of the project, see the
@@ -59,20 +58,16 @@ plane — it is never used for App↔Pi frames.)
 
 ---
 
-## Public relay
+## No public relay — self-host
 
-A shared relay is available at:
-
-```
-https://relay-rp1.jacobmoura.work
-```
-
-You can use it to get started without any setup. However, be aware of the security
-trade-offs below.
+**un-bien ships with no default relay and runs no shared infrastructure.** You
+host your own (below), which keeps the relay operator role in your hands. The
+extension reports its relay as `unset` and refuses to connect until you point it
+at one with `/unbien set-relay <url>`.
 
 ### Security considerations
 
-Messages are protected in two ways on the public relay:
+Messages are protected in two ways:
 
 - **TLS (SSL)** — the WebSocket connection is encrypted in transit.
 - **Ed25519 connection key** — challenge-response authenticates possession of the
@@ -104,12 +99,14 @@ places the TLS endpoint, executable, and storage under infrastructure you contro
 ### Docker (quickest)
 
 ```bash
+# Build the image from this crate, then run it:
+docker build -t un-bien-relay .
 docker run -d \
-  --name remote-pi-relay \
+  --name un-bien-relay \
   -p 3000:3000 \
-  -v remote-pi-data:/data \
+  -v un-bien-data:/data \
   --restart unless-stopped \
-  jacobmoura7/remote-pi-relay
+  un-bien-relay
 ```
 
 The relay listens on a **single port** (`3000` by default) and serves three
@@ -119,12 +116,12 @@ surfaces at once:
 - `GET /health` — health check (returns `200 OK`)
 - `GET / POST /mesh/<owner_pk_hash>` — signed membership versions
 
-Point your app and `pi-extension` to `ws://<your-server-ip>:3000` (or `wss://`
+Point your app and extension to `ws://<your-server-ip>:3000` (or `wss://`
 if you put it behind a TLS-terminating reverse proxy such as Caddy or nginx).
 
 **`/data` volume**: the relay stores its SQLite database (signed membership
 versions) at `/data/mesh.db` inside the container. Mount a named volume (as in
-the example above) or a host directory (`-v /srv/remote-pi:/data`) so the state
+the example above) or a host directory (`-v /srv/un-bien:/data`) so the state
 survives `docker rm` and image upgrades. Without a mount, the database is
 recreated empty each time the container starts and clients re-publish their
 state at the next mutation.
@@ -141,13 +138,13 @@ Example with a custom port and logging (volume mount is the same):
 
 ```bash
 docker run -d \
-  --name remote-pi-relay \
+  --name un-bien-relay \
   -p 8080:8080 \
-  -v remote-pi-data:/data \
+  -v un-bien-data:/data \
   -e UNBIEN_RELAY_PORT=8080 \
   -e RUST_LOG=info \
   --restart unless-stopped \
-  jacobmoura7/remote-pi-relay
+  un-bien-relay
 ```
 
 ### Mesh membership endpoint
@@ -201,7 +198,7 @@ relay.yourdomain.com {
 }
 ```
 
-Then set your app and `pi-extension` relay URL to `wss://relay.yourdomain.com`.
+Then set your app and extension relay URL to `wss://relay.yourdomain.com`.
 
 ---
 
@@ -209,11 +206,11 @@ Then set your app and `pi-extension` relay URL to `wss://relay.yourdomain.com`.
 
 ```bash
 cargo build --release
-./target/release/relay
+./target/release/un-bien-relay
 ```
 
 ```bash
-UNBIEN_RELAY_PORT=8080 RUST_LOG=info ./target/release/relay
+UNBIEN_RELAY_PORT=8080 RUST_LOG=info ./target/release/un-bien-relay
 ```
 
 ## Running tests
