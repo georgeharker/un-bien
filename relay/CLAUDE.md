@@ -55,7 +55,7 @@ pelo Owner em SQLite.
   wire mistos continuam adiados. O shim da 0.6 cobre Relay antigo ou rollback,
   não é a razão de Relay-first ser seguro.
 - Os procedimentos de rollout ficam centralizados no
-  [Plano 51](../plan/51-cross-pc-mesh-routing-hardening.md).
+  Plano 51.
 
 ## NÃO fazer
 

@@ -21,3 +21,7 @@ data/
 
 # Xcode build products (iOS/mac device builds)
 app/build/
+
+/.quarto/
+**/*.quarto_ipynb
+/_site/

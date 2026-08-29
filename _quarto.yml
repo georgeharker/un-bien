@@ -1,0 +1,52 @@
+project:
+  type: website
+  render:
+    - index.md
+    - README.md # README files must be listed explicitly; globs skip them
+    - DESIGN.md
+    - DEPLOY.md
+    - TESTING.md
+    - docs/rpc-envelope.md
+    - docs/rpc-on-event-map.md
+
+# gfm_auto_identifiers makes heading anchors match GitHub's slugs, which the
+# docs' cross-links use. Keep pandoc's full markdown reader otherwise —
+# `from: gfm` breaks Quarto's navigation divs.
+from: markdown+gfm_auto_identifiers
+
+website:
+  title: "un-bien"
+  description: "Mobile remote control + local agent mesh for the Pi agent."
+  search: true
+  repo-url: https://github.com/georgeharker/un-bien
+  sidebar:
+    style: docked
+    tools:
+      - icon: github
+        href: https://github.com/georgeharker/un-bien
+        text: GitHub repository
+    contents:
+      - text: "Home"
+        href: index.md
+      - text: "Overview (README)"
+        href: README.md
+      - section: "Design & protocol"
+        contents:
+          - text: "Architecture & design"
+            href: DESIGN.md
+          - text: "rpc-envelope protocol"
+            href: docs/rpc-envelope.md
+          - text: "pi.on() ↔ frame map"
+            href: docs/rpc-on-event-map.md
+      - section: "Operations"
+        contents:
+          - text: "Deployment & signing"
+            href: DEPLOY.md
+          - text: "Feature test drive"
+            href: TESTING.md
+
+format:
+  html:
+    theme: pulse
+    toc: true
+    embed-resources: true

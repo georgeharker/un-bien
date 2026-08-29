@@ -18,7 +18,7 @@ For a full overview of the project, see the
 
 For wire format, identity model, ACK protocol, cross-PC routing, mesh
 membership, trust model, and failure modes, see
-[PROTOCOL.md](../PROTOCOL.md) at the repo root. It is the canonical reference
+[rpc-envelope](../docs/rpc-envelope.md) at the repo root. It is the canonical reference
 for everything the relay enforces on the wire.
 
 ---
@@ -189,7 +189,7 @@ errors. Then coordinate the Extension 0.6 rollout and minimize mixed old/new
 Extensions because mixed wire-label interoperability is deferred. Extension
 0.6's old-Relay error shim is for an old Relay or Relay rollback, not the reason
 Relay-first is safe. The centralized rollout gates are in
-[Plan 51](../plan/51-cross-pc-mesh-routing-hardening.md).
+Plan 51.
 
 ### Behind a reverse proxy (HTTPS/WSS)
 

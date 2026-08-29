@@ -4,10 +4,10 @@
 > below still carries upstream branding and is being rebranded to un-bien.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/jacobaraujo7/remote_pi/main/branding/logo-full.svg" width="160" alt="Remote Pi logo" />
+  <img src="https://raw.githubusercontent.com/georgeharker/un-bien/main/app/icons/un-bien-macos-1024.png" width="160" alt="un-bien logo" />
 </p>
 
-<h1 align="center">Remote Pi</h1>
+<h1 align="center">un-bien</h1>
 
 > Extend the [Pi coding agent](https://github.com/earendil-works/pi) with two
 > superpowers: agents that talk to each other on the same machine, and a mobile
@@ -22,7 +22,7 @@ first time it asks a couple of questions and you are done.
 
 For wire format, identity model, ACK protocol, cross-PC routing, mesh
 membership, and the trust model (what the relay sees and doesn't see),
-read [`PROTOCOL.md`](../PROTOCOL.md) at the repo root. It is the canonical
+read [`rpc-envelope`](../docs/rpc-envelope.md) at the repo root. It is the canonical
 document — this README only covers user-facing setup.
 
 ---
@@ -85,7 +85,7 @@ both:
 
 Several Pi instances running side-by-side in different terminals can discover
 each other and exchange messages. Each instance is a peer in a named
-*session*. The LLM uses:
+_session_. The LLM uses:
 
 - `list_peers` — discover current peer routing addresses
 - `agent_send` — unicast waits for the broker delivery ACK; broadcast is
@@ -103,8 +103,8 @@ addresses over the relay; local-only use stays on UDS when relay access is off.
 Useful for splitting work across roles (`backend`, `frontend`, `tests`,
 `orchestrator`, …) and letting them coordinate.
 
-The first agent to enter a session becomes the *leader* (hosts the broker);
-the rest are *followers*. If the leader exits, a follower automatically takes
+The first agent to enter a session becomes the _leader_ (hosts the broker);
+the rest are _followers_. If the leader exits, a follower automatically takes
 over — the failover is invisible to the LLMs.
 
 ### 2) Mobile app (over the relay)
@@ -118,7 +118,7 @@ Communication uses WebSocket over TLS to the relay. Fields such as `ct` are
 wire containers, not a systemwide end-to-end confidentiality guarantee: current
 Pi-forward, cross-PC, app, and control envelopes visible to the relay are not
 fully opaque or E2E encrypted. A relay operator can see routed plaintext
-protocol content and metadata; see [`PROTOCOL.md`](../PROTOCOL.md) for the exact
+protocol content and metadata; see [`rpc-envelope`](../docs/rpc-envelope.md) for the exact
 trust boundaries.
 
 **Get the app** — all current download options (Google Play, App Store, and
@@ -134,17 +134,17 @@ Beyond the chat, the app surfaces a small set of typed actions you can run
 on the paired Pi session. Tap the ⚙ button next to the message input (visible
 when the input is empty) to open the Quick Actions sheet:
 
-| Action | What it does |
-| --- | --- |
-| **Compact context** | Runs `ctx.compact()` — same as `/compact` in the TUI. |
-| **New session** | Runs `ctx.newSession()` — equivalent to `/new`, asks for confirmation first. |
-| **Model** | Opens a model picker fed by your authenticated providers (same source the TUI uses) and switches via `pi.setModel(model)`. |
-| **Thinking** | Segmented control with the 6 SDK levels (`off` · `minimal` · `low` · `medium` · `high` · `xhigh`). Changes via `pi.setThinkingLevel(level)`. |
+| Action              | What it does                                                                                                                                 |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Compact context** | Runs `ctx.compact()` — same as `/compact` in the TUI.                                                                                        |
+| **New session**     | Runs `ctx.newSession()` — equivalent to `/new`, asks for confirmation first.                                                                 |
+| **Model**           | Opens a model picker fed by your authenticated providers (same source the TUI uses) and switches via `pi.setModel(model)`.                   |
+| **Thinking**        | Segmented control with the 6 SDK levels (`off` · `minimal` · `low` · `medium` · `high` · `xhigh`). Changes via `pi.setThinkingLevel(level)`. |
 
 Each action gets a structured `action_ok` / `action_error` reply so the app
 can show a SnackBar on failure. Visible side-effects (chat output, model
 change broadcasts, compaction notice) still flow through the normal chat
-channels. The wire schema is documented in [`PROTOCOL.md`](../PROTOCOL.md)
+channels. The wire schema is documented in [`rpc-envelope`](../docs/rpc-envelope.md)
 under "App actions".
 
 It is **not** a generic slash-command picker. The Pi SDK does not expose
@@ -207,11 +207,11 @@ The bare command is the everyday entry point:
 
 Behavior depends on whether there's a local config for this directory:
 
-| State | What happens |
-| --- | --- |
+| State                                      | What happens                                                                             |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------- |
 | First run (no `.pi/remote-pi/config.json`) | Interactive wizard → saves config → joins agent session → starts relay (if you opted in) |
-| Returning user, auto-start enabled | Joins agent session + starts relay automatically, then prints status |
-| Returning user, auto-start disabled | Prints status only; join/relay must be run manually |
+| Returning user, auto-start enabled         | Joins agent session + starts relay automatically, then prints status                     |
+| Returning user, auto-start disabled        | Prints status only; join/relay must be run manually                                      |
 
 The wizard asks three questions:
 
@@ -398,12 +398,12 @@ log at `~/.pi/remote/sessions/<name>/audit.jsonl` for postmortem inspection.
 
 Useful commands:
 
-| Command | What it does |
-| --- | --- |
-| `/remote-pi` | Join the local mesh (and start the relay, if enabled) |
-| `/remote-pi peers` | List local + cross-PC mesh peers, grouped by PC |
-| `/remote-pi rename <new>` | Rename this agent in the current session |
-| `/remote-pi stop` | Leave the local mesh and disconnect the relay |
+| Command                   | What it does                                          |
+| ------------------------- | ----------------------------------------------------- |
+| `/remote-pi`              | Join the local mesh (and start the relay, if enabled) |
+| `/remote-pi peers`        | List local + cross-PC mesh peers, grouped by PC       |
+| `/remote-pi rename <new>` | Rename this agent in the current session              |
+| `/remote-pi stop`         | Leave the local mesh and disconnect the relay         |
 
 Name collisions inside a session get a numeric suffix automatically
 (`backend`, `backend#2`, `backend#3`). The broker assigns it and returns the
@@ -415,40 +415,40 @@ real name to the peer.
 
 ### Local session (one Pi, one terminal)
 
-| Command | Description |
-| --- | --- |
-| `/remote-pi` | Connect (join local mesh + start relay), or run setup on first use |
-| `/remote-pi setup` | Run the setup wizard and update local config |
-| `/remote-pi status` | Show local mesh + relay status |
-| `/remote-pi stop` | Stop everything for **this** terminal (mesh + relay) |
-| `/remote-pi pair` | Show QR code + copy-paste pairing URI for a new mobile device |
-| `/remote-pi devices` | List paired mobile devices (online/offline per device) |
-| `/remote-pi revoke <shortid>` | Revoke a paired device by its shortid |
-| `/remote-pi set-relay <url>` | Persist a new relay URL (http:// or https://) |
+| Command                                  | Description                                                                    |
+| ---------------------------------------- | ------------------------------------------------------------------------------ |
+| `/remote-pi`                             | Connect (join local mesh + start relay), or run setup on first use             |
+| `/remote-pi setup`                       | Run the setup wizard and update local config                                   |
+| `/remote-pi status`                      | Show local mesh + relay status                                                 |
+| `/remote-pi stop`                        | Stop everything for **this** terminal (mesh + relay)                           |
+| `/remote-pi pair`                        | Show QR code + copy-paste pairing URI for a new mobile device                  |
+| `/remote-pi devices`                     | List paired mobile devices (online/offline per device)                         |
+| `/remote-pi revoke <shortid>`            | Revoke a paired device by its shortid                                          |
+| `/remote-pi set-relay <url>`             | Persist a new relay URL (http:// or https://)                                  |
 | `/remote-pi relay [start\|stop\|status]` | Relay-only control — leaves local mesh membership untouched (no verb = toggle) |
-| `/remote-pi relay url <url>` | Same as `set-relay` |
-| `/remote-pi config` | Show the effective relay URL and its source (env / config / default) |
+| `/remote-pi relay url <url>`             | Same as `set-relay`                                                            |
+| `/remote-pi config`                      | Show the effective relay URL and its source (env / config / default)           |
 
 ### Daemon fleet (one supervisor, N background Pis — see [Daemon mode](#daemon-mode))
 
-| Command | Description |
-| --- | --- |
-| `/remote-pi create <cwd> [--name X]` | Register a folder as a daemon |
-| `/remote-pi remove <id>` | Unregister a daemon (local config preserved) |
-| `/remote-pi daemons` | List registered daemons + state |
-| `/remote-pi daemon start` | Start every registered daemon |
-| `/remote-pi daemon stop` | Stop every running daemon (`/remote-pi stop` stops only the local terminal) |
-| `/remote-pi daemon restart` | Stop + start all daemons |
-| `/remote-pi daemon status` | Detailed runtime status (pid, uptime, restart count) |
-| `/remote-pi daemon send <id> "<text>"` | Send a prompt to a specific daemon |
+| Command                                        | Description                                                                   |
+| ---------------------------------------------- | ----------------------------------------------------------------------------- |
+| `/remote-pi create <cwd> [--name X]`           | Register a folder as a daemon                                                 |
+| `/remote-pi remove <id>`                       | Unregister a daemon (local config preserved)                                  |
+| `/remote-pi daemons`                           | List registered daemons + state                                               |
+| `/remote-pi daemon start`                      | Start every registered daemon                                                 |
+| `/remote-pi daemon stop`                       | Stop every running daemon (`/remote-pi stop` stops only the local terminal)   |
+| `/remote-pi daemon restart`                    | Stop + start all daemons                                                      |
+| `/remote-pi daemon status`                     | Detailed runtime status (pid, uptime, restart count)                          |
+| `/remote-pi daemon send <id> "<text>"`         | Send a prompt to a specific daemon                                            |
 | `/remote-pi cron add <id> "<expr>" "<prompt>"` | Schedule a recurring prompt (`--tz`, `--wake`, `--no-skip-busy`, `--catchup`) |
-| `/remote-pi cron list` | List scheduled jobs (schedule, enabled, next run, last status) |
-| `/remote-pi cron run <jobId>` | Fire a job now (ignores its schedule) |
-| `/remote-pi cron enable\|disable <jobId>` | Toggle a job on/off |
-| `/remote-pi cron remove <jobId>` | Delete a job |
-| `/remote-pi cron log [<jobId>] [--tail N]` | Read the fire/skip audit log |
-| `/remote-pi install` | Install `pi-supervisord` as a system service |
-| `/remote-pi uninstall` | Remove the system service (registry preserved) |
+| `/remote-pi cron list`                         | List scheduled jobs (schedule, enabled, next run, last status)                |
+| `/remote-pi cron run <jobId>`                  | Fire a job now (ignores its schedule)                                         |
+| `/remote-pi cron enable\|disable <jobId>`      | Toggle a job on/off                                                           |
+| `/remote-pi cron remove <jobId>`               | Delete a job                                                                  |
+| `/remote-pi cron log [<jobId>] [--tail N]`     | Read the fire/skip audit log                                                  |
+| `/remote-pi install`                           | Install `pi-supervisord` as a system service                                  |
+| `/remote-pi uninstall`                         | Remove the system service (registry preserved)                                |
 
 All commands above work both as Pi slash commands (interactive) and as
 shell-level `remote-pi <subcommand>` when the package is installed
@@ -460,7 +460,7 @@ globally (`npm install -g remote-pi`).
 supervisor — e.g. a daily "summarise new PRs". Output flows fire-and-forget to
 the mesh/app like any prompt; the cron layer only audits the dispatch.
 
-- **Schedule** is a cron expression (croner syntax; an optional 6th *seconds*
+- **Schedule** is a cron expression (croner syntax; an optional 6th _seconds_
   field is supported), with an optional IANA timezone via `--tz`:
 
   ```sh
@@ -571,10 +571,10 @@ registered daemon back. To wipe the registry entirely, `rm
 
 ### Where to find logs
 
-| Platform | Command |
-| --- | --- |
-| Linux | `journalctl --user -u remote-pi-supervisord -f` |
-| macOS | `tail -f ~/.pi/remote/supervisord.log` |
+| Platform | Command                                         |
+| -------- | ----------------------------------------------- |
+| Linux    | `journalctl --user -u remote-pi-supervisord -f` |
+| macOS    | `tail -f ~/.pi/remote/supervisord.log`          |
 
 Each spawned daemon's stderr is forwarded into the supervisor's log
 with a `[<cwd>]` prefix, so a single log stream shows every agent.
@@ -598,22 +598,22 @@ with a `[<cwd>]` prefix, so a single log stream shows every agent.
 
 ## Configuration files
 
-| Path | Scope | What's in it |
-| --- | --- | --- |
-| `<cwd>/.pi/remote-pi/config.json` | Per-directory | `agent_name`, `session_name`, `auto_start_relay` |
-| `~/.pi/remote/config.json` | Per-user | `relay` URL; optional `defaults.auto_start_relay` (machine-wide fallback for per-directory configs) |
-| `~/.pi/remote/peers.json` | Per-machine | Paired mobile devices |
-| `~/.pi/remote/sessions/<name>/` | Per-session | Broker socket + `audit.jsonl` |
-| `~/.pi/remote/skills/agent-network/SKILL.md` | Per-user | Agent skill the LLM reads |
+| Path                                         | Scope         | What's in it                                                                                        |
+| -------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------- |
+| `<cwd>/.pi/remote-pi/config.json`            | Per-directory | `agent_name`, `session_name`, `auto_start_relay`                                                    |
+| `~/.pi/remote/config.json`                   | Per-user      | `relay` URL; optional `defaults.auto_start_relay` (machine-wide fallback for per-directory configs) |
+| `~/.pi/remote/peers.json`                    | Per-machine   | Paired mobile devices                                                                               |
+| `~/.pi/remote/sessions/<name>/`              | Per-session   | Broker socket + `audit.jsonl`                                                                       |
+| `~/.pi/remote/skills/agent-network/SKILL.md` | Per-user      | Agent skill the LLM reads                                                                           |
 
 Every path above **except the global `config.json`** derives from a single
 **state root** — by default `~/.pi/remote`. Two environment variables relocate
 that state root:
 
-| Variable | Behaviour |
-| --- | --- |
-| `REMOTE_PI_DIR` | Absolute path to the state root. No suffix appended — set this to an XDG-style location like `~/.config/pi/remote-pi`. Takes priority over every other variable. |
-| `REMOTE_PI_HOME` | Stand-in for `$HOME`; state lives at `<REMOTE_PI_HOME>/.pi/remote`. Kept for backward compatibility. |
+| Variable         | Behaviour                                                                                                                                                        |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `REMOTE_PI_DIR`  | Absolute path to the state root. No suffix appended — set this to an XDG-style location like `~/.config/pi/remote-pi`. Takes priority over every other variable. |
+| `REMOTE_PI_HOME` | Stand-in for `$HOME`; state lives at `<REMOTE_PI_HOME>/.pi/remote`. Kept for backward compatibility.                                                             |
 
 When both are set, `REMOTE_PI_DIR` wins. Use these to put remote-pi **state**
 (sessions, daemon registries, cwd locks, paired identity) on a specific disk,
@@ -622,8 +622,8 @@ inside an XDG directory, or anywhere your system's conventions dictate.
 The global `config.json` (relay URL + defaults) is resolved separately, so it
 can sit beside the coding agent's own settings rather than the state tree:
 
-| Variable | Behaviour |
-|---|---|
+| Variable              | Behaviour                                                                                                                                                                                                                     |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PI_CODING_AGENT_DIR` | The Pi host's settings root (default `~/.pi`). `config.json` lives at `<PI_CODING_AGENT_DIR>/remote/config.json`, so with the default agent dir the path stays exactly `~/.pi/remote/config.json`. Takes priority for config. |
 
 When `PI_CODING_AGENT_DIR` is unset, `config.json` falls back to the state root
@@ -638,8 +638,8 @@ as a fallback for every per-directory config that doesn't set the field:
 {
   "relay": "https://relay.yourdomain.tld",
   "defaults": {
-    "auto_start_relay": true
-  }
+    "auto_start_relay": true,
+  },
 }
 ```
 
@@ -662,7 +662,7 @@ REMOTE_PI_RELAY=https://staging.example.tld pi
 ## Troubleshooting
 
 **Footer says `🟡 relay waiting for pairing` even though I paired a device.**
-The icon reflects whether *any* device has been paired on this machine, not
+The icon reflects whether _any_ device has been paired on this machine, not
 whether one is connected right now. If you really have a paired device in
 `/remote-pi devices`, restart Pi — the cache may be stale (fixed in current
 release; report a bug if it recurs).
