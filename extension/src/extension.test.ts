@@ -1761,51 +1761,35 @@ describe("multi-channel broadcast (W2D)", () => {
     expect(_getState()).toBe("paired"); // derived: at least one owner still on
   });
 
-  // ── Source-of-truth rebroadcast (plan/24 W2D fix) ──────────────────────────
+  // ── Source-of-truth fan-out (plan/24 W2D) ──────────────────────────────────
   //
-  // When app A sends a user_message, the Pi must echo it to every
-  // _activePeers entry (A included) after the SDK accepts the handoff.
-  // App side renders from the echo, not from local optimistic state — keeps
-  // every paired device's session view bit-identical.
-
-  test("user_message from A → rebroadcast reaches both A and B (with id preserved)", async () => {
+  // The user's own bubble now renders from the fork forwarding pi's
+  // message_end/message_start events as {rpc} envelopes (the stock echo is
+  // gone). _broadcastEnvelope must fan every such frame out to EVERY attached
+  // peer, so each paired device's session view stays bit-identical.
+  test("fork-forwarded message_end envelope reaches both owner A and owner B", async () => {
     await _pairForTest("ownerA__1234567890");
     await _pairAdditionalForTest("ownerB__abcdefghij", "Android");
     const sendsBefore = relayRef.current!.send.mock.calls.length;
 
-    // Owner A sends user_message with a stable id.
-    relayRef.current!.emit(
-      "message",
-      JSON.stringify({
-        peer: "ownerA__1234567890",
-        ct: Buffer.from(
-          JSON.stringify({
-            type: "user_message",
-            id: "msg-123",
-            text: "oi",
-          }),
-        ).toString("base64"),
-      }),
-    );
-    // Flush microtasks so the route handler runs.
-    await new Promise<void>((r) => setImmediate(r));
+    // The fork forwards pi's message_end as a {rpc} envelope via the producer.
+    const onMsgEnd = captureEventHandler("message_end");
+    onMsgEnd({
+      type: "message_end",
+      message: { role: "user", content: [{ type: "text", text: "oi" }] },
+    });
 
     const sent = relayRef
       .current!.send.mock.calls.slice(sendsBefore)
       .map((c) => c[0] as string)
       .map(decodeSentCt);
-    const echoes = sent.filter((d) => d.inner.type === "user_message");
-    expect(echoes).toHaveLength(2);
-    // id must be the sender's verbatim — Pi must not re-generate.
-    for (const e of echoes) {
-      expect(e.inner).toMatchObject({
-        type: "user_message",
-        id: "msg-123",
-        text: "oi",
-      });
-    }
-    // Both owners received the echo (sender included).
-    const recipients = new Set(echoes.map((d) => d.peer));
+    const ends = sent.filter(
+      (d) =>
+        (d.inner["rpc"] as Record<string, unknown> | undefined)?.["type"] ===
+        "message_end",
+    );
+    // One frame per attached owner, both recipients present.
+    const recipients = new Set(ends.map((d) => d.peer));
     expect(recipients).toEqual(
       new Set(["ownerA__1234567890", "ownerB__abcdefghij"]),
     );
@@ -1828,18 +1812,18 @@ describe("multi-channel broadcast (W2D)", () => {
         sentMessages.push(messageArgs);
       },
     });
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
     relayRef.current!.emit(
       "message",
       JSON.stringify({
         peer: "ownerA__1234567890",
         ct: Buffer.from(
           JSON.stringify({
-            type: "user_message",
-            id: messageId,
-            text: "what is this?",
-            images: [{ data: "QUJD", mime: "image/png" }],
+            rpc: {
+              type: "prompt",
+              id: messageId,
+              message: "what is this?",
+              images: [{ data: "QUJD", mime: "image/png" }],
+            },
           }),
         ).toString("base64"),
       }),
@@ -1900,19 +1884,6 @@ describe("multi-channel broadcast (W2D)", () => {
       const stDir = statSync(dirname(preview.details.path));
       expect(stDir.mode & 0o777).toBe(0o700);
     }
-
-    // The echo carries `images` so other owners render the bubble.
-    const sent = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt);
-    const echo = sent.find((d) => d.inner.type === "user_message");
-    expect(echo?.inner).toMatchObject({
-      type: "user_message",
-      id: messageId,
-      text: "what is this?",
-      images: [{ data: "QUJD", mime: "image/png" }],
-    });
   });
 
   test("JPEG user_message generates optional private PNG preview when converter is available", async () => {
@@ -1936,10 +1907,12 @@ describe("multi-channel broadcast (W2D)", () => {
         peer: "ownerA__1234567890",
         ct: Buffer.from(
           JSON.stringify({
-            type: "user_message",
-            id: "jpeg-msg",
-            text: "jpeg caption",
-            images: [{ data: "QUJD", mime: "image/jpeg" }],
+            rpc: {
+              type: "prompt",
+              id: "jpeg-msg",
+              message: "jpeg caption",
+              images: [{ data: "QUJD", mime: "image/jpeg" }],
+            },
           }),
         ).toString("base64"),
       }),
@@ -1985,10 +1958,12 @@ describe("multi-channel broadcast (W2D)", () => {
         peer: "ownerA__1234567890",
         ct: Buffer.from(
           JSON.stringify({
-            type: "user_message",
-            id: "jpeg-big-preview",
-            text: "jpeg caption",
-            images: [{ data: "QUJD", mime: "image/jpeg" }],
+            rpc: {
+              type: "prompt",
+              id: "jpeg-big-preview",
+              message: "jpeg caption",
+              images: [{ data: "QUJD", mime: "image/jpeg" }],
+            },
           }),
         ).toString("base64"),
       }),
@@ -2029,11 +2004,13 @@ describe("multi-channel broadcast (W2D)", () => {
         peer: "ownerA__1234567890",
         ct: Buffer.from(
           JSON.stringify({
-            type: "user_message",
-            id: "steer-image",
-            text: "extra photo",
-            streaming_behavior: "steer",
-            images: [{ data: "QUJD", mime: "image/png" }],
+            rpc: {
+              type: "prompt",
+              id: "steer-image",
+              message: "extra photo",
+              streamingBehavior: "steer",
+              images: [{ data: "QUJD", mime: "image/png" }],
+            },
           }),
         ).toString("base64"),
       }),
@@ -2077,10 +2054,12 @@ describe("multi-channel broadcast (W2D)", () => {
         peer: "ownerA__1234567890",
         ct: Buffer.from(
           JSON.stringify({
-            type: "user_message",
-            id: "slow-jpeg",
-            text: "slow photo",
-            images: [{ data: "QUJD", mime: "image/jpeg" }],
+            rpc: {
+              type: "prompt",
+              id: "slow-jpeg",
+              message: "slow photo",
+              images: [{ data: "QUJD", mime: "image/jpeg" }],
+            },
           }),
         ).toString("base64"),
       }),
@@ -2301,43 +2280,6 @@ describe("multi-channel broadcast (W2D)", () => {
     }
   });
 
-  test("plan/30: user_message without images → no `images` key on the echo (text path unchanged)", async () => {
-    await _pairForTest("ownerA__1234567890");
-    const sendUserMessage = vi.fn();
-    _setPiForTest({
-      sendUserMessage,
-      sendMessage: () => undefined,
-    });
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-    relayRef.current!.emit(
-      "message",
-      JSON.stringify({
-        peer: "ownerA__1234567890",
-        ct: Buffer.from(
-          JSON.stringify({
-            type: "user_message",
-            id: "msg-txt",
-            text: "hi",
-          }),
-        ).toString("base64"),
-      }),
-    );
-    await new Promise<void>((r) => setImmediate(r));
-    expect(sendUserMessage).toHaveBeenCalledWith("hi", { deliverAs: "steer" });
-    const sent = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt);
-    const echo = sent.find((d) => d.inner.type === "user_message");
-    expect(echo?.inner).toMatchObject({
-      type: "user_message",
-      id: "msg-txt",
-      text: "hi",
-    });
-    expect(echo?.inner).not.toHaveProperty("images");
-    expect(echo?.inner).not.toHaveProperty("streaming_behavior");
-  });
-
   test("plan/43: active steering calls sendUserMessage(deliverAs='steer')", async () => {
     await _pairForTest("ownerA__1234567890");
     const onInput = captureEventHandler("input");
@@ -2349,7 +2291,6 @@ describe("multi-channel broadcast (W2D)", () => {
       sendUserMessage,
       sendMessage: () => undefined,
     });
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
 
     relayRef.current!.emit(
       "message",
@@ -2357,10 +2298,12 @@ describe("multi-channel broadcast (W2D)", () => {
         peer: "ownerA__1234567890",
         ct: Buffer.from(
           JSON.stringify({
-            type: "user_message",
-            id: "msg-steer",
-            text: "refine this",
-            streaming_behavior: "steer",
+            rpc: {
+              type: "prompt",
+              id: "msg-steer",
+              message: "refine this",
+              streamingBehavior: "steer",
+            },
           }),
         ).toString("base64"),
       }),
@@ -2370,17 +2313,6 @@ describe("multi-channel broadcast (W2D)", () => {
     expect(sendUserMessage).toHaveBeenCalledTimes(1);
     expect(sendUserMessage).toHaveBeenCalledWith("refine this", {
       deliverAs: "steer",
-    });
-    const sent = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt);
-    const echo = sent.find((d) => d.inner.type === "user_message");
-    expect(echo?.inner).toMatchObject({
-      type: "user_message",
-      id: "msg-steer",
-      text: "refine this",
-      streaming_behavior: "steer",
     });
   });
 
@@ -2392,7 +2324,6 @@ describe("multi-channel broadcast (W2D)", () => {
       sendUserMessage,
       sendMessage: () => undefined,
     });
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
 
     relayRef.current!.emit(
       "message",
@@ -2400,10 +2331,12 @@ describe("multi-channel broadcast (W2D)", () => {
         peer: "ownerA__1234567890",
         ct: Buffer.from(
           JSON.stringify({
-            type: "user_message",
-            id: "msg-stale-steer",
-            text: "refine while stale",
-            streaming_behavior: "steer",
+            rpc: {
+              type: "prompt",
+              id: "msg-stale-steer",
+              message: "refine while stale",
+              streamingBehavior: "steer",
+            },
           }),
         ).toString("base64"),
       }),
@@ -2415,17 +2348,6 @@ describe("multi-channel broadcast (W2D)", () => {
       deliverAs: "steer",
     });
     expect(_getCurrentTurnIdForTest()).toBe("msg-stale-steer");
-    const sent = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt);
-    const echo = sent.find((d) => d.inner.type === "user_message");
-    expect(echo?.inner).toMatchObject({
-      type: "user_message",
-      id: "msg-stale-steer",
-      text: "refine while stale",
-      streaming_behavior: "steer",
-    });
   });
 
   test("plan/43: busy app message without wire behavior is defensively steered", async () => {
@@ -2434,11 +2356,13 @@ describe("multi-channel broadcast (W2D)", () => {
     onTurnStart({ type: "turn_start", turnIndex: 0, timestamp: 0 });
     expect(_getCurrentTurnIdForTest()).toBeNull();
     const sendUserMessage = vi.fn();
+    // No wire behavior: rely on the handler's mechanical steer-when-streaming
+    // net (pi.isStreaming), not fork-side steer inference.
     _setPiForTest({
       sendUserMessage,
       sendMessage: () => undefined,
+      isStreaming: true,
     });
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
 
     relayRef.current!.emit(
       "message",
@@ -2446,9 +2370,11 @@ describe("multi-channel broadcast (W2D)", () => {
         peer: "ownerA__1234567890",
         ct: Buffer.from(
           JSON.stringify({
-            type: "user_message",
-            id: "msg-busy-no-mode",
-            text: "late correction",
+            rpc: {
+              type: "prompt",
+              id: "msg-busy-no-mode",
+              message: "late correction",
+            },
           }),
         ).toString("base64"),
       }),
@@ -2460,17 +2386,6 @@ describe("multi-channel broadcast (W2D)", () => {
       deliverAs: "steer",
     });
     expect(_getCurrentTurnIdForTest()).toBe("msg-busy-no-mode");
-    const sent = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt);
-    const echo = sent.find((d) => d.inner.type === "user_message");
-    expect(echo?.inner).toMatchObject({
-      type: "user_message",
-      id: "msg-busy-no-mode",
-      text: "late correction",
-      streaming_behavior: "steer",
-    });
   });
 
   // The rpc `prompt` handler is the path the APP actually uses
@@ -2585,10 +2500,12 @@ describe("multi-channel broadcast (W2D)", () => {
         peer: "ownerA__1234567890",
         ct: Buffer.from(
           JSON.stringify({
-            type: "user_message",
-            id: "msg-steer-fail",
-            text: "bad steer",
-            streaming_behavior: "steer",
+            rpc: {
+              type: "prompt",
+              id: "msg-steer-fail",
+              message: "bad steer",
+              streamingBehavior: "steer",
+            },
           }),
         ).toString("base64"),
       }),
@@ -2600,20 +2517,22 @@ describe("multi-channel broadcast (W2D)", () => {
       .current!.send.mock.calls.slice(sendsBefore)
       .map((c) => c[0] as string)
       .map(decodeSentCt);
-    expect(
-      sent.some(
-        (d) =>
-          d.inner.type === "user_message" && d.inner.id === "msg-steer-fail",
-      ),
-    ).toBe(false);
-    const error = sent.find((d) => d.inner.type === "error");
-    expect(error?.inner).toMatchObject({
-      type: "error",
-      in_reply_to: "msg-steer-fail",
-      code: "internal_error",
+    // The stock echo is gone, so there is trivially no outbound user_message.
+    expect(sent.some((d) => d.inner.type === "user_message")).toBe(false);
+    // The correlated failure now rides an rpc error RESPONSE to the sender.
+    const error = sent.find(
+      (d) =>
+        (d.inner["rpc"] as Record<string, unknown> | undefined)?.["type"] ===
+        "response",
+    );
+    expect(error?.inner["rpc"]).toMatchObject({
+      type: "response",
+      command: "prompt",
+      success: false,
+      id: "msg-steer-fail",
     });
     expect(
-      (error?.inner as { message?: string } | undefined)?.message,
+      (error?.inner["rpc"] as { error?: string } | undefined)?.error,
     ).toContain("steer rejected");
   });
 
@@ -2674,42 +2593,6 @@ describe("multi-channel broadcast (W2D)", () => {
     expect(sent.some((d) => d.inner.type === "error")).toBe(false);
   });
 
-  test("rebroadcast happens BEFORE the agent processes the message", async () => {
-    // We can't observe SDK ordering directly with the standard mockPi, but
-    // we can verify the echo fires synchronously after the inner is
-    // received — i.e., it's queued onto `relay.send` before any async
-    // SDK work resolves. The test asserts at least the order in
-    // `relay.send.mock.calls`: user_message echoes precede any reply
-    // generated downstream (none expected here since SDK is mocked).
-    await _pairForTest("ownerA__1234567890");
-    const sendsBefore = relayRef.current!.send.mock.calls.length;
-
-    relayRef.current!.emit(
-      "message",
-      JSON.stringify({
-        peer: "ownerA__1234567890",
-        ct: Buffer.from(
-          JSON.stringify({
-            type: "user_message",
-            id: "msg-order-1",
-            text: "order check",
-          }),
-        ).toString("base64"),
-      }),
-    );
-    await new Promise<void>((r) => setImmediate(r));
-
-    const sent = relayRef
-      .current!.send.mock.calls.slice(sendsBefore)
-      .map((c) => c[0] as string)
-      .map(decodeSentCt);
-    // First outbound after the user_message arrives must be the echo.
-    expect(sent[0]?.inner).toMatchObject({
-      type: "user_message",
-      id: "msg-order-1",
-      text: "order check",
-    });
-  });
 });
 
 // ── /unbien set-relay + /unbien config ──────────────────────────────────

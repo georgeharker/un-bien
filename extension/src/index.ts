@@ -812,18 +812,6 @@ function _contentFromUserMessage(
     : msg.text;
 }
 
-function _echoUserMessage(msg: ClientUserMessage, forceSteer = false): void {
-  _broadcastToActive({
-    type: "user_message",
-    id: msg.id,
-    text: msg.text,
-    ...(msg.images && msg.images.length > 0 ? { images: msg.images } : {}),
-    ...(forceSteer || msg.streaming_behavior === "steer"
-      ? { streaming_behavior: "steer" as const }
-      : {}),
-  });
-}
-
 async function _deliverImageUserMessage(
   sender: PlainPeerChannel,
   msg: ClientUserMessage,
@@ -871,8 +859,6 @@ async function _deliverImageUserMessage(
     });
     return;
   }
-
-  _echoUserMessage(msg, shouldSteer);
 }
 
 // ── Cross-PC mesh wiring (plan/25 Wave B/C) ───────────────────────────────────
@@ -1756,8 +1742,6 @@ function _routeRpcCommandFrom(
         if (seededTurnId) _rootState().turnId = previousTurnId;
         throw new Error(wake.detail);
       }
-      // The app renders the user's own message ONLY from this echo.
-      _echoUserMessage(msg, shouldSteer);
     },
     steer: async (message) => {
       const wake = _wakeAgent(message, "app rpc steer", "steer");
@@ -5853,71 +5837,6 @@ export function _routeClientMessageFrom(
   // extension_ui_response is envelope-only now — handled in _routeRpcCommandFrom.
   if (!_pi) return;
   switch (msg.type) {
-    case "user_message": {
-      // Source-of-truth rebroadcast (plan/24 W2D fix). Echo the message
-      // back to every attached owner (sender included) after the SDK accepts
-      // the handoff, so optimistic app bubbles only confirm on real delivery.
-      //   1. The sender's app waits for this echo to render (no eager
-      //      local store), keeping all owners visually consistent.
-      //   2. Other owners see what was said, not just the agent's reply.
-      //   3. `id` is preserved verbatim, so future dedup logic on the app
-      //      side can key off it.
-      // The user_message is also recorded in _messageBuffer indirectly
-      // via `pi.on("message_end")` after the SDK persists the turn — so
-      // a later `session_sync` returns it in the history events.
-      // Plan/30: echo any inline images too so every owner renders the same
-      // image bubble. No-image path is byte-identical to before (no `images`
-      // key on the wire).
-      const requestedSteer = msg.streaming_behavior === "steer";
-      const inferredBusySteer =
-        !requestedSteer && _myRoomMeta?.working === true;
-      const shouldSteer = requestedSteer || inferredBusySteer;
-      // A reconnecting app can correctly send `steer` while our mirror has no
-      // turn id (for example, the turn started while no owner was attached).
-      // Also be defensive for clients that send a plain user_message while the
-      // room is already working. Tell the SDK this is steering; otherwise it
-      // rejects the message as a normal busy prompt. Seed a fallback id so
-      // later chunks/done have a target instead of being dropped.
-      if (msg.images && msg.images.length > 0) {
-        void _deliverImageUserMessage(sender, msg, shouldSteer).catch(
-          (error) => {
-            const detail =
-              error instanceof Error ? error.message : String(error);
-            console.error(
-              `[un-bien] failed delivering image message id=${msg.id}: ${detail}`,
-            );
-          },
-        );
-        break;
-      }
-
-      const previousTurnId = _rootState().turnId;
-      const seededTurnId = !shouldSteer || _rootState().turnId === null;
-      if (seededTurnId) {
-        _rootState().turnId = msg.id;
-      }
-      // Always include a streaming delivery mode for app-originated messages.
-      // The SDK ignores `deliverAs` when idle, but requires it when a turn is
-      // already running. This avoids a race where Remote Pi's mirror has not
-      // seen turn_start/currentTurnId yet but the SDK is already busy.
-      const wake = _wakeAgent(
-        msg.text,
-        `app user_message id=${msg.id}`,
-        "steer",
-      );
-      if (!wake.ok) {
-        if (seededTurnId) _rootState().turnId = previousTurnId;
-        sender.send({
-          type: "error",
-          code: "internal_error",
-          in_reply_to: msg.id,
-          message: `Agent rejected incoming message: ${wake.detail}`,
-        });
-        break;
-      }
-      _echoUserMessage(msg, shouldSteer);
-      break;
-    }
     case "approve_tool":
       // Approval gate was removed (plano 10.2 revisado). Type kept in
       // ClientMessage for forward-compat with a future permissions model;
