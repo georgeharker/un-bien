@@ -7,24 +7,16 @@ const fixtureDir = fileURLToPath(
   new URL("../../../app/Tests/UnBienCoreTests/Fixtures", import.meta.url),
 );
 
-const SERVER_TYPE_FILES = new Set([
-  "pair_ok.jsonl",
-  "pair_error.jsonl",
-  "user_input.jsonl",
-  "agent_stream.jsonl",
-  "agent_message.jsonl",
-  "tool_request.jsonl",
-  "tool_result.jsonl",
-  "error.jsonl",
-  "cancelled.jsonl",
-  "pong.jsonl",
-]);
+// Server-decodable fixtures. After the stock->envelope purge (95135ad) only the
+// relay pairing acks stay server-typed; every other remaining fixture is a
+// relay/transport CONTROL or client frame and must reject via decodeServer.
+const SERVER_TYPE_FILES = new Set(["pair_ok.jsonl", "pair_error.jsonl"]);
 
 describe("fixtures", () => {
   const files = readdirSync(fixtureDir).filter((f) => f.endsWith(".jsonl"));
 
-  test("29 fixture files present", () => {
-    expect(files).toHaveLength(29);
+  test("20 fixture files present", () => {
+    expect(files).toHaveLength(20);
   });
 
   for (const file of files) {

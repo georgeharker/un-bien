@@ -69,9 +69,7 @@ import type {
   ClientMessage,
   PairErrorCode,
   ServerMessage,
-  SessionHistoryEvent,
   ThinkingLevel,
-  WireImage,
 } from "./protocol/types.js";
 import { RelayClient, RoomAlreadyOpenError } from "./transport/relay_client.js";
 import { PlainPeerChannel } from "./transport/peer_channel.js";
@@ -1033,48 +1031,6 @@ type BufferMsg = {
 // .sessionManager). Both are captured from event ctx (survive fork restarts via
 // the persisted session log).
 
-/** Messages for reconstruction: prefer the PERSISTED session log (survives fork
- *  restarts) via sessionManager.getEntries(); fall back to the in-memory buffer
- *  when no ctx has bound yet. Each `message`-type entry carries an AgentMessage. */
-function _sessionHistoryMessages(): BufferMsg[] {
-  const sm = _rootState().sessionManager;
-  if (sm) {
-    try {
-      const entries = sm.getEntries() as Array<{
-        type?: string;
-        customType?: string;
-        message?: unknown;
-      }>;
-      // DIAGNOSTIC: entry-type breakdown + which entry types carry image content,
-      // to confirm whether tool-result images live in `message` entries or in
-      // appendEntry'd custom blocks (which this reconstruction currently skips).
-      const typeCounts: Record<string, number> = {};
-      let imageEntries = "";
-      for (const e of entries) {
-        const key =
-          e.type === "custom" && e.customType
-            ? `custom:${e.customType}`
-            : (e.type ?? "?");
-        typeCounts[key] = (typeCounts[key] ?? 0) + 1;
-        const s = JSON.stringify(e);
-        if (s.includes("mimeType") || s.includes('"image"'))
-          imageEntries += `[${key}]`;
-      }
-      envLog(
-        `getEntries types=${JSON.stringify(typeCounts)} imageEntries=${imageEntries || "none"}`,
-      );
-      const msgs: BufferMsg[] = [];
-      for (const e of entries) {
-        if (e.type === "message" && e.message)
-          msgs.push(e.message as BufferMsg);
-      }
-      if (msgs.length > 0) return msgs;
-    } catch (err) {
-      envLog(`getEntries failed: ${String(err)}`);
-    }
-  }
-  return _rootState().buffer;
-}
 type MeshEnvelope = {
   id: string;
   from: string;
@@ -1355,19 +1311,6 @@ let _cwdLock: AcquiredLock | null = null;
 // registers under this name; the broker confirms it (and may bump it again under
 // a live race). Null until the lock is acquired.
 let _lockedName: string | null = null;
-
-// ── Session sync limit (mirror cache cap) ─────────────────────────────────────
-//
-// Configurable via UNBIEN_SYNC_LIMIT env var (positive int, default 30).
-// Read on every session_sync so QA can `export UNBIEN_SYNC_LIMIT=N` between
-// runs without restarting the extension. The value is also clamped against
-// the client-provided `limit` (server is authoritative).
-const SYNC_LIMIT_DEFAULT = 30;
-function _getSyncLimit(): number {
-  const raw = process.env["UNBIEN_SYNC_LIMIT"];
-  const parsed = raw ? parseInt(raw, 10) : NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : SYNC_LIMIT_DEFAULT;
-}
 
 // ── Relay reconnect state ─────────────────────────────────────────────────────
 // Backoffs in ms: 1s, 2s, 5s, 10s, 30s, then stays at 30s.
@@ -1897,6 +1840,24 @@ function _routeRpcCommandFrom(
         }
       ).clearQueue();
     },
+    getEntries: async (since?: string) => {
+      // Native pi get_entries: the app reconstructs the transcript itself from
+      // the raw entry log (each message entry carries an AgentMessage). `since`
+      // slices to entries AFTER that id (delta cursor); leafId is the cursor to
+      // resume from next time. The fork does NOT replay these — see the app's
+      // SessionState.applyEntries (design 01M15FMQ).
+      const sm = _rootState().sessionManager;
+      if (!sm) return { entries: [], leafId: null };
+      const all = sm.getEntries();
+      const sliced =
+        typeof since === "string"
+          ? (() => {
+              const i = all.findIndex((e) => e.id === since);
+              return i === -1 ? all : all.slice(i + 1);
+            })()
+          : all;
+      return { entries: sliced, leafId: sm.getLeafId() };
+    },
   };
   void dispatchRpcCommand(frame as Record<string, unknown>, handlers)
     .then((resp) => {
@@ -1929,33 +1890,29 @@ function _routeUnBienPlaneFrom(
 
   if (type === "session_sync") {
     const f = frame as Record<string, unknown>;
-    const serverLimit = _getSyncLimit();
-    const requested = typeof f.limit === "number" ? f.limit : serverLimit;
-    const limit = Math.min(requested, serverLimit);
-    const msgs = _sessionHistoryMessages();
-    const events = _mapAgentMessagesToEvents(msgs);
-    const slice = limit > 0 ? events.slice(-limit) : [];
-    const truncated = events.length > slice.length;
-    const replayFrames = _historyReplayEnvelopes(slice);
+    // session_sync now carries ONLY un-bien's NON-rpc display state: panels +
+    // pending extension_ui. The TRANSCRIPT is the app's OWN native get_entries
+    // rpc (reduced by SessionState.applyEntries) — NOT replayed here. Design
+    // 01M15FMQ: separate the rpc transcript (get_entries) from un-bien panel/ui
+    // state, each an independent app-driven request issued on open + reconnect.
+    for (const req of _extensionUiBridge?.pendingRequests() ?? [])
+      sender.send(req);
+    const panels = _panelBridge?.pendingPanels() ?? [];
+    for (const panel of panels)
+      sender.sendEnvelope({ evt: { channel: "panel", data: panel } });
     envLog(
-      `session_sync(un): msgs=${msgs.length} events=${events.length} replay=${replayFrames.length} limit=${limit} truncated=${truncated}`,
+      `session_sync(un): panels=${panels.length} + ui (transcript is the app's get_entries rpc)`,
     );
-    for (const replay of replayFrames) sender.sendEnvelope(replay);
-    // Terminator on the un plane (un-bien's own reconstruction protocol); its
-    // arrival IS the eos. session_started_at + truncated ride here.
+    // Terminator/ack on the un plane; carries the session clock so the app can
+    // detect a pi restart. `truncated`/`limit` are gone (a replay concern;
+    // get_entries is unbounded / since-delta).
     sender.sendEnvelope({
       un: {
         type: "session_sync_end",
         ...(typeof f.id === "string" ? { in_reply_to: f.id } : {}),
         session_started_at: _sessionStartedAt ?? 0,
-        truncated,
       } as EnvelopeMessage["un"],
     });
-    for (const req of _extensionUiBridge?.pendingRequests() ?? [])
-      sender.send(req);
-    for (const panel of _panelBridge?.pendingPanels() ?? []) {
-      sender.sendEnvelope({ evt: { channel: "panel", data: panel } });
-    }
     return;
   }
 
@@ -1987,100 +1944,6 @@ function _uiBroadcast(msg: ServerMessage): void {
     return;
   }
   _broadcastToActive(msg);
-}
-
-/** Map the buffered session history to {rpc} live-frame envelopes so a
- *  newly-attached peer reconstructs the transcript via the SAME `applyRPC` the
- *  live stream uses — the envelope-native replacement for stock session_history.
- *  Tool cards survive (mapped to tool_execution_start/end), unlike a bare
- *  message replay. */
-function _historyReplayEnvelopes(
-  events: SessionHistoryEvent[],
-): EnvelopeMessage[] {
-  const out: EnvelopeMessage[] = [];
-  const content = (
-    text: string,
-    images?: ReadonlyArray<{ data: string; mime: string }>,
-  ): unknown[] => {
-    const c: unknown[] = [];
-    if (text) c.push({ type: "text", text });
-    for (const img of images ?? [])
-      c.push({ type: "image", data: img.data, mimeType: img.mime });
-    return c;
-  };
-  for (const e of events) {
-    switch (e.type) {
-      case "user_input":
-        out.push({
-          rpc: {
-            type: "message_end",
-            message: {
-              role: "user",
-              id: e.id,
-              content: content(e.text, e.images),
-            },
-          },
-        });
-        break;
-      case "agent_message":
-        out.push({
-          rpc: {
-            type: "message_end",
-            message: { role: "assistant", content: content(e.text, e.images) },
-          },
-        });
-        break;
-      case "tool_request":
-        out.push({
-          rpc: {
-            type: "tool_execution_start",
-            toolCallId: e.tool_call_id,
-            toolName: e.tool,
-            args: e.args,
-          },
-        });
-        break;
-      case "tool_result": {
-        // The app pulls tool images from INSIDE `result` (imagesFromToolResult);
-        // _mapAgentMessagesToEvents split them into a separate `images` array, so
-        // rebuild a `{content:[text?, image...]}` result carrying the blocks.
-        const imgs = e.images ?? [];
-        const result =
-          imgs.length > 0
-            ? {
-                content: [
-                  ...(typeof e.result === "string" && e.result
-                    ? [{ type: "text", text: e.result }]
-                    : []),
-                  ...imgs.map((img) => ({
-                    type: "image",
-                    data: img.data,
-                    mimeType: img.mime,
-                  })),
-                ],
-              }
-            : e.result;
-        out.push({
-          rpc: {
-            type: "tool_execution_end",
-            toolCallId: e.tool_call_id,
-            result,
-            isError: !!e.error,
-          },
-        });
-        break;
-      }
-      case "compaction":
-        out.push({
-          rpc: {
-            type: "compaction_end",
-            result: { summary: e.summary, tokensBefore: e.tokens_before },
-          },
-        });
-        break;
-    }
-  }
-  return out;
 }
 
 /** Broadcast for the panel bridge. Panels are ENVELOPE-ONLY (the {evt} plane):
@@ -2732,9 +2595,11 @@ function _attachOwner(
   envLog(
     `attach: peer=${appPeerId.slice(0, 8)} hello sent (caps + sessionId=${_sid ?? "?"}); active=${_activePeers.size}`,
   );
-  // Transcript reconstruction is request-driven (app sends session_sync on open)
-  // — see the envelope session_sync handler in _routeRpcCommandFrom; nothing to
-  // replay proactively here.
+  // Reconstruction (transcript + panels + extension_ui) is request-driven: the
+  // app issues session_sync — on fresh open AND on relay reconnect — and the
+  // handler in _routeUnBienPlaneFrom replays all of it. Re-sync is idempotent
+  // (stable identify ids + ns/id panel merge), so nothing is replayed
+  // proactively here.
   _refreshFooter();
 
   _safeNotify(
@@ -6523,176 +6388,6 @@ function _stringifyContent(content: unknown): string {
       return block.type === "text" ? String(block.text ?? "") : "";
     })
     .join("");
-}
-
-/**
- * Stringify a tool result consistently for BOTH the live `tool_execution_end`
- * broadcast AND the history mapper, so the app shows the same text live and on
- * re-sync. The SDK's `ToolExecutionEndEvent.result` is `any` — usually a
- * content-array of `{type:"text"}` blocks; `String()` on that yields the
- * "[object Object]" bug. Rules: string → as-is; content-array → join its text
- * (same as `_stringifyContent`); any other object → readable JSON; other
- * primitives → `String()`; null/undefined → "". Never "[object Object]".
- */
-function _stringifyToolResult(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) return _stringifyContent(value);
-  if (value !== null && typeof value === "object") {
-    // The LIVE `tool_execution_end` result is a WRAPPER object
-    // `{ content: [{type:"text",...}], details:{} }` — not the bare
-    // content-array the history path (`m.content`) carries. Unwrap `content`
-    // (or a plain `text`) so live == re-sync; JSON is only the last fallback.
-    const obj = value as { content?: unknown; text?: unknown };
-    if (Array.isArray(obj.content)) return _stringifyContent(obj.content);
-    if (typeof obj.text === "string") return obj.text;
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return "";
-    }
-  }
-  return value === null || value === undefined ? "" : String(value);
-}
-
-/**
- * Plan/30: extract `ImageContent` blocks ({type:"image", data, mimeType}) from
- * an SDK message's content and map them to the wire shape (`mimeType` → `mime`).
- * Used by the history mapper so a re-synced image bubble keeps its bytes —
- * `_stringifyContent` only pulls text and would otherwise drop the image.
- */
-function _imagesFromContent(content: unknown): WireImage[] {
-  if (!Array.isArray(content)) return [];
-  const out: WireImage[] = [];
-  for (const c of content) {
-    if (!c || typeof c !== "object") continue;
-    const block = c as { type?: string; data?: unknown; mimeType?: unknown };
-    if (
-      block.type === "image" &&
-      typeof block.data === "string" &&
-      typeof block.mimeType === "string"
-    ) {
-      out.push({ data: block.data, mime: block.mimeType });
-    }
-  }
-  return out;
-}
-
-/**
- * Maps SDK AgentMessage[] (UserMessage / AssistantMessage / ToolResultMessage)
- * into the flat SessionHistoryEvent[] shape consumed by the app.
- *
- * Caveats (see report): in_reply_to of agent_message is the *last* user_input
- * id seen in a linear scan — fine for typical conversational flow but not
- * a perfect reconstruction of multi-turn ordering when tools interleave.
- * Stable id for user_input is `sync_<timestamp>`.
- */
-export function _mapAgentMessagesToEvents(
-  messages: BufferMsg[],
-): SessionHistoryEvent[] {
-  const events: SessionHistoryEvent[] = [];
-  let lastUserId: string | null = null;
-  let msgIdx = -1;
-
-  for (const m of messages) {
-    msgIdx += 1;
-    const ts = typeof m.timestamp === "number" ? m.timestamp : 0;
-
-    if (m.role === "compaction") {
-      // Plan/32: re-render the compaction notice on history re-sync.
-      events.push({
-        ts,
-        type: "compaction",
-        summary: typeof m.content === "string" ? m.content : "",
-        tokens_before: typeof m.tokensBefore === "number" ? m.tokensBefore : 0,
-      });
-    } else if (m.role === "user") {
-      // Include the buffer position so two user inputs sharing a timestamp (or a
-      // missing ts → 0) still get DISTINCT, stable ids. The app dedups by id, so
-      // a non-unique id would silently DROP a real message.
-      const id = `sync_${ts}_${msgIdx}`;
-      lastUserId = id;
-      // Plan/30: keep any image blocks so a re-sync rebuilds the bubble. The
-      // bytes are already in _messageBuffer; only attach `images` when present
-      // so the text-only path stays byte-identical (no `images` key).
-      const images = _imagesFromContent(m.content);
-      const ev: SessionHistoryEvent = {
-        ts,
-        type: "user_input",
-        id,
-        text: _stringifyContent(m.content),
-      };
-      if (images.length > 0) ev.images = images;
-      events.push(ev);
-    } else if (m.role === "assistant") {
-      const content = Array.isArray(m.content) ? m.content : [];
-      const usage = m.usage
-        ? {
-            input_tokens: m.usage.input ?? 0,
-            output_tokens: m.usage.output ?? 0,
-          }
-        : undefined;
-      // Agent-emitted inline graphics (base64 already encoded in the content).
-      // Attach to the first text agent_message so a re-sync rebuilds the bubble
-      // with its images; if the message is image-only, emit a text-less one.
-      const images = _imagesFromContent(m.content);
-      let imagesAttached = false;
-      for (const raw of content) {
-        if (!raw || typeof raw !== "object") continue;
-        const block = raw as {
-          type?: string;
-          text?: unknown;
-          id?: unknown;
-          name?: unknown;
-          arguments?: unknown;
-        };
-        if (block.type === "text") {
-          const text = String(block.text ?? "");
-          if (!text) continue;
-          const ev: SessionHistoryEvent = {
-            ts,
-            type: "agent_message",
-            in_reply_to: lastUserId ?? `sync_${ts}_${msgIdx}`,
-            text,
-            ...(usage ? { usage } : {}),
-            ...(images.length > 0 && !imagesAttached ? { images } : {}),
-          };
-          if (images.length > 0 && !imagesAttached) imagesAttached = true;
-          events.push(ev);
-        } else if (block.type === "toolCall") {
-          events.push({
-            ts,
-            type: "tool_request",
-            tool_call_id: String(block.id ?? ""),
-            tool: String(block.name ?? ""),
-            args: (block.arguments as Record<string, unknown>) ?? {},
-          });
-        }
-      }
-      // Image-only assistant message (no text block): still surface the graphic.
-      if (images.length > 0 && !imagesAttached) {
-        events.push({
-          ts,
-          type: "agent_message",
-          in_reply_to: lastUserId ?? `sync_${ts}_${msgIdx}`,
-          text: "",
-          ...(usage ? { usage } : {}),
-          images,
-        });
-      }
-    } else if (m.role === "toolResult") {
-      // Same helper as the live `tool_execution_end` broadcast → live == re-sync.
-      const text = _stringifyToolResult(m.content);
-      const tcid = String(m.toolCallId ?? "");
-      const images = _imagesFromContent(m.content);
-      const ev: SessionHistoryEvent = m.isError
-        ? { ts, type: "tool_result", tool_call_id: tcid, error: text }
-        : { ts, type: "tool_result", tool_call_id: tcid, result: text };
-      if (images.length > 0) ev.images = images;
-      events.push(ev);
-    }
-  }
-
-  return events;
 }
 
 // ── Standalone CLI ────────────────────────────────────────────────────────────

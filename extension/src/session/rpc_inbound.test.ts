@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   dispatchRpcCommand,
+  type GetEntriesResult,
   rpcResponse,
   type RpcCommandHandlers,
 } from "./rpc_inbound.js";
@@ -156,6 +157,40 @@ describe("dispatchRpcCommand", () => {
         id: "t",
       },
     });
+  });
+
+  it("get_entries → handler(since) + response carrying {entries, leafId}", async () => {
+    const data = {
+      entries: [{ type: "message", id: "e1" }],
+      leafId: "e1",
+    } as unknown as GetEntriesResult;
+    const h = handlers({ getEntries: vi.fn(async () => data) });
+    const resp = await dispatchRpcCommand(
+      { type: "get_entries", id: "ge", since: "e0" },
+      h,
+    );
+    expect(h.getEntries).toHaveBeenCalledWith("e0");
+    expect(resp).toEqual({
+      rpc: {
+        type: "response",
+        command: "get_entries",
+        success: true,
+        id: "ge",
+        data,
+      },
+    });
+  });
+
+  it("get_entries without `since` passes undefined; an unwired handler → null", async () => {
+    const h = handlers({
+      getEntries: vi.fn(async () => ({ entries: [], leafId: null })),
+    });
+    await dispatchRpcCommand({ type: "get_entries", id: "g2" }, h);
+    expect(h.getEntries).toHaveBeenCalledWith(undefined);
+    // getEntries is optional — unset means the command falls through to null.
+    expect(
+      await dispatchRpcCommand({ type: "get_entries", id: "g3" }, handlers()),
+    ).toBeNull();
   });
 
   it("returns null for unhandled / typeless commands (forward-compat)", async () => {

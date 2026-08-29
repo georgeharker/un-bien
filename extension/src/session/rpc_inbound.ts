@@ -10,7 +10,15 @@
 // follow_up / abort / set_model / set_thinking_level. get_state / get_entries /
 // compact / bash follow (they need the fuller ctx.sessionManager).
 
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { EnvelopeMessage } from "./rpc_envelope.js";
+
+/** Native pi `get_entries` result: the raw entry log + the leaf cursor to
+ *  resume from. The app reduces `entries` into its transcript itself. */
+export interface GetEntriesResult {
+      entries: SessionEntry[];
+      leafId: string | null;
+}
 
 /** Build a `{ rpc: response }` envelope. Correlates by the command's `id`. */
 export function rpcResponse(
@@ -53,6 +61,11 @@ export interface RpcCommandHandlers {
       /** Clear the steering/follow-up queue (pi `clear_queue`); resolves to the
        *  removed {steering, followUp} text. */
       clearQueue?(): Promise<unknown>;
+      /** Return the session ENTRY log (pi `get_entries`); resolves to
+       *  `{ entries, leafId }`. `since` slices to entries AFTER that entry id
+       *  (the native delta cursor). This is the transcript source — the app
+       *  reduces the raw entries itself; the fork does NOT replay them. */
+      getEntries?(since?: string): Promise<GetEntriesResult>;
 }
 
 function str(v: unknown): string {
@@ -147,6 +160,18 @@ export async function dispatchRpcCommand(
                         if (!handlers.clearQueue) return null;
                         const data = await handlers.clearQueue();
                         return rpcResponse("clear_queue", id, {
+                              success: true,
+                              data,
+                        });
+                  }
+                  case "get_entries": {
+                        if (!handlers.getEntries) return null;
+                        const data = await handlers.getEntries(
+                              typeof frame.since === "string"
+                                    ? frame.since
+                                    : undefined,
+                        );
+                        return rpcResponse("get_entries", id, {
                               success: true,
                               data,
                         });

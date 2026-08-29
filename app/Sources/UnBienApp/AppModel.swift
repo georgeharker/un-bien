@@ -109,6 +109,11 @@ public final class AppModel: ObservableObject {
     private var reconnectAttempts: [UUID: Int] = [:]
     /// In-flight reconnect timers per relay, cancelled on remove/success.
     private var reconnectTasks: [UUID: Task<Void, Never>] = [:]
+    /// Sessions the user has opened this run, keyed by session.id. On relay
+    /// RECONNECT we re-issue reconstruction (get_entries + session_sync) for
+    /// each on the reconnected relay — openSession only fires on view appear,
+    /// not reconnect (design 01M15FMQ).
+    private var openSessions: [String: LiveSession] = [:]
 
     private static let iCloudDefaultsKey = "com.georgeharker.un-bien.owner-key.icloud-sync"
     private static let themeKey = "com.georgeharker.un-bien.theme"
@@ -199,6 +204,12 @@ public final class AppModel: ObservableObject {
             relayHealth[relay.id] = .online
             reconnectAttempts[relay.id] = 0
             startEventLoop(relayID: relay.id, connection: connection)
+            // Recover every open session on this relay after a (re)connect: the
+            // transcript (get_entries) + panels (session_sync). Idempotent, so a
+            // first connect where nothing is open yet is a no-op.
+            for session in openSessions.values where session.relayID == relay.id {
+                await requestReconstruction(session, connection: connection)
+            }
         } catch {
             relayHealth[relay.id] = .failed(String(describing: error))
             scheduleReconnect(relay)
@@ -387,17 +398,29 @@ public final class AppModel: ObservableObject {
     // MARK: - Session actions
 
     public func openSession(_ session: LiveSession, limit: Int = 100) async {
+        openSessions[session.id] = session
         guard let connection = connections[session.relayID] else {
             return
         }
-        // Envelope-native resume request (was stock session_sync): the fork
-        // replies with a {rpc} history replay folded via applyRPC.
-        try? await connection.send(.sessionSync(id: UUID().uuidString, limit: limit),
-                                   toPeer: session.peerEPK, room: session.roomID)
+        await requestReconstruction(session, connection: connection)
         if availableModels[session.id] == nil {
             try? await connection.send(.listModels(id: UUID().uuidString),
                                        toPeer: session.peerEPK, room: session.roomID)
         }
+    }
+
+    /// The TWO independent reconstruction requests (design 01M15FMQ), issued on
+    /// open AND on relay reconnect: (1) native pi `get_entries` rpc for the
+    /// TRANSCRIPT — `since` the last leaf cursor for a delta fetch, reduced by
+    /// `SessionState.applyEntries`; (2) `session_sync` for un-bien's NON-rpc
+    /// panels + pending extension_ui. Both are idempotent (identify dedup /
+    /// panel ns-merge), so re-issuing them freely is safe.
+    private func requestReconstruction(_ session: LiveSession, connection: RelayConnection) async {
+        let since = envelopeReducers[session.id]?.leafId
+        try? await connection.send(.getEntries(id: UUID().uuidString, since: since),
+                                   toPeer: session.peerEPK, room: session.roomID)
+        try? await connection.send(.sessionSync(id: UUID().uuidString, limit: nil),
+                                   toPeer: session.peerEPK, room: session.roomID)
     }
 
     /// Whether the paired pi session has shut down (`rpc:session_shutdown`).

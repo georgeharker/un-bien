@@ -8,7 +8,15 @@ public enum ClientMessage: Equatable, Sendable {
     case approveTool(id: String, toolCallID: String, decision: ToolDecision)
     case cancel(id: String, targetID: String)
     case ping(id: String)
+    /// un-bien reconstruction TRIGGER — asks the fork to re-send its NON-rpc
+    /// display state (panels + pending extension_ui). The transcript is NOT
+    /// carried here; it's the app's own `get_entries` rpc (design 01M15FMQ).
     case sessionSync(id: String, limit: Int?)
+    /// Native pi `get_entries` rpc — the transcript source. The fork answers
+    /// with `{entries, leafId}`; the app reduces the raw entries itself
+    /// (`SessionState.applyEntries`). `since` = the last leafId cursor for a
+    /// delta fetch; nil = full log.
+    case getEntries(id: String, since: String?)
     case sessionNew(id: String)
     case sessionCompact(id: String)
     case modelSet(id: String, provider: String, modelID: String)
@@ -34,6 +42,7 @@ public enum ClientMessage: Equatable, Sendable {
         case .cancel: return "cancel"
         case .ping: return "ping"
         case .sessionSync: return "session_sync"
+        case .getEntries: return "get_entries"
         case .sessionNew: return "session_new"
         case .sessionCompact: return "session_compact"
         case .modelSet: return "model_set"

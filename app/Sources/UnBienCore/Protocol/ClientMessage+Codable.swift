@@ -29,6 +29,7 @@ extension ClientMessage: Codable {
         static let confirmed = CodingKeys("confirmed")
         static let cancelled = CodingKeys("cancelled")
         static let ask = CodingKeys("ask")
+        static let since = CodingKeys("since")
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -56,6 +57,9 @@ extension ClientMessage: Codable {
         case let .sessionSync(id, limit):
             try container.encode(id, forKey: .id)
             try container.encodeIfPresent(limit, forKey: .limit)
+        case let .getEntries(id, since):
+            try container.encode(id, forKey: .id)
+            try container.encodeIfPresent(since, forKey: .since)
         case let .sessionNew(id):
             try container.encode(id, forKey: .id)
         case let .sessionCompact(id):
@@ -114,6 +118,11 @@ extension ClientMessage: Codable {
             self = .sessionSync(
                 id: try string(.id),
                 limit: try container.decodeIfPresent(Int.self, forKey: .limit)
+            )
+        case "get_entries":
+            self = .getEntries(
+                id: try string(.id),
+                since: try container.decodeIfPresent(String.self, forKey: .since)
             )
         case "session_new":
             self = .sessionNew(id: try string(.id))

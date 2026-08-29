@@ -40,7 +40,6 @@ public struct SessionState: Equatable, Sendable {
     // rpc-envelope reduction state
     private var rpcTurn: String?
     private var rpcTurnSeq = 0
-    private var rpcUserSeq = 0
 
     public init() {}
 
@@ -272,29 +271,35 @@ public struct SessionState: Equatable, Sendable {
         let turn = rpcTurn ?? "t0"
         switch role {
         case "user":
-            rpcUserSeq += 1
-            let id = message?["id"]?.stringValue ?? "u\(rpcUserSeq)"
-            append(.user(UserBubble(id: id, text: message?["content"]?.joinedText() ?? "")))
+            // Stable, message-intrinsic id (identify): a later session_sync replay
+            // of the same user message resolves to the same id and dedups via
+            // appendedIDs. Pi messages carry no id — see design 01M15FMQ.
+            append(.user(UserBubble(id: Self.identify(message),
+                                    text: message?["content"]?.joinedText() ?? "",
+                                    images: Self.imagesFromContent(message?["content"]))))
         case "assistant":
             if message?["stopReason"]?.stringValue == "error" {
                 // Forward a failed turn as a notice (mirrors the fork's `error`).
-                noticeSeq += 1
-                append(.notice(NoticeItem(id: "err\(noticeSeq)", code: "provider_error",
+                append(.notice(NoticeItem(id: "err\(Self.identify(message))", code: "provider_error",
                                           message: message?["errorMessage"]?.stringValue ?? "Provider error")))
             } else {
-                // Inline graphics settle here on the assistant message (the live
-                // stream is text deltas only). Attach to the delta-built bubble,
-                // or fall back to authoritative text when no delta opened one.
+                // Re-key the delta-built bubble to its stable {identify}-a id at
+                // settle so a session_sync replay of the same message dedups; on
+                // replay (no deltas) build it directly with the same id. Inline
+                // graphics settle here (the live stream is text deltas only).
+                let bubbleID = "\(Self.identify(message))-a"
                 let images = Self.imagesFromContent(message?["content"])
                 if openAssistantIndex != nil {
                     // Finalize WITHOUT clobbering delta-built interleaving; keep
                     // activeTurnID (turn isn't done until agent_settled).
-                    if !images.isEmpty { attachImages(images) }
+                    reidOpenAssistant(to: bubbleID, images: images)
                     closeOpenAssistant()
                 } else {
                     let text = message?["content"]?.joinedText() ?? ""
                     if !text.isEmpty || !images.isEmpty {
-                        settleAssistant(inReplyTo: turn, text: text, usage: nil, images: images)
+                        append(.assistant(AssistantBubble(id: bubbleID, inReplyTo: turn,
+                                                          text: text, streaming: false,
+                                                          usage: nil, images: images)))
                     }
                 }
             }
@@ -320,6 +325,50 @@ public struct SessionState: Equatable, Sendable {
         }
     }
 
+    /// Reduce a batch of raw pi session ENTRIES (from the native `get_entries`
+    /// rpc) into the transcript. Each message entry is fed through the SAME
+    /// identify-based `message_end`/`tool_execution_*` path the live stream
+    /// uses, so a get_entries (re)fetch DEDUPS against live frames instead of
+    /// duplicating (design 01M15FMQ). Tool cards are reconstructed from
+    /// `toolCall` content + `toolResult` entries (keyed by toolCallId). Applied
+    /// to the LIVE reducer — not a reset — so it merges idempotently.
+    public mutating func applyEntries(_ entries: [JSONValue]) {
+        for entry in entries {
+            switch entry["type"]?.stringValue {
+            case "compaction":
+                applyRPC(.object(["type": .string("compaction_end"),
+                                  "result": .object(["summary": entry["summary"] ?? .string(""),
+                                                     "tokensBefore": entry["tokensBefore"] ?? .number(0)])]))
+            case "message":
+                guard let msg = entry["message"] else { continue }
+                switch msg["role"]?.stringValue {
+                case "user", "assistant":
+                    applyRPC(.object(["type": .string("message_end"), "message": msg]))
+                    // Reconstruct tool cards from the assistant's toolCall blocks
+                    // (the live stream opens them via separate tool_execution_start
+                    // frames; here they ride the message content).
+                    if msg["role"]?.stringValue == "assistant", let content = msg["content"]?.arrayValue {
+                        for block in content where block["type"]?.stringValue == "toolCall" {
+                            applyRPC(.object(["type": .string("tool_execution_start"),
+                                              "toolCallId": block["id"] ?? .string(""),
+                                              "toolName": block["name"] ?? .string(""),
+                                              "args": block["arguments"] ?? .object([:])]))
+                        }
+                    }
+                case "toolResult":
+                    applyRPC(.object(["type": .string("tool_execution_end"),
+                                      "toolCallId": msg["toolCallId"] ?? .string(""),
+                                      "result": msg["content"] ?? .null,
+                                      "isError": msg["isError"] ?? .bool(false)]))
+                default:
+                    break
+                }
+            default:
+                break  // model_change / thinking_level_change / label / ... : not transcript rows
+            }
+        }
+    }
+
     private mutating func updateToolCard(toolCallID: String, partial: JSONValue?) {
         guard let index = toolIndex[toolCallID], case var .tool(card) = items[index] else { return }
         if let partial { card.result = partial }
@@ -331,6 +380,64 @@ public struct SessionState: Equatable, Sendable {
         guard let index = openAssistantIndex, case var .assistant(bubble) = items[index] else { return }
         bubble.images = images
         items[index] = .assistant(bubble)
+    }
+
+    /// Re-key the open (delta-built) assistant bubble to its stable `identify`
+    /// id at message_end, so a later session_sync replay of the same message
+    /// dedups via `appendedIDs`. Keeps the streamed text (authoritative for the
+    /// live bubble) and attaches settled images.
+    private mutating func reidOpenAssistant(to bubbleID: String, images: [WireImage]) {
+        guard let index = openAssistantIndex, case let .assistant(old) = items[index] else { return }
+        appendedIDs.remove(items[index].id)
+        items[index] = .assistant(AssistantBubble(id: bubbleID, inReplyTo: old.inReplyTo,
+                                                  text: old.text, streaming: false,
+                                                  usage: old.usage,
+                                                  images: images.isEmpty ? old.images : images))
+        appendedIDs.insert(items[index].id)
+    }
+
+    /// A stable, message-INTRINSIC identity derived from the pi message's own
+    /// fields — identical on the live `message_end` and on a `session_sync`
+    /// replay of the same message, so re-sync dedups instead of duplicating
+    /// (pi messages carry no id; see design 01M15FMQ). Prefer the provider
+    /// `responseId` when present; otherwise a deterministic hash of
+    /// role+timestamp+model+content (timestamp disambiguates same-content
+    /// messages; ts is non-unique, but content makes collisions negligible).
+    static func identify(_ message: JSONValue?) -> String {
+        if let rid = message?["responseId"]?.stringValue, !rid.isEmpty { return "r\(rid)" }
+        let role = message?["role"]?.stringValue ?? "?"
+        let ts = message?["timestamp"]?.intValue ?? 0
+        let model = message?["model"]?.stringValue ?? ""
+        let sig = contentSignature(message?["content"])
+        return "m\(stableHash("\(role)|\(ts)|\(model)|\(sig)"))"
+    }
+
+    /// Canonical, order-preserving signature of a message `content` (array or a
+    /// bare user string). Includes tool-call ids so tool-only messages don't
+    /// collide on empty text. Must be deterministic across app launches, so it
+    /// avoids Swift's per-process `Hasher`.
+    static func contentSignature(_ content: JSONValue?) -> String {
+        guard let blocks = content?.arrayValue else { return content?.stringValue ?? "" }
+        return blocks.map { block in
+            switch block["type"]?.stringValue ?? "" {
+            case "text": return "t:" + (block["text"]?.stringValue ?? "")
+            case "thinking": return "k:" + (block["thinking"]?.stringValue ?? "")
+            case "toolCall": return "c:" + (block["id"]?.stringValue ?? "") + ":" + (block["name"]?.stringValue ?? "")
+            case "image": return "i:" + (block["mimeType"]?.stringValue ?? "")
+            case let other: return other
+            }
+        }.joined(separator: "\n")
+    }
+
+    /// Deterministic FNV-1a over UTF-8, base-36 — stable across processes
+    /// (unlike `Hasher`), so `identify` matches on a relaunched app's re-sync.
+    static func stableHash(_ s: String) -> String {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in s.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01b3
+        }
+        return String(hash, radix: 36)
     }
 
     /// Image blocks (`{type:"image", data, mimeType}`) from a message `content`

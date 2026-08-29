@@ -55,6 +55,9 @@ public struct EnvelopeReducer {
     public private(set) var widgets: [String: [String]] = [:]
     public private(set) var title: String?
     public private(set) var pendingAsks: [PendingAsk] = []
+    /// Leaf-entry cursor from the last `get_entries` response — the app resends
+    /// it as `since` for a delta refetch (design 01M15FMQ).
+    public private(set) var leafId: String?
 
     public init() {}
 
@@ -75,6 +78,11 @@ public struct EnvelopeReducer {
             applyExtensionUI(rpc)
         case "response" where rpc["command"]?.stringValue == "get_state":
             applyState(rpc["data"])
+        case "response" where rpc["command"]?.stringValue == "get_entries":
+            // Native pi get_entries: reduce the raw entry log into the transcript
+            // (idempotent via identify) + keep the leaf cursor for a delta refetch.
+            if let entries = rpc["data"]?["entries"]?.arrayValue { session.applyEntries(entries) }
+            if let leaf = rpc["data"]?["leafId"]?.stringValue { leafId = leaf }
         case "response":
             break   // other command responses carry no transcript/side effect here
         default:
