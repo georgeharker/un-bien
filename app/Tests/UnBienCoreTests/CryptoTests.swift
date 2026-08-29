@@ -74,6 +74,18 @@ final class CryptoTests: XCTestCase {
         XCTAssertEqual(Base64.canonicalKey(standardPadded), standardPadded)
     }
 
+    /// The tolerant decoder / canonicalizer REJECTS malformed base64 (the
+    /// app-surface slice of mesh/encoding.test.ts's rejection vectors). Strict
+    /// 32-byte / trailing-bit validation is NOT the app's job here: the app
+    /// only canonicalizes its OWN trusted epk and never verifies the untrusted
+    /// owner roster (verify/canonical are fork-side surfaces).
+    func testTolerantDecoderRejectsMalformedBase64() {
+        XCTAssertNil(Base64.decodeTolerant("A"))          // count % 4 == 1 → unrecoverable
+        XCTAssertNil(Base64.canonicalKey("A"))
+        XCTAssertNil(Base64.decodeTolerant("bad key"))    // illegal char (space)
+        XCTAssertNil(Base64.canonicalKey("not+base64!!")) // illegal char (!)
+    }
+
     func testPairingInviteCanonicalizesEPK() {
         let raw = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
         let urlUnpadded = raw.base64EncodedString()

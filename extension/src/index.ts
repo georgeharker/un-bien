@@ -1322,27 +1322,6 @@ export function _hasActivePeerForTest(appPeerIdStd: string): boolean {
 
 // ── Multi-channel helpers ─────────────────────────────────────────────────────
 
-/**
- * Sends a raw stock `msg` to every currently-attached owner channel. The stock
- * transcript drive-stream that once rode this (agent_chunk/tool_request/
- * tool_result/agent_done/user_input mirror) is retired — the app is
- * envelope-only. It survives ONLY as the non-transcript fallback inside
- * `_uiBroadcast`/`_panelBroadcast` for any message that isn't the
- * extension_ui/panel frame those bridges wrap as `{rpc}`/`{evt}`.
- *
- * Per-request responses (e.g. `pair_ok` answering `pair_request`) must NOT use
- * this — they go to the sender channel directly.
- */
-function _broadcastToActive(msg: ServerMessage): void {
-  for (const ch of _activePeers.values()) {
-    try {
-      ch.send(msg);
-    } catch {
-      /* best-effort per channel */
-    }
-  }
-}
-
 /** Returns true when at least one owner is attached. Derived `paired` UX. */
 function _anyPeerActive(): boolean {
   return _activePeers.size > 0;
@@ -2025,31 +2004,23 @@ function _routeUnBienPlaneFrom(
   }
 }
 
-/** Broadcast for the extension_ui bridge. extension_ui is ENVELOPE-ONLY
- *  (pi-unbien is not a compatible project): emit the `extension_ui_request` as
- *  an envelope `{rpc}` frame (the wire shape mirrors the SDK rpc contract 1:1).
- *  Any non-extension_ui message (none today) would still go stock. */
+/** Broadcast for the extension_ui bridge. The bridge only ever emits
+ *  `extension_ui_request`, sent ENVELOPE-ONLY as a `{rpc}` frame (the wire
+ *  shape mirrors the SDK rpc contract 1:1). No stock fallback. */
 function _uiBroadcast(msg: ServerMessage): void {
-  if (msg.type === "extension_ui_request") {
-    _broadcastEnvelope({ rpc: msg });
-    return;
-  }
-  _broadcastToActive(msg);
+  if (msg.type === "extension_ui_request") _broadcastEnvelope({ rpc: msg });
 }
 
-/** Broadcast for the panel bridge. Panels are ENVELOPE-ONLY (the {evt} plane):
- *  forward each aggregated `panel_update` as `{evt:{channel:"panel", data}}`.
- *  The app folds it back into its panel store (reusing the stock decoder). */
+/** Broadcast for the panel bridge. The bridge only ever emits `panel_update`,
+ *  forwarded ENVELOPE-ONLY as `{evt:{channel:"panel", data}}` (the {evt} plane);
+ *  the app folds it into its panel store. No stock fallback. */
 function _panelBroadcast(msg: ServerMessage): void {
-  if (msg.type === "panel_update") {
+  if (msg.type === "panel_update")
     _broadcastEnvelope({ evt: { channel: "panel", data: msg } });
-    return;
-  }
-  _broadcastToActive(msg);
 }
 
 /** Fan an rpc-envelope frame out to every attached peer (base64 ct via each
- *  channel), mirroring `_broadcastToActive` for `{ rpc | evt }` messages. */
+ *  channel) — the single owner-fanout path for `{ rpc | evt }` messages. */
 function _broadcastEnvelope(env: EnvelopeMessage): void {
   {
     // Observability only (not a route gate): watch the {rpc|evt} wire during
@@ -5873,8 +5844,8 @@ async function _cmdJoin(
  * sender-specific responses (cancelled, pong, session_history) flow back
  * through the right wire instead of being broadcast.
  *
- * Broadcast messages (user_input mirror, agent_chunk, tool_*) still use
- * `_broadcastToActive` from the SDK event handlers; this router only
+ * Live-plane frames (message/tool/turn events) fan out as envelopes via
+ * `_broadcastEnvelope` from the rpc-envelope producer; this router only
  * handles incoming app→pi requests.
  */
 function _abortCurrentTurn(
