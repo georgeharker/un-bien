@@ -231,17 +231,19 @@ struct TranscriptView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     ForEach(items, id: \.id) { item in
+                        // Mirror pi's TUI tracking: BLUE = queued (followUp, runs
+                        // after the turn), GREY = steer (interrupts mid-turn). Both
+                        // are optimistic until the model consumes them.
+                        let isSteer = item.kind == "steer"
+                        let tint: Color = isSteer ? .gray : .blue
                         HStack(spacing: 4) {
-                            // Optimistic not-yet-confirmed entries read as pending
-                            // (clock + dimmed) until pi's queue_update settles them.
-                            Image(systemName: item.pending ? "clock" : "tray.and.arrow.down")
+                            Image(systemName: isSteer ? "arrow.turn.up.right" : "clock")
                             Text(item.text).lineLimit(1)
                         }
                         .font(.caption)
                         .padding(.horizontal, 8).padding(.vertical, 5)
-                        .background(theme.surface, in: Capsule())
-                        .foregroundStyle(theme.secondaryText)
-                        .opacity(item.pending ? 0.55 : 1)
+                        .background(tint.opacity(0.12), in: Capsule())
+                        .foregroundStyle(tint.opacity(0.7))
                     }
                 }
                 .padding(.horizontal, 10)

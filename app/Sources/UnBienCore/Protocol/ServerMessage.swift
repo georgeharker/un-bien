@@ -35,13 +35,18 @@ public struct QueuedMessageItem: Codable, Equatable, Sendable {
     /// replaces the list (design 01M15S77E). NOT on the wire (absent from
     /// CodingKeys); defaults false so decoded/authoritative items are non-pending.
     public var pending: Bool = false
+    /// App-local chip KIND driving color: "steer" (interrupt-now, grey) vs
+    /// "followUp" (queue-after, blue) — mirrors pi's TUI tracking. NOT on the wire.
+    public var kind: String = "followUp"
 
-    public init(id: String, text: String, editable: Bool, createdAt: Int, pending: Bool = false) {
+    public init(id: String, text: String, editable: Bool, createdAt: Int,
+                pending: Bool = false, kind: String = "followUp") {
         self.id = id
         self.text = text
         self.editable = editable
         self.createdAt = createdAt
         self.pending = pending
+        self.kind = kind
     }
 
     enum CodingKeys: String, CodingKey {

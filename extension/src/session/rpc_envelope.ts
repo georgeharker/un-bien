@@ -187,9 +187,17 @@ const BUILDERS: Record<string, Builder> = {
     result: p.result,
     isError: p.isError ?? false,
   }),
-  // pi's NATIVE steering/follow-up queue snapshot ({steering[], followUp[]}),
-  // forwarded so every owner shows the same pending queue (un-bien's multi-owner
-  // display layer on top of pi's queue — no app-owned buffer).
+  // DEAD ON THE LIVE PLANE — pi does NOT deliver queue_update to extensions.
+  // AgentSession._emitQueueUpdate() (pi agent-session.ts) calls only this._emit()
+  // (the host `subscribe` stream that `pi --mode rpc` consumes) and NEVER
+  // this._extensionRunner.emit(), so pi.on("queue_update") registered from
+  // RPC_EVENT_NAMES NEVER FIRES. (Every other event we forward IS fanned to
+  // extensions via _emitExtensionEvent(); queue_update is the lone exception, and
+  // the ExtensionAPI exposes only hasPendingMessages():boolean — no queue text,
+  // no subscribe.) So the fork CANNOT send a queue snapshot; the queued display
+  // is APP-OWNED (optimistic chip cleared on model-consumption). Kept only to
+  // document the frame shape the app's (now dead) handler once consumed. See
+  // design 01M158S7.
   queue_update: (p) => ({
     type: "queue_update",
     steering: p.steering ?? [],

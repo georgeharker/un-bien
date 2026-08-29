@@ -120,6 +120,13 @@ public final class AppModel: ObservableObject {
     private static let showThinkingKey = "com.georgeharker.un-bien.show-thinking"
     private static let textScaleKey = "com.georgeharker.un-bien.text-scale"
     private static let monoFontKey = "com.georgeharker.un-bien.mono-font"
+    /// Backstop grace for an UNCONSUMED optimistic queued chip (design 01M158S7).
+    /// Long by design: consumption (user message_end) is the primary clear, so
+    /// this only catches truly-stuck chips (text-normalization miss / dropped
+    /// followUp). Erring long avoids clearing a message that is still legitimately
+    /// queued through a slow turn. App-owned timing — independent of pi's
+    /// (uncertain) re-timestamping. Tunable.
+    private static let queuedChipGraceNanos: UInt64 = 5 * 60 * 1_000_000_000  // 5 min
     private static let reconnectBaseDelay: Double = 1
     private static let reconnectMaxDelay: Double = 30
 
@@ -337,15 +344,30 @@ public final class AppModel: ObservableObject {
                         availableModels[key] = models
                         if let current { currentModel[key] = current }
                     }
-                    // Native pi queue: {rpc queue_update, steering[], followUp[]}
-                    // is the pending-queue snapshot. Fold its string arrays into
-                    // the pending display list (ids synthesized by index).
-                    if let rpc = env.rpc, rpc["type"]?.stringValue == "queue_update" {
-                        let steering = rpc["steering"]?.arrayValue?.compactMap { $0.stringValue } ?? []
-                        let followUp = rpc["followUp"]?.arrayValue?.compactMap { $0.stringValue } ?? []
-                        queued[key] = (steering + followUp).enumerated().map {
-                            QueuedMessageItem(id: "\($0.offset)", text: $0.element,
-                                              editable: false, createdAt: 0)
+                    // Queue display is APP-OWNED. pi never delivers queue_update
+                    // to extensions — it's routed only to the host subscribe stream,
+                    // never to pi.on / the ExtensionAPI (which exposes just
+                    // hasPendingMessages():Bool, no queue text) — so the fork can't
+                    // send us a queue snapshot. Instead: an optimistic pending chip
+                    // on Queue submit, RESOLVED when the MODEL consumes the message.
+                    // The model "saw the post" when pi dequeues + runs it, which
+                    // surfaces as a user message_end here; correlate by TEXT only
+                    // (timestamp / send-id don't persist) and clear that chip. The
+                    // queueMessage timeout is the backstop. Design 01M158S7.
+                    if let rpc = env.rpc, rpc["type"]?.stringValue == "message_end",
+                       rpc["message"]?["role"]?.stringValue == "user" {
+                        let text = rpc["message"]?["content"]?.joinedText() ?? ""
+                        if !text.isEmpty {
+                            let norm = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                            // ONE consumption clears ONE pending chip. If the same
+                            // text was queued twice, each run clears the FIRST
+                            // (oldest / FIFO — pi delivers in order) match, not all
+                            // identical-in-flight copies.
+                            if let idx = queued[key]?.firstIndex(where: {
+                                $0.pending && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == norm
+                            }) {
+                                queued[key]?.remove(at: idx)
+                            }
                         }
                     }
                     return
@@ -432,6 +454,14 @@ public final class AppModel: ObservableObject {
     public func sendMessage(_ text: String, to session: LiveSession) async {
         guard !hasEnded(session) else { return }
         guard let connection = connections[session.relayID] else { return }
+        // Busy -> this STEERS into the running turn (pi holds it in the steering
+        // queue until the model picks it up mid-turn — often not for a while), so
+        // show a GREY pending chip so the text doesn't vanish from the composer.
+        // Idle -> runs fresh; the user bubble is the feedback. (activeTurnID is the
+        // same busy signal as the Stop icon.)
+        if activeTurnID(for: session) != nil {
+            insertPendingChip(text, session: session, kind: "steer")
+        }
         try? await connection.send(
             .userMessage(id: UUID().uuidString, text: text, images: nil, streamingBehavior: "steer"),
             toPeer: session.peerEPK, room: session.roomID)
@@ -543,30 +573,37 @@ public final class AppModel: ObservableObject {
 
     public func queueMessage(_ text: String, to session: LiveSession) async {
         guard let connection = connections[session.relayID] else { return }
-        // Optimistic PENDING display: when the message will actually pend (busy),
-        // show it instantly so the Queue button gives feedback — pi's queue_update
-        // round-trips a moment later and wholesale-replaces queued[], clearing the
-        // temp. Resolve by queue_update ARRIVAL, not text-match (design 01M15S77E).
-        // A timeout drops the temp if no queue_update lands (e.g. pi went idle and
-        // ran the followUp fresh).
+        // Busy -> followUp QUEUES until the turn ends; show a BLUE pending chip.
+        // Idle -> runs fresh (bubble is the feedback). Same trick as steer, just a
+        // different color + it clears later (after the turn vs mid-turn).
         if activeTurnID(for: session) != nil {
-            let tempID = "pending-\(UUID().uuidString)"
-            var forSession = queued[session.id] ?? []
-            forSession.append(QueuedMessageItem(id: tempID, text: text, editable: false,
-                                                createdAt: Int(Date().timeIntervalSince1970 * 1000),
-                                                pending: true))
-            queued[session.id] = forSession
-            let sid = session.id
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
-                self?.queued[sid]?.removeAll { $0.id == tempID && $0.pending }
-            }
+            insertPendingChip(text, session: session, kind: "followUp")
         }
         // pi's native queue: a `prompt` with `followUp` behavior queues while the
         // turn streams (fresh turn when idle).
         try? await connection.send(
             .userMessage(id: UUID().uuidString, text: text, images: nil, streamingBehavior: "followUp"),
             toPeer: session.peerEPK, room: session.roomID)
+    }
+
+    /// Insert an OPTIMISTIC pending chip for a message submitted WHILE BUSY. Both
+    /// steer (grey, interrupts mid-turn) and followUp (blue, after the turn) sit in
+    /// a pi queue until the model consumes them, so show the text instead of
+    /// letting it vanish from the composer. Cleared by consumption (user
+    /// message_end, text-correlated in handle()); a long backstop timer drops a
+    /// never-consumed chip (design 01M158S7).
+    private func insertPendingChip(_ text: String, session: LiveSession, kind: String) {
+        let tempID = "pending-\(UUID().uuidString)"
+        var forSession = queued[session.id] ?? []
+        forSession.append(QueuedMessageItem(id: tempID, text: text, editable: false,
+                                            createdAt: Int(Date().timeIntervalSince1970 * 1000),
+                                            pending: true, kind: kind))
+        queued[session.id] = forSession
+        let sid = session.id
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: Self.queuedChipGraceNanos)
+            self?.queued[sid]?.removeAll { $0.id == tempID && $0.pending }
+        }
     }
 
     // MARK: - Pairing
