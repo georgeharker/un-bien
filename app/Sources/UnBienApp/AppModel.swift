@@ -469,6 +469,18 @@ public final class AppModel: ObservableObject {
     private func handle(control event: RelayControlIn, relayID: UUID) {
         switch event {
         case let .rooms(peer, rooms):
+            // Authoritative per-peer snapshot (rooms_check on subscribe): RECONCILE,
+            // don't just add. Drop any session for this (relay, peer) whose room
+            // isn't in the snapshot — it ended while we were disconnected/backgrounded
+            // (missed roomEnded); add-only left those as ghosts ("old chats in the
+            // mix"). Then upsert the live ones. Scoped to this peer, so other
+            // machines' sessions are untouched. See design 01M18AK9.
+            let liveRoomIDs = Set(rooms.map(\.roomID))
+            let prefix = "\(relayID.uuidString):\(peer):"
+            for key in sessions.keys where key.hasPrefix(prefix)
+            && !liveRoomIDs.contains(String(key.dropFirst(prefix.count))) {
+                sessions[key] = nil
+            }
             for room in rooms { upsertSession(relayID: relayID, peer: peer, room: room) }
         case let .roomAnnounced(peer, room):
             upsertSession(relayID: relayID, peer: peer, room: room)
