@@ -270,6 +270,20 @@ export function initSubagentRooms(
     });
     emitPanel();
 
+    // Prefer the child's OWN parent (SDK session header) so a nested subagent
+    // nests under its real spawner, not always the root; fall back to root.
+    const header = ctx.sessionManager.getHeader?.() ?? null;
+    const parentSessionId =
+      (typeof header?.parentSession === "string" && header.parentSession) ||
+      opts.getParentSessionId() ||
+      undefined;
+    // The child's real start (session-header timestamp) so its room reports its
+    // own start instead of 0; fall back to the panel stamp, then now.
+    const startedAt =
+      (header?.timestamp ? Date.parse(header.timestamp) : 0) ||
+      panelBySession.get(sessionId)?.startedAt ||
+      Date.now();
+
     void startChildRoom({
       relayUrl,
       childPi,
@@ -277,7 +291,8 @@ export function initSubagentRooms(
       sessionId,
       roomId,
       parentRoomId,
-      parentSessionId: opts.getParentSessionId() ?? undefined,
+      parentSessionId,
+      startedAt,
       name,
       subagentId: rec?.id,
       makeHandlers,
@@ -317,6 +332,7 @@ async function startChildRoom(args: {
   roomId: string;
   parentRoomId: string;
   parentSessionId?: string;
+  startedAt: number;
   name: string;
   subagentId?: string;
   makeHandlers: (ctx: ExtensionContext) => RpcCommandHandlers;
@@ -358,7 +374,7 @@ async function startChildRoom(args: {
           ub: {
             type: "session_sync_end",
             ...(typeof f.id === "string" ? { in_reply_to: f.id } : {}),
-            session_started_at: 0,
+            session_started_at: args.startedAt,
           } as EnvelopeMessage["ub"],
         });
       } else if (f.type === "get_session_info") {
