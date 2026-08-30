@@ -120,7 +120,16 @@ struct HomeView: View {
                                         .accessibilityLabel("Idle — daemon status unknown")
                                 }
                             }
-                            .task { await model.requestDaemonStatus(machine: machine) }
+                            .task {
+                                // The daemon may start AFTER this row appears, so
+                                // re-request until it answers (or the row scrolls
+                                // away — .task auto-cancels). Stops once caps land.
+                                while !Task.isCancelled,
+                                      model.daemonPresence(for: machine) == nil {
+                                    await model.requestDaemonStatus(machine: machine)
+                                    try? await Task.sleep(nanoseconds: 2_500_000_000)
+                                }
+                            }
                         }
                     }
                     Button {
@@ -209,7 +218,13 @@ private struct IdleMachineRow: View {
     }
 
     private var subtitle: String {
-        guard let d = model.daemonPresence(for: machine) else { return "idle · checking daemon…" }
+        guard let d = model.daemonPresence(for: machine) else {
+            // Show the room the app is polling so it can be eyeballed against the
+            // daemon's logged control room — a mismatch means the paired epk
+            // differs from the daemon's identity (re-pair needed).
+            let room = Base64.deriveControlRoom(epk: machine.epk) ?? "?"
+            return "idle · checking daemon @ \(room)…"
+        }
         let host = d.hostname ?? machine.hostname
         let backend = d.backend.map { " · \($0)" } ?? ""
         return "idle" + (host.map { " · \($0)" } ?? "") + backend
