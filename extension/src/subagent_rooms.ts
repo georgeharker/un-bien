@@ -196,11 +196,14 @@ export function initSubagentRooms(
 
   // Event-asserted child (docs/subagent-events.md §3B/§4): a child whose id is
   // supplied in an EVENT rather than detected via an in-process session_start.
-  // The expectation is the child is un-bien-aware and joins the mesh ITSELF, so
-  // it owns its own room/transcript/interaction; this only folds it into the
-  // parent's fleet/panel/status so the parent recognizes + tracks it. Tolerant
-  // of field spelling across emitters (gotgenes `subagents:child:session-created`
-  // and un-bien's own `unbien:subagent:child`); the child sessionId is REQUIRED.
+  // CONTRACT (gotgenes' "subagent adapter convention", decision 0012 / CHANGELOG):
+  // `subagents:child:session-created` carries `{ sessionId, parentSessionId? }`,
+  // emitted synchronously BEFORE bindExtensions(). un-bien's own
+  // `unbien:subagent:child` mirrors that shape (+ optional id/type/description/
+  // status/cwd). We read those canonical fields; the extra spellings below are
+  // defensive only. The child sessionId is REQUIRED. The expectation is the
+  // child is un-bien-aware and joins the mesh ITSELF (owns its own transcript);
+  // this folds it into the parent's fleet/panel/status + pre-creates the keeper.
   function onChildMarker(raw: unknown): void {
     if (disposed) return;
     const p = (raw ?? {}) as Record<string, unknown>;
@@ -264,6 +267,27 @@ export function initSubagentRooms(
     }
   }
 
+  // Paired disposal (gotgenes `subagents:child:disposed` = `{ sessionId }`, fired
+  // in the run's finally on success AND error; un-bien's own
+  // `unbien:subagent:disposed` mirrors it). The child session is gone — release
+  // our keeper/room + drop it from the panel. For an out-of-process child this
+  // closes only OUR keeper conn; the child's own conn (if still up) keeps the
+  // room until it leaves. Inert for tintinweb (never emits this).
+  function onChildDisposed(raw: unknown): void {
+    const p = (raw ?? {}) as Record<string, unknown>;
+    const sessionId =
+      (typeof p.sessionId === "string" && p.sessionId) ||
+      (typeof p.childSessionId === "string" && p.childSessionId) ||
+      undefined;
+    if (!sessionId) return;
+    children.get(sessionId)?.dispose();
+    children.delete(sessionId);
+    building.delete(sessionId);
+    pendingAttach.delete(sessionId);
+    panelBySession.delete(sessionId);
+    emitPanel();
+  }
+
   // SAFETY: the pi SDK exposes an `events` bus at runtime that isn't part of
   // its public typings; we read it defensively (optional) and guard below.
   const events = (
@@ -320,6 +344,8 @@ export function initSubagentRooms(
     // in-process session_start detection runs.
     unsub.push(events.on("subagents:child:session-created", onChildMarker));
     unsub.push(events.on("unbien:subagent:child", onChildMarker));
+    unsub.push(events.on("subagents:child:disposed", onChildDisposed));
+    unsub.push(events.on("unbien:subagent:disposed", onChildDisposed));
   }
 
   function nextRecord(): SubagentRecord | undefined {

@@ -120,10 +120,26 @@ child id** (+ parent link) — the exact facts Regime A would have detected. Two
 accepted markers:
 
 1. **gotgenes `subagents:child:session-created`** — consumed as authoritative
-   when present (also removes the arrival-order guess in Regime A). *Confirm its
-   exact payload against the gotgenes source/ADR before relying on field names.*
+   when present (also removes the arrival-order guess in Regime A). **Confirmed
+   payload** (gotgenes decision 0012 / CHANGELOG): `{ sessionId, parentSessionId? }`,
+   emitted **synchronously before `bindExtensions()`**. Paired disposal event:
+   **`subagents:child:disposed` = `{ sessionId }`** (fired in the run's `finally`,
+   success and error alike) — un-bien consumes it to release the keeper and drop
+   the child from the panel.
 2. **`unbien:subagent:child`** (§4) — un-bien's own implementation-neutral marker,
-   so any launcher can assert a child without depending on a subagents package.
+   mirroring that shape, so any launcher can assert a child without depending on a
+   subagents package.
+
+**The “subagent adapter convention”** (gotgenes' name for this contract): an
+implementation's whole obligation is the announcement —
+- **in-process:** emit `subagents:child:session-created` `{ sessionId,
+  parentSessionId? }` synchronously before `bindExtensions()`, and
+  `subagents:child:disposed` `{ sessionId }` in the `finally`;
+- **out-of-process:** set env `PI_SUBAGENT_PARENT_SESSION=<parent-session-id>` in
+  the spawned child so it learns its parent.
+
+un-bien's keeper + relay-inherit path (§3 parentage) makes even the env-less case
+nest, but honoring the convention is the portable contract other tools share.
 
 ### Parentage model: child-knows-parent (chosen)
 
@@ -192,6 +208,12 @@ pi.events.emit("unbien:subagent:child", {
   `sessionId`, they reconcile on `sessionId` — no double room.
 - Additive: absent → Regime A unchanged; present → deterministic + covers
   out-of-process.
+
+**Disposal counterpart.** Emit **`unbien:subagent:disposed`** `{ sessionId }` when
+the child session ends (mirroring gotgenes' `subagents:child:disposed`); un-bien
+releases the keeper and drops the child from the panel. For an out-of-process
+child this closes only un-bien's keeper connection — the child's own connection
+(if still up) keeps the room until it leaves.
 
 ---
 
