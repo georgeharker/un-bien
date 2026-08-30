@@ -132,18 +132,20 @@ on its own deterministic room** (`roomIdForSession(childSessionId)`) — one
 connection, no parent-held placeholder. In-process, the parent builds the child
 room and stamps it; out-of-process, the child's own un-bien stamps it from its
 **spawn context** (parentSessionId handed in at spawn — the same mechanism a
-launched session uses, so parentage composes with launch). "Parent-knows-child"
-is not a second system: when only the parent knows the link (a marker event for a
-child not told at spawn), the parent **converts** it to child-known by delivering
-the parent to the child (inject at spawn; runtime delivery on the child's room as
-fallback). The deterministic `roomId` is where the two ends meet without
+launched session uses). For the OPPOSITE case — an extension hands us the childId
+on **spawn** of a subagent (parent-knows-child) but the child doesn't know its
+parent — *we* pre-create the child room with `parentId` already stamped, and when
+the child recreates itself in that same deterministic room it simply **doesn't
+overwrite** `parentId`. The relay backs this: `update_room_meta` writes only the
+fields present in a patch, so a child write that omits `parent` leaves the
+pre-stamped value intact. The deterministic `roomId` is where the two ends meet without
 coordinating; precedence is **set-once, parent-authoritative**. The marker events
 still feed the parent's fleet/panel/status, but nesting always rides the
 child-stamped `room_meta.parent`. Creation is **upsert** (create-or-enrich) keyed
 on that deterministic `roomId`: the marker, `session_start`, and any re-arrival
-converge on one room/entry — enrich if it exists, never duplicate or double-bind. (A parent keeper-placeholder room — holding an
-open relay room + reaping on launch failure — was considered and rejected as
-unnecessary once parentage always converts to the child.)
+converge on one room/entry — enrich if it exists, never duplicate or double-bind.
+(No held keeper is needed and no reap: a child recreates itself in the
+pre-created room, and children live until the **parent connection dies**.)
 
 **Child-connection invariant + no reap.** Children linger for the parent's
 lifetime (transcripts stay visible), disposed only on parent `session_shutdown` —
