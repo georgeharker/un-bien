@@ -54,7 +54,9 @@ export function _runtimeOwnerFingerprint(runtimeKey: string): string {
   }
 }
 
-export function _inspectPeerRecord(record: unknown): InspectedPeerRecord | null {
+export function _inspectPeerRecord(
+  record: unknown,
+): InspectedPeerRecord | null {
   if (!record || typeof record !== "object") {
     const fingerprint = _rawOwnerFingerprint(record);
     console.warn(
