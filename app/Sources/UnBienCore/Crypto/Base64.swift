@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Base64 discipline for the relay + mesh boundary (DESIGN §10.1).
 ///
@@ -37,5 +38,34 @@ public enum Base64 {
     public static func canonicalKey(_ input: String) -> String? {
         guard let raw = decodeTolerant(input) else { return nil }
         return standard(raw)
+    }
+
+    /// Encode raw bytes as RFC 4648 URL-safe base64, UNPADDED — the form the
+    /// machine's epk takes on the wire (`Buffer.toString("base64url")`) and the
+    /// alphabet room ids use.
+    public static func urlUnpadded(_ data: Data) -> String {
+        var s = data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+        while s.hasSuffix("=") { s.removeLast() }
+        return s
+    }
+
+    /// Derive the machine-level CONTROL room id from a machine's ed25519 public
+    /// key — the Swift mirror of `rooms.ts` `roomIdForControl` (design
+    /// 01M17WDQ04). The idle-machine presence daemon joins this room; the app
+    /// derives the SAME id to reach it.
+    ///
+    /// The daemon hashes the epk in base64url-UNPADDED form
+    /// (`Buffer.toString("base64url")`), but `PairedMachine.epk` is stored
+    /// padded-standard — so we canonicalize to base64url-unpadded FIRST, or the
+    /// two sides hash different strings and derive different rooms (never meet).
+    /// Formula: `base64url(sha256("\0control\0" + epkBase64url)).prefix(12)`.
+    /// Returns nil only when `epk` isn't valid base64.
+    public static func deriveControlRoom(epk: String) -> String? {
+        guard let raw = decodeTolerant(epk) else { return nil }
+        let input = "\u{0}control\u{0}" + urlUnpadded(raw)
+        let digest = SHA256.hash(data: Data(input.utf8))
+        return String(urlUnpadded(Data(digest)).prefix(12))
     }
 }

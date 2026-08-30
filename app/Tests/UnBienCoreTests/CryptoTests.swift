@@ -96,4 +96,29 @@ final class CryptoTests: XCTestCase {
                                    roomID: "main", relayURL: nil)
         XCTAssertEqual(invite.epk, raw.base64EncodedString())
     }
+
+    /// deriveControlRoom mirrors rooms.ts `roomIdForControl`. Cross-language
+    /// vector: pubkey = 32×0x01 → the daemon (base64url-unpadded epk) derives
+    /// control room "sx7ij5GnP2Fn" (computed by node from the TS). The app
+    /// stores epk padded-standard, so deriveControlRoom MUST canonicalize to
+    /// base64url-unpadded first, or it lands in a different room than the daemon
+    /// and the two never meet.
+    func testDeriveControlRoomMatchesDaemon() {
+        let raw = Data(repeating: 0x01, count: 32)
+        let epkStdPadded = raw.base64EncodedString() // "AQEB…AQE=" (app form)
+        XCTAssertEqual(Base64.deriveControlRoom(epk: epkStdPadded), "sx7ij5GnP2Fn")
+
+        // Same room regardless of the epk's input alphabet/padding.
+        let epkUrlUnpadded = epkStdPadded
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        XCTAssertEqual(Base64.deriveControlRoom(epk: epkUrlUnpadded), "sx7ij5GnP2Fn")
+
+        XCTAssertEqual(Base64.deriveControlRoom(epk: epkStdPadded)?.count, 12)
+        XCTAssertNotEqual(
+            Base64.deriveControlRoom(epk: Data(repeating: 0x02, count: 32).base64EncodedString()),
+            "sx7ij5GnP2Fn")
+        XCTAssertNil(Base64.deriveControlRoom(epk: "not+base64!!"))
+    }
 }
