@@ -192,7 +192,29 @@ carries only lifecycle + labels, never transcript content.
 
 **Room advertisement.** The child room carries `room_meta.parent` (parent room id)
 + `subagentId` (record id) via the relay's room_meta passthrough, so the app nests
-and navigates from `room_announced` alone.
+and navigates from `room_announced` alone. `room_meta` is transport/negotiation
+ONLY — no app state rides it.
+
+**Status is PULLED over the child connection, not pushed.** Lifecycle status
+(`done`/`failed`/`in_progress`/`pending`) is app STATE, so it does NOT ride
+`room_meta` (transport) nor the chat-scoped subagents panel (delivered only on
+`session_sync` attach — absent on the home list). Instead:
+
+1. `subagent_rooms` tracks each child's status from the `subagents:*` events
+   (the SOURCE), keyed by child `sessionId`.
+2. The app issues a `get_session_info` ub PULL to the child room; the fork answers
+   `session_info { status }` from that tracked state. The pull's SEND is what makes
+   the child room attach + reply.
+3. The app stamps `status` on the child `LiveSession` (keyed by child `sessionId`),
+   so the home-list checkmark reads it WITHOUT attaching to the parent.
+4. The pull is re-issued on every `room_announced` — i.e. on reconnect AND app
+   relaunch — so status survives an app restart while the fork stays the source of
+   truth ("track state in the fork, re-query on relaunch").
+
+This is the governing rule in miniature: rooms only aggregate pi sessions across pi
+lifetimes (the app outlives any one pi); everything else — status included — goes
+over pi/extension interfaces (the envelope's `ub`/`rpc` planes), never relay
+features like `room_meta`. Mirrors the `presence_status` caps PULL exactly.
 
 ## ub plane — Un Bien's own protocol
 
@@ -202,6 +224,9 @@ and navigates from `room_announced` alone.
 | `session_sync` | app→fork | `{ id?, limit? }` | request panels + pending-ui reconstruction |
 | `session_sync_end` | fork→app | `{ in_reply_to?, session_started_at? }` | reconstruction terminator + session clock |
 | `session_launch` | app→fork | `{ mode, cwd?, name? }` | mesh remote-launch of a SEPARATE pi process |
+| `get_session_info` | app→fork | `{ id? }` | PULL a session's own state (subagent lifecycle status) |
+| `session_info` | fork→app | `{ status?, in_reply_to? }` | response to `get_session_info`, from the fork's tracked state |
+| `presence_status` | app↔fork/daemon | `{ id? }` → `{ caps?, hostname?, backend?, in_reply_to? }` | PULL a machine's daemon caps |
 
 `hello` and `session_sync_end` are folded by the app the same way as an rpc
 frame (`session_sync_end`'s inner `.type` drives `applyRPC`). `session_launch` is
@@ -283,11 +308,15 @@ match pi's rpc contract (`text`→`message`, `model_id`→`modelId`,
 | answer a dialog | `{rpc}` `extension_ui_response` | `id`, `value`/`confirmed`/`cancelled` |
 | reconstruct panels+ui | `{ub}` `session_sync` | `id`, `limit?` |
 | remote launch | `{ub}` `session_launch` | `mode`, `cwd?`, `name?` |
+| pull subagent status | `{ub}` `get_session_info` | `id?` → `session_info { status }` |
+| pull daemon caps | `{ub}` `presence_status` | `id?` → `{ caps, hostname, backend }` |
 
 Each pi-native command carries an optional `id`; the fork replies
 `{rpc:{type:"response", command, success, data?, error?, id}}` to the SENDER,
-correlated by `id`. `session_sync` / `session_launch` (ub plane) have their own
-replies (`session_sync_end` / none). `pair_request` is a bare pre-attach frame.
+correlated by `id`. The `{ub}`-plane PULLs have their own replies, correlated by
+`in_reply_to`: `session_sync`→`session_sync_end`, `get_session_info`→`session_info`,
+`presence_status`→`presence_status`; `session_launch` has none. `pair_request` is a
+bare pre-attach frame.
 
 ### Queue = pi's native queue, display = app-owned
 

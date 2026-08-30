@@ -205,6 +205,14 @@ struct HomeView: View {
                         .frame(width: 16)
                 }
                 SessionRow(session: session)
+                // Subagent lifecycle status as a glyph (done ✓ / failed / running),
+                // pulled onto the child session via get_session_info (design 01M18PCM).
+                if session.isSubagent, let status = session.status {
+                    Image(systemName: subagentStatusIcon(status))
+                        .imageScale(.medium)
+                        .foregroundStyle(subagentStatusColor(status))
+                        .accessibilityLabel("Subagent status: \(status)")
+                }
                 // A NEW-conversation launch on THIS machine. remote_launch is a
                 // room-scoped cap and this row's room is a valid carrier;
                 // borderless so the tap doesn't trigger row navigation.
@@ -226,6 +234,24 @@ struct HomeView: View {
 
     private func toggleFold(_ id: String) {
         if collapsed.contains(id) { collapsed.remove(id) } else { collapsed.insert(id) }
+    }
+
+    private func subagentStatusIcon(_ status: String) -> String {
+        switch status {
+        case "done", "completed": return "checkmark.circle.fill"
+        case "failed", "error", "aborted", "stopped": return "xmark.octagon.fill"
+        case "in_progress", "in-progress", "running", "started": return "gearshape.2.fill"
+        default: return "clock"
+        }
+    }
+
+    private func subagentStatusColor(_ status: String) -> Color {
+        switch status {
+        case "done", "completed": return theme.success
+        case "failed", "error", "aborted", "stopped": return theme.error
+        case "in_progress", "in-progress", "running", "started": return theme.accent
+        default: return theme.secondaryText
+        }
     }
 }
 

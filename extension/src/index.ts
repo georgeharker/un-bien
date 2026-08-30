@@ -782,9 +782,13 @@ function _ctxUi(preferred?: { ui?: unknown } | null): {
 function _safeNotify(
   message: string,
   level: "info" | "warning" | "error" = "info",
+  preferred?: { ui?: unknown } | null,
 ): void {
   try {
-    const ui = _ctxUi();
+    // Prefer the caller's fresh ctx (e.g. a command ctx) over the module's
+    // last-event ctx — a session_start ctx can be ui-less/stale and would
+    // otherwise shadow it, silently dropping the notify.
+    const ui = _ctxUi(preferred);
     if (ui && typeof ui.notify === "function") ui.notify(message, level);
   } catch {
     /* never let notify take down the process */
@@ -3043,11 +3047,15 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // New session. Fires on startup/new/fork/reload/resume; the ctx is always
   // bound to the current session.
   pi.on("session_start", (_event, ctx) => {
-    _lastEventCtx = ctx;
     // Register THIS session's record (root + every subagent get their own
     // session_start with their own ctx). Each records its OWN sessionManager —
     // no cross-session clobber (was the unguarded `_sessionManager = ...` bug).
     const sid = _sidOf(ctx);
+    // The module BASE ctx (compact/notify fallback when no fresh ctx is passed)
+    // is the ROOT's — a subagent child's ctx must NOT clobber it, same
+    // no-cross-session-clobber rule as the per-sid sessionManager. Otherwise a
+    // subagent steals the base ctx and root-scoped notifies silently drop.
+    if (!_isNonRootSid(sid)) _lastEventCtx = ctx;
     if (ctx?.sessionManager) _stateFor(sid).sessionManager = ctx.sessionManager;
     // session_shutdown disposes per-session pi-ask subscriptions. A host that
     // reuses this module instance does NOT re-run the factory, so rebind the
@@ -3343,6 +3351,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         _safeNotify(
           `[un-bien test] ${_runTestScenario(sub.slice("test".length).trim())}`,
           "info",
+          ctx,
         );
       } else if (sub === "rename" || sub.startsWith("rename ")) {
         await _renameAgent(sub.slice("rename".length).trim());

@@ -32,6 +32,10 @@ public enum ClientMessage: Equatable, Sendable {
     /// its capabilities. Answered ONLY by the presence daemon with a
     /// `presence_status` response { caps, hostname, backend }.
     case presenceStatus(id: String)
+    /// Session-info PULL: ask a session for its own info (subagent lifecycle
+    /// status for now). Answered by the extension from pi's tracked state, so it
+    /// survives app relaunch; re-issued on reconnect / room re-announce.
+    case getSessionInfo(id: String)
     /// Response to an `extension_ui_request` (select/confirm/input/editor).
     case extensionUiResponse(ExtensionUiResponse)
 
@@ -56,6 +60,7 @@ public enum ClientMessage: Equatable, Sendable {
         case .listModels: return "list_models"
         case .sessionLaunch: return "session_launch"
         case .presenceStatus: return "presence_status"
+        case .getSessionInfo: return "get_session_info"
         case .extensionUiResponse: return "extension_ui_response"
         }
     }

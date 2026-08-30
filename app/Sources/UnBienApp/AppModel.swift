@@ -26,6 +26,10 @@ public struct LiveSession: Identifiable, Equatable, Hashable, Sendable {
     /// Supplementary relay metadata — kept, but NOT logic keys.
     public var parentRoomID: String?
     public var subagentID: String?
+    /// Subagent lifecycle status (done/failed/in_progress/pending), PULLED over
+    /// this session's own connection via `get_session_info` (design 01M18PCM) —
+    /// not room_meta. nil until the pull answers.
+    public var status: String? = nil
 
     /// Identity = pi sessionId, NOT the routing roomId.
     public var id: String { "\(relayID.uuidString):\(peerEPK):\(sessionID)" }
@@ -390,6 +394,18 @@ public final class AppModel: ObservableObject {
                         backend: ub["backend"]?.stringValue)
                     return
                 }
+                // Response to a `get_session_info` PULL: a subagent reporting its
+                // own lifecycle status over its connection (design 01M18PCM). Set
+                // it on the child LiveSession, keyed by the child's pi sessionId,
+                // so the home-row checkmark reads it WITHOUT the parent's panel.
+                if env.type == "ub", let ub = env.ub,
+                   ub["type"]?.stringValue == "session_info" {
+                    if var s = sessions[key] {
+                        s.status = ub["status"]?.stringValue
+                        sessions[key] = s
+                    }
+                    return
+                }
                 // Other un-bien-plane frames (the session_sync_end terminator):
                 // fold via the reducer as a frame — its inner `.type` drives
                 // applyRPC, exactly like an rpc-plane frame.
@@ -525,12 +541,30 @@ public final class AppModel: ObservableObject {
     }
 
     private func upsertSession(relayID: UUID, peer: String, room: RoomInfo) {
-        let session = LiveSession(relayID: relayID, peerEPK: peer, roomID: room.roomID,
-                                  sessionID: room.sessionID ?? room.roomID,
+        // The presence daemon's control room is not a chat session: it carries the
+        // `is_daemon` cap, its roomId is the control-room derivation, and it has no
+        // pi sessionId (a real session's wire identity).
+        if room.caps?.contains("is_daemon") == true { return }
+        if let control = Base64.deriveControlRoom(epk: peer), room.roomID == control { return }
+        guard let sessionID = room.sessionID else { return }
+        var session = LiveSession(relayID: relayID, peerEPK: peer, roomID: room.roomID,
+                                  sessionID: sessionID,
                                   name: room.name, cwd: room.cwd, model: nil,
                                   parentSessionID: room.parentSessionID,
                                   parentRoomID: room.parent, subagentID: room.subagentID)
+        // Carry a known status across re-announce (reconnect/relaunch replays
+        // room_announced); the pull below refreshes it.
+        session.status = sessions[session.id]?.status
         sessions[session.id] = session
+        // PULL the subagent's lifecycle status over its OWN connection, re-issued
+        // on every announce so it survives app relaunch (design 01M18PCM). The
+        // send itself is what makes the child room attach + answer.
+        if session.isSubagent, let connection = connections[relayID] {
+            let peerEPK = session.peerEPK
+            let roomID = session.roomID
+            Task { try? await connection.send(.getSessionInfo(id: UUID().uuidString),
+                                              toPeer: peerEPK, room: roomID) }
+        }
     }
 
     /// The child subagent session for a subagents-panel record id, on the same
@@ -831,6 +865,8 @@ public final class AppModel: ObservableObject {
     public func sessions(onRelay relayID: UUID) -> [LiveSession] {
         sessions.values.filter { $0.relayID == relayID }.sorted { $0.name < $1.name }
     }
+
+
 
     public func transcript(for session: LiveSession) -> SessionState {
         transcripts[session.id] ?? SessionState()

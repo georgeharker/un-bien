@@ -281,6 +281,7 @@ export function initSubagentRooms(
       name,
       subagentId: rec?.id,
       makeHandlers,
+      getStatus: () => displayStatus(panelBySession.get(sessionId)?.status),
       onClosed: () => children.delete(sessionId),
     }).then((room) => {
       if (disposed) {
@@ -319,6 +320,7 @@ async function startChildRoom(args: {
   name: string;
   subagentId?: string;
   makeHandlers: (ctx: ExtensionContext) => RpcCommandHandlers;
+  getStatus: () => string | undefined;
   onClosed: () => void;
 }): Promise<ChildRoom> {
   const kp = await getOrCreateEd25519Keypair();
@@ -357,6 +359,16 @@ async function startChildRoom(args: {
             type: "session_sync_end",
             ...(typeof f.id === "string" ? { in_reply_to: f.id } : {}),
             session_started_at: 0,
+          } as EnvelopeMessage["ub"],
+        });
+      } else if (f.type === "get_session_info") {
+        // Pull: the app asks this subagent for its own info (lifecycle status).
+        // Answered from the fork's tracked state, so it survives app relaunch.
+        sender.sendEnvelope({
+          ub: {
+            type: "session_info",
+            status: args.getStatus(),
+            ...(typeof f.id === "string" ? { in_reply_to: f.id } : {}),
           } as EnvelopeMessage["ub"],
         });
       }

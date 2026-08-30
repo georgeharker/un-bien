@@ -396,6 +396,7 @@ private struct TranscriptRow: View, Equatable {
                         .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
                         .markdownMargin(top: 8, bottom: 8)
                     }
+                    .textSelection(.enabled)
             }
             ForEach(Array(bubble.images.enumerated()), id: \.offset) { _, image in
                 WireImageView(image: image, theme: theme)
@@ -410,6 +411,7 @@ private struct TranscriptRow: View, Equatable {
             Text(role).font(.caption.weight(.semibold)).foregroundStyle(tint)
             Text(text).foregroundStyle(theme.text)
                 .font(typography.bodyFont())
+                .textSelection(.enabled)
                 .padding(10)
                 .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
         }

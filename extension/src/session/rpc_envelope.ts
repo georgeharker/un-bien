@@ -97,6 +97,14 @@ export type UbFrame =
       hostname?: string; // response: machine hostname
       backend?: string; // response: configured launch backend (tmux|herdr)
       in_reply_to?: string; // response: echoes the request id
+    }
+  | { type: "get_session_info"; id?: string } // app->ext: session-info PULL request
+  | {
+      // ext->app: session-info PULL response — a session's own state, answered
+      // from the fork's tracked data (subagent lifecycle status for now).
+      type: "session_info";
+      status?: string;
+      in_reply_to?: string;
     };
 
 /** Legacy wrapper marker for the rpc/evt plane — still stamped + accepted during

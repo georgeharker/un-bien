@@ -88,10 +88,13 @@ public struct RoomInfo: Codable, Equatable, Sendable {
     /// room_id stays relay-routing only.
     public let sessionID: String?
     public let parentSessionID: String?
+    /// Caps the room advertises via room_meta; the presence daemon stamps
+    /// `is_daemon` so its control room is filtered from the session list.
+    public let caps: [String]?
 
     enum CodingKeys: String, CodingKey {
         case roomID = "room_id"
-        case name, cwd
+        case name, cwd, caps
         case startedAt = "started_at"
         case parent
         case subagentID = "subagentId"

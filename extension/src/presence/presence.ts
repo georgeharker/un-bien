@@ -33,6 +33,10 @@ import type { ClientMessage, ServerMessage } from "../protocol/types.js";
 
 const RECONNECT_DELAY_MS = 3_000;
 
+/** Caps the presence daemon advertises: `remote_launch` gates the app's launch
+ *  control; `is_daemon` marks the control room so the app filters it. */
+const DAEMON_CAPS = ["remote_launch", "is_daemon"] as const;
+
 export interface PresenceHandle {
   readonly roomId: string;
   readonly epk: string;
@@ -89,7 +93,7 @@ export async function startPresence(): Promise<PresenceHandle> {
       sender.sendEnvelope({
         ub: {
           type: "presence_status",
-          caps: ["remote_launch"],
+          caps: [...DAEMON_CAPS],
           hostname: hostname(),
           backend: configuredBackend(),
           ...(typeof frame.id === "string" ? { in_reply_to: frame.id } : {}),
@@ -152,7 +156,7 @@ export async function startPresence(): Promise<PresenceHandle> {
     channels.set(peer, channel);
     // Advertise machine caps up front so the app enables its launch control for
     // this control room. No sessionId — the presence has no pi session.
-    channel.sendEnvelope(helloEnvelope(["remote_launch"]));
+    channel.sendEnvelope(helloEnvelope([...DAEMON_CAPS]));
     envLog(
       `presence: owner ${peer.slice(0, 8)} (${known.name}) attached; caps sent`,
     );
@@ -200,7 +204,8 @@ export async function startPresence(): Promise<PresenceHandle> {
     });
     await r.connect({
       roomId,
-      roomMeta: { name: hostname(), cwd: homedir() },
+      // caps ride room_meta so the app filters the control room from the announce.
+      roomMeta: { name: hostname(), cwd: homedir(), caps: [...DAEMON_CAPS] },
     });
     envLog(
       `presence: connected to control room ${roomId} (epk ${epk.slice(0, 12)}…)`,
