@@ -55,11 +55,32 @@ export async function startPresence(): Promise<PresenceHandle> {
   let relay: RelayClient | null = null;
   const channels = new Map<string, PlainPeerChannel>();
 
-  /** Honor a `session_launch` ub-frame — mirrors the fork's _routeUnBienPlaneFrom
-   *  handler: per-cwd opt-in, machine-config backend, clean exec (no keystrokes). */
-  function handleUbFrame(env: EnvelopeMessage): void {
+  /** The machine's configured launch backend (rpc is a fast-follow). */
+  function configuredBackend(): "tmux" | "herdr" {
+    return loadConfig().launch?.backend === "herdr" ? "herdr" : "tmux";
+  }
+
+  /** Handle a ub-frame from an attached owner. `presence_status` is the
+   *  DAEMON-SPECIFIC caps PULL (design 01M1813Q) — reply with caps + hostname +
+   *  backend. `session_launch` mirrors the fork's _routeUnBienPlaneFrom handler:
+   *  per-cwd opt-in, machine-config backend, clean exec (no keystrokes). */
+  function handleUbFrame(env: EnvelopeMessage, sender: PlainPeerChannel): void {
     if (env.ub === undefined) return;
     const frame = env.ub as Record<string, unknown>;
+
+    if (frame.type === "presence_status") {
+      sender.sendEnvelope({
+        ub: {
+          type: "presence_status",
+          caps: ["remote_launch"],
+          hostname: hostname(),
+          backend: configuredBackend(),
+          ...(typeof frame.id === "string" ? { in_reply_to: frame.id } : {}),
+        },
+      });
+      return;
+    }
+
     if (frame.type !== "session_launch") return;
     const cwd = _expandTilde(
       typeof frame.cwd === "string" && frame.cwd.length > 0
@@ -70,9 +91,8 @@ export async function startPresence(): Promise<PresenceHandle> {
       envLog("presence session_launch: remote launch disabled on this machine");
       return;
     }
-    const backend = loadConfig().launch?.backend === "herdr" ? "herdr" : "tmux";
     const launchError = _launchSession(
-      backend,
+      configuredBackend(),
       cwd,
       typeof frame.name === "string" ? frame.name : undefined,
     );
@@ -110,7 +130,7 @@ export async function startPresence(): Promise<PresenceHandle> {
       roomId,
       () => {}, // presence ignores stock ClientMessages (ub plane only)
       () => channels.delete(peer),
-      (env) => handleUbFrame(env),
+      (env) => handleUbFrame(env, channel),
     );
     channels.set(peer, channel);
     // Advertise machine caps up front so the app enables its launch control for
@@ -121,7 +141,7 @@ export async function startPresence(): Promise<PresenceHandle> {
     );
     // The channel didn't see the line that triggered the attach — route it.
     if (isEnvelopeFrame(firstInner as Record<string, unknown>)) {
-      handleUbFrame(firstInner as EnvelopeMessage);
+      handleUbFrame(firstInner as EnvelopeMessage, channel);
     }
   }
 

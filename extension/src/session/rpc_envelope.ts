@@ -81,6 +81,18 @@ export type UbFrame =
       mode: string;
       cwd?: string;
       name?: string;
+    }
+  | {
+      // app->peer: caps request | peer->app: caps response. A machine-level
+      // PULL for capabilities, answered by both a session fork and the idle-
+      // machine presence daemon (design 01M1813Q). Request carries only `id`;
+      // the response fills caps/hostname/backend + echoes in_reply_to.
+      type: "presence_status";
+      id?: string; // request correlation id
+      caps?: string[]; // response: capability set
+      hostname?: string; // response: machine hostname
+      backend?: string; // response: configured launch backend (tmux|herdr)
+      in_reply_to?: string; // response: echoes the request id
     };
 
 /** Legacy wrapper marker for the rpc/evt plane — still stamped + accepted during
