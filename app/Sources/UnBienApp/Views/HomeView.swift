@@ -251,6 +251,9 @@ struct HomeView: View {
         case "done", "completed": return "checkmark.circle.fill"
         case "failed", "error", "aborted", "stopped": return "xmark.octagon.fill"
         case "in_progress", "in-progress", "running", "started": return "gearshape.2.fill"
+        case "steered": return "arrow.triangle.branch"
+        case "compacted": return "arrow.triangle.merge"
+        case "queued", "created": return "clock"
         default: return "clock"
         }
     }
@@ -259,7 +262,7 @@ struct HomeView: View {
         switch status {
         case "done", "completed": return theme.success
         case "failed", "error", "aborted", "stopped": return theme.error
-        case "in_progress", "in-progress", "running", "started": return theme.accent
+        case "in_progress", "in-progress", "running", "started", "steered", "compacted": return theme.accent
         default: return theme.secondaryText
         }
     }

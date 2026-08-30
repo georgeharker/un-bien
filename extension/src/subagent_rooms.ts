@@ -132,19 +132,33 @@ export function initSubagentRooms(
   >();
   const recordToSession = new Map<string, string>();
 
-  function displayStatus(s?: string): string {
+  // Normalize a raw subagents:* status to un-bien's stable EXTENDED vocabulary
+  // (docs/subagent-events.md §1). We forward the FULL vocab to the app rather
+  // than collapsing to 3 states, so the app can render the richer states;
+  // unknown values pass through (forward-compatible), empty -> "pending".
+  function normalizeStatus(s?: string): string {
     const v = String(s ?? "").toLowerCase();
-    if (v === "completed") return "done";
-    if (v === "failed" || v === "error" || v === "aborted" || v === "stopped")
-      return "failed";
-    if (
-      v === "running" ||
-      v === "started" ||
-      v === "in_progress" ||
-      v === "steered"
-    )
-      return "in_progress";
-    return "pending";
+    switch (v) {
+      case "completed":
+      case "done":
+        return "completed";
+      case "running":
+      case "started":
+      case "in_progress":
+      case "in-progress":
+        return "running";
+      case "failed":
+      case "error":
+      case "aborted":
+      case "stopped":
+      case "steered":
+      case "compacted":
+      case "queued":
+      case "created":
+        return v;
+      default:
+        return v || "pending";
+    }
   }
 
   function emitPanel(): void {
@@ -155,7 +169,7 @@ export function initSubagentRooms(
       id: `agent:${sessionId}`,
       kind: "agent",
       title: s.description || s.type || sessionId,
-      status: displayStatus(s.status),
+      status: normalizeStatus(s.status),
       deps: [] as string[],
       meta: { agentType: s.type, startedAt: s.startedAt, sessionId },
     }));
@@ -306,7 +320,7 @@ export function initSubagentRooms(
       name,
       subagentId: rec?.id,
       makeHandlers,
-      getStatus: () => displayStatus(panelBySession.get(sessionId)?.status),
+      getStatus: () => normalizeStatus(panelBySession.get(sessionId)?.status),
       onClosed: () => children.delete(sessionId),
     }).then((room) => {
       if (disposed) {
