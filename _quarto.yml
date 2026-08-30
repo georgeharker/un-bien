@@ -11,6 +11,7 @@ project:
     - DESIGN.md
     - docs/rpc-envelope.md
     - docs/rpc-on-event-map.md
+    - docs/subagent-events.md
     - docs/identity.md
     - DEPLOY.md
     - TESTING.md
@@ -58,6 +59,8 @@ website:
             href: docs/rpc-envelope.md
           - text: "pi.on() ↔ frame map"
             href: docs/rpc-on-event-map.md
+          - text: "Subagent & plan bus events"
+            href: docs/subagent-events.md
           - text: "Machine identity"
             href: docs/identity.md
           - text: "Deployment & signing"
