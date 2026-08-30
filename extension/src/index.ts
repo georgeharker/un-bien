@@ -76,6 +76,7 @@ import {
 import { createPanelBridge, type PanelBridge } from "./panel_bridge.js";
 import {
   initSubagentRooms,
+  subagentRoomsEnabled,
   type SubagentRoomsController,
 } from "./subagent_rooms.js";
 import {
@@ -265,6 +266,7 @@ let _myRoomMeta: {
   model?: string;
   thinking?: ThinkingLevel;
   working?: boolean;
+  sessionId?: string;
 } | null = null;
 let _currentModel: string | undefined; // last-known model name
 let _currentThinking: ThinkingLevel | undefined; // last-known thinking level
@@ -2437,6 +2439,8 @@ function _attachOwner(
       env.ub === undefined
         ? _routeRpcCommandFrom(channel, env)
         : _routeUnBienPlaneFrom(channel, env),
+    () =>
+      _rootState().sessionManager?.getSessionId() ?? _rootSessionId ?? undefined,
   );
 
   _attachPeerChannel(appPeerId, channel);
@@ -2848,7 +2852,9 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     _extensionUiBridge?.dispose();
     _extensionUiBridge = createExtensionUiBridge(pi, _uiBroadcast);
     _panelBridge?.dispose();
-    _panelBridge = createPanelBridge(pi, _panelBroadcast);
+    _panelBridge = createPanelBridge(pi, _panelBroadcast, {
+      suppressAgents: subagentRoomsEnabled(),
+    });
     _rpcEnvelope?.dispose();
     _rpcEnvelope = createRpcEnvelope(pi, _broadcastEnvelope, {
       enrichArgs: (tool, args) => {
@@ -2861,6 +2867,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     _subagentRooms?.dispose();
     _subagentRooms = initSubagentRooms(pi, {
       getParentRoomId: () => _myRoomId,
+      getParentSessionId: () => _rootSessionId,
+      broadcastPanel: _panelBroadcast,
     });
   }
 
@@ -3086,7 +3094,10 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       if (ctx?.sessionManager) _rootSessionId = sid;
       if (!_extensionUiBridge)
         _extensionUiBridge = createExtensionUiBridge(pi, _uiBroadcast);
-      if (!_panelBridge) _panelBridge = createPanelBridge(pi, _panelBroadcast);
+      if (!_panelBridge)
+        _panelBridge = createPanelBridge(pi, _panelBroadcast, {
+          suppressAgents: subagentRoomsEnabled(),
+        });
       if (!_rpcEnvelope)
         _rpcEnvelope = createRpcEnvelope(pi, _broadcastEnvelope, {
           enrichArgs: (tool, args) => {
@@ -3099,6 +3110,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       if (!_subagentRooms)
         _subagentRooms = initSubagentRooms(pi, {
           getParentRoomId: () => _myRoomId,
+          getParentSessionId: () => _rootSessionId,
+          broadcastPanel: _panelBroadcast,
         });
     } else if (_isNonRootSid(sid)) {
       // A subagent child session (non-root) — surface it as its own relay room.
@@ -4016,10 +4029,17 @@ async function _cmdStart(
     cwd: string;
     model?: string;
     thinking?: ThinkingLevel;
+    sessionId?: string;
   } = { name: sessionName, cwd };
   const modelName = _currentModelName();
   if (modelName) roomMeta.model = modelName;
   if (_currentThinking) roomMeta.thinking = _currentThinking;
+  // The room's OWN pi sessionId on the announce — so the app keys per-session
+  // state by the pi id (wire identity), not the routing roomId. roomId stays
+  // relay-routing only.
+  const rootSid =
+    _rootState().sessionManager?.getSessionId() ?? _rootSessionId ?? undefined;
+  if (rootSid) roomMeta.sessionId = rootSid;
   // Persist so _attemptReconnect can replay the same hello payload — without
   // this, reconnect issues a bare hello and the relay creates a "default room"
   // entry that surfaces in the app as a phantom legacy session.

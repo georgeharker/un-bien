@@ -45,6 +45,15 @@ export interface RoomMeta {
    *  sessions. Lets the app NEST the child under its parent in the home list
    *  from `room_announced` alone, without attaching. */
   parent?: string;
+  /** Subagent record id, when this room is a subagent child session. Lets a
+   *  consumer map a subagents-panel row to this room. Rides the relay's
+   *  room_meta passthrough alongside `parent`. */
+  subagentId?: string;
+  /** This room's OWN pi sessionId, and its PARENT's pi sessionId when it is a
+   *  subagent child. Pi ids (NOT roomIds) — the app nests + maps panel rows by
+   *  these, at list time, from room_announced. roomId stays relay-routing only. */
+  sessionId?: string;
+  parentSessionId?: string;
 }
 
 /** Control frame sent to relay (not routed to app peer). Each publish carries

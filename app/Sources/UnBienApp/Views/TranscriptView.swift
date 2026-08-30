@@ -50,8 +50,12 @@ struct TranscriptView: View {
                 .scrollDismissesKeyboard(.interactively)
                 #endif
             }
-            queuedChips
-            inputBar
+            if session.isSubagent && !model.subagentsInteractive {
+                readOnlyNote
+            } else {
+                queuedChips
+                inputBar
+            }
         }
         .background(theme.background)
         .navigationTitle(session.name)
@@ -79,7 +83,14 @@ struct TranscriptView: View {
         }
         .sheet(isPresented: panelPresented, onDismiss: { model.closePanel() }) {
             if let key = selectedPanelKey, let panel = model.panels[session.id]?[key] {
-                PanelHostView(panel: panel)
+                PanelHostView(panel: panel, onSelectSubagent: { sessionID in
+                    // Map the panel row (child sessionId) to its session, dismiss
+                    // the sheet, and let Home push it onto the nav stack.
+                    if let child = model.subagentSession(sessionID: sessionID, under: session) {
+                        selectedPanelKey = nil
+                        model.pendingSessionNav = child
+                    }
+                })
             }
         }
         .sheet(isPresented: promptPresented) {
@@ -248,6 +259,16 @@ struct TranscriptView: View {
 
     private var inputBar: some View {
         ComposerBar(session: session)
+    }
+
+    /// Composer replacement for a view-only subagent session (read-only).
+    private var readOnlyNote: some View {
+        Text("View-only subagent session")
+            .font(.footnote)
+            .foregroundStyle(theme.secondaryText)
+            .frame(maxWidth: .infinity)
+            .padding(10)
+            .background(theme.background)
     }
 }
 

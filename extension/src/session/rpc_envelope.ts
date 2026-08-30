@@ -47,6 +47,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 export interface EnvelopeMessage {
   type?: string;
   ts?: number;
+  /** The pi sessionId of the SENDING session — the wire IDENTITY the app keys
+   *  per-session state by. Stamped at the outbound choke. The outer `room` is
+   *  mesh/relay ROUTING only; this is the pi id. */
+  sessionId?: string;
   /** Envelope/pi-rpc protocol version for client decode-guarding. Cross-cutting. */
   protocolVersion?: number;
   rpc?: unknown;

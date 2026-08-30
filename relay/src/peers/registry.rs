@@ -401,6 +401,7 @@ mod tests {
             thinking: None,
             working: false,
             started_at: 0,
+            extra: Default::default(),
         }
     }
 

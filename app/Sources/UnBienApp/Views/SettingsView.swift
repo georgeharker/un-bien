@@ -21,6 +21,7 @@ struct SettingsView: View {
                 appearanceSection
                 typographySection
                 transcriptSection
+                subagentsSection
                 performanceSection
                 syncSection
                 identitySection
@@ -153,6 +154,17 @@ struct SettingsView: View {
             Text("Transcript")
         } footer: {
             Text("Rich results (diff / code) can auto-expand, and their raw input block can be hidden to keep cards compact.")
+        }
+    }
+
+    private var subagentsSection: some View {
+        Section {
+            Toggle("Show subagents on Home", isOn: $model.showSubagentsOnHome)
+            Toggle("Interact with subagents", isOn: $model.subagentsInteractive)
+        } header: {
+            Text("Subagents")
+        } footer: {
+            Text("Subagent sessions can appear nested under their parent on Home. By default they are view-only; enable interaction to prompt or steer them.")
         }
     }
 

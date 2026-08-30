@@ -78,11 +78,25 @@ public struct RoomInfo: Codable, Equatable, Sendable {
     public let name: String
     public let cwd: String
     public let startedAt: Int
+    /// Subagent nesting (via the relay's `room_meta` passthrough): the parent
+    /// (spawning) room id, and the subagent record id, when this room is a
+    /// subagent child session. Both absent for a normal top-level session.
+    public let parent: String?
+    public let subagentID: String?
+    /// Pi ids from room_meta (extension sends them): the room's OWN sessionId and
+    /// its parent's sessionId (subagent child). The app keys + nests by these;
+    /// room_id stays relay-routing only.
+    public let sessionID: String?
+    public let parentSessionID: String?
 
     enum CodingKeys: String, CodingKey {
         case roomID = "room_id"
         case name, cwd
         case startedAt = "started_at"
+        case parent
+        case subagentID = "subagentId"
+        case sessionID = "sessionId"
+        case parentSessionID = "parentSessionId"
     }
 }
 

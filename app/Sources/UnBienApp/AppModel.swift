@@ -11,12 +11,25 @@ public enum RelayHealth: Equatable, Sendable {
 public struct LiveSession: Identifiable, Equatable, Hashable, Sendable {
     public let relayID: UUID
     public let peerEPK: String
+    /// Relay room id — mesh/relay ROUTING only (addressing frames to this
+    /// session). NOT the identity.
     public let roomID: String
+    /// The pi sessionId — the session IDENTITY (wire identity). All per-session
+    /// state keys on this, never on roomID.
+    public let sessionID: String
     public var name: String
     public var cwd: String?
     public var model: String?
+    /// Parent pi sessionId when this is a subagent child (from room_meta); the
+    /// app nests + associates by this pi id.
+    public var parentSessionID: String?
+    /// Supplementary relay metadata — kept, but NOT logic keys.
+    public var parentRoomID: String?
+    public var subagentID: String?
 
-    public var id: String { "\(relayID.uuidString):\(peerEPK):\(roomID)" }
+    /// Identity = pi sessionId, NOT the routing roomId.
+    public var id: String { "\(relayID.uuidString):\(peerEPK):\(sessionID)" }
+    public var isSubagent: Bool { parentSessionID != nil }
 }
 
 /// A named side-panel (plan, subagents, …) mirrored from a cooperating event
@@ -53,10 +66,6 @@ public final class AppModel: ObservableObject {
     /// when a fork speaks the `{rpc|evt}` route; each fold updates the matching
     /// `transcripts[key]` from `reducer.session`.
     private var envelopeReducers: [String: EnvelopeReducer] = [:]
-    /// Last hello `sessionId` seen per key (relayID:peer:room). A change means the
-    /// pi session was replaced (new/fork/reload) within the same room/cwd — used
-    /// to reset stale state so a reused session name doesn't bleed old content.
-    private var sessionIds: [String: String] = [:]
     /// Pending interactive prompt per session (extension_ui_request).
     @Published public var prompts: [String: ExtensionUiRequest] = [:]
     /// Pending queued follow-up messages per session (pi-native `queue_update`).
@@ -74,6 +83,10 @@ public final class AppModel: ObservableObject {
     /// A pairing invite opened via the `unbien://` scheme, awaiting a relay
     /// choice. Drives the deep-link relay chooser sheet.
     @Published public var pendingPairing: PendingPairing?
+    /// A subagent session the user tapped in the subagents panel, to be pushed
+    /// onto the Home nav stack. Transient (not persisted); HomeView consumes and
+    /// clears it. Lets a panel row (in a sheet) navigate the underlying stack.
+    @Published public var pendingSessionNav: LiveSession?
 
     // MARK: - Preferences (persisted)
 
@@ -105,6 +118,15 @@ public final class AppModel: ObservableObject {
     @Published public var hideInputWhenRich: Bool {
         didSet { UserDefaults.standard.set(hideInputWhenRich, forKey: Self.hideInputRichKey) }
     }
+    /// Show subagent child sessions nested under their parent in the home list.
+    @Published public var showSubagentsOnHome: Bool {
+        didSet { UserDefaults.standard.set(showSubagentsOnHome, forKey: Self.showSubagentsKey) }
+    }
+    /// Allow interacting with (prompting/steering) a subagent session. Off =
+    /// view-only: the composer is hidden for subagent sessions.
+    @Published public var subagentsInteractive: Bool {
+        didSet { UserDefaults.standard.set(subagentsInteractive, forKey: Self.subagentsInteractiveKey) }
+    }
 
     /// The active theme palette for the selected `themeID`.
     public var theme: AppTheme { themeID.theme }
@@ -135,6 +157,8 @@ public final class AppModel: ObservableObject {
     private static let bodyFontKey = "com.georgeharker.un-bien.body-font"
     private static let expandRichKey = "com.georgeharker.un-bien.expand-rich-tool-results"
     private static let hideInputRichKey = "com.georgeharker.un-bien.hide-input-when-rich"
+    private static let showSubagentsKey = "com.georgeharker.un-bien.show-subagents-home"
+    private static let subagentsInteractiveKey = "com.georgeharker.un-bien.subagents-interactive"
     /// Backstop grace for an UNCONSUMED optimistic queued chip (design 01M158S7).
     /// Long by design: consumption (user message_end) is the primary clear, so
     /// this only catches truly-stuck chips (text-normalization miss / dropped
@@ -160,6 +184,10 @@ public final class AppModel: ObservableObject {
             UserDefaults.standard.object(forKey: Self.expandRichKey) as? Bool ?? true
         self.hideInputWhenRich =
             UserDefaults.standard.object(forKey: Self.hideInputRichKey) as? Bool ?? true
+        self.showSubagentsOnHome =
+            UserDefaults.standard.object(forKey: Self.showSubagentsKey) as? Bool ?? true
+        self.subagentsInteractive =
+            UserDefaults.standard.object(forKey: Self.subagentsInteractiveKey) as? Bool ?? false
         self.identityStore = identityStore
             ?? KeychainOwnerIdentityStore(syncsToICloud: syncOn)
     }
@@ -293,13 +321,15 @@ public final class AppModel: ObservableObject {
     private func handle(frame: InboundFrame, relayID: UUID) {
         switch frame {
         case let .routed(envelope):
-            let key = "\(relayID.uuidString):\(envelope.peer):\(envelope.room)"
             // Envelope route ({rpc|evt}): a fork advertising `rpc_envelope`
             // carries the transcript as pi rpc frames inside `ct`. Discriminate
             // by SHAPE — a stock ServerMessage decodes to an EnvelopeMessage with
             // both fields nil. The reducer owns the transcript for this key;
             // stock session-content is suppressed in `route`.
             if let env = try? envelope.decodeEnvelope() {
+                // Key per-session state on the pi sessionId (wire identity); the
+                // outer room is mesh/relay ROUTING only.
+                let key = "\(relayID.uuidString):\(envelope.peer):\(env.sessionId ?? envelope.room)"
                 // Envelope-native capability handshake: learn caps here (not just
                 // from stock session_history) so the {rpc|evt} route + stock
                 // suppression turn on before any session content arrives.
@@ -318,18 +348,8 @@ public final class AppModel: ObservableObject {
                     } else if capabilities[key] == nil {
                         capabilities[key] = []
                     }
-                    // Session replacement detection: the room (cwd) is stable, but a
-                    // new pi sessionId here means a different session reused it. Reset
-                    // so the prior transcript/panels/prompt don't leak in; a fresh
-                    // session_sync + live frames rebuild the new one.
-                    let sid = ub["sessionId"]?.stringValue
-                    if let sid, let prev = sessionIds[key], prev != sid {
-                        transcripts[key] = nil
-                        envelopeReducers[key] = nil
-                        panels[key] = nil
-                        prompts[key] = nil
-                    }
-                    if let sid { sessionIds[key] = sid }
+                    // The key IS the pi sessionId now, so a replaced session is
+                    // simply a NEW key with fresh state — no reset needed here.
                     if envelopeReducers[key] == nil { envelopeReducers[key] = EnvelopeReducer() }
                     return
                 }
@@ -355,7 +375,8 @@ public final class AppModel: ObservableObject {
                        let pdata = try? JSONEncoder().encode(evt.data),
                        let pline = String(data: pdata, encoding: .utf8),
                        let pmsg = try? Codec.decodeServer(pline) {
-                        route(pmsg, relayID: relayID, peer: envelope.peer, room: envelope.room)
+                        route(pmsg, relayID: relayID, peer: envelope.peer,
+                              sessionID: env.sessionId ?? envelope.room)
                     }
                     // extension_ui is envelope-only: the {rpc} extension_ui_request
                     // frame is the same JSON as the stock ServerMessage, so reuse
@@ -415,8 +436,8 @@ public final class AppModel: ObservableObject {
     // Only reached from the envelope PANEL path: {evt channel:"panel"} decodes
     // to a stock `panel_update` frame and routes here. All other stock session
     // frames are gone from the fork (E1–E7), so no general receive fallback.
-    private func route(_ message: ServerMessage, relayID: UUID, peer: String, room: String) {
-        let key = "\(relayID.uuidString):\(peer):\(room)"
+    private func route(_ message: ServerMessage, relayID: UUID, peer: String, sessionID: String) {
+        let key = "\(relayID.uuidString):\(peer):\(sessionID)"
         switch message {
         case let .panelUpdate(panelKey, title, icon, data):
             let wasOpen = panels[key]?[panelKey]?.changed == false && openPanel == "\(key):\(panelKey)"
@@ -436,10 +457,15 @@ public final class AppModel: ObservableObject {
         case let .roomAnnounced(peer, room):
             upsertSession(relayID: relayID, peer: peer, room: room)
         case let .roomEnded(peer, roomID, _):
-            sessions["\(relayID.uuidString):\(peer):\(roomID)"] = nil
+            if let k = sessionKey(relayID: relayID, peer: peer, roomID: roomID) {
+                sessions[k] = nil
+            }
         case let .roomMetaUpdated(peer, roomID, model):
-            let key = "\(relayID.uuidString):\(peer):\(roomID)"
-            if var session = sessions[key] { session.model = model; sessions[key] = session }
+            if let k = sessionKey(relayID: relayID, peer: peer, roomID: roomID),
+               var session = sessions[k] {
+                session.model = model
+                sessions[k] = session
+            }
         default:
             break
         }
@@ -447,8 +473,29 @@ public final class AppModel: ObservableObject {
 
     private func upsertSession(relayID: UUID, peer: String, room: RoomInfo) {
         let session = LiveSession(relayID: relayID, peerEPK: peer, roomID: room.roomID,
-                                  name: room.name, cwd: room.cwd, model: nil)
+                                  sessionID: room.sessionID ?? room.roomID,
+                                  name: room.name, cwd: room.cwd, model: nil,
+                                  parentSessionID: room.parentSessionID,
+                                  parentRoomID: room.parent, subagentID: room.subagentID)
         sessions[session.id] = session
+    }
+
+    /// The child subagent session for a subagents-panel record id, on the same
+    /// machine as `parent`. nil until that subagent's room is announced.
+    public func subagentSession(sessionID: String, under parent: LiveSession) -> LiveSession? {
+        sessions.values.first {
+            $0.sessionID == sessionID
+                && $0.relayID == parent.relayID
+                && $0.peerEPK == parent.peerEPK
+        }
+    }
+
+    /// Resolve a relay (peer, roomID) ROUTING tuple to the pi-sessionId state key
+    /// (LiveSession.id) — for control frames keyed by roomID.
+    private func sessionKey(relayID: UUID, peer: String, roomID: String) -> String? {
+        sessions.values.first {
+            $0.relayID == relayID && $0.peerEPK == peer && $0.roomID == roomID
+        }?.id
     }
 
     // MARK: - Session actions
@@ -701,7 +748,9 @@ public final class AppModel: ObservableObject {
         let relayID = UUID(uuidString: "F00DBEEF-0000-4000-8000-000000000001")!
         mesh.addTransientRelay(RelayConfig(id: relayID, name: "Demo relay", url: "demo://local"))
         let session = LiveSession(relayID: relayID, peerEPK: "demo-peer", roomID: "demo-room",
-                                  name: "Demo (\(turns) turns)", cwd: "/demo", model: "claude-opus-4-8")
+                                  sessionID: "demo-session",
+                                  name: "Demo (\(turns) turns)", cwd: "/demo", model: "claude-opus-4-8",
+                                  parentSessionID: nil, parentRoomID: nil, subagentID: nil)
         sessions[session.id] = session
         transcripts[session.id] = .demo(turns: turns)
     }

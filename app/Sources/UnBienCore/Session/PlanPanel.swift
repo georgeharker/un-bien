@@ -51,6 +51,13 @@ public struct PlanItem: Decodable, Equatable, Sendable, Identifiable {
         if case let .number(value)? = meta?["startedAt"] { return value }
         return nil
     }
+
+    /// Child pi sessionId for a subagents-panel row, from `meta.sessionId` — the
+    /// pi-id join key to the child session (NOT a roomId or record id).
+    public var subagentSessionID: String? {
+        if case let .string(value)? = meta?["sessionId"] { return value }
+        return nil
+    }
 }
 
 /// A plan item enriched with its wave position (dependency depth). Mirrors

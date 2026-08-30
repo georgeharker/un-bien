@@ -71,6 +71,7 @@ fn test_room_meta() -> RoomMeta {
         thinking: None,
         working: false,
         started_at: 0,
+        extra: Default::default(),
     }
 }
 

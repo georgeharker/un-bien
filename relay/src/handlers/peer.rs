@@ -114,6 +114,24 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as i64;
+        // Any room_meta keys the relay does not model itself (e.g. an app-level
+        // session `parent`) ride through verbatim so app-owned metadata reaches
+        // subscribers without the relay learning its meaning.
+        let extra: std::collections::BTreeMap<String, serde_json::Value> =
+            room_meta_val
+                .and_then(|m| m.as_object())
+                .map(|obj| {
+                    obj.iter()
+                        .filter(|(k, _)| {
+                            !matches!(
+                                k.as_str(),
+                                "name" | "cwd" | "model" | "thinking" | "working"
+                            )
+                        })
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect()
+                })
+                .unwrap_or_default();
         RoomMeta {
             room_id,
             name,
@@ -122,6 +140,7 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
             thinking,
             working,
             started_at,
+            extra,
         }
     };
     let room_id = room_meta.room_id.clone();

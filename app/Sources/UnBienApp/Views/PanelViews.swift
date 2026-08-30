@@ -15,6 +15,9 @@ func panelSymbol(_ panel: PanelState) -> String {
 /// a generic list/JSON view.
 struct PanelHostView: View {
     let panel: PanelState
+    /// Called with a subagent record id when its panel row is tapped, to open
+    /// that subagent's own session. nil = rows are not navigable.
+    var onSelectSubagent: ((String) -> Void)?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var theme
 
@@ -24,7 +27,8 @@ struct PanelHostView: View {
                 switch panel.key {
                 case "plan": PlanPanelView(items: PlanModel.items(from: panel.data))
                 case "subagents", "agents":
-                    SubagentsPanelView(items: PlanModel.agentItems(from: panel.data))
+                    SubagentsPanelView(items: PlanModel.agentItems(from: panel.data),
+                                       onSelect: onSelectSubagent)
                 default: GenericPanelView(data: panel.data)
                 }
             }
@@ -163,6 +167,9 @@ struct PlanPanelView: View {
 /// elapsed/started time. Mirrors pi-plan's Agents group (chronological).
 struct SubagentsPanelView: View {
     let items: [PlanItem]
+    /// Tap handler with the subagent record id (its `PlanItem.id`); nil = rows
+    /// are display-only.
+    var onSelect: ((String) -> Void)?
     @Environment(\.appTheme) private var theme
 
     var body: some View {
@@ -175,9 +182,16 @@ struct SubagentsPanelView: View {
                 }
                 Section {
                     ForEach(items) { item in
-                        card(item)
-                            .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
-                            .listRowBackground(Color.clear)
+                        Group {
+                            if let onSelect, let sid = item.subagentSessionID {
+                                Button { onSelect(sid) } label: { card(item) }
+                                    .buttonStyle(.plain)
+                            } else {
+                                card(item)
+                            }
+                        }
+                        .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+                        .listRowBackground(Color.clear)
                     }
                 }
             }

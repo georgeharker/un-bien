@@ -11,10 +11,16 @@ struct HomeView: View {
     @State private var settingsRelay: RelayConfig?
     @State private var showSettings = false
     @State private var launchSession: LiveSession?
+    /// Parents whose subagent children are folded away in the Home list. A parent
+    /// is EXPANDED unless listed here, so children show by default.
+    @State private var collapsed: Set<String> = []
+    /// Nav stack path, so a subagents-panel tap (from a sheet over a pushed
+    /// TranscriptView) can push the child session onto THIS stack.
+    @State private var path = NavigationPath()
     @Environment(\.appTheme) private var theme
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             Group {
                 if model.mesh.config.relays.isEmpty {
                     emptyState
@@ -31,6 +37,14 @@ struct HomeView: View {
             }
         }
         .tint(theme.accent)
+        // A subagents-panel tap sets this on the model; push it here (the panel
+        // lives in a sheet and can't push the stack itself).
+        .onChange(of: model.pendingSessionNav) { _, next in
+            if let next {
+                path.append(next)
+                model.pendingSessionNav = nil
+            }
+        }
         .sheet(isPresented: $showSettings) {
             SettingsView().environmentObject(model).environmentObject(fonts)
         }
@@ -72,28 +86,31 @@ struct HomeView: View {
                         Text("No live sessions — pair a machine or start Pi with un-bien.")
                             .font(.footnote).foregroundStyle(theme.secondaryText)
                     } else {
-                        ForEach(sessions) { session in
-                            NavigationLink(value: session) {
-                                HStack {
-                                    SessionRow(session: session)
-                                    // A NEW-conversation launch on THIS machine.
-                                    // remote_launch is a room-scoped cap and this
-                                    // row's room is a valid carrier; borderless so
-                                    // the tap doesn't trigger row navigation.
-                                    if model.supports("remote_launch", session: session) {
-                                        Spacer(minLength: 8)
-                                        Button {
-                                            launchSession = session
-                                        } label: {
-                                            Image(systemName: "plus.circle")
-                                                .imageScale(.large)
-                                        }
-                                        .buttonStyle(.borderless)
-                                        .tint(theme.accent)
-                                        .accessibilityLabel("New conversation on this machine")
-                                    }
+                        // Top-level sessions, with subagent children nested under
+                        // their parent (a distinct session each — the row just
+                        // navigates to it). Nesting is behind a preference.
+                        let top = sessions.filter { !$0.isSubagent }
+                        let topIDs = Set(top.map(\.sessionID))
+                        let kids: [String: [LiveSession]] = model.showSubagentsOnHome
+                            ? Dictionary(grouping: sessions.filter(\.isSubagent),
+                                         by: { $0.parentSessionID ?? "" })
+                            : [:]
+                        ForEach(top) { session in
+                            let children = kids[session.sessionID] ?? []
+                            sessionRow(session, hasChildren: !children.isEmpty)
+                            if !children.isEmpty, !collapsed.contains(session.id) {
+                                ForEach(children) { child in
+                                    sessionRow(child, indented: true)
                                 }
                             }
+                        }
+                        // Defensive: a subagent whose parent isn't listed here
+                        // still appears (flat) when the toggle is on, never lost.
+                        if model.showSubagentsOnHome {
+                            let orphans = sessions.filter {
+                                $0.isSubagent && !topIDs.contains($0.parentSessionID ?? "")
+                            }
+                            ForEach(orphans) { sessionRow($0) }
                         }
                     }
                     Button {
@@ -117,6 +134,60 @@ struct HomeView: View {
         .navigationDestination(for: LiveSession.self) { session in
             TranscriptView(session: session).environmentObject(model)
         }
+    }
+
+    /// One session row as a nav link (pushes its own TranscriptView). A parent
+    /// with subagent children gets a fold-out chevron; a child is indented under
+    /// it. Each row — parent or child — navigates to its own distinct session.
+    @ViewBuilder
+    private func sessionRow(_ session: LiveSession,
+                           indented: Bool = false,
+                           hasChildren: Bool = false) -> some View {
+        NavigationLink(value: session) {
+            HStack {
+                // Leading slot (fixed width so rows align): a fold-out chevron on
+                // a parent, a child marker on a nested row, else empty.
+                if hasChildren {
+                    Button {
+                        toggleFold(session.id)
+                    } label: {
+                        Image(systemName: collapsed.contains(session.id)
+                              ? "chevron.right" : "chevron.down")
+                            .imageScale(.small)
+                            .foregroundStyle(theme.secondaryText)
+                            .frame(width: 16)
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel(collapsed.contains(session.id)
+                                        ? "Show subagents" : "Hide subagents")
+                } else if indented {
+                    Image(systemName: "arrow.turn.down.right")
+                        .imageScale(.small)
+                        .foregroundStyle(theme.secondaryText)
+                        .frame(width: 16)
+                }
+                SessionRow(session: session)
+                // A NEW-conversation launch on THIS machine. remote_launch is a
+                // room-scoped cap and this row's room is a valid carrier;
+                // borderless so the tap doesn't trigger row navigation.
+                if model.supports("remote_launch", session: session) {
+                    Spacer(minLength: 8)
+                    Button {
+                        launchSession = session
+                    } label: {
+                        Image(systemName: "plus.circle").imageScale(.large)
+                    }
+                    .buttonStyle(.borderless)
+                    .tint(theme.accent)
+                    .accessibilityLabel("New conversation on this machine")
+                }
+            }
+            .padding(.leading, indented ? 16 : 0)
+        }
+    }
+
+    private func toggleFold(_ id: String) {
+        if collapsed.contains(id) { collapsed.remove(id) } else { collapsed.insert(id) }
     }
 }
 

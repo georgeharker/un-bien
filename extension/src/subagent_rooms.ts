@@ -17,6 +17,7 @@ import {
   type EnvelopeMessage,
 } from "./session/rpc_envelope.js";
 import { envLog } from "./session/debug_log.js";
+import type { ServerMessage } from "./protocol/types.js";
 
 /**
  * Surface each Pi SUBAGENT as its OWN, separate app-facing session — a distinct
@@ -47,7 +48,7 @@ import { envLog } from "./session/debug_log.js";
  * when @tintinweb/pi-subagents adds sessionId to subagents:started.
  */
 
-function enabled(): boolean {
+export function subagentRoomsEnabled(): boolean {
   return loadConfig().subagents?.rooms === true;
 }
 
@@ -55,6 +56,8 @@ interface SubagentRecord {
   id: string;
   type?: string;
   description?: string;
+  status?: string;
+  startedAt?: number;
 }
 
 interface ChildRoom {
@@ -85,9 +88,16 @@ const NOOP: SubagentRoomsController = {
  */
 export function initSubagentRooms(
   rootPi: ExtensionAPI,
-  opts: { getParentRoomId: () => string | null },
+  opts: {
+    getParentRoomId: () => string | null;
+    /** The ROOT's pi sessionId — the parent link the app nests by (pi id). */
+    getParentSessionId: () => string | null;
+    /** Emit a panel_update to the ROOT's attached app channels (the subagents
+     *  panel is a root-session surface). Wired to the fork's _panelBroadcast. */
+    broadcastPanel: (panel: ServerMessage) => void;
+  },
 ): SubagentRoomsController {
-  if (!enabled()) return NOOP;
+  if (!subagentRoomsEnabled()) return NOOP;
 
   const resolution = resolveRelayUrl();
   if (!resolution.url) return NOOP; // no relay → nothing to surface to
@@ -100,6 +110,58 @@ export function initSubagentRooms(
   const children = new Map<string, ChildRoom>();
   let disposed = false;
 
+  // Subagents PANEL state, keyed by CHILD sessionId (pi data). The panel is
+  // produced HERE from child detection (identity) and enriched by subagents:*
+  // events (labels/status). Each item carries the child roomId so the app maps
+  // a panel row -> session exactly, with NO record-id round-trip.
+  const panelBySession = new Map<
+    string,
+    {
+      roomId: string;
+      type?: string;
+      description?: string;
+      status?: string;
+      startedAt?: number;
+    }
+  >();
+  const recordToSession = new Map<string, string>();
+
+  function displayStatus(s?: string): string {
+    const v = String(s ?? "").toLowerCase();
+    if (v === "completed") return "done";
+    if (v === "failed" || v === "error" || v === "aborted" || v === "stopped")
+      return "failed";
+    if (
+      v === "running" ||
+      v === "started" ||
+      v === "in_progress" ||
+      v === "steered"
+    )
+      return "in_progress";
+    return "pending";
+  }
+
+  function emitPanel(): void {
+    if (disposed) return;
+    // Keyed by the child SESSIONID (pi data), NOT the roomId (relay value). The
+    // app maps a panel row -> session by sessionId via its hello-sessionId index.
+    const items = [...panelBySession.entries()].map(([sessionId, s]) => ({
+      id: `agent:${sessionId}`,
+      kind: "agent",
+      title: s.description || s.type || sessionId,
+      status: displayStatus(s.status),
+      deps: [] as string[],
+      meta: { agentType: s.type, startedAt: s.startedAt, sessionId },
+    }));
+    opts.broadcastPanel({
+      type: "panel_update",
+      key: "subagents",
+      title: "Agents",
+      icon: "person.2",
+      data: { items },
+    } as unknown as ServerMessage);
+  }
+
   const events = (
     rootPi as unknown as {
       events?: { on(e: string, h: (d: unknown) => void): () => void };
@@ -108,20 +170,47 @@ export function initSubagentRooms(
 
   const unsub: Array<() => void> = [];
   if (events) {
-    const record = (data: unknown): void => {
-      const p = (data ?? {}) as Record<string, unknown>;
-      const id = typeof p.id === "string" ? p.id : undefined;
-      if (!id) return;
-      fleet.set(id, {
-        id,
-        type: typeof p.type === "string" ? p.type : undefined,
-        description:
-          typeof p.description === "string" ? p.description : undefined,
-      });
-      if (!pendingRecords.includes(id)) pendingRecords.push(id);
-    };
-    unsub.push(events.on("subagents:created", record));
-    unsub.push(events.on("subagents:started", record));
+    // Adapter for the subagents:* event format (the de-facto standard, also
+    // consumed by @geohar/pi-plan). Records supply LABELS (type/description) +
+    // STATUS; identity/room come from child detection. created/started seed a
+    // pending record for the next child session_start to bind; terminal events
+    // update the bound child's status on the panel.
+    const onRecord =
+      (status: string) =>
+      (data: unknown): void => {
+        const p = (data ?? {}) as Record<string, unknown>;
+        const id = typeof p.id === "string" ? p.id : undefined;
+        if (!id) return;
+        const type = typeof p.type === "string" ? p.type : undefined;
+        const description =
+          typeof p.description === "string" ? p.description : undefined;
+        const prev = fleet.get(id);
+        fleet.set(id, {
+          id,
+          type: type ?? prev?.type,
+          description: description ?? prev?.description,
+          status,
+          startedAt: prev?.startedAt ?? Date.now(),
+        });
+        if (status === "created" || status === "started") {
+          if (!pendingRecords.includes(id)) pendingRecords.push(id);
+        }
+        // Already bound to a child? reflect the status/labels on its panel row.
+        const sid = recordToSession.get(id);
+        const st = sid ? panelBySession.get(sid) : undefined;
+        if (st) {
+          st.status = status;
+          if (type) st.type = type;
+          if (description) st.description = description;
+          emitPanel();
+        }
+      };
+    unsub.push(events.on("subagents:created", onRecord("created")));
+    unsub.push(events.on("subagents:started", onRecord("started")));
+    unsub.push(events.on("subagents:completed", onRecord("completed")));
+    unsub.push(events.on("subagents:failed", onRecord("failed")));
+    unsub.push(events.on("subagents:steered", onRecord("steered")));
+    unsub.push(events.on("subagents:compacted", onRecord("compacted")));
   }
 
   function nextRecord(): SubagentRecord | undefined {
@@ -169,6 +258,18 @@ export function initSubagentRooms(
     const roomId = roomIdForSession(sessionId);
     const name = rec?.description ?? rec?.type ?? "subagent";
 
+    // Register the panel row keyed by the CHILD sessionId (identity from
+    // detection); labels/status enrich from the bound record + later events.
+    if (rec?.id) recordToSession.set(rec.id, sessionId);
+    panelBySession.set(sessionId, {
+      roomId,
+      type: rec?.type,
+      description: rec?.description,
+      status: rec?.status ?? "started",
+      startedAt: rec?.startedAt ?? Date.now(),
+    });
+    emitPanel();
+
     void startChildRoom({
       relayUrl,
       childPi,
@@ -176,7 +277,9 @@ export function initSubagentRooms(
       sessionId,
       roomId,
       parentRoomId,
+      parentSessionId: opts.getParentSessionId() ?? undefined,
       name,
+      subagentId: rec?.id,
       makeHandlers,
       onClosed: () => children.delete(sessionId),
     }).then((room) => {
@@ -212,7 +315,9 @@ async function startChildRoom(args: {
   sessionId: string;
   roomId: string;
   parentRoomId: string;
+  parentSessionId?: string;
   name: string;
+  subagentId?: string;
   makeHandlers: (ctx: ExtensionContext) => RpcCommandHandlers;
   onClosed: () => void;
 }): Promise<ChildRoom> {
@@ -269,6 +374,7 @@ async function startChildRoom(args: {
       () => {}, // stock ClientMessages unused — envelope plane only
       () => channels.delete(peer),
       (env) => handleRpc(env, channel),
+      () => args.sessionId, // stamp the child's pi sessionId on every frame
     );
     channels.set(peer, channel);
     // Greet: caps + the child sessionId, so the app turns on the envelope route.
@@ -308,7 +414,12 @@ async function startChildRoom(args: {
     roomMeta: {
       name: args.name,
       cwd: args.ctx.cwd,
+      // Pi ids — the app nests + maps by these; parent (roomId) + subagentId are
+      // kept as supplementary (not the logic keys).
+      sessionId: args.sessionId,
+      ...(args.parentSessionId ? { parentSessionId: args.parentSessionId } : {}),
       parent: args.parentRoomId,
+      ...(args.subagentId ? { subagentId: args.subagentId } : {}),
     },
   });
   envLog(

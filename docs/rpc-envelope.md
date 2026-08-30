@@ -153,6 +153,47 @@ the live panel; `subagents:record` **entry_appended** is the persist/reconstruct
 copy (picked up by `get_entries`). Panels are **evt-only** — Un Bien keeps no
 parallel panel buffer beyond the bridge's `pendingPanels()` replay.
 
+### Subagent sessions: how the association works (what we RELY ON)
+
+A subagent is surfaced as its OWN app session — a distinct relay room under the
+same machine identity (see `extension/src/subagent_rooms.ts`). The association
+rests on exactly two signals:
+
+1. **Child detection — a session fired from within another IS a child
+   (authoritative).** The fork claims ONE root session per process
+   (`_claimRootSession`). Any OTHER `session_start` that fires in-process — a
+   fresh session with a `sessionId` ≠ the root's (`_isNonRootSid`) — is treated as
+   a SUBAGENT CHILD. Its OWN `sessionId` keys the child room
+   (`roomIdForSession(childSessionId)`); the PARENT is the root session (its room
+   id), captured fork-side. This needs NOTHING from `subagents:*` — the in-process
+   non-root `session_start` is the whole signal.
+2. **Record + lifecycle — from `subagents:*`.** We use the subagents manager's
+   bus events (`@tintinweb/pi-subagents`, NOT pi core) — `subagents:started` /
+   `completed` / `failed` / `steered` / `compacted` — for the subagent RECORD
+   (`{ id, type, description, status }`) and the live panel. `started`
+   opens/activates the child room; terminal events settle it (linger-for-view vs
+   close-to-purge is policy, not wire). Nested (non-top-level) subagents are
+   suppressed from this stream, so we see ONE hierarchy level.
+
+**Binding the two** (record `id` ↔ child `sessionId`) is by ARRIVAL ORDER today —
+a `created`/`started` is followed by the child's `session_start` — exact for
+sequential spawns, but able to mis-pair under concurrent/batch spawns. The core
+paths do NOT depend on this bind: child detection, the child room, its transcript,
+and `room_meta.parent` are all exact without it. ONLY the subagents-panel-row →
+session mapping (via `subagentId`) leans on it. Clean fix is upstream:
+`subagents:started` SHOULD carry the child `sessionId` (known by emit time — the
+record's session file exists), letting us match it exactly against the child
+`session_start`'s `ctx.sessionManager.getSessionId()`; `subagents:created` is too
+early (session not built yet).
+
+**Transcript source is NOT the event.** The child transcript is the child pi's OWN
+`pi.on` stream, reconstructed as `{rpc}` frames on the child room; `subagents:*`
+carries only lifecycle + labels, never transcript content.
+
+**Room advertisement.** The child room carries `room_meta.parent` (parent room id)
++ `subagentId` (record id) via the relay's room_meta passthrough, so the app nests
+and navigates from `room_announced` alone.
+
 ## ub plane — Un Bien's own protocol
 
 | inner `.type` | direction | payload | purpose |
