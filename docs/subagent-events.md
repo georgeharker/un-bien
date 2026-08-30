@@ -125,6 +125,33 @@ accepted markers:
 2. **`unbien:subagent:child`** (§4) — un-bien's own implementation-neutral marker,
    so any launcher can assert a child without depending on a subagents package.
 
+### Parentage model: child-knows-parent (chosen)
+
+Nesting has ONE model: **the child stamps `room_meta.parent` (+ `parentSessionId`)
+on its own deterministic room** (`roomIdForSession(childSessionId)`) — one
+connection, no parent-held placeholder. In-process, the parent builds the child
+room and stamps it; out-of-process, the child's own un-bien stamps it from its
+**spawn context** (parentSessionId handed in at spawn — the same mechanism a
+launched session uses, so parentage composes with launch). "Parent-knows-child"
+is not a second system: when only the parent knows the link (a marker event for a
+child not told at spawn), the parent **converts** it to child-known by delivering
+the parent to the child (inject at spawn; runtime delivery on the child's room as
+fallback). The deterministic `roomId` is where the two ends meet without
+coordinating; precedence is **set-once, parent-authoritative**. The marker events
+still feed the parent's fleet/panel/status, but nesting always rides the
+child-stamped `room_meta.parent`. Creation is **upsert** (create-or-enrich) keyed
+on that deterministic `roomId`: the marker, `session_start`, and any re-arrival
+converge on one room/entry — enrich if it exists, never duplicate or double-bind. (A parent keeper-placeholder room — holding an
+open relay room + reaping on launch failure — was considered and rejected as
+unnecessary once parentage always converts to the child.)
+
+**Child-connection invariant + no reap.** Children linger for the parent's
+lifetime (transcripts stay visible), disposed only on parent `session_shutdown` —
+so there is nothing to reap. And for an out-of-process child, un-bien is
+**observer-only of the child's mesh connection**: the parent never creates,
+produces on, or disposes it — the child owns it. Parent-side awareness rides the
+marker events (fleet/panel/status); nesting rides the child-stamped `room_meta`.
+
 ### The rule, restated
 
 - **Marker given → respected** (authoritative; supersedes arrival-order
@@ -188,6 +215,12 @@ The emitter's contract, uniformly:
 un-bien is a pure consumer of this stream. There is no "query the child" path in
 the contract — an out-of-process authority that goes silent leaves the child
 running-with-last-known-status until a terminal event arrives.
+
+**Failure is a status stamp, not a removal.** A launch/agent failure arrives as
+`subagents:failed` (or the marker's `status`) and is simply *stamped* onto the
+child (`failed`/`error`/`aborted`/`stopped`); the child is **kept** — it lingers
+showing that terminal status (and its transcript, if it produced one) until
+parent teardown. That is why no reap is needed: nothing is removed on failure.
 
 > Internal detail (not an emitter concern): because bus events are ephemeral and
 > don't replay on app relaunch, un-bien's extension keeps the **event-derived**
