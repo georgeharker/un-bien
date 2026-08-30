@@ -69,6 +69,9 @@ interface ChildRoom {
   relay: RelayClient;
   channels: Map<string, PlainPeerChannel>;
   rpc: { dispose(): void };
+  /** Attach the transcript producer for an ACTUAL in-process launch (idempotent).
+   *  A keeper created producer-less is upgraded in place — same connection. */
+  attach(childPi: ExtensionAPI, ctx: ExtensionContext): void;
   dispose(): void;
 }
 
@@ -114,6 +117,13 @@ export function initSubagentRooms(
   const pendingRecords: string[] = [];
   const fleet = new Map<string, SubagentRecord>();
   const children = new Map<string, ChildRoom>();
+  // In-flight keeper builds (async connect) reserved by child sessionId, so a
+  // marker's keeper and an in-process session_start can't race into two rooms.
+  const building = new Set<string>();
+  const pendingAttach = new Map<
+    string,
+    { childPi: ExtensionAPI; ctx: ExtensionContext }
+  >();
   let disposed = false;
 
   // Subagents PANEL state, keyed by CHILD sessionId (pi data). The panel is
@@ -226,6 +236,32 @@ export function initSubagentRooms(
       });
     }
     emitPanel();
+
+    // Pre-create the passive KEEPER (holds the room open + room_meta.parent) so
+    // an event-asserted / out-of-process child NESTS immediately; an in-process
+    // launch (if any) later attaches the producer to THIS same room via
+    // ensureChildRoom. Keyed by child sessionId; needs the parent room up.
+    const parentRoomId = opts.getParentRoomId();
+    const parentSessionId =
+      (typeof p.parentSessionId === "string" && p.parentSessionId) ||
+      (typeof p.parentSession === "string" && p.parentSession) ||
+      (typeof p.parent === "string" && p.parent) ||
+      opts.getParentSessionId() ||
+      undefined;
+    if (parentRoomId) {
+      ensureChildRoom(sessionId, {
+        relayUrl,
+        sessionId,
+        roomId: existing?.roomId ?? roomIdForSession(sessionId),
+        parentRoomId,
+        parentSessionId,
+        startedAt: existing?.startedAt ?? Date.now(),
+        name: description ?? type ?? "subagent",
+        subagentId: id,
+        makeHandlers,
+        getStatus: () => normalizeStatus(panelBySession.get(sessionId)?.status),
+      });
+    }
   }
 
   // SAFETY: the pi SDK exposes an `events` bus at runtime that isn't part of
@@ -291,6 +327,48 @@ export function initSubagentRooms(
     return id ? fleet.get(id) : undefined;
   }
 
+  // Idempotent create-or-attach, keyed by child sessionId (the deterministic
+  // roomId's key). The FIRST caller builds the room — a passive keeper when no
+  // childPi, or serving when a childPi is supplied; a later in-process
+  // session_start ATTACHES the producer to the SAME room. `building` is reserved
+  // synchronously so a marker + session_start microseconds apart converge on one
+  // room instead of racing into two.
+  function ensureChildRoom(
+    sessionId: string,
+    buildArgs: Omit<Parameters<typeof startChildRoom>[0], "onClosed">,
+  ): void {
+    const launch =
+      buildArgs.childPi && buildArgs.ctx
+        ? { childPi: buildArgs.childPi, ctx: buildArgs.ctx }
+        : undefined;
+    const existing = children.get(sessionId);
+    if (existing) {
+      if (launch) existing.attach(launch.childPi, launch.ctx);
+      return;
+    }
+    if (building.has(sessionId)) {
+      if (launch) pendingAttach.set(sessionId, launch);
+      return;
+    }
+    building.add(sessionId);
+    void startChildRoom({
+      ...buildArgs,
+      onClosed: () => children.delete(sessionId),
+    }).then((room) => {
+      building.delete(sessionId);
+      if (disposed) {
+        room.dispose();
+        return;
+      }
+      children.set(sessionId, room);
+      const pend = pendingAttach.get(sessionId);
+      if (pend) {
+        room.attach(pend.childPi, pend.ctx);
+        pendingAttach.delete(sessionId);
+      }
+    });
+  }
+
   function makeHandlers(ctx: ExtensionContext): RpcCommandHandlers {
     const ro = async (): Promise<never> => {
       throw new Error("subagent session is read-only");
@@ -323,7 +401,7 @@ export function initSubagentRooms(
   ): void {
     if (disposed || !ctx?.sessionManager) return;
     const sessionId = ctx.sessionManager.getSessionId();
-    if (!sessionId || children.has(sessionId)) return;
+    if (!sessionId) return;
     const parentRoomId = opts.getParentRoomId();
     if (!parentRoomId) return; // root room not up yet — nothing to nest under
 
@@ -368,7 +446,7 @@ export function initSubagentRooms(
       panelBySession.get(sessionId)?.startedAt ||
       Date.now();
 
-    void startChildRoom({
+    ensureChildRoom(sessionId, {
       relayUrl,
       childPi,
       ctx,
@@ -381,13 +459,6 @@ export function initSubagentRooms(
       subagentId: rec?.id,
       makeHandlers,
       getStatus: () => normalizeStatus(panelBySession.get(sessionId)?.status),
-      onClosed: () => children.delete(sessionId),
-    }).then((room) => {
-      if (disposed) {
-        room.dispose();
-        return;
-      }
-      children.set(sessionId, room);
     });
   }
 
@@ -410,8 +481,8 @@ export function initSubagentRooms(
 
 async function startChildRoom(args: {
   relayUrl: string;
-  childPi: ExtensionAPI;
-  ctx: ExtensionContext;
+  childPi?: ExtensionAPI;
+  ctx?: ExtensionContext;
   sessionId: string;
   roomId: string;
   parentRoomId: string;
@@ -426,7 +497,14 @@ async function startChildRoom(args: {
   const kp = await getOrCreateEd25519Keypair();
   const relay = new RelayClient(args.relayUrl, kp);
   const channels = new Map<string, PlainPeerChannel>();
-  const handlers = args.makeHandlers(args.ctx);
+  // Passive KEEPER by default: holds the room open + carries room_meta.parent,
+  // subscribes to NO child events and answers NO owner RPCs. attach() is the
+  // ONLY thing that reads the child / takes pi callbacks, and it runs only on an
+  // ACTUAL in-process launch (immediately when built with a childPi, else
+  // deferred to session_start).
+  let handlers: RpcCommandHandlers | null = null;
+  let rpc: { dispose(): void } = { dispose() {} };
+  let serving = false;
 
   function broadcast(env: EnvelopeMessage): void {
     for (const ch of channels.values()) {
@@ -439,6 +517,7 @@ async function startChildRoom(args: {
   }
 
   function handleRpc(env: EnvelopeMessage, sender: PlainPeerChannel): void {
+    if (!serving || !handlers) return; // passive keeper answers nothing
     if (env.rpc !== undefined) {
       void dispatchRpcCommand(env.rpc as Record<string, unknown>, handlers)
         .then((resp) => {
@@ -479,6 +558,7 @@ async function startChildRoom(args: {
     peer: string,
     firstInner: unknown,
   ): Promise<void> {
+    if (!serving) return; // keeper doesn't attach owners; the child's conn serves
     if (channels.has(peer)) return;
     const known = await _findKnownPeer(peer);
     if (!known) return; // relay-verified but not a paired owner
@@ -528,7 +608,7 @@ async function startChildRoom(args: {
     roomId: args.roomId,
     roomMeta: {
       name: args.name,
-      cwd: args.ctx.cwd,
+      cwd: args.ctx?.cwd ?? "",
       // Pi ids — the app nests + maps by these; parent (roomId) + subagentId are
       // kept as supplementary (not the logic keys).
       sessionId: args.sessionId,
@@ -543,15 +623,24 @@ async function startChildRoom(args: {
     `subagent room ${args.roomId} up (child ${args.sessionId.slice(0, 8)}…, parent ${args.parentRoomId})`,
   );
 
-  // Produce the child's transcript on this room (its own pi fires its own events).
-  const rpc = createRpcEnvelope(args.childPi, broadcast);
+  // Attach the transcript PRODUCER — the ONLY pi.on subscription (child
+  // callbacks). Called immediately when built WITH a child pi (in-process direct
+  // launch), else deferred to session_start via the returned attach().
+  function attach(childPi: ExtensionAPI, ctx: ExtensionContext): void {
+    if (serving) return; // idempotent
+    handlers = args.makeHandlers(ctx);
+    rpc = createRpcEnvelope(childPi, broadcast);
+    serving = true;
+  }
+  if (args.childPi && args.ctx) attach(args.childPi, args.ctx);
 
   return {
     sessionId: args.sessionId,
     roomId: args.roomId,
     relay,
     channels,
-    rpc,
+    attach,
+    rpc: { dispose: () => rpc.dispose() },
     dispose() {
       try {
         rpc.dispose();
