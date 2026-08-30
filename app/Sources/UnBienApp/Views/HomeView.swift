@@ -11,7 +11,7 @@ struct HomeView: View {
     @State private var settingsRelay: RelayConfig?
     @State private var showSettings = false
     @State private var launchTarget: LaunchTarget?
-    @AppStorage("hideMachinesWithoutDaemon") private var hideDaemonlessMachines = false
+    @AppStorage("hideLaunchChipUntilDaemonUp") private var hideChipUntilDaemonUp = false
     @Environment(\.appTheme) private var theme
 
     var body: some View {
@@ -68,12 +68,13 @@ struct HomeView: View {
             ForEach(model.mesh.config.relays) { relay in
                 Section {
                     let sessions = model.sessions(onRelay: relay.id)
-                    // A machine-level launch for every paired machine (not just
-                    // idle ones). "Hide machines without a daemon" drops the ones
-                    // whose daemon hasn't answered, for a clean list.
+                    // The daemon/machine LAUNCH CHIP for each paired machine (the
+                    // machine + its sessions are never hidden by this — only the
+                    // launch chip). "Hide launch chip until daemon is up" drops the
+                    // chips whose daemon hasn't answered yet, for a clean list.
                     let launchMachines = model.mesh.config.machines(onRelay: relay.id)
                     let visibleMachines = launchMachines.filter {
-                        model.daemonPresence(for: $0) != nil || !hideDaemonlessMachines
+                        model.daemonPresence(for: $0) != nil || !hideChipUntilDaemonUp
                     }
                     if sessions.isEmpty && visibleMachines.isEmpty {
                         Text("No live sessions — pair a machine or start Pi with un-bien.")

@@ -14,7 +14,7 @@ struct SettingsView: View {
     @State private var fontPreview = "AaBbCc 0O1lI {}[]() => Meslo \u{2713}"
     @AppStorage("renderCacheBlocks") private var cacheBlocks = 400
     @AppStorage("renderCacheImages") private var cacheImages = 200
-    @AppStorage("hideMachinesWithoutDaemon") private var hideDaemonlessMachines = false
+    @AppStorage("hideLaunchChipUntilDaemonUp") private var hideChipUntilDaemonUp = false
 
     var body: some View {
         NavigationStack {
@@ -160,11 +160,11 @@ struct SettingsView: View {
 
     private var machinesSection: some View {
         Section {
-            Toggle("Hide machines without a daemon", isOn: $hideDaemonlessMachines)
+            Toggle("Hide launch chip until daemon is up", isOn: $hideChipUntilDaemonUp)
         } header: {
-            Text("Machines")
+            Text("Machine launch")
         } footer: {
-            Text("When on, a paired machine only appears once its presence daemon is up and offers launch. When off, it shows a “searching for daemon…” row until the daemon answers.")
+            Text("The launch chip starts a new session on a machine via its presence daemon (the machine and its sessions are always shown regardless). When on, the chip stays hidden until that machine's daemon is confirmed up. When off, machines show a “searching…” chip while the daemon is located, then the launch.")
         }
     }
 
