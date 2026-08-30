@@ -10,7 +10,7 @@ struct HomeView: View {
     @State private var pairingRelay: RelayConfig?
     @State private var settingsRelay: RelayConfig?
     @State private var showSettings = false
-    @State private var launchSession: LiveSession?
+    @State private var launchTarget: LaunchTarget?
     @Environment(\.appTheme) private var theme
 
     var body: some View {
@@ -43,13 +43,12 @@ struct HomeView: View {
         .sheet(item: $pairingRelay) { relay in
             PairSheet(relay: relay).environmentObject(model)
         }
-        // Launch a NEW session on a machine straight from Home. remote_launch is
-        // a ROOM-scoped cap, so gate on the row's own session; that room is also
-        // a valid carrier for the session_launch frame (the fork spawns a fresh
-        // session regardless of carrier room). Idle machines with no session are
-        // regime 2 (daemon control-room) — deferred.
-        .sheet(item: $launchSession) { session in
-            LaunchSessionSheet(session: session).environmentObject(model)
+        // Launch a NEW session from Home. For a live session, remote_launch is a
+        // room-scoped cap gated on that row's session (its room is a valid
+        // carrier). For an IDLE machine (regime 2), the presence daemon answers
+        // presence_status with its caps and the launch rides the control room.
+        .sheet(item: $launchTarget) { target in
+            LaunchSessionSheet(target: target).environmentObject(model)
         }
     }
 
@@ -68,7 +67,10 @@ struct HomeView: View {
             ForEach(model.mesh.config.relays) { relay in
                 Section {
                     let sessions = model.sessions(onRelay: relay.id)
-                    if sessions.isEmpty {
+                    let liveEPKs = Set(sessions.map(\.peerEPK))
+                    let idleMachines = model.mesh.config.machines(onRelay: relay.id)
+                        .filter { !liveEPKs.contains($0.epk) }
+                    if sessions.isEmpty && idleMachines.isEmpty {
                         Text("No live sessions — pair a machine or start Pi with un-bien.")
                             .font(.footnote).foregroundStyle(theme.secondaryText)
                     } else {
@@ -83,7 +85,7 @@ struct HomeView: View {
                                     if model.supports("remote_launch", session: session) {
                                         Spacer(minLength: 8)
                                         Button {
-                                            launchSession = session
+                                            launchTarget = .session(session)
                                         } label: {
                                             Image(systemName: "plus.circle")
                                                 .imageScale(.large)
@@ -94,6 +96,31 @@ struct HomeView: View {
                                     }
                                 }
                             }
+                        }
+                        // Idle machines (regime 2): paired machines with NO live
+                        // session. Pull the presence daemon's caps on appear; when
+                        // it advertises remote_launch, offer a launch straight to
+                        // its control room (no live session needed).
+                        ForEach(idleMachines) { machine in
+                            HStack {
+                                IdleMachineRow(machine: machine)
+                                Spacer(minLength: 8)
+                                if model.daemonSupports("remote_launch", machine: machine) {
+                                    Button {
+                                        launchTarget = .machine(machine)
+                                    } label: {
+                                        Image(systemName: "plus.circle").imageScale(.large)
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .tint(theme.accent)
+                                    .accessibilityLabel("Launch a session on this idle machine")
+                                } else {
+                                    Image(systemName: "moon.zzz")
+                                        .foregroundStyle(.tertiary)
+                                        .accessibilityLabel("Idle — daemon status unknown")
+                                }
+                            }
+                            .task { await model.requestDaemonStatus(machine: machine) }
                         }
                     }
                     Button {
@@ -165,5 +192,26 @@ private struct SessionRow: View {
                 Text(model).font(.caption2).foregroundStyle(.tertiary)
             }
         }
+    }
+}
+
+/// A paired machine with no live session — its presence daemon (if up) answers
+/// presence_status with launch caps + backend, shown here as the subtitle.
+private struct IdleMachineRow: View {
+    @EnvironmentObject var model: AppModel
+    let machine: PairedMachine
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(machine.nickname ?? machine.hostname ?? "Machine").font(.body)
+            Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        }
+    }
+
+    private var subtitle: String {
+        guard let d = model.daemonPresence(for: machine) else { return "idle · checking daemon…" }
+        let host = d.hostname ?? machine.hostname
+        let backend = d.backend.map { " · \($0)" } ?? ""
+        return "idle" + (host.map { " · \($0)" } ?? "") + backend
     }
 }
