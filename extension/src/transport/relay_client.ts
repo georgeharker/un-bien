@@ -65,7 +65,15 @@ export interface RoomMeta {
 export interface RoomMetaUpdateFrame {
   type: "room_meta_update";
   room_id: string;
-  meta: { model?: string; working?: boolean; thinking?: ThinkingLevel };
+  meta: {
+    model?: string;
+    working?: boolean;
+    thinking?: ThinkingLevel;
+    // Subagent parentage re-advertised after the child attaches (set-once on
+    // the relay — never overrides an already-set parent).
+    parent?: string;
+    parentSessionId?: string;
+  };
 }
 
 export interface ConnectOptions {

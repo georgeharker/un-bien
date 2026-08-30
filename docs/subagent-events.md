@@ -132,6 +132,7 @@ accepted markers:
 
 **The “subagent adapter convention”** (gotgenes' name for this contract): an
 implementation's whole obligation is the announcement —
+
 - **in-process:** emit `subagents:child:session-created` `{ sessionId,
   parentSessionId? }` synchronously before `bindExtensions()`, and
   `subagents:child:disposed` `{ sessionId }` in the `finally`;
@@ -169,6 +170,41 @@ so there is nothing to reap. And for an out-of-process child, un-bien is
 **observer-only of the child's mesh connection**: the parent never creates,
 produces on, or disposes it — the child owns it. Parent-side awareness rides the
 marker events (fleet/panel/status); nesting rides the child-stamped `room_meta`.
+
+### Advertising the parent — early vs late (the exact flow)
+
+`parentId`/`parentSessionId` ride the child room's `room_meta`, and **when they
+land depends on when parentage is known** — but *both* funnel through the same
+idempotent `ensureChildRoom`, and the room is **never rebuilt/disposed** to change
+it.
+
+- **EARLY — gotgenes + out-of-process** (parent known at *creation*). The child
+  marker (`subagents:child:session-created` / `unbien:subagent:child`) carries
+  `{ sessionId, parentSessionId }`, so the room is **created with the
+  parent-child relationship already set** in its connect `room_meta` →
+  `room_announced` (first-conn) carries it → the app nests immediately. This is
+  the design; do not remove it.
+- **LATE — tintinweb / in-process** (parent known only at *attach*). tintinweb
+  gives no early child id, so the room is created **optimistically without a
+  parent**; parentage is learned when the child session attaches (`session_start`
+  → SDK header `parentSession`). Because `room_announced` fires **first-conn
+  only**, the late parent is advertised via a **`room_meta_update`** on the
+  already-open room (`ChildRoom.setParent` → `RelayClient.sendControl`), **not** a
+  re-announce and **never** a dispose/rebuild (that would kill an already-set
+  parent).
+
+**Relay = set-once.** `update_room_meta` merges the `parent`/`parentSessionId`
+into `extra` **only if absent** (never overrides an existing parent), then fans
+out `room_meta_updated` carrying them.
+
+**App = last-info-wins + re-nest.** The `room_meta_updated` handler updates
+`LiveSession.parentSessionID`/`parentRoomID` **present-only (never clears)** and
+reassigns `sessions[k]`, which re-derives HomeView's top/kids grouping so the row
+**moves in the hierarchy** live.
+
+**Race-safe.** If parentage arrives while the room is still building (async
+connect), `ensureChildRoom` queues it (`pendingParent`) and applies it on build
+completion — create can occur late.
 
 ### The rule, restated
 

@@ -552,12 +552,31 @@ public final class AppModel: ObservableObject {
         case let .roomEnded(peer, roomID, _):
             if let k = sessionKey(relayID: relayID, peer: peer, roomID: roomID) {
                 sessions[k] = nil
+                forgetSession(key: k)
             }
-        case let .roomMetaUpdated(peer, roomID, model):
+        case let .roomMetaUpdated(peer, roomID, model, parent, parentSessionID):
             if let k = sessionKey(relayID: relayID, peer: peer, roomID: roomID),
                var session = sessions[k] {
-                session.model = model
+                let wasSubagent = session.isSubagent
+                if let model { session.model = model }
+                // Last-info-wins parentage (present-only, never clears): a
+                // LATE-advertised parent (in-process subagent, after attach)
+                // re-nests the child. Reassigning sessions[k] re-derives
+                // HomeView's top/kids grouping so the row moves in the hierarchy.
+                if let parentSessionID { session.parentSessionID = parentSessionID }
+                if let parent { session.parentRoomID = parent }
                 sessions[k] = session
+                // Newly a subagent -> pull its lifecycle status (mirror upsert).
+                if !wasSubagent, session.isSubagent,
+                   let connection = connections[relayID] {
+                    let peerEPK = session.peerEPK
+                    let rid = session.roomID
+                    Task {
+                        try? await connection.send(
+                            .getSessionInfo(id: UUID().uuidString),
+                            toPeer: peerEPK, room: rid)
+                    }
+                }
             }
         default:
             break

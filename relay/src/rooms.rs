@@ -52,6 +52,13 @@ pub struct RoomMetaPatch {
     /// `None` = field absent (leave current), `Some(b)` = set to `b`. There is
     /// no "clear to null" — `false` *is* the cleared state.
     pub working: Option<bool>,
+    /// SET-ONCE `extra` passthrough for subagent parentage learned LATE (after
+    /// the child session attaches). `Some(s)` = a candidate value applied ONLY
+    /// if the room's `extra` doesn't already carry that key — an existing parent
+    /// is never overridden. Lets a child re-advertise its parent via
+    /// `room_meta_update` without clobbering one already set.
+    pub parent: Option<String>,
+    pub parent_session_id: Option<String>,
 }
 
 impl RoomMetaPatch {
@@ -59,7 +66,11 @@ impl RoomMetaPatch {
     /// otherwise). Used by the registry to skip work when callers send empty
     /// `meta: {}`.
     pub fn is_empty(&self) -> bool {
-        self.model.is_none() && self.thinking.is_none() && self.working.is_none()
+        self.model.is_none()
+            && self.thinking.is_none()
+            && self.working.is_none()
+            && self.parent.is_none()
+            && self.parent_session_id.is_none()
     }
 }
 

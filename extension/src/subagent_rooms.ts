@@ -72,6 +72,10 @@ interface ChildRoom {
   /** Attach the transcript producer for an ACTUAL in-process launch (idempotent).
    *  A keeper created producer-less is upgraded in place — same connection. */
   attach(childPi: ExtensionAPI, ctx: ExtensionContext): void;
+  /** Set parentage on the ALREADY-MADE room + re-advertise via room_meta_update
+   *  (relay set-once). For a parent learned LATE (in-process, after attach) —
+   *  never rebuilds, never re-announces. */
+  setParent(parentRoomId: string, parentSessionId?: string): void;
   dispose(): void;
 }
 
@@ -123,6 +127,12 @@ export function initSubagentRooms(
   const pendingAttach = new Map<
     string,
     { childPi: ExtensionAPI; ctx: ExtensionContext }
+  >();
+  // Parentage queued while a room is still building (race: the child attaches /
+  // parent becomes known before the async connect finishes). Applied on build.
+  const pendingParent = new Map<
+    string,
+    { parentRoomId: string; parentSessionId?: string }
   >();
   let disposed = false;
 
@@ -284,6 +294,7 @@ export function initSubagentRooms(
     children.delete(sessionId);
     building.delete(sessionId);
     pendingAttach.delete(sessionId);
+    pendingParent.delete(sessionId);
     panelBySession.delete(sessionId);
     emitPanel();
   }
@@ -367,13 +378,27 @@ export function initSubagentRooms(
       buildArgs.childPi && buildArgs.ctx
         ? { childPi: buildArgs.childPi, ctx: buildArgs.ctx }
         : undefined;
+    // Parentage to advertise. Gate on parentSessionId — the app nests by it;
+    // parentRoomId alone can't. gotgenes / out-of-process advertise EARLY (the
+    // connect room_meta below already carries it); tintinweb advertises LATE via
+    // setParent (re-advertise, relay set-once). Both funnel through here; the
+    // room is NEVER rebuilt.
+    const parent =
+      buildArgs.parentSessionId && buildArgs.parentRoomId
+        ? {
+            parentRoomId: buildArgs.parentRoomId,
+            parentSessionId: buildArgs.parentSessionId,
+          }
+        : undefined;
     const existing = children.get(sessionId);
     if (existing) {
       if (launch) existing.attach(launch.childPi, launch.ctx);
+      if (parent) existing.setParent(parent.parentRoomId, parent.parentSessionId);
       return;
     }
     if (building.has(sessionId)) {
       if (launch) pendingAttach.set(sessionId, launch);
+      if (parent) pendingParent.set(sessionId, parent);
       return;
     }
     building.add(sessionId);
@@ -391,6 +416,15 @@ export function initSubagentRooms(
       if (pend) {
         room.attach(pend.childPi, pend.ctx);
         pendingAttach.delete(sessionId);
+      }
+      // Re-advertise for the just-built room (set-once; harmless when the connect
+      // room_meta already carried it) + any parent queued during the build race.
+      const pp = pendingParent.get(sessionId);
+      if (pp) {
+        room.setParent(pp.parentRoomId, pp.parentSessionId);
+        pendingParent.delete(sessionId);
+      } else if (parent) {
+        room.setParent(parent.parentRoomId, parent.parentSessionId);
       }
     });
   }
@@ -660,12 +694,28 @@ async function startChildRoom(args: {
   }
   if (args.childPi && args.ctx) attach(args.childPi, args.ctx);
 
+  // Re-advertise parentage on this already-open room via room_meta_update (the
+  // relay merges it SET-ONCE, never overriding an existing parent). Lets a child
+  // whose parent is learned LATE (in-process, after session_start) nest without
+  // a re-announce or a rebuild — no dispose/teardown.
+  function setParent(parentRoomId: string, parentSessionId?: string): void {
+    relay.sendControl({
+      type: "room_meta_update",
+      room_id: args.roomId,
+      meta: {
+        parent: parentRoomId,
+        ...(parentSessionId ? { parentSessionId } : {}),
+      },
+    });
+  }
+
   return {
     sessionId: args.sessionId,
     roomId: args.roomId,
     relay,
     channels,
     attach,
+    setParent,
     rpc: { dispose: () => rpc.dispose() },
     dispose() {
       try {

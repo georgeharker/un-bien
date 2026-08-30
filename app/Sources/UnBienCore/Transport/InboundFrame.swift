@@ -64,7 +64,11 @@ public enum InboundFrame: Equatable, Sendable {
                 throw DecodeError.invalidMessage("room_meta_updated missing 'room_id'")
             }
             let meta = object["meta"] as? [String: Any]
-            return .roomMetaUpdated(peer: try peer(), roomID: roomID, model: meta?["model"] as? String)
+            return .roomMetaUpdated(
+                peer: try peer(), roomID: roomID,
+                model: meta?["model"] as? String,
+                parent: meta?["parent"] as? String,
+                parentSessionID: meta?["parentSessionId"] as? String)
         default:
             throw DecodeError.unsupportedType(type)
         }

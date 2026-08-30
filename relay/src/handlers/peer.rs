@@ -302,10 +302,23 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                     let working_patch = meta_obj
                                         .and_then(|m| m.get("working"))
                                         .and_then(|v| v.as_bool());
+                                    // Subagent parentage (set-once in `extra`) so
+                                    // a child can re-advertise a late-learned
+                                    // parent without a re-announce.
+                                    let parent_patch = meta_obj
+                                        .and_then(|m| m.get("parent"))
+                                        .and_then(|v| v.as_str())
+                                        .map(String::from);
+                                    let parent_session_patch = meta_obj
+                                        .and_then(|m| m.get("parentSessionId"))
+                                        .and_then(|v| v.as_str())
+                                        .map(String::from);
                                     let patch = RoomMetaPatch {
                                         model: model_patch,
                                         thinking: thinking_patch,
                                         working: working_patch,
+                                        parent: parent_patch,
+                                        parent_session_id: parent_session_patch,
                                     };
                                     if !registry
                                         .update_room_meta(&peer_id, &target_room, patch)

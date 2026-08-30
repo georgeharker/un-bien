@@ -302,7 +302,13 @@ impl PeerRegistry {
         room_id: &str,
         patch: RoomMetaPatch,
     ) -> bool {
-        let (current_model, current_thinking, current_working) = {
+        let (
+            current_model,
+            current_thinking,
+            current_working,
+            current_parent,
+            current_parent_session,
+        ) = {
             let mut lock = self.senders.lock().unwrap();
             let key = (peer_id.to_string(), room_id.to_string());
             match lock.get_mut(&key) {
@@ -317,6 +323,20 @@ impl PeerRegistry {
                         if let Some(w) = patch.working {
                             meta.working = w;
                         }
+                        // SET-ONCE parentage in `extra`: only fill when absent,
+                        // never override an already-set parent.
+                        if let Some(ref p) = patch.parent {
+                            meta.extra
+                                .entry("parent".to_string())
+                                .or_insert_with(|| serde_json::Value::String(p.clone()));
+                        }
+                        if let Some(ref ps) = patch.parent_session_id {
+                            meta.extra
+                                .entry("parentSessionId".to_string())
+                                .or_insert_with(|| {
+                                    serde_json::Value::String(ps.clone())
+                                });
+                        }
                     }
                     // All conns at this key carry the same post-patch state
                     // now; read the first as the canonical snapshot.
@@ -325,6 +345,16 @@ impl PeerRegistry {
                         head.1.model.clone(),
                         head.1.thinking.clone(),
                         head.1.working,
+                        head.1
+                            .extra
+                            .get("parent")
+                            .and_then(|v| v.as_str())
+                            .map(String::from),
+                        head.1
+                            .extra
+                            .get("parentSessionId")
+                            .and_then(|v| v.as_str())
+                            .map(String::from),
                     )
                 }
                 _ => return false,
@@ -351,6 +381,20 @@ impl PeerRegistry {
                 "working".to_string(),
                 serde_json::Value::Bool(current_working),
             );
+            // Subagent parentage (post-patch, from `extra`) rides along so the
+            // app can re-nest a child whose parent was learned late.
+            if let Some(p) = &current_parent {
+                meta_obj.insert(
+                    "parent".to_string(),
+                    serde_json::Value::String(p.clone()),
+                );
+            }
+            if let Some(ps) = &current_parent_session {
+                meta_obj.insert(
+                    "parentSessionId".to_string(),
+                    serde_json::Value::String(ps.clone()),
+                );
+            }
             let msg = serde_json::json!({
                 "type": "room_meta_updated",
                 "peer": peer_id,
