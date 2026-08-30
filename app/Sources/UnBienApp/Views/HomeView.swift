@@ -32,6 +32,13 @@ struct HomeView: View {
             .navigationTitle("Sessions")
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
+                    // Explicit refresh: macOS has no pull-to-refresh gesture, so
+                    // .refreshable (iOS pull) is invisible there. Button + ⌘R give
+                    // a real affordance on every platform.
+                    Button { Task { await model.refreshRooms() } } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .keyboardShortcut("r", modifiers: .command)
                     Button { showSettings = true } label: { Image(systemName: "gearshape") }
                     Button { showAddRelay = true } label: { Image(systemName: "plus") }
                 }
@@ -157,6 +164,9 @@ struct HomeView: View {
         // machines without a daemon" has no row and no row .task, so row-driven
         // polling would never confirm its daemon and it'd stay hidden forever.
         .task { await pollDaemons() }
+        // Drag-to-refresh: re-issue rooms_check on every connected relay so a
+        // session whose room_announced push was missed still surfaces.
+        .refreshable { await model.refreshRooms() }
     }
 
     /// Probe each paired machine's presence daemon until it answers, regardless

@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import UnBienCore
+import os
 
 public enum RelayHealth: Equatable, Sendable {
     case connecting, online, offline
@@ -163,6 +164,7 @@ public final class AppModel: ObservableObject {
     private var identityStore: OwnerIdentityStore
     private var owner: Ed25519Identity?
     private var connections: [UUID: RelayConnection] = [:]
+    private let log = Logger(subsystem: "un-bien", category: "relay")
     /// Consecutive failed connect attempts per relay, for exponential backoff.
     private var reconnectAttempts: [UUID: Int] = [:]
     /// In-flight reconnect timers per relay, cancelled on remove/success.
@@ -280,6 +282,17 @@ public final class AppModel: ObservableObject {
 
     private func connectAll() async {
         for relay in mesh.config.relays { await connect(relay) }
+    }
+
+    /// Home drag-to-refresh: re-request the rooms snapshot on every connected
+    /// relay so a session whose `room_announced` push was missed still
+    /// surfaces. The `.rooms` reconcile logs how many it recovered.
+    func refreshRooms() async {
+        for relay in mesh.config.relays {
+            guard let connection = connections[relay.id] else { continue }
+            let peers = mesh.config.machines(onRelay: relay.id).map(\.epk)
+            try? await connection.refreshRooms(peers: peers)
+        }
     }
 
     private func connect(_ relay: RelayConfig) async {
@@ -517,6 +530,17 @@ public final class AppModel: ObservableObject {
             // the sessionId). Parsing the key would treat every sessionId as an
             // unknown room and purge all live sessions.
             let liveRoomIDs = Set(rooms.map(\.roomID))
+            // Observability: rooms in the snapshot we didn't already have live
+            // are room_announced pushes we missed — on first connect this is the
+            // initial load, on a manual refresh a non-zero count means a push
+            // was dropped.
+            let knownRoomIDs = Set(sessions.values
+                .filter { $0.relayID == relayID && $0.peerEPK == peer }
+                .map(\.roomID))
+            let recovered = liveRoomIDs.subtracting(knownRoomIDs).count
+            if recovered > 0 {
+                log.info("rooms_check recovered \(recovered, privacy: .public) not-live room(s) for peer \(String(peer.prefix(8)), privacy: .public) (initial load or missed room_announced)")
+            }
             for (key, session) in sessions
             where session.relayID == relayID && session.peerEPK == peer
             && !liveRoomIDs.contains(session.roomID) {
