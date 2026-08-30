@@ -282,9 +282,7 @@ export function initSubagentRooms(
     // Event-asserted child markers (§3B): gotgenes' authoritative pre-bind event
     // and un-bien's own implementation-neutral marker. Additive — absent, only
     // in-process session_start detection runs.
-    unsub.push(
-      events.on("subagents:child:session-created", onChildMarker),
-    );
+    unsub.push(events.on("subagents:child:session-created", onChildMarker));
     unsub.push(events.on("unbien:subagent:child", onChildMarker));
   }
 
@@ -329,19 +327,30 @@ export function initSubagentRooms(
     const parentRoomId = opts.getParentRoomId();
     if (!parentRoomId) return; // root room not up yet — nothing to nest under
 
-    const rec = nextRecord();
-    const roomId = roomIdForSession(sessionId);
-    const name = rec?.description ?? rec?.type ?? "subagent";
+    // UPSERT reconcile (deterministic roomId is the meeting point): if a child
+    // MARKER (subagents:child:session-created / unbien:subagent:child) already
+    // registered this child, that binding is AUTHORITATIVE — enrich it and SKIP
+    // the arrival-order record pop (removes the mis-bind risk). Otherwise fall
+    // back to arrival-order correlation. Either way we converge on ONE entry.
+    const existing = panelBySession.get(sessionId);
+    const rec = existing ? undefined : nextRecord();
+    const roomId = existing?.roomId ?? roomIdForSession(sessionId);
+    const name =
+      existing?.description ??
+      existing?.type ??
+      rec?.description ??
+      rec?.type ??
+      "subagent";
 
-    // Register the panel row keyed by the CHILD sessionId (identity from
+    // Register/enrich the panel row keyed by the CHILD sessionId (identity from
     // detection); labels/status enrich from the bound record + later events.
     if (rec?.id) recordToSession.set(rec.id, sessionId);
     panelBySession.set(sessionId, {
       roomId,
-      type: rec?.type,
-      description: rec?.description,
-      status: rec?.status ?? "started",
-      startedAt: rec?.startedAt ?? Date.now(),
+      type: existing?.type ?? rec?.type,
+      description: existing?.description ?? rec?.description,
+      status: existing?.status ?? rec?.status ?? "started",
+      startedAt: existing?.startedAt ?? rec?.startedAt ?? Date.now(),
     });
     emitPanel();
 
