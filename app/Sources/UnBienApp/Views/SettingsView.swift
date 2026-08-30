@@ -14,6 +14,7 @@ struct SettingsView: View {
     @State private var fontPreview = "AaBbCc 0O1lI {}[]() => Meslo \u{2713}"
     @AppStorage("renderCacheBlocks") private var cacheBlocks = 400
     @AppStorage("renderCacheImages") private var cacheImages = 200
+    @AppStorage("hideMachinesWithoutDaemon") private var hideDaemonlessMachines = false
 
     var body: some View {
         NavigationStack {
@@ -21,6 +22,7 @@ struct SettingsView: View {
                 appearanceSection
                 typographySection
                 transcriptSection
+                machinesSection
                 performanceSection
                 syncSection
                 identitySection
@@ -153,6 +155,16 @@ struct SettingsView: View {
             Text("Transcript")
         } footer: {
             Text("Rich results (diff / code) can auto-expand, and their raw input block can be hidden to keep cards compact.")
+        }
+    }
+
+    private var machinesSection: some View {
+        Section {
+            Toggle("Hide machines without a daemon", isOn: $hideDaemonlessMachines)
+        } header: {
+            Text("Machines")
+        } footer: {
+            Text("When on, a paired machine only appears once its presence daemon is up and offers launch. When off, it shows a “searching for daemon…” row until the daemon answers.")
         }
     }
 

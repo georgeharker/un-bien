@@ -11,6 +11,7 @@ struct HomeView: View {
     @State private var settingsRelay: RelayConfig?
     @State private var showSettings = false
     @State private var launchTarget: LaunchTarget?
+    @AppStorage("hideMachinesWithoutDaemon") private var hideDaemonlessMachines = false
     @Environment(\.appTheme) private var theme
 
     var body: some View {
@@ -67,12 +68,14 @@ struct HomeView: View {
             ForEach(model.mesh.config.relays) { relay in
                 Section {
                     let sessions = model.sessions(onRelay: relay.id)
-                    // TEMP (user request): surface a machine-level daemon launch
-                    // for EVERY paired machine, not only session-less ones, so a
-                    // new session can be launched via the daemon even when the
-                    // machine already has sessions running.
+                    // A machine-level launch for every paired machine (not just
+                    // idle ones). "Hide machines without a daemon" drops the ones
+                    // whose daemon hasn't answered, for a clean list.
                     let launchMachines = model.mesh.config.machines(onRelay: relay.id)
-                    if sessions.isEmpty && launchMachines.isEmpty {
+                    let visibleMachines = launchMachines.filter {
+                        model.daemonPresence(for: $0) != nil || !hideDaemonlessMachines
+                    }
+                    if sessions.isEmpty && visibleMachines.isEmpty {
                         Text("No live sessions — pair a machine or start Pi with un-bien.")
                             .font(.footnote).foregroundStyle(theme.secondaryText)
                     } else {
@@ -99,39 +102,14 @@ struct HomeView: View {
                                 }
                             }
                         }
-                        // Machine-level daemon launch (regime 2). TEMP: shown for
-                        // every paired machine (not just idle) so it's reachable
-                        // with sessions running. Pull the daemon's caps on appear;
-                        // when it advertises remote_launch, launch via the control
-                        // room.
-                        ForEach(launchMachines) { machine in
-                            HStack {
-                                IdleMachineRow(machine: machine)
-                                Spacer(minLength: 8)
-                                if model.daemonSupports("remote_launch", machine: machine) {
-                                    Button {
-                                        launchTarget = .machine(machine)
-                                    } label: {
-                                        Image(systemName: "plus.circle").imageScale(.large)
-                                    }
-                                    .buttonStyle(.borderless)
-                                    .tint(theme.accent)
-                                    .accessibilityLabel("Launch a session on this idle machine")
-                                } else {
-                                    Image(systemName: "moon.zzz")
-                                        .foregroundStyle(.tertiary)
-                                        .accessibilityLabel("Idle — daemon status unknown")
-                                }
-                            }
-                            .task {
-                                // The daemon may start AFTER this row appears, so
-                                // re-request until it answers (or the row scrolls
-                                // away — .task auto-cancels). Stops once caps land.
-                                while !Task.isCancelled,
-                                      model.daemonPresence(for: machine) == nil {
-                                    await model.requestDaemonStatus(machine: machine)
-                                    try? await Task.sleep(nanoseconds: 2_500_000_000)
-                                }
+                        // Machine-level launch (regime 2): its OWN row, styled
+                        // distinctly from sessions (icon-led). Hidden when no
+                        // daemon has answered if the setting is on. Polling runs
+                        // list-level (see .task below) so a HIDDEN machine is still
+                        // probed — else hide-until-up would never un-hide.
+                        ForEach(visibleMachines) { machine in
+                            MachineLaunchRow(machine: machine) {
+                                launchTarget = .machine(machine)
                             }
                         }
                     }
@@ -155,6 +133,26 @@ struct HomeView: View {
         }
         .navigationDestination(for: LiveSession.self) { session in
             TranscriptView(session: session).environmentObject(model)
+        }
+        // Poll the presence daemon for EVERY paired machine, driven at the LIST
+        // level (the machine entries), NOT per row — a machine hidden by "hide
+        // machines without a daemon" has no row and no row .task, so row-driven
+        // polling would never confirm its daemon and it'd stay hidden forever.
+        .task { await pollDaemons() }
+    }
+
+    /// Probe each paired machine's presence daemon until it answers, regardless
+    /// of row visibility. Stops probing a machine once its caps land; keeps
+    /// sweeping the ones still unknown (daemon not up yet).
+    private func pollDaemons() async {
+        while !Task.isCancelled {
+            for relay in model.mesh.config.relays {
+                for machine in model.mesh.config.machines(onRelay: relay.id)
+                where model.daemonPresence(for: machine) == nil {
+                    await model.requestDaemonStatus(machine: machine)
+                }
+            }
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
         }
     }
 }
@@ -207,25 +205,45 @@ private struct SessionRow: View {
     }
 }
 
-/// A paired machine with no live session — its presence daemon (if up) answers
-/// presence_status with launch caps + backend, shown here as the subtitle.
-private struct IdleMachineRow: View {
+/// A paired machine's MACHINE-LEVEL launch — its own row, styled distinctly from
+/// a session row (icon-led, muted). Pulls the presence daemon's caps on appear;
+/// shows a "searching" spinner until the daemon answers, then a launch button
+/// when it advertises `remote_launch`.
+private struct MachineLaunchRow: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.appTheme) private var theme
     let machine: PairedMachine
+    let onLaunch: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(machine.nickname ?? machine.hostname ?? "Machine").font(.body)
-            Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        HStack(spacing: 10) {
+            Image(systemName: "desktopcomputer")
+                .font(.title3)
+                .foregroundStyle(theme.secondaryText)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(machine.nickname ?? machine.hostname ?? "Machine")
+                    .font(.subheadline.weight(.medium))
+                Text(subtitle).font(.caption)
+                    .foregroundStyle(theme.secondaryText).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            if model.daemonSupports("remote_launch", machine: machine) {
+                Button(action: onLaunch) {
+                    Image(systemName: "plus.circle.fill").imageScale(.large)
+                }
+                .buttonStyle(.borderless)
+                .tint(theme.accent)
+                .accessibilityLabel("Launch a session on this machine")
+            } else {
+                ProgressView().controlSize(.small)
+            }
         }
+        .padding(.vertical, 2)
     }
 
     private var subtitle: String {
-        guard let d = model.daemonPresence(for: machine) else {
-            return "checking for daemon…"
-        }
-        let host = d.hostname ?? machine.hostname
+        guard let d = model.daemonPresence(for: machine) else { return "searching for daemon…" }
         let backend = d.backend.map { " · \($0)" } ?? ""
-        return (host ?? "online") + backend
+        return "ready to launch" + backend
     }
 }
