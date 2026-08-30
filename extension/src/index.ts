@@ -75,6 +75,10 @@ import {
 } from "./extension_ui_bridge.js";
 import { createPanelBridge, type PanelBridge } from "./panel_bridge.js";
 import {
+  initSubagentRooms,
+  type SubagentRoomsController,
+} from "./subagent_rooms.js";
+import {
   createRpcEnvelope,
   isEnvelopeFrame,
   helloEnvelope,
@@ -911,6 +915,8 @@ export function _resetBridgeOwnersForTest(): void {
   _panelBridge = null;
   _rpcEnvelope?.dispose();
   _rpcEnvelope = null;
+  _subagentRooms?.dispose();
+  _subagentRooms = null;
   _extensionUiBridge?.dispose();
   _extensionUiBridge = null;
 }
@@ -1109,6 +1115,12 @@ let _panelBridge: PanelBridge | null = null;
 // (always on, advertised as the `rpc_envelope` capability); runs alongside the
 // stock ServerMessage path only until M4 parity retirement.
 let _rpcEnvelope: { dispose(): void } | null = null;
+
+// Per-child subagent relay rooms — each subagent surfaced to the app as its own
+// session, opt-in via the `subagents.rooms` un-bien setting (a no-op controller
+// otherwise). Owned by the ROOT session; a child session_start calls
+// onChildSession on this same instance.
+let _subagentRooms: SubagentRoomsController | null = null;
 
 let _stopAutoListener: (() => void) | null = null;
 
@@ -2846,6 +2858,10 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         return Array.isArray(e.hunks) ? { hunks: e.hunks } : null;
       },
     });
+    _subagentRooms?.dispose();
+    _subagentRooms = initSubagentRooms(pi, {
+      getParentRoomId: () => _myRoomId,
+    });
   }
 
   // Plano 19: ensure ~/.pi/un-bien/{sessions,skills}/ exist and deploy the
@@ -3080,6 +3096,14 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
             return Array.isArray(e.hunks) ? { hunks: e.hunks } : null;
           },
         });
+      if (!_subagentRooms)
+        _subagentRooms = initSubagentRooms(pi, {
+          getParentRoomId: () => _myRoomId,
+        });
+    } else if (_isNonRootSid(sid)) {
+      // A subagent child session (non-root) — surface it as its own relay room.
+      // `pi` here is the CHILD's ExtensionAPI (per-activation).
+      _subagentRooms?.onChildSession(pi, ctx);
     }
     // Rearm a reused-but-disposed instance. The session_shutdown teardown (below)
     // sets _disposed=true assuming the host re-evaluates THIS module fresh for the
@@ -3202,6 +3226,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       _panelBridge = null;
       _rpcEnvelope?.dispose();
       _rpcEnvelope = null;
+      _subagentRooms?.dispose();
+      _subagentRooms = null;
       _releaseRootSession(pi);
     }
     // Drop captured ctxs immediately. On module-reuse hosts the same instance

@@ -50,6 +50,14 @@ export type UnBienConfig = {
    * point). Absent ⇒ `"un-bien"`.
    */
   launch?: { backend?: "tmux" | "herdr"; tmux_session?: string };
+  /**
+   * Subagent surfacing. When `rooms` is true, a
+   * Pi SUBAGENT is surfaced to the paired app as its OWN session — a distinct
+   * relay room (under this machine's identity) that nests under its parent via
+   * `room_meta.parent`. Read-only (view-only) for now. Absent/false ⇒ subagents
+   * stay hidden from the app (historical behaviour). See `subagent_rooms.ts`.
+   */
+  subagents?: { rooms?: boolean };
 };
 
 export function loadConfig(): UnBienConfig {

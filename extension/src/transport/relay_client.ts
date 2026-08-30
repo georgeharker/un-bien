@@ -40,6 +40,11 @@ export interface RoomMeta {
   /** Friendly model name (e.g. "claude-sonnet-4.5"). Optional — pi-ext sends
    *  when `ExtensionContext.model` is available; relay/app tolerate absence. */
   model?: string;
+  /** Parent room id, when this room is a SUBAGENT child session:
+   *  the roomId of the spawning (root) session. Absent for normal top-level
+   *  sessions. Lets the app NEST the child under its parent in the home list
+   *  from `room_announced` alone, without attaching. */
+  parent?: string;
 }
 
 /** Control frame sent to relay (not routed to app peer). Each publish carries
