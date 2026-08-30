@@ -1,0 +1,191 @@
+import { Buffer } from "node:buffer";
+import { hostname, homedir } from "node:os";
+import { RelayClient } from "../transport/relay_client.js";
+import { PlainPeerChannel } from "../transport/peer_channel.js";
+import { getOrCreateEd25519Keypair } from "../pairing/storage.js";
+import { roomIdForControl } from "../rooms.js";
+import { _findKnownPeer } from "../pairing/peer_trust.js";
+import { _launchSession, _expandTilde } from "../launch.js";
+import {
+  helloEnvelope,
+  isEnvelopeFrame,
+  type EnvelopeMessage,
+} from "../session/rpc_envelope.js";
+import { loadConfig, resolveRelayUrl } from "../config.js";
+import {
+  loadLocalConfig,
+  effectiveAllowRemoteLaunch,
+} from "../session/local_config.js";
+import { envLog } from "../session/debug_log.js";
+
+/**
+ * Regime-2 machine-presence core (pi-INDEPENDENT — no pi SDK). A lightweight
+ * mesh peer that lets a paired app reach a machine with NO live pi session:
+ * it joins the machine-level control room (roomIdForControl), advertises the
+ * `remote_launch` capability, and on a `session_launch` frame spawns a
+ * tmux/herdr window via the shared launch module. Owner-auth reuses the fork's
+ * exact gate (relay verifies the peer's key; _findKnownPeer checks peers.json).
+ *
+ * NOT a pi process: no transcript/rpc/panels, no pairing (pairing happens once
+ * via any session fork's QR — the presence only trusts already-paired owners).
+ */
+
+const RECONNECT_DELAY_MS = 3_000;
+
+export interface PresenceHandle {
+  readonly roomId: string;
+  readonly epk: string;
+  stop(): void;
+}
+
+export async function startPresence(): Promise<PresenceHandle> {
+  const kp = await getOrCreateEd25519Keypair();
+  const epk = Buffer.from(kp.publicKey).toString("base64url");
+  const roomId = roomIdForControl(epk);
+
+  const resolution = resolveRelayUrl();
+  if (!resolution.url) {
+    throw new Error(
+      "un-bien presence: no relay configured (set UNBIEN_RELAY or the `relay` config key)",
+    );
+  }
+  const relayUrl = resolution.url;
+
+  let stopped = false;
+  let relay: RelayClient | null = null;
+  const channels = new Map<string, PlainPeerChannel>();
+
+  /** Honor a `session_launch` ub-frame — mirrors the fork's _routeUnBienPlaneFrom
+   *  handler: per-cwd opt-in, machine-config backend, clean exec (no keystrokes). */
+  function handleUbFrame(env: EnvelopeMessage): void {
+    if (env.ub === undefined) return;
+    const frame = env.ub as Record<string, unknown>;
+    if (frame.type !== "session_launch") return;
+    const cwd = _expandTilde(
+      typeof frame.cwd === "string" && frame.cwd.length > 0
+        ? frame.cwd
+        : process.cwd(),
+    );
+    if (!effectiveAllowRemoteLaunch(loadLocalConfig(cwd))) {
+      envLog("presence session_launch: remote launch disabled on this machine");
+      return;
+    }
+    const backend = loadConfig().launch?.backend === "herdr" ? "herdr" : "tmux";
+    const launchError = _launchSession(
+      backend,
+      cwd,
+      typeof frame.name === "string" ? frame.name : undefined,
+    );
+    if (launchError) envLog(`presence session_launch error: ${launchError}`);
+  }
+
+  async function gateAndAttach(
+    r: RelayClient,
+    peer: string,
+    firstInner: unknown,
+  ): Promise<void> {
+    const known = await _findKnownPeer(peer);
+    if (!known) {
+      // Relay-verified but not a paired owner (never paired / revoked). Signal
+      // so the app can react, mirroring the fork's unknown-peer reply.
+      try {
+        const errCt = Buffer.from(
+          JSON.stringify({
+            type: "error",
+            code: "unknown_peer",
+            message: "Peer not paired — re-scan QR",
+          }),
+        ).toString("base64");
+        r.send(JSON.stringify({ peer, ct: errCt }));
+      } catch {
+        /* relay down — nothing to signal */
+      }
+      return;
+    }
+    if (channels.has(peer)) return;
+
+    const channel = new PlainPeerChannel(
+      r,
+      peer,
+      roomId,
+      () => {}, // presence ignores stock ClientMessages (ub plane only)
+      () => channels.delete(peer),
+      (env) => handleUbFrame(env),
+    );
+    channels.set(peer, channel);
+    // Advertise machine caps up front so the app enables its launch control for
+    // this control room. No sessionId — the presence has no pi session.
+    channel.sendEnvelope(helloEnvelope(["remote_launch"]));
+    envLog(
+      `presence: owner ${peer.slice(0, 8)} (${known.name}) attached; caps sent`,
+    );
+    // The channel didn't see the line that triggered the attach — route it.
+    if (isEnvelopeFrame(firstInner as Record<string, unknown>)) {
+      handleUbFrame(firstInner as EnvelopeMessage);
+    }
+  }
+
+  function onMsg(r: RelayClient, line: string): void {
+    let outer: { peer?: string; ct?: string };
+    try {
+      outer = JSON.parse(line) as { peer?: string; ct?: string };
+    } catch {
+      return;
+    }
+    if (!outer.peer || !outer.ct) return;
+    if (channels.has(outer.peer)) return; // its PlainPeerChannel handles routing
+
+    let inner: unknown;
+    try {
+      inner = JSON.parse(Buffer.from(outer.ct, "base64").toString("utf8"));
+    } catch {
+      return;
+    }
+    if (!inner || typeof inner !== "object") return;
+    void gateAndAttach(r, outer.peer, inner);
+  }
+
+  function scheduleReconnect(): void {
+    if (stopped) return;
+    setTimeout(() => {
+      if (stopped) return;
+      connectOnce().catch(() => scheduleReconnect());
+    }, RECONNECT_DELAY_MS);
+  }
+
+  async function connectOnce(): Promise<void> {
+    const r = new RelayClient(relayUrl, kp);
+    relay = r;
+    r.on("message", (line: string) => onMsg(r, line));
+    r.on("close", () => {
+      channels.clear();
+      if (!stopped) scheduleReconnect();
+    });
+    await r.connect({
+      roomId,
+      roomMeta: { name: hostname(), cwd: homedir() },
+    });
+    envLog(
+      `presence: connected to control room ${roomId} (epk ${epk.slice(0, 12)}…)`,
+    );
+  }
+
+  await connectOnce();
+
+  return {
+    roomId,
+    epk,
+    stop() {
+      stopped = true;
+      for (const ch of channels.values()) {
+        try {
+          ch.detach();
+        } catch {
+          /* best-effort */
+        }
+      }
+      channels.clear();
+      relay?.close();
+    },
+  };
+}
