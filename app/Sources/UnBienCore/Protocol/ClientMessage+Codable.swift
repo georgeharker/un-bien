@@ -78,6 +78,8 @@ extension ClientMessage: Codable {
             try container.encodeIfPresent(mode, forKey: .mode)
             try container.encodeIfPresent(cwd, forKey: .cwd)
             try container.encodeIfPresent(name, forKey: .name)
+        case let .presenceStatus(id):
+            try container.encode(id, forKey: .id)
         case let .extensionUiResponse(response):
             try container.encode(response.id, forKey: .id)
             try container.encodeIfPresent(response.value, forKey: .value)

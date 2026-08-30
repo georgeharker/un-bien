@@ -28,6 +28,10 @@ public enum ClientMessage: Equatable, Sendable {
     /// `launch.backend` config decides the backend (tmux | herdr; rpc is a
     /// fast-follow).
     case sessionLaunch(id: String, mode: String?, cwd: String?, name: String?)
+    /// Daemon caps PULL (design 01M1813Q): ask a machine's presence daemon for
+    /// its capabilities. Answered ONLY by the presence daemon with a
+    /// `presence_status` response { caps, hostname, backend }.
+    case presenceStatus(id: String)
     /// Response to an `extension_ui_request` (select/confirm/input/editor).
     case extensionUiResponse(ExtensionUiResponse)
 
@@ -51,6 +55,7 @@ public enum ClientMessage: Equatable, Sendable {
         case .thinkingSet: return "thinking_set"
         case .listModels: return "list_models"
         case .sessionLaunch: return "session_launch"
+        case .presenceStatus: return "presence_status"
         case .extensionUiResponse: return "extension_ui_response"
         }
     }
