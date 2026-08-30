@@ -361,7 +361,10 @@ public final class AppModel: ObservableObject {
                 if env.type == "ub", let ub = env.ub,
                    ub["type"]?.stringValue == "presence_status" {
                     let caps = ub["caps"]?.arrayValue?.compactMap { $0.stringValue } ?? []
-                    daemonPresence[key] = DaemonPresence(
+                    // MACHINE-caps entry: key by the MACHINE (relay + canonical
+                    // epk), NOT the control room. The room is only transport.
+                    let mkey = machineCapsKey(relayID: relayID, epk: envelope.peer)
+                    daemonPresence[mkey] = DaemonPresence(
                         caps: Set(caps),
                         hostname: ub["hostname"]?.stringValue,
                         backend: ub["backend"]?.stringValue)
@@ -588,16 +591,16 @@ public final class AppModel: ObservableObject {
 
     // MARK: - Idle-machine (presence daemon) control
 
-    /// The control-room key for a paired machine (design 01M17WDQ04 / 01M1813Q):
-    /// `relayID:epk:controlRoom`. nil only if the epk isn't valid base64.
-    public func controlRoomKey(for machine: PairedMachine) -> String? {
-        guard let room = Base64.deriveControlRoom(epk: machine.epk) else { return nil }
-        return "\(machine.relayID.uuidString):\(machine.epk):\(room)"
+    /// The MACHINE-caps store key: relay + canonical epk. Daemon caps are a
+    /// MACHINE property, NOT associated with a room (design 01M1813Q) — the
+    /// control room is only the transport address used to reach the daemon.
+    private func machineCapsKey(relayID: UUID, epk: String) -> String {
+        "\(relayID.uuidString):\(Base64.canonicalKey(epk) ?? epk)"
     }
 
-    /// Daemon/machine status for a paired machine, if we've pulled it.
+    /// Daemon/machine caps for a paired machine, if we've pulled them.
     public func daemonPresence(for machine: PairedMachine) -> DaemonPresence? {
-        controlRoomKey(for: machine).flatMap { daemonPresence[$0] }
+        daemonPresence[machineCapsKey(relayID: machine.relayID, epk: machine.epk)]
     }
 
     /// True when the machine's presence daemon advertised `cap` (e.g.

@@ -67,10 +67,12 @@ struct HomeView: View {
             ForEach(model.mesh.config.relays) { relay in
                 Section {
                     let sessions = model.sessions(onRelay: relay.id)
-                    let liveEPKs = Set(sessions.map(\.peerEPK))
-                    let idleMachines = model.mesh.config.machines(onRelay: relay.id)
-                        .filter { !liveEPKs.contains($0.epk) }
-                    if sessions.isEmpty && idleMachines.isEmpty {
+                    // TEMP (user request): surface a machine-level daemon launch
+                    // for EVERY paired machine, not only session-less ones, so a
+                    // new session can be launched via the daemon even when the
+                    // machine already has sessions running.
+                    let launchMachines = model.mesh.config.machines(onRelay: relay.id)
+                    if sessions.isEmpty && launchMachines.isEmpty {
                         Text("No live sessions — pair a machine or start Pi with un-bien.")
                             .font(.footnote).foregroundStyle(theme.secondaryText)
                     } else {
@@ -97,11 +99,12 @@ struct HomeView: View {
                                 }
                             }
                         }
-                        // Idle machines (regime 2): paired machines with NO live
-                        // session. Pull the presence daemon's caps on appear; when
-                        // it advertises remote_launch, offer a launch straight to
-                        // its control room (no live session needed).
-                        ForEach(idleMachines) { machine in
+                        // Machine-level daemon launch (regime 2). TEMP: shown for
+                        // every paired machine (not just idle) so it's reachable
+                        // with sessions running. Pull the daemon's caps on appear;
+                        // when it advertises remote_launch, launch via the control
+                        // room.
+                        ForEach(launchMachines) { machine in
                             HStack {
                                 IdleMachineRow(machine: machine)
                                 Spacer(minLength: 8)
@@ -219,14 +222,10 @@ private struct IdleMachineRow: View {
 
     private var subtitle: String {
         guard let d = model.daemonPresence(for: machine) else {
-            // Show the room the app is polling so it can be eyeballed against the
-            // daemon's logged control room — a mismatch means the paired epk
-            // differs from the daemon's identity (re-pair needed).
-            let room = Base64.deriveControlRoom(epk: machine.epk) ?? "?"
-            return "idle · checking daemon @ \(room)…"
+            return "checking for daemon…"
         }
         let host = d.hostname ?? machine.hostname
         let backend = d.backend.map { " · \($0)" } ?? ""
-        return "idle" + (host.map { " · \($0)" } ?? "") + backend
+        return (host ?? "online") + backend
     }
 }
