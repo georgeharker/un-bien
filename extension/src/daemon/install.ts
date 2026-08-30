@@ -17,23 +17,23 @@ import { fileURLToPath } from "node:url";
 import { unbienStateHome } from "../paths.js";
 
 /**
- * Generates and activates a system service for `pi-supervisord` so the
- * daemon fleet survives reboots (plan/26 W3).
+ * Generates and activates a system service for the un-bien presence daemon so
+ * it survives reboots.
  *
  * Platform support:
- *   - **macOS**: writes `~/Library/LaunchAgents/dev.unbien.supervisord.plist`
+ *   - **macOS**: writes `~/Library/LaunchAgents/dev.unbien.presence.plist`
  *     and runs `launchctl bootstrap gui/<uid> <plist>` (modern API) with a
  *     fallback to `launchctl load` for older macOS.
- *   - **Linux**: writes `~/.config/systemd/user/unbien-supervisord.service`
+ *   - **Linux**: writes `~/.config/systemd/user/unbien-presence.service`
  *     and runs `systemctl --user daemon-reload && systemctl --user enable
- *     --now unbien-supervisord.service`.
+ *     --now unbien-presence.service`.
  *
  * Uninstall reverses both. Idempotent — re-running install over an existing
  * unit refreshes it (paths could have changed if user moved node_modules).
  *
  * **What does NOT happen here**: the actual `npm install -g un-bien` step.
- * The user has to make the supervisor bin reachable on disk before install
- * can wire up the service. The `findSupervisorScript` resolver detects
+ * The user has to make the presence bin reachable on disk before install
+ * can wire up the service. The `findPresenceScript` resolver detects
  * common cases (npm global, pnpm global, local dev clone) and yields a
  * clear error otherwise.
  */
@@ -58,20 +58,20 @@ export function detectPlatform(): SupervisorPlatform {
 // ── Path resolution ────────────────────────────────────────────────────────
 
 /**
- * Absolute path to the supervisor's compiled entry. We resolve from
+ * Absolute path to the presence daemon's compiled entry. We resolve from
  * `import.meta.url` (this file's location) since wherever the daemon
- * module lives, `bin/supervisord.js` is a sibling of `daemon/` under
+ * module lives, `bin/presence.js` is a sibling of `daemon/` under
  * `dist/`.
  *
- * After build: `dist/daemon/install.js` → `dist/bin/supervisord.js`.
+ * After build: `dist/daemon/install.js` → `dist/bin/presence.js`.
  * In dev (`tsx`): same path resolution still lands inside `src/`, which
  * isn't directly runnable by `node` — dev install isn't expected.
  */
-export function findSupervisorScript(): string {
+export function findPresenceScript(): string {
   const here = fileURLToPath(import.meta.url); // dist/daemon/install.js
   const daemonDir = dirname(here); // dist/daemon
   const distRoot = dirname(daemonDir); // dist
-  return resolve(distRoot, "bin/supervisord.js");
+  return resolve(distRoot, "bin/presence.js");
 }
 
 /**
@@ -80,7 +80,7 @@ export function findSupervisorScript(): string {
  * `un-bien <subcommand>` from any shell after installing the extension
  * through Pi (`pi install npm:un-bien`).
  *
- * Same resolution strategy as `findSupervisorScript`: from
+ * Same resolution strategy as `findPresenceScript`: from
  * `dist/daemon/install.js` → `dist/index.js`.
  */
 export function findRemotePiScript(): string {
@@ -126,54 +126,49 @@ export function systemdUnitPath(): string {
     ".config",
     "systemd",
     "user",
-    "unbien-supervisord.service",
+    "unbien-presence.service",
   );
 }
 
 export function launchdPlistPath(): string {
-  return join(
-    homedir(),
-    "Library",
-    "LaunchAgents",
-    "dev.unbien.supervisord.plist",
-  );
+  return join(homedir(), "Library", "LaunchAgents", "dev.unbien.presence.plist");
 }
 
-export const LAUNCHD_LABEL = "dev.unbien.supervisord";
-/** systemd --user unit name (with `.service`) for the supervisor. */
-export const SYSTEMD_UNIT = "unbien-supervisord.service";
-/** Windows Task Scheduler task name (plan/40). */
-export const WINDOWS_TASK_NAME = "RemotePiSupervisor";
+export const LAUNCHD_LABEL = "dev.unbien.presence";
+/** systemd --user unit name (with `.service`) for the presence daemon. */
+export const SYSTEMD_UNIT = "unbien-presence.service";
+/** Windows Task Scheduler task name. */
+export const WINDOWS_TASK_NAME = "RemotePiPresence";
 
 /** Path of the rendered Task Scheduler XML (input to `schtasks /Create /XML`). */
 export function taskXmlPath(): string {
-  return join(unbienStateHome(), "RemotePiSupervisor.xml");
+  return join(unbienStateHome(), "RemotePiPresence.xml");
 }
 
 /**
  * Path of the rendered VBScript launcher the Task Scheduler action invokes
- * via `wscript.exe` (plan/40, Windows). Launching node through this hidden
- * wrapper is what keeps the supervisor from flashing a console window.
+ * via `wscript.exe` (Windows). Launching node through this hidden wrapper is
+ * what keeps the presence daemon from flashing a console window.
  */
 export function vbsLauncherPath(): string {
-  return join(unbienStateHome(), "RemotePiSupervisorLauncher.vbs");
+  return join(unbienStateHome(), "RemotePiPresenceLauncher.vbs");
 }
 
 /**
- * Combined stdout/stderr log for the Windows supervisor. The Task Scheduler
- * launches it hidden via wscript, so without this redirect its output (and the
- * forwarded daemon-child stderr) would vanish — mirrors launchd/systemd, which
- * already log to `~/.pi/un-bien/supervisord.log`.
+ * Combined stdout/stderr log for the Windows presence daemon. The Task
+ * Scheduler launches it hidden via wscript, so without this redirect its output
+ * would vanish — mirrors launchd/systemd, which already log to
+ * `~/.pi/un-bien/presence.log`.
  */
-export function supervisordLogPath(): string {
-  return join(unbienStateHome(), "supervisord.log");
+export function presenceLogPath(): string {
+  return join(unbienStateHome(), "presence.log");
 }
 
 // ── Template rendering ─────────────────────────────────────────────────────
 
 export interface RenderVars {
   node: string;
-  supervisor: string;
+  presence: string;
   home: string;
   user: string;
   /** PATH inherited so `pi --mode rpc` resolves the same way it does
@@ -182,28 +177,28 @@ export interface RenderVars {
   /** Windows only: absolute path of the VBScript launcher the Task Scheduler
    *  action runs via `wscript.exe`. Empty on POSIX (templates ignore `{VBS}`). */
   vbs: string;
-  /** Windows only: combined stdout/stderr log the hidden supervisor appends to.
-   *  Empty on POSIX (templates ignore `{LOG}`). */
+  /** Windows only: combined stdout/stderr log the hidden presence daemon
+   *  appends to. Empty on POSIX (templates ignore `{LOG}`). */
   logPath: string;
 }
 
 export function defaultRenderVars(): RenderVars {
   return {
     node: findNodeBinary(),
-    supervisor: findSupervisorScript(),
+    presence: findPresenceScript(),
     home: homedir(),
     user: userInfo().username,
     path: process.env["PATH"] ?? "/usr/local/bin:/usr/bin:/bin",
     vbs: vbsLauncherPath(),
-    logPath: supervisordLogPath(),
+    logPath: presenceLogPath(),
   };
 }
 
-/** Replace `{NODE}` / `{SUPERVISOR}` / `{USER}` / `{HOME}` / `{PATH}` / `{VBS}` / `{LOG}`. */
+/** Replace `{NODE}` / `{PRESENCE}` / `{USER}` / `{HOME}` / `{PATH}` / `{VBS}` / `{LOG}`. */
 export function renderTemplate(template: string, vars: RenderVars): string {
   return template
     .replace(/\{NODE\}/g, vars.node)
-    .replace(/\{SUPERVISOR\}/g, vars.supervisor)
+    .replace(/\{PRESENCE\}/g, vars.presence)
     .replace(/\{USER\}/g, vars.user)
     .replace(/\{HOME\}/g, vars.home)
     .replace(/\{PATH\}/g, vars.path)
@@ -239,10 +234,10 @@ export function installService(
     );
   }
 
-  // Sanity: supervisor script must exist on disk.
-  if (!existsSync(vars.supervisor)) {
+  // Sanity: presence script must exist on disk.
+  if (!existsSync(vars.presence)) {
     throw new Error(
-      `supervisor script not found at ${vars.supervisor}. ` +
+      `presence script not found at ${vars.presence}. ` +
         "Run `pnpm build` (dev) or `npm install -g un-bien` (prod) first.",
     );
   }
@@ -294,13 +289,13 @@ export function installService(
     _exec("systemctl", ["--user", "daemon-reload"], log);
     _exec(
       "systemctl",
-      ["--user", "enable", "--now", "unbien-supervisord.service"],
+      ["--user", "enable", "--now", SYSTEMD_UNIT],
       log,
     );
     log.push("activated via systemctl --user enable --now");
   } else {
-    // windows — Task Scheduler (plan/40). The action runs `wscript.exe
-    // <launcher.vbs>` (not node directly) so the supervisor starts hidden,
+    // windows — Task Scheduler. The action runs `wscript.exe
+    // <launcher.vbs>` (not node directly) so the presence daemon starts hidden,
     // with no console window. Render + write that launcher first.
     const vbsTpl = findTemplate("vbs-launcher");
     if (!existsSync(vbsTpl))
@@ -361,7 +356,7 @@ export function uninstallService(): UninstallResult {
   } else if (plat === "linux") {
     _tryExec(
       "systemctl",
-      ["--user", "disable", "--now", "unbien-supervisord.service"],
+      ["--user", "disable", "--now", SYSTEMD_UNIT],
       log,
     );
     log.push("deactivated via systemctl --user disable --now");
@@ -543,15 +538,16 @@ function _execElevatedWindows(lines: string[], log: string[]): void {
 // When the user installs Remote Pi through Pi (`pi install npm:un-bien`),
 // the extension's `bin` entries in package.json never reach `$PATH` — Pi's
 // installer ignores them. Without `npm install -g un-bien` a second time,
-// the user can't run `unbien daemon …` from a shell.
+// the user can't run `unbien …` from a shell.
 //
-// `linkCliBinaries` writes two symlinks into `~/.local/bin/`:
+// `linkCliBinaries` writes one symlink into `~/.local/bin/`:
 //   - `un-bien`     → `<extensionRoot>/dist/index.js`
-//   - `pi-supervisord`→ `<extensionRoot>/dist/bin/supervisord.js`
 //
-// Both targets get `chmod +x` (tsc doesn't preserve the executable bit;
-// node tolerates running them via symlink either way, but POSIX shells
-// won't `exec` a non-executable file directly).
+// The target gets `chmod +x` (tsc doesn't preserve the executable bit;
+// node tolerates running it via symlink either way, but POSIX shells
+// won't `exec` a non-executable file directly). The OS service runs the
+// presence daemon as `node dist/bin/presence.js` directly, so it needs no
+// symlink of its own.
 //
 // This step is opt-in and runs ONLY when the slash-command path triggers
 // `_cmdInstall` — i.e., the user is inside Pi's TUI. The CLI-mode path
@@ -562,9 +558,9 @@ function _execElevatedWindows(lines: string[], log: string[]): void {
 // copy, which is a different file tree and would diverge on upgrades.
 
 export interface LinkBinariesResult {
-  /** `~/.local/bin/`. The two symlinks land here. */
+  /** `~/.local/bin/`. The symlink lands here. */
   binDir: string;
-  /** Paths of the two symlinks we created/refreshed. */
+  /** Paths of the symlink(s) we created/refreshed. */
   links: Array<{ name: string; path: string; target: string }>;
   /** True when `binDir` is already on `$PATH`. False → caller surfaces the
    *  "add this line to your shell rc" hint to the user. */
@@ -592,10 +588,9 @@ export function isOnPath(
 }
 
 /**
- * Create (or refresh) the `un-bien` + `pi-supervisord` symlinks in
- * `~/.local/bin/`. Idempotent — replaces stale links pointing at old
- * extension paths (Pi can reinstall the extension to a different hash dir
- * on upgrades, so this MUST overwrite).
+ * Create (or refresh) the `un-bien` symlink in `~/.local/bin/`. Idempotent —
+ * replaces stale links pointing at old extension paths (Pi can reinstall the
+ * extension to a different hash dir on upgrades, so this MUST overwrite).
  *
  * Returns `onPath: false` when `~/.local/bin` isn't in the user's `$PATH`.
  * The caller is responsible for surfacing the shell-rc instruction —
@@ -603,7 +598,7 @@ export function isOnPath(
  */
 export function linkCliBinaries(
   home: string = homedir(),
-  paths: { remotePi?: string; supervisord?: string } = {},
+  paths: { remotePi?: string } = {},
   opts: { node?: string; mutatePath?: boolean } = {},
 ): LinkBinariesResult {
   const binDir = userLocalBinDir(home);
@@ -621,42 +616,24 @@ export function linkCliBinaries(
   log.push(`ensured ${binDir}`);
 
   const remotePi = paths.remotePi ?? findRemotePiScript();
-  const supervisord = paths.supervisord ?? findSupervisorScript();
   if (!existsSync(remotePi)) {
     throw new Error(
       `unbien script not found at ${remotePi}. ` +
         "Run `pnpm build` (dev) or reinstall the extension.",
     );
   }
-  if (!existsSync(supervisord)) {
-    throw new Error(
-      `supervisor script not found at ${supervisord}. ` +
-        "Run `pnpm build` (dev) or reinstall the extension.",
-    );
-  }
 
   // tsc strips the executable bit on its outputs; the shebang at the top
   // of dist/index.js means the file IS a valid interpreter target once
-  // chmod +x is applied. Same for supervisord.js (no shebang — we rely
-  // on `node` resolving via the symlink at exec time).
+  // chmod +x is applied.
   try {
     chmodSync(remotePi, 0o755);
-  } catch {
-    /* best-effort */
-  }
-  try {
-    chmodSync(supervisord, 0o755);
   } catch {
     /* best-effort */
   }
 
   const links: LinkBinariesResult["links"] = [
     { name: "unbien", path: join(binDir, "unbien"), target: remotePi },
-    {
-      name: "pi-supervisord",
-      path: join(binDir, "pi-supervisord"),
-      target: supervisord,
-    },
   ];
   for (const link of links) {
     _replaceSymlink(link.path, link.target, log);
@@ -675,15 +652,15 @@ export function linkCliBinaries(
 }
 
 /**
- * Windows variant of `linkCliBinaries`: writes `un-bien.cmd` +
- * `pi-supervisord.cmd` shims into `~/.local/bin` and ensures that dir is on the
- * user's PATH (User scope — no admin). `opts.node` overrides the node binary
- * (tests); `opts.mutatePath === false` skips the real PATH mutation (tests).
+ * Windows variant of `linkCliBinaries`: writes an `un-bien.cmd` shim into
+ * `~/.local/bin` and ensures that dir is on the user's PATH (User scope — no
+ * admin). `opts.node` overrides the node binary (tests); `opts.mutatePath ===
+ * false` skips the real PATH mutation (tests).
  */
 function _linkCliBinariesWindows(
   home: string,
   binDir: string,
-  paths: { remotePi?: string; supervisord?: string },
+  paths: { remotePi?: string },
   opts: { node?: string; mutatePath?: boolean },
 ): LinkBinariesResult {
   void home;
@@ -693,16 +670,9 @@ function _linkCliBinariesWindows(
 
   const node = opts.node ?? findNodeBinary();
   const remotePi = paths.remotePi ?? findRemotePiScript();
-  const supervisord = paths.supervisord ?? findSupervisorScript();
   if (!existsSync(remotePi)) {
     throw new Error(
       `unbien script not found at ${remotePi}. ` +
-        "Run `pnpm build` (dev) or reinstall the extension.",
-    );
-  }
-  if (!existsSync(supervisord)) {
-    throw new Error(
-      `supervisor script not found at ${supervisord}. ` +
         "Run `pnpm build` (dev) or reinstall the extension.",
     );
   }
@@ -712,11 +682,6 @@ function _linkCliBinariesWindows(
       name: "un-bien.cmd",
       path: join(binDir, "un-bien.cmd"),
       target: remotePi,
-    },
-    {
-      name: "pi-supervisord.cmd",
-      path: join(binDir, "pi-supervisord.cmd"),
-      target: supervisord,
     },
   ];
   for (const link of links) {
@@ -791,10 +756,7 @@ export function unlinkCliBinaries(
   const log: string[] = [];
   // Windows shims are `.cmd` files (linkCliBinaries writes those); POSIX uses
   // extensionless symlinks. Match what was actually created on this platform.
-  const names =
-    platform() === "win32"
-      ? ["un-bien.cmd", "pi-supervisord.cmd"]
-      : ["unbien", "pi-supervisord"];
+  const names = platform() === "win32" ? ["un-bien.cmd"] : ["unbien"];
   const removed: UnlinkBinariesResult["removed"] = [];
 
   for (const name of names) {

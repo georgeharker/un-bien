@@ -21,7 +21,7 @@ import {
   defaultRenderVars,
   detectPlatform,
   findNodeBinary,
-  findSupervisorScript,
+  findPresenceScript,
   findRemotePiScript,
   findTemplate,
   isOnPath,
@@ -55,10 +55,10 @@ describe("findNodeBinary", () => {
   });
 });
 
-describe("findSupervisorScript", () => {
-  test("ends with bin/supervisord.js (whatever distRoot is)", () => {
+describe("findPresenceScript", () => {
+  test("ends with bin/presence.js (whatever distRoot is)", () => {
     // `join` yields the platform separator (`/` POSIX, `\` win32).
-    expect(findSupervisorScript().endsWith(join("bin", "supervisord.js"))).toBe(
+    expect(findPresenceScript().endsWith(join("bin", "presence.js"))).toBe(
       true,
     );
   });
@@ -73,7 +73,7 @@ describe("findTemplate", () => {
     const content = readFileSync(p, "utf8");
     expect(content).toContain("[Service]");
     expect(content).toContain("{NODE}");
-    expect(content).toContain("{SUPERVISOR}");
+    expect(content).toContain("{PRESENCE}");
   });
 
   test("launchd template file exists on disk", () => {
@@ -81,9 +81,9 @@ describe("findTemplate", () => {
     expect(p.endsWith("launchd.plist.template")).toBe(true);
     const content = readFileSync(p, "utf8");
     expect(content).toContain("<key>Label</key>");
-    expect(content).toContain("dev.unbien.supervisord");
+    expect(content).toContain("dev.unbien.presence");
     expect(content).toContain("{NODE}");
-    expect(content).toContain("{SUPERVISOR}");
+    expect(content).toContain("{PRESENCE}");
   });
 
   test("task-scheduler (Windows) template file exists on disk (plan/40)", () => {
@@ -93,13 +93,13 @@ describe("findTemplate", () => {
     expect(content).toContain("<Task ");
     expect(content).toContain("<LogonTrigger>");
     expect(content).toContain("<RestartOnFailure>");
-    // {NODE}/{SUPERVISOR} now live in the VBS launcher, not the XML — the XML's
+    // {NODE}/{PRESENCE} now live in the VBS launcher, not the XML — the XML's
     // action invokes wscript.exe with {VBS} (asserted below).
     // Must declare UTF-16 to match the UTF-16LE+BOM bytes install.ts writes —
     // schtasks /Create /XML rejects a mismatch ("unable to switch the encoding").
     expect(content).toContain('encoding="UTF-16"');
     // The action runs the hidden VBScript launcher (plan/40), not node directly,
-    // so the supervisor starts with no console window.
+    // so the presence daemon starts with no console window.
     expect(content).toContain("wscript.exe");
     expect(content).toContain("{VBS}");
     expect(content).toContain("<Hidden>true</Hidden>");
@@ -114,7 +114,7 @@ describe("findTemplate", () => {
     expect(content).toContain("WScript.Quit");
     expect(content).toContain("cmd /c");
     expect(content).toContain("{NODE}");
-    expect(content).toContain("{SUPERVISOR}");
+    expect(content).toContain("{PRESENCE}");
     expect(content).toContain("{LOG}");
   });
 });
@@ -122,24 +122,24 @@ describe("findTemplate", () => {
 describe("renderTemplate", () => {
   const vars = {
     node: "/usr/local/bin/node",
-    supervisor: "/Users/x/dist/bin/supervisord.js",
+    presence: "/Users/x/dist/bin/presence.js",
     home: "/Users/x",
     user: "jacob",
     path: "/usr/local/bin:/usr/bin:/bin",
-    vbs: "/Users/x/.pi/un-bien/RemotePiSupervisorLauncher.vbs",
-    logPath: "/Users/x/.pi/un-bien/supervisord.log",
+    vbs: "/Users/x/.pi/un-bien/RemotePiPresenceLauncher.vbs",
+    logPath: "/Users/x/.pi/un-bien/presence.log",
   };
 
   test("substitutes every placeholder in systemd template", () => {
     const tpl = readFileSync(findTemplate("systemd"), "utf8");
     const out = renderTemplate(tpl, vars);
     expect(out).not.toContain("{NODE}");
-    expect(out).not.toContain("{SUPERVISOR}");
+    expect(out).not.toContain("{PRESENCE}");
     expect(out).not.toContain("{HOME}");
     expect(out).not.toContain("{PATH}");
     expect(out).not.toContain("{USER}");
     expect(out).toContain(vars.node);
-    expect(out).toContain(vars.supervisor);
+    expect(out).toContain(vars.presence);
     expect(out).toContain(vars.home);
     expect(out).toContain(vars.path);
   });
@@ -148,13 +148,13 @@ describe("renderTemplate", () => {
     const tpl = readFileSync(findTemplate("launchd"), "utf8");
     const out = renderTemplate(tpl, vars);
     expect(out).not.toContain("{NODE}");
-    expect(out).not.toContain("{SUPERVISOR}");
+    expect(out).not.toContain("{PRESENCE}");
     expect(out).not.toContain("{HOME}");
     expect(out).not.toContain("{PATH}");
     expect(out).toContain(`<string>${vars.node}</string>`);
-    expect(out).toContain(`<string>${vars.supervisor}</string>`);
+    expect(out).toContain(`<string>${vars.presence}</string>`);
     expect(out).toContain(
-      `<string>${vars.home}/.pi/un-bien/supervisord.log</string>`,
+      `<string>${vars.home}/.pi/un-bien/presence.log</string>`,
     );
   });
 
@@ -176,19 +176,19 @@ describe("renderTemplate", () => {
     const out = renderTemplate(tpl, vars);
     expect(out).not.toContain("{VBS}");
     expect(out).toContain(vars.vbs);
-    // {NODE}/{SUPERVISOR} no longer appear in the XML — they moved to the VBS.
+    // {NODE}/{PRESENCE} no longer appear in the XML — they moved to the VBS.
     expect(out).not.toContain("{NODE}");
-    expect(out).not.toContain("{SUPERVISOR}");
+    expect(out).not.toContain("{PRESENCE}");
   });
 
-  test("substitutes {NODE}/{SUPERVISOR}/{LOG} in the vbs-launcher template", () => {
+  test("substitutes {NODE}/{PRESENCE}/{LOG} in the vbs-launcher template", () => {
     const tpl = readFileSync(findTemplate("vbs-launcher"), "utf8");
     const out = renderTemplate(tpl, vars);
     expect(out).not.toContain("{NODE}");
-    expect(out).not.toContain("{SUPERVISOR}");
+    expect(out).not.toContain("{PRESENCE}");
     expect(out).not.toContain("{LOG}");
     expect(out).toContain(vars.node);
-    expect(out).toContain(vars.supervisor);
+    expect(out).toContain(vars.presence);
     expect(out).toContain(vars.logPath);
   });
 });
@@ -197,9 +197,9 @@ describe("vbsLauncherPath", () => {
   test("is absolute and ends with the launcher .vbs under ~/.pi/un-bien", () => {
     const p = vbsLauncherPath();
     expect(isAbsolute(p)).toBe(true);
-    expect(p.endsWith("RemotePiSupervisorLauncher.vbs")).toBe(true);
+    expect(p.endsWith("RemotePiPresenceLauncher.vbs")).toBe(true);
     expect(
-      p.endsWith(join(".pi", "un-bien", "RemotePiSupervisorLauncher.vbs")),
+      p.endsWith(join(".pi", "un-bien", "RemotePiPresenceLauncher.vbs")),
     ).toBe(true);
   });
 });
@@ -217,20 +217,20 @@ describe("buildElevatedCmd", () => {
   test("redirects schtasks lines to the log but leaves control-flow bare", () => {
     const out = buildElevatedCmd(
       [
-        "schtasks /End /TN RemotePiSupervisor",
-        'schtasks /Create /XML "x.xml" /TN RemotePiSupervisor /F',
+        "schtasks /End /TN RemotePiPresence",
+        'schtasks /Create /XML "x.xml" /TN RemotePiPresence /F',
         "if errorlevel 1 exit /b 1",
-        "schtasks /Run /TN RemotePiSupervisor",
+        "schtasks /Run /TN RemotePiPresence",
       ],
       "C:\\Temp\\out.log",
     );
     expect(out.startsWith("@echo off\r\n")).toBe(true);
     // schtasks lines get the redirect…
     expect(out).toContain(
-      'schtasks /End /TN RemotePiSupervisor >> "C:\\Temp\\out.log" 2>&1',
+      'schtasks /End /TN RemotePiPresence >> "C:\\Temp\\out.log" 2>&1',
     );
     expect(out).toContain(
-      'schtasks /Run /TN RemotePiSupervisor >> "C:\\Temp\\out.log" 2>&1',
+      'schtasks /Run /TN RemotePiPresence >> "C:\\Temp\\out.log" 2>&1',
     );
     // …control flow does NOT (redirecting it would swallow the exit code).
     expect(out).toContain("if errorlevel 1 exit /b 1\r\n");
@@ -242,13 +242,13 @@ describe("buildElevatedCmd", () => {
 describe.skipIf(posixOnly)("paths", () => {
   test("systemdUnitPath lives under ~/.config/systemd/user/", () => {
     expect(systemdUnitPath()).toMatch(
-      /\.config\/systemd\/user\/unbien-supervisord\.service$/,
+      /\.config\/systemd\/user\/unbien-presence\.service$/,
     );
   });
 
   test("launchdPlistPath lives under ~/Library/LaunchAgents/", () => {
     expect(launchdPlistPath()).toMatch(
-      /Library\/LaunchAgents\/dev\.unbien\.supervisord\.plist$/,
+      /Library\/LaunchAgents\/dev\.unbien\.presence\.plist$/,
     );
   });
 });
@@ -257,7 +257,7 @@ describe("defaultRenderVars", () => {
   test("populates all required fields", () => {
     const vars = defaultRenderVars();
     expect(vars.node).toBe(process.execPath);
-    expect(vars.supervisor.endsWith(join("bin", "supervisord.js"))).toBe(true);
+    expect(vars.presence.endsWith(join("bin", "presence.js"))).toBe(true);
     expect(isAbsolute(vars.home)).toBe(true);
     expect(vars.user.length).toBeGreaterThan(0);
     expect(vars.path.length).toBeGreaterThan(0);
@@ -267,11 +267,11 @@ describe("defaultRenderVars", () => {
 // ── CLI bin linking (plan/27) ────────────────────────────────────────────────
 
 describe("findRemotePiScript", () => {
-  test("resolves to dist/index.js sibling of supervisord", () => {
+  test("resolves to dist/index.js sibling of presence", () => {
     const p = findRemotePiScript();
     expect(basename(p)).toBe("index.js");
-    // Same dist root as supervisord: dirname(index.js) === dirname(dist/bin).
-    expect(dirname(p)).toBe(dirname(dirname(findSupervisorScript())));
+    // Same dist root as presence: dirname(index.js) === dirname(dist/bin).
+    expect(dirname(p)).toBe(dirname(dirname(findPresenceScript())));
   });
 });
 
@@ -298,33 +298,31 @@ describe.skipIf(posixOnly)("userLocalBinDir + isOnPath", () => {
 // (npm-global provides the `.cmd` shims there), so these don't apply.
 describe.skipIf(posixOnly)("linkCliBinaries / unlinkCliBinaries", () => {
   let tmpHome: string;
-  let fakePaths: { remotePi: string; supervisord: string };
+  let fakePaths: { remotePi: string };
 
   beforeEach(() => {
     tmpHome = mkdtempSync(join(tmpdir(), "pi-link-"));
-    // Stand-ins for the real extension files so the test doesn't depend
+    // Stand-in for the real extension file so the test doesn't depend
     // on `pnpm build` having run.
     const stub = join(tmpHome, "fake-ext");
-    mkdirSync(join(stub, "bin"), { recursive: true });
+    mkdirSync(stub, { recursive: true });
     fakePaths = {
       remotePi: join(stub, "index.js"),
-      supervisord: join(stub, "bin", "supervisord.js"),
     };
     writeFileSync(fakePaths.remotePi, "#!/usr/bin/env node\n");
-    writeFileSync(fakePaths.supervisord, "#!/usr/bin/env node\n");
   });
 
   afterEach(() => {
     rmSync(tmpHome, { recursive: true, force: true });
   });
 
-  test("link creates two symlinks pointing at the real extension files", () => {
+  test("link creates the un-bien symlink pointing at the real extension file", () => {
     const result = linkCliBinaries(tmpHome, fakePaths);
     expect(result.binDir).toBe(join(tmpHome, ".local", "bin"));
-    expect(result.links).toHaveLength(2);
+    expect(result.links).toHaveLength(1);
 
     const names = result.links.map((l) => l.name).sort();
-    expect(names).toEqual(["pi-supervisord", "unbien"]);
+    expect(names).toEqual(["unbien"]);
 
     for (const link of result.links) {
       expect(lstatSync(link.path).isSymbolicLink()).toBe(true);
@@ -332,7 +330,7 @@ describe.skipIf(posixOnly)("linkCliBinaries / unlinkCliBinaries", () => {
     }
   });
 
-  test("link is idempotent (re-running yields same symlinks, no error)", () => {
+  test("link is idempotent (re-running yields same symlink, no error)", () => {
     linkCliBinaries(tmpHome, fakePaths);
     const second = linkCliBinaries(tmpHome, fakePaths);
     for (const link of second.links) {
@@ -369,16 +367,16 @@ describe.skipIf(posixOnly)("linkCliBinaries / unlinkCliBinaries", () => {
     }
   });
 
-  test("unlink removes both symlinks, idempotent on second call", () => {
+  test("unlink removes the symlink, idempotent on second call", () => {
     linkCliBinaries(tmpHome, fakePaths);
     const first = unlinkCliBinaries(tmpHome);
-    expect(first.removed.map((r) => r.existed)).toEqual([true, true]);
+    expect(first.removed.map((r) => r.existed)).toEqual([true]);
     for (const r of first.removed) {
       expect(existsSync(r.path)).toBe(false);
     }
     // Second call is a no-op
     const second = unlinkCliBinaries(tmpHome);
-    expect(second.removed.map((r) => r.existed)).toEqual([false, false]);
+    expect(second.removed.map((r) => r.existed)).toEqual([false]);
   });
 
   test("unlink does NOT delete the extension files (link targets are preserved)", () => {
@@ -398,33 +396,31 @@ describe.skipIf(!posixOnly)(
   "linkCliBinaries / unlinkCliBinaries (Windows .cmd shims)",
   () => {
     let tmpHome: string;
-    let fakePaths: { remotePi: string; supervisord: string };
+    let fakePaths: { remotePi: string };
     const node = "C:\\Program Files\\nodejs\\node.exe";
 
     beforeEach(() => {
       tmpHome = mkdtempSync(join(tmpdir(), "pi-link-win-"));
       const stub = join(tmpHome, "fake-ext");
-      mkdirSync(join(stub, "bin"), { recursive: true });
+      mkdirSync(stub, { recursive: true });
       fakePaths = {
         remotePi: join(stub, "index.js"),
-        supervisord: join(stub, "bin", "supervisord.js"),
       };
       writeFileSync(fakePaths.remotePi, "// stub\n");
-      writeFileSync(fakePaths.supervisord, "// stub\n");
     });
 
     afterEach(() => {
       rmSync(tmpHome, { recursive: true, force: true });
     });
 
-    test("link writes un-bien.cmd + pi-supervisord.cmd pointing at node + targets", () => {
+    test("link writes un-bien.cmd pointing at node + target", () => {
       const result = linkCliBinaries(tmpHome, fakePaths, {
         node,
         mutatePath: false,
       });
       expect(result.binDir).toBe(join(tmpHome, ".local", "bin"));
       const names = result.links.map((l) => l.name).sort();
-      expect(names).toEqual(["pi-supervisord.cmd", "un-bien.cmd"]);
+      expect(names).toEqual(["un-bien.cmd"]);
       for (const link of result.links) {
         expect(existsSync(link.path)).toBe(true);
         const content = readFileSync(link.path, "utf8");
@@ -434,7 +430,7 @@ describe.skipIf(!posixOnly)(
       }
     });
 
-    test("link is idempotent (re-running overwrites the same .cmd files)", () => {
+    test("link is idempotent (re-running overwrites the same .cmd file)", () => {
       linkCliBinaries(tmpHome, fakePaths, { node, mutatePath: false });
       const second = linkCliBinaries(tmpHome, fakePaths, {
         node,
@@ -447,13 +443,13 @@ describe.skipIf(!posixOnly)(
       }
     });
 
-    test("unlink removes both .cmd shims, idempotent on second call", () => {
+    test("unlink removes the .cmd shim, idempotent on second call", () => {
       linkCliBinaries(tmpHome, fakePaths, { node, mutatePath: false });
       const first = unlinkCliBinaries(tmpHome);
-      expect(first.removed.map((r) => r.existed)).toEqual([true, true]);
+      expect(first.removed.map((r) => r.existed)).toEqual([true]);
       for (const r of first.removed) expect(existsSync(r.path)).toBe(false);
       const second = unlinkCliBinaries(tmpHome);
-      expect(second.removed.map((r) => r.existed)).toEqual([false, false]);
+      expect(second.removed.map((r) => r.existed)).toEqual([false]);
     });
   },
 );

@@ -1,11 +1,11 @@
 [Unit]
-Description=Remote Pi daemon supervisor (plan/26)
+Description=un-bien presence daemon
 Documentation=https://docs.georgeharker.com/un-bien
 After=default.target
 
 [Service]
 Type=simple
-ExecStart={NODE} {SUPERVISOR}
+ExecStart={NODE} {PRESENCE}
 Restart=on-failure
 RestartSec=5s
 StandardOutput=journal

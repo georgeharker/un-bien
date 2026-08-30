@@ -65,7 +65,10 @@ export async function startPresence(): Promise<PresenceHandle> {
    *  transport-control handler (index.ts) so a health check works against an
    *  idle machine too. Distinct from the `presence_status` caps PULL — this is
    *  the plain are-you-there reply, no caps. */
-  function handleStockMessage(msg: ClientMessage, sender: PlainPeerChannel): void {
+  function handleStockMessage(
+    msg: ClientMessage,
+    sender: PlainPeerChannel,
+  ): void {
     if ((msg as { type?: string }).type === "ping") {
       sender.send({
         type: "pong",

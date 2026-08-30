@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>Remote Pi daemon supervisor (pi-supervisord) — keeps background Pi agents running.</Description>
+    <Description>un-bien presence daemon — keeps the machine reachable on the mesh.</Description>
   </RegistrationInfo>
   <Triggers>
     <LogonTrigger>

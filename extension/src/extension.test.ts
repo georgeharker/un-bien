@@ -272,7 +272,6 @@ const {
   _hasActivePeerForTest,
   _getActivePeerCountForTest,
   _checkSelfRevokeForTest,
-  _restartSupervisorCommand,
   _setDisposedForTest,
   _resetAutoInitedForTest,
   _setAutoInitedForTest,
@@ -478,7 +477,7 @@ describe("extension default export", () => {
     expect(typeof extension).toBe("function");
   });
 
-  test("registers the user-facing commands (post plan/26 W3: + install/uninstall)", () => {
+  test("registers the user-facing commands", () => {
     const { pi, registeredCommands } = makeMockPi();
     (extension as ExtensionFactory)(pi);
     // Local session (plan/25)
@@ -490,18 +489,7 @@ describe("extension default export", () => {
     expect(registeredCommands).toContain("unbien devices");
     expect(registeredCommands).toContain("unbien revoke");
     expect(registeredCommands).toContain("unbien set-relay");
-    // Daemon registry (plan/26 W1)
-    expect(registeredCommands).toContain("unbien create");
-    expect(registeredCommands).toContain("unbien remove");
-    // Fleet ops (plan/26 W2) — use `daemon` prefix to avoid clashing with
-    // /unbien stop (local) since both have very different semantics.
-    expect(registeredCommands).toContain("unbien daemons");
-    expect(registeredCommands).toContain("unbien daemon start");
-    expect(registeredCommands).toContain("unbien daemon stop");
-    expect(registeredCommands).toContain("unbien daemon restart");
-    expect(registeredCommands).toContain("unbien daemon status");
-    expect(registeredCommands).toContain("unbien daemon send");
-    // Service install (plan/26 W3) — systemd / launchd
+    // Service install — the presence daemon as a system service
     expect(registeredCommands).toContain("unbien install");
     expect(registeredCommands).toContain("unbien uninstall");
     // Cross-PC peer inventory (plan/25 W D)
@@ -511,40 +499,14 @@ describe("extension default export", () => {
     expect(registeredCommands).toContain("unbien identity show");
   });
 
-  test("restart-supervisor maps to the right OS command sequence per platform", () => {
-    expect(_restartSupervisorCommand("darwin", 501)).toEqual([
-      {
-        cmd: "launchctl",
-        args: ["kickstart", "-k", "gui/501/dev.unbien.supervisord"],
-      },
-    ]);
-    expect(_restartSupervisorCommand("linux", 1000)).toEqual([
-      {
-        cmd: "systemctl",
-        args: ["--user", "restart", "unbien-supervisord.service"],
-      },
-    ]);
-    // Windows (plan/40): End (ignorable) then Run, via Task Scheduler.
-    expect(_restartSupervisorCommand("win32", 0)).toEqual([
-      {
-        cmd: "schtasks",
-        args: ["/End", "/TN", "RemotePiSupervisor"],
-        ignoreFailure: true,
-      },
-      { cmd: "schtasks", args: ["/Run", "/TN", "RemotePiSupervisor"] },
-    ]);
-    // Truly unsupported platform → null (caller exits non-zero).
-    expect(_restartSupervisorCommand("aix", 0)).toBeNull();
-  });
-
   test("no deprecated or removed commands leak back into the surface", () => {
     const { pi, registeredCommands } = makeMockPi();
     (extension as ExtensionFactory)(pi);
-    // 8 plan-25 + 2 daemon registry (W1) + 6 fleet ops (W2) + 2 install (W3)
-    // + 1 cross-PC inventory (plan-25 W D) + 1 cron (plan-39) + 1 rename (plan/41)
-    // + 1 relay control (issue #119 — README documents the verb family)
-    // + 2 identity (`unbien identity` and its `identity show` verb alias).
-    expect(registeredCommands).toHaveLength(25);
+    // 8 plan-25 + 2 install + 1 cross-PC inventory (plan-25 W D)
+    // + 1 rename (plan/41) + 1 relay control (issue #119)
+    // + 2 identity (`unbien identity` and its `identity show` verb alias)
+    // + 1 config.
+    expect(registeredCommands).toHaveLength(16);
     // `relay` is back as ONE command with verbs (start/stop/status/url), not the
     // five separate registrations plan/19 trimmed — the README documents it and
     // without it every `/unbien relay …` silently reprinted the status panel.
@@ -561,6 +523,16 @@ describe("extension default export", () => {
       "unbien start",
       "un-bien list",
       "un-bien add-relay",
+      // Retired supervisord/daemon-fleet/cron subsystem.
+      "unbien create",
+      "unbien remove",
+      "unbien daemons",
+      "unbien daemon start",
+      "unbien daemon stop",
+      "unbien daemon restart",
+      "unbien daemon status",
+      "unbien daemon send",
+      "unbien cron",
     ]) {
       expect(registeredCommands).not.toContain(removed);
     }
