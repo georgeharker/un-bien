@@ -7,7 +7,7 @@ import { envLog } from "./session/debug_log.js";
 
 /**
  * Launch backends for remote `session_launch` — shared by the extension (index.ts)
- * and the regime-2 presence daemon. PTY-hosted backends exec `pi` cleanly (no
+ * and the regime-2 launcher daemon. PTY-hosted backends exec `pi` cleanly (no
  * keystrokes): `tmux` = a WINDOW in one shared named session; `herdr` =
  * `workspace create` then `agent start --kind pi`. `rpc` is a fast-follow.
  */

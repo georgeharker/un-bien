@@ -79,7 +79,7 @@ export function roomIdFor(cwd: string, name?: string): string {
 /**
  * THE machine-level "control" room id — a sibling of `roomIdFor(cwd,name)` keyed
  * on the machine's long-term ed25519 public key (`epk`) instead of a session or
- * cwd. The idle-machine presence daemon (regime 2) joins THIS room so a paired
+ * cwd. The idle-machine launcher daemon (regime 2) joins THIS room so a paired
  * app can reach a machine that currently has NO live pi session.
  *
  * The `\0control\0` NUL-sentinel prefix keeps it from ever colliding with a

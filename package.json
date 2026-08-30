@@ -11,10 +11,9 @@
     ]
   },
   "scripts": {
-    "build": "pnpm -C extension build",
-    "typecheck": "pnpm -C extension typecheck",
-    "test": "pnpm -C extension test",
-    "install:ext": "pnpm -C extension install"
+    "build": "pnpm -C extension build && pnpm -C launcher build",
+    "typecheck": "pnpm -C extension typecheck && pnpm -C launcher typecheck",
+    "test": "pnpm -C extension test"
   },
   "engines": {
     "node": ">=20.0.0"

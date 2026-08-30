@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * `pi-unbien-presence` — the regime-2 machine-presence daemon.
+ * `pi-unbien-launcher` — the regime-2 machine-launcher daemon.
  *
  * A lightweight mesh peer (NOT a pi session) that lets a paired app launch a
  * session on THIS machine even when no pi is running here. Reads the machine's
@@ -8,16 +8,16 @@
  * control room, advertises `remote_launch`, and spawns tmux/herdr on request.
  *
  * Run by hand during bring-up:
- *   pnpm build && node dist/bin/presence.js
+ *   pnpm build && node dist/bin/launcher.js
  * (An OS-service unit for keepalive is a separate install step.)
  */
-import { startPresence } from "../presence/presence.js";
+import { startLauncher } from "../launcher/launcher.js";
 
 async function main(): Promise<void> {
-  const handle = await startPresence();
+  const handle = await startLauncher();
   // eslint-disable-next-line no-console
   console.log(
-    `[un-bien presence] listening on control room ${handle.roomId} ` +
+    `[un-bien launcher] listening on control room ${handle.roomId} ` +
       `(epk ${handle.epk.slice(0, 16)}…) — Ctrl-C to stop`,
   );
 
@@ -26,7 +26,7 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     // eslint-disable-next-line no-console
-    console.log(`[un-bien presence] ${signal} — shutting down`);
+    console.log(`[un-bien launcher] ${signal} — shutting down`);
     handle.stop();
     process.exit(0);
   };
@@ -37,7 +37,7 @@ async function main(): Promise<void> {
 main().catch((err: unknown) => {
   // eslint-disable-next-line no-console
   console.error(
-    `[un-bien presence] fatal: ${err instanceof Error ? err.message : String(err)}`,
+    `[un-bien launcher] fatal: ${err instanceof Error ? err.message : String(err)}`,
   );
   process.exit(1);
 });

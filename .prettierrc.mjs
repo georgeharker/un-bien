@@ -1,5 +1,5 @@
 /**
- * Formatting config for the un-bien fork extension (TypeScript).
+ * Formatting config for the un-bien MONOREPO (extension, launcher, root).
  * pi-lens formats JS/TS via its formatter cascade ["biome", "prettier", ...];
  * biome's tab default was mangling this 2-space codebase, so this file pins
  * prettier(d) as the formatter. These are prettier's DEFAULTS made explicit —

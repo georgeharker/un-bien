@@ -1,0 +1,49 @@
+{
+  "name": "@geohar/un-bien-launcher",
+  "version": "0.1.0",
+  "description": "unbien-launcher — the un-bien machine-presence launcher daemon. A lightweight mesh peer (not a Pi session) that lets a paired app launch a Pi session on this machine even when no Pi is running here. Part of the un-bien monorepo; wraps the presence core exported by @geohar/un-bien.",
+  "type": "module",
+  "bin": {
+    "unbien-launcher": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm build"
+  },
+  "keywords": [
+    "pi",
+    "un-bien",
+    "unbien",
+    "launcher",
+    "presence",
+    "daemon",
+    "agent-mesh",
+    "remote-launch"
+  ],
+  "author": "George Harker <georgeharker@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/georgeharker/un-bien.git",
+    "directory": "launcher"
+  },
+  "homepage": "https://docs.georgeharker.com/un-bien",
+  "bugs": {
+    "url": "https://github.com/georgeharker/un-bien/issues"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@geohar/un-bien": "workspace:^"
+  },
+  "devDependencies": {
+    "@types/node": "^25.8.0",
+    "typescript": "^6.0.3"
+  }
+}

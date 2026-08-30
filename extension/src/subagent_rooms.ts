@@ -32,10 +32,10 @@ import type { ServerMessage } from "./protocol/types.js";
  *   - a per-child RelayClient connected to roomIdForSession(childSessionId) with
  *     room_meta.parent = the root room id (so the app NESTS it), reusing the
  *     machine keypair (pairing is machine-level — the app reaches it with no new
- *     pair, exactly like the presence control room);
+ *     pair, exactly like the launcher control room);
  *   - a per-child createRpcEnvelope(childPi, …) that produces the child's
  *     transcript on THAT room;
- *   - owner attach (same _findKnownPeer gate as presence) + a READ-ONLY inbound
+ *   - owner attach (same _findKnownPeer gate as the launcher) + a READ-ONLY inbound
  *     surface (get_entries from the child's own sessionManager; session_sync
  *     terminator). No prompt/steer here — view-only (Phase 1).
  *

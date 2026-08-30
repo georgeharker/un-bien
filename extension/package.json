@@ -1,13 +1,23 @@
 {
   "name": "@geohar/un-bien",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Mobile remote control and local agent mesh for the Pi coding agent. Pair your phone via QR over a relay, watch tool calls in real time, run multi-Pi sessions over a local Unix Domain Socket broker, and let agents talk to each other through structured request/reply. Derived from remote-pi by Jacob Moura (https://github.com/jacobaraujo7/remote_pi), MIT.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "unbien": "dist/index.js",
-    "pi-unbien-presence": "dist/bin/presence.js"
+    "unbien": "dist/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./launcher": {
+      "types": "./dist/bin/launcher.d.ts",
+      "default": "./dist/bin/launcher.js"
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -60,14 +70,6 @@
   ],
   "engines": {
     "node": ">=20.0.0"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@google/genai",
-      "esbuild",
-      "koffi",
-      "protobufjs"
-    ]
   },
   "devDependencies": {
     "@types/node": "^25.8.0",

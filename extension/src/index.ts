@@ -3498,10 +3498,10 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     },
   });
 
-  // Service install / uninstall — the presence daemon as a system service.
+  // Service install / uninstall — the launcher daemon as a system service.
   pi.registerCommand("unbien install", {
     description:
-      "Install the un-bien presence daemon as a system service + link the un-bien CLI (systemd/launchd/Task Scheduler; Windows prompts for admin)",
+      "Install the un-bien launcher daemon as a system service + link the un-bien CLI (systemd/launchd/Task Scheduler; Windows prompts for admin)",
     handler: async (_, ctx) => {
       _lastCtx = ctx;
       _cmdInstall(ctx, { linkCli: true });
@@ -3509,7 +3509,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   });
   pi.registerCommand("unbien uninstall", {
     description:
-      "Remove the un-bien presence daemon system service + the CLI shims (Windows prompts for admin)",
+      "Remove the un-bien launcher daemon system service + the CLI shims (Windows prompts for admin)",
     handler: async (_, ctx) => {
       _lastCtx = ctx;
       _cmdUninstall(ctx, { linkCli: true });
@@ -4497,11 +4497,11 @@ async function _cmdRelay(arg: string, ctx: ExtensionContext): Promise<void> {
   }
 }
 
-// ── Install/uninstall the presence-daemon service ────────────────────────────
+// ── Install/uninstall the launcher-daemon service ────────────────────────────
 //
-// Installs the un-bien presence daemon as a user-level system service (systemd
+// Installs the un-bien launcher daemon as a user-level system service (systemd
 // `--user` unit on Linux, launchd LaunchAgent on macOS, Task Scheduler on
-// Windows). Once installed the presence daemon starts at login + survives
+// Windows). Once installed the launcher daemon starts at login + survives
 // reboots. Uninstall is the inverse.
 
 /**
@@ -4524,7 +4524,7 @@ function _cmdInstall(
   try {
     const result = installService();
     const sections = [
-      `[un-bien] Presence daemon service installed (${result.platform}).`,
+      `[un-bien] Launcher daemon service installed (${result.platform}).`,
       `  Unit: ${result.unitPath}`,
       `  Steps:\n${result.log.map((l) => "    " + l).join("\n")}`,
     ];
@@ -4566,7 +4566,7 @@ function _cmdUninstall(
   try {
     const result = uninstallService();
     const sections = [
-      `[un-bien] Presence daemon service uninstalled (${result.platform}).`,
+      `[un-bien] Launcher daemon service uninstalled (${result.platform}).`,
       `  Unit: ${result.unitPath} (${result.removed ? "removed" : "not present"})`,
       `  Steps:\n${result.log.map((l) => "    " + l).join("\n")}`,
     ];
@@ -5283,7 +5283,7 @@ if (_isDirectRun()) {
         "Usage: un-bien <command>",
         "",
         "Service:",
-        "  install                         Install the un-bien presence daemon as a system service",
+        "  install                         Install the un-bien launcher daemon as a system service",
         "  uninstall                       Remove the system service",
         "",
         "Devices:",

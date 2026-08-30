@@ -7,7 +7,7 @@ import {
 import { listPeers, type PeerRecord } from "./storage.js";
 
 /**
- * Owner-trust lookups shared by the extension (index.ts) and the regime-2 presence
+ * Owner-trust lookups shared by the extension (index.ts) and the regime-2 launcher
  * daemon. The trust model: the RELAY authenticates a peer's Ed25519 key
  * ownership (challenge-response), so an inbound `peer` id IS the owner's
  * cryptographic identity; authorization is then "is this key in peers.json?".

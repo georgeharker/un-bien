@@ -21,7 +21,7 @@ import {
   defaultRenderVars,
   detectPlatform,
   findNodeBinary,
-  findPresenceScript,
+  findLauncherScript,
   findRemotePiScript,
   findTemplate,
   isOnPath,
@@ -55,10 +55,10 @@ describe("findNodeBinary", () => {
   });
 });
 
-describe("findPresenceScript", () => {
-  test("ends with bin/presence.js (whatever distRoot is)", () => {
+describe("findLauncherScript", () => {
+  test("ends with bin/launcher.js (whatever distRoot is)", () => {
     // `join` yields the platform separator (`/` POSIX, `\` win32).
-    expect(findPresenceScript().endsWith(join("bin", "presence.js"))).toBe(
+    expect(findLauncherScript().endsWith(join("bin", "launcher.js"))).toBe(
       true,
     );
   });
@@ -81,7 +81,7 @@ describe("findTemplate", () => {
     expect(p.endsWith("launchd.plist.template")).toBe(true);
     const content = readFileSync(p, "utf8");
     expect(content).toContain("<key>Label</key>");
-    expect(content).toContain("dev.unbien.presence");
+    expect(content).toContain("dev.unbien.launcher");
     expect(content).toContain("{NODE}");
     expect(content).toContain("{PRESENCE}");
   });
@@ -99,7 +99,7 @@ describe("findTemplate", () => {
     // schtasks /Create /XML rejects a mismatch ("unable to switch the encoding").
     expect(content).toContain('encoding="UTF-16"');
     // The action runs the hidden VBScript launcher (plan/40), not node directly,
-    // so the presence daemon starts with no console window.
+    // so the launcher daemon starts with no console window.
     expect(content).toContain("wscript.exe");
     expect(content).toContain("{VBS}");
     expect(content).toContain("<Hidden>true</Hidden>");
@@ -122,12 +122,12 @@ describe("findTemplate", () => {
 describe("renderTemplate", () => {
   const vars = {
     node: "/usr/local/bin/node",
-    presence: "/Users/x/dist/bin/presence.js",
+    launcher: "/Users/x/dist/bin/launcher.js",
     home: "/Users/x",
     user: "jacob",
     path: "/usr/local/bin:/usr/bin:/bin",
-    vbs: "/Users/x/.pi/un-bien/RemotePiPresenceLauncher.vbs",
-    logPath: "/Users/x/.pi/un-bien/presence.log",
+    vbs: "/Users/x/.pi/un-bien/RemotePiLauncherRun.vbs",
+    logPath: "/Users/x/.pi/un-bien/launcher.log",
   };
 
   test("substitutes every placeholder in systemd template", () => {
@@ -139,7 +139,7 @@ describe("renderTemplate", () => {
     expect(out).not.toContain("{PATH}");
     expect(out).not.toContain("{USER}");
     expect(out).toContain(vars.node);
-    expect(out).toContain(vars.presence);
+    expect(out).toContain(vars.launcher);
     expect(out).toContain(vars.home);
     expect(out).toContain(vars.path);
   });
@@ -152,9 +152,9 @@ describe("renderTemplate", () => {
     expect(out).not.toContain("{HOME}");
     expect(out).not.toContain("{PATH}");
     expect(out).toContain(`<string>${vars.node}</string>`);
-    expect(out).toContain(`<string>${vars.presence}</string>`);
+    expect(out).toContain(`<string>${vars.launcher}</string>`);
     expect(out).toContain(
-      `<string>${vars.home}/.pi/un-bien/presence.log</string>`,
+      `<string>${vars.home}/.pi/un-bien/launcher.log</string>`,
     );
   });
 
@@ -188,7 +188,7 @@ describe("renderTemplate", () => {
     expect(out).not.toContain("{PRESENCE}");
     expect(out).not.toContain("{LOG}");
     expect(out).toContain(vars.node);
-    expect(out).toContain(vars.presence);
+    expect(out).toContain(vars.launcher);
     expect(out).toContain(vars.logPath);
   });
 });
@@ -197,9 +197,9 @@ describe("vbsLauncherPath", () => {
   test("is absolute and ends with the launcher .vbs under ~/.pi/un-bien", () => {
     const p = vbsLauncherPath();
     expect(isAbsolute(p)).toBe(true);
-    expect(p.endsWith("RemotePiPresenceLauncher.vbs")).toBe(true);
+    expect(p.endsWith("RemotePiLauncherRun.vbs")).toBe(true);
     expect(
-      p.endsWith(join(".pi", "un-bien", "RemotePiPresenceLauncher.vbs")),
+      p.endsWith(join(".pi", "un-bien", "RemotePiLauncherRun.vbs")),
     ).toBe(true);
   });
 });
@@ -217,20 +217,20 @@ describe("buildElevatedCmd", () => {
   test("redirects schtasks lines to the log but leaves control-flow bare", () => {
     const out = buildElevatedCmd(
       [
-        "schtasks /End /TN RemotePiPresence",
-        'schtasks /Create /XML "x.xml" /TN RemotePiPresence /F',
+        "schtasks /End /TN RemotePiLauncher",
+        'schtasks /Create /XML "x.xml" /TN RemotePiLauncher /F',
         "if errorlevel 1 exit /b 1",
-        "schtasks /Run /TN RemotePiPresence",
+        "schtasks /Run /TN RemotePiLauncher",
       ],
       "C:\\Temp\\out.log",
     );
     expect(out.startsWith("@echo off\r\n")).toBe(true);
     // schtasks lines get the redirect…
     expect(out).toContain(
-      'schtasks /End /TN RemotePiPresence >> "C:\\Temp\\out.log" 2>&1',
+      'schtasks /End /TN RemotePiLauncher >> "C:\\Temp\\out.log" 2>&1',
     );
     expect(out).toContain(
-      'schtasks /Run /TN RemotePiPresence >> "C:\\Temp\\out.log" 2>&1',
+      'schtasks /Run /TN RemotePiLauncher >> "C:\\Temp\\out.log" 2>&1',
     );
     // …control flow does NOT (redirecting it would swallow the exit code).
     expect(out).toContain("if errorlevel 1 exit /b 1\r\n");
@@ -242,13 +242,13 @@ describe("buildElevatedCmd", () => {
 describe.skipIf(posixOnly)("paths", () => {
   test("systemdUnitPath lives under ~/.config/systemd/user/", () => {
     expect(systemdUnitPath()).toMatch(
-      /\.config\/systemd\/user\/unbien-presence\.service$/,
+      /\.config\/systemd\/user\/unbien-launcher\.service$/,
     );
   });
 
   test("launchdPlistPath lives under ~/Library/LaunchAgents/", () => {
     expect(launchdPlistPath()).toMatch(
-      /Library\/LaunchAgents\/dev\.unbien\.presence\.plist$/,
+      /Library\/LaunchAgents\/dev\.unbien\.launcher\.plist$/,
     );
   });
 });
@@ -257,7 +257,7 @@ describe("defaultRenderVars", () => {
   test("populates all required fields", () => {
     const vars = defaultRenderVars();
     expect(vars.node).toBe(process.execPath);
-    expect(vars.presence.endsWith(join("bin", "presence.js"))).toBe(true);
+    expect(vars.launcher.endsWith(join("bin", "launcher.js"))).toBe(true);
     expect(isAbsolute(vars.home)).toBe(true);
     expect(vars.user.length).toBeGreaterThan(0);
     expect(vars.path.length).toBeGreaterThan(0);
@@ -267,11 +267,11 @@ describe("defaultRenderVars", () => {
 // ── CLI bin linking (plan/27) ────────────────────────────────────────────────
 
 describe("findRemotePiScript", () => {
-  test("resolves to dist/index.js sibling of presence", () => {
+  test("resolves to dist/index.js sibling of launcher", () => {
     const p = findRemotePiScript();
     expect(basename(p)).toBe("index.js");
-    // Same dist root as presence: dirname(index.js) === dirname(dist/bin).
-    expect(dirname(p)).toBe(dirname(dirname(findPresenceScript())));
+    // Same dist root as launcher: dirname(index.js) === dirname(dist/bin).
+    expect(dirname(p)).toBe(dirname(dirname(findLauncherScript())));
   });
 });
 

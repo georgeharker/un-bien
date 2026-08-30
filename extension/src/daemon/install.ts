@@ -17,23 +17,23 @@ import { fileURLToPath } from "node:url";
 import { unbienStateHome } from "../paths.js";
 
 /**
- * Generates and activates a system service for the un-bien presence daemon so
+ * Generates and activates a system service for the un-bien launcher daemon so
  * it survives reboots.
  *
  * Platform support:
- *   - **macOS**: writes `~/Library/LaunchAgents/dev.unbien.presence.plist`
+ *   - **macOS**: writes `~/Library/LaunchAgents/dev.unbien.launcher.plist`
  *     and runs `launchctl bootstrap gui/<uid> <plist>` (modern API) with a
  *     fallback to `launchctl load` for older macOS.
- *   - **Linux**: writes `~/.config/systemd/user/unbien-presence.service`
+ *   - **Linux**: writes `~/.config/systemd/user/unbien-launcher.service`
  *     and runs `systemctl --user daemon-reload && systemctl --user enable
- *     --now unbien-presence.service`.
+ *     --now unbien-launcher.service`.
  *
  * Uninstall reverses both. Idempotent — re-running install over an existing
  * unit refreshes it (paths could have changed if user moved node_modules).
  *
  * **What does NOT happen here**: the actual `npm install -g un-bien` step.
- * The user has to make the presence bin reachable on disk before install
- * can wire up the service. The `findPresenceScript` resolver detects
+ * The user has to make the launcher bin reachable on disk before install
+ * can wire up the service. The `findLauncherScript` resolver detects
  * common cases (npm global, pnpm global, local dev clone) and yields a
  * clear error otherwise.
  */
@@ -58,20 +58,20 @@ export function detectPlatform(): SupervisorPlatform {
 // ── Path resolution ────────────────────────────────────────────────────────
 
 /**
- * Absolute path to the presence daemon's compiled entry. We resolve from
+ * Absolute path to the launcher daemon's compiled entry. We resolve from
  * `import.meta.url` (this file's location) since wherever the daemon
- * module lives, `bin/presence.js` is a sibling of `daemon/` under
+ * module lives, `bin/launcher.js` is a sibling of `daemon/` under
  * `dist/`.
  *
- * After build: `dist/daemon/install.js` → `dist/bin/presence.js`.
+ * After build: `dist/daemon/install.js` → `dist/bin/launcher.js`.
  * In dev (`tsx`): same path resolution still lands inside `src/`, which
  * isn't directly runnable by `node` — dev install isn't expected.
  */
-export function findPresenceScript(): string {
+export function findLauncherScript(): string {
   const here = fileURLToPath(import.meta.url); // dist/daemon/install.js
   const daemonDir = dirname(here); // dist/daemon
   const distRoot = dirname(daemonDir); // dist
-  return resolve(distRoot, "bin/presence.js");
+  return resolve(distRoot, "bin/launcher.js");
 }
 
 /**
@@ -80,7 +80,7 @@ export function findPresenceScript(): string {
  * `un-bien <subcommand>` from any shell after installing the extension
  * through Pi (`pi install npm:un-bien`).
  *
- * Same resolution strategy as `findPresenceScript`: from
+ * Same resolution strategy as `findLauncherScript`: from
  * `dist/daemon/install.js` → `dist/index.js`.
  */
 export function findRemotePiScript(): string {
@@ -126,7 +126,7 @@ export function systemdUnitPath(): string {
     ".config",
     "systemd",
     "user",
-    "unbien-presence.service",
+    "unbien-launcher.service",
   );
 }
 
@@ -135,45 +135,45 @@ export function launchdPlistPath(): string {
     homedir(),
     "Library",
     "LaunchAgents",
-    "dev.unbien.presence.plist",
+    "dev.unbien.launcher.plist",
   );
 }
 
-export const LAUNCHD_LABEL = "dev.unbien.presence";
-/** systemd --user unit name (with `.service`) for the presence daemon. */
-export const SYSTEMD_UNIT = "unbien-presence.service";
+export const LAUNCHD_LABEL = "dev.unbien.launcher";
+/** systemd --user unit name (with `.service`) for the launcher daemon. */
+export const SYSTEMD_UNIT = "unbien-launcher.service";
 /** Windows Task Scheduler task name. */
-export const WINDOWS_TASK_NAME = "RemotePiPresence";
+export const WINDOWS_TASK_NAME = "RemotePiLauncher";
 
 /** Path of the rendered Task Scheduler XML (input to `schtasks /Create /XML`). */
 export function taskXmlPath(): string {
-  return join(unbienStateHome(), "RemotePiPresence.xml");
+  return join(unbienStateHome(), "RemotePiLauncher.xml");
 }
 
 /**
  * Path of the rendered VBScript launcher the Task Scheduler action invokes
  * via `wscript.exe` (Windows). Launching node through this hidden wrapper is
- * what keeps the presence daemon from flashing a console window.
+ * what keeps the launcher daemon from flashing a console window.
  */
 export function vbsLauncherPath(): string {
-  return join(unbienStateHome(), "RemotePiPresenceLauncher.vbs");
+  return join(unbienStateHome(), "RemotePiLauncherRun.vbs");
 }
 
 /**
- * Combined stdout/stderr log for the Windows presence daemon. The Task
+ * Combined stdout/stderr log for the Windows launcher daemon. The Task
  * Scheduler launches it hidden via wscript, so without this redirect its output
  * would vanish — mirrors launchd/systemd, which already log to
- * `~/.pi/un-bien/presence.log`.
+ * `~/.pi/un-bien/launcher.log`.
  */
-export function presenceLogPath(): string {
-  return join(unbienStateHome(), "presence.log");
+export function launcherLogPath(): string {
+  return join(unbienStateHome(), "launcher.log");
 }
 
 // ── Template rendering ─────────────────────────────────────────────────────
 
 export interface RenderVars {
   node: string;
-  presence: string;
+  launcher: string;
   home: string;
   user: string;
   /** PATH inherited so `pi --mode rpc` resolves the same way it does
@@ -182,7 +182,7 @@ export interface RenderVars {
   /** Windows only: absolute path of the VBScript launcher the Task Scheduler
    *  action runs via `wscript.exe`. Empty on POSIX (templates ignore `{VBS}`). */
   vbs: string;
-  /** Windows only: combined stdout/stderr log the hidden presence daemon
+  /** Windows only: combined stdout/stderr log the hidden launcher daemon
    *  appends to. Empty on POSIX (templates ignore `{LOG}`). */
   logPath: string;
 }
@@ -190,12 +190,12 @@ export interface RenderVars {
 export function defaultRenderVars(): RenderVars {
   return {
     node: findNodeBinary(),
-    presence: findPresenceScript(),
+    launcher: findLauncherScript(),
     home: homedir(),
     user: userInfo().username,
     path: process.env["PATH"] ?? "/usr/local/bin:/usr/bin:/bin",
     vbs: vbsLauncherPath(),
-    logPath: presenceLogPath(),
+    logPath: launcherLogPath(),
   };
 }
 
@@ -203,7 +203,7 @@ export function defaultRenderVars(): RenderVars {
 export function renderTemplate(template: string, vars: RenderVars): string {
   return template
     .replace(/\{NODE\}/g, vars.node)
-    .replace(/\{PRESENCE\}/g, vars.presence)
+    .replace(/\{PRESENCE\}/g, vars.launcher)
     .replace(/\{USER\}/g, vars.user)
     .replace(/\{HOME\}/g, vars.home)
     .replace(/\{PATH\}/g, vars.path)
@@ -239,10 +239,10 @@ export function installService(
     );
   }
 
-  // Sanity: presence script must exist on disk.
-  if (!existsSync(vars.presence)) {
+  // Sanity: launcher script must exist on disk.
+  if (!existsSync(vars.launcher)) {
     throw new Error(
-      `presence script not found at ${vars.presence}. ` +
+      `launcher script not found at ${vars.launcher}. ` +
         "Run `pnpm build` (dev) or `npm install -g un-bien` (prod) first.",
     );
   }
@@ -296,7 +296,7 @@ export function installService(
     log.push("activated via systemctl --user enable --now");
   } else {
     // windows — Task Scheduler. The action runs `wscript.exe
-    // <launcher.vbs>` (not node directly) so the presence daemon starts hidden,
+    // <launcher.vbs>` (not node directly) so the launcher daemon starts hidden,
     // with no console window. Render + write that launcher first.
     const vbsTpl = findTemplate("vbs-launcher");
     if (!existsSync(vbsTpl))
@@ -543,7 +543,7 @@ function _execElevatedWindows(lines: string[], log: string[]): void {
 // The target gets `chmod +x` (tsc doesn't preserve the executable bit;
 // node tolerates running it via symlink either way, but POSIX shells
 // won't `exec` a non-executable file directly). The OS service runs the
-// presence daemon as `node dist/bin/presence.js` directly, so it needs no
+// launcher daemon as `node dist/bin/launcher.js` directly, so it needs no
 // symlink of its own.
 //
 // This step is opt-in and runs ONLY when the slash-command path triggers

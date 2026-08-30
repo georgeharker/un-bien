@@ -20,7 +20,7 @@ import { envLog } from "../session/debug_log.js";
 import type { ClientMessage, ServerMessage } from "../protocol/types.js";
 
 /**
- * Regime-2 machine-presence core (pi-INDEPENDENT — no pi SDK). A lightweight
+ * Regime-2 machine-launcher core (pi-INDEPENDENT — no pi SDK). A lightweight
  * mesh peer that lets a paired app reach a machine with NO live pi session:
  * it joins the machine-level control room (roomIdForControl), advertises the
  * `remote_launch` capability, and on a `session_launch` frame spawns a
@@ -28,22 +28,22 @@ import type { ClientMessage, ServerMessage } from "../protocol/types.js";
  * exact gate (relay verifies the peer's key; _findKnownPeer checks peers.json).
  *
  * NOT a pi process: no transcript/rpc/panels, no pairing (pairing happens once
- * via any session extension's QR — the presence only trusts already-paired owners).
+ * via any session extension's QR — the launcher only trusts already-paired owners).
  */
 
 const RECONNECT_DELAY_MS = 3_000;
 
-/** Caps the presence daemon advertises: `remote_launch` gates the app's launch
+/** Caps the launcher daemon advertises: `remote_launch` gates the app's launch
  *  control; `is_daemon` marks the control room so the app filters it. */
 const DAEMON_CAPS = ["remote_launch", "is_daemon"] as const;
 
-export interface PresenceHandle {
+export interface LauncherHandle {
   readonly roomId: string;
   readonly epk: string;
   stop(): void;
 }
 
-export async function startPresence(): Promise<PresenceHandle> {
+export async function startLauncher(): Promise<LauncherHandle> {
   const kp = await getOrCreateEd25519Keypair();
   const epk = Buffer.from(kp.publicKey).toString("base64url");
   const roomId = roomIdForControl(epk);
@@ -51,7 +51,7 @@ export async function startPresence(): Promise<PresenceHandle> {
   const resolution = resolveRelayUrl();
   if (!resolution.url) {
     throw new Error(
-      "un-bien presence: no relay configured (set UNBIEN_RELAY or the `relay` config key)",
+      "un-bien launcher: no relay configured (set UNBIEN_RELAY or the `relay` config key)",
     );
   }
   const relayUrl = resolution.url;
@@ -109,7 +109,7 @@ export async function startPresence(): Promise<PresenceHandle> {
         : process.cwd(),
     );
     if (!effectiveAllowRemoteLaunch(loadLocalConfig(cwd))) {
-      envLog("presence session_launch: remote launch disabled on this machine");
+      envLog("launcher session_launch: remote launch disabled on this machine");
       return;
     }
     const launchError = _launchSession(
@@ -117,7 +117,7 @@ export async function startPresence(): Promise<PresenceHandle> {
       cwd,
       typeof frame.name === "string" ? frame.name : undefined,
     );
-    if (launchError) envLog(`presence session_launch error: ${launchError}`);
+    if (launchError) envLog(`launcher session_launch error: ${launchError}`);
   }
 
   async function gateAndAttach(
@@ -155,10 +155,10 @@ export async function startPresence(): Promise<PresenceHandle> {
     );
     channels.set(peer, channel);
     // Advertise machine caps up front so the app enables its launch control for
-    // this control room. No sessionId — the presence has no pi session.
+    // this control room. No sessionId — the launcher has no pi session.
     channel.sendEnvelope(helloEnvelope([...DAEMON_CAPS]));
     envLog(
-      `presence: owner ${peer.slice(0, 8)} (${known.name}) attached; caps sent`,
+      `launcher: owner ${peer.slice(0, 8)} (${known.name}) attached; caps sent`,
     );
     // The channel didn't see the line that triggered the attach — route it.
     if (isEnvelopeFrame(firstInner as Record<string, unknown>)) {
@@ -208,7 +208,7 @@ export async function startPresence(): Promise<PresenceHandle> {
       roomMeta: { name: hostname(), cwd: homedir(), caps: [...DAEMON_CAPS] },
     });
     envLog(
-      `presence: connected to control room ${roomId} (epk ${epk.slice(0, 12)}…)`,
+      `launcher: connected to control room ${roomId} (epk ${epk.slice(0, 12)}…)`,
     );
   }
 

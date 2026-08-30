@@ -1,5 +1,5 @@
 [Unit]
-Description=un-bien presence daemon
+Description=un-bien launcher daemon
 Documentation=https://docs.georgeharker.com/un-bien
 After=default.target
 

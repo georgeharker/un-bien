@@ -1,0 +1,12 @@
+packages:
+  - extension
+  - launcher
+
+# Native deps whose install build scripts pnpm (v10+) blocks by default. These
+# are trusted first-party build tools, allowed to run. Moved here from
+# extension/package.json's `pnpm` field when the workspace was introduced.
+allowBuilds:
+  "@google/genai": true
+  esbuild: true
+  koffi: true
+  protobufjs: true

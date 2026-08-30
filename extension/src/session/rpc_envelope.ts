@@ -89,7 +89,7 @@ export type UbFrame =
   | {
       // app->peer: caps request | peer->app: caps response. A machine-level
       // PULL for capabilities, answered by both a session extension and the idle-
-      // machine presence daemon (design 01M1813Q). Request carries only `id`;
+      // machine launcher daemon (design 01M1813Q). Request carries only `id`;
       // the response fills caps/hostname/backend + echoes in_reply_to.
       type: "presence_status";
       id?: string; // request correlation id

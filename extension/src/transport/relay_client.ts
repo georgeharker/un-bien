@@ -54,7 +54,7 @@ export interface RoomMeta {
    *  these, at list time, from room_announced. roomId stays relay-routing only. */
   sessionId?: string;
   parentSessionId?: string;
-  /** Caps the room advertises about itself; the presence daemon stamps
+  /** Caps the room advertises about itself; the launcher daemon stamps
    *  `is_daemon` so the app filters its control room. */
   caps?: string[];
 }
