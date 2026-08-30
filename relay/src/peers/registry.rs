@@ -221,16 +221,31 @@ impl PeerRegistry {
     }
 
     /// Returns one `RoomMeta` per distinct room of `peer_id`.
-    /// Multiple conns at the same room collapse to a single entry (using
-    /// the most recently registered meta for stability).
+    /// Multiple conns at the same room collapse to a single entry: the typed
+    /// fields follow the most recently registered conn (stability), but the
+    /// opaque `extra` passthrough (app metadata like `parent`/`parentSessionId`/
+    /// `subagentId`) is treated as ROOM-LEVEL and UNIONED across the room's
+    /// conns. This lets a parent-stamped keeper's parentage survive in the
+    /// snapshot even when a later child conn — which omits it — is the last
+    /// registered: the last conn's `extra` wins per key, and the other conns
+    /// (e.g. the keeper) only fill in keys the last conn left out.
     pub fn rooms_of(&self, peer_id: &str) -> Vec<RoomMeta> {
         let lock = self.senders.lock().unwrap();
         let mut by_room: HashMap<String, RoomMeta> = HashMap::new();
         for ((p, _), v) in lock.iter() {
             if p == peer_id
-                && let Some((_, meta, _)) = v.last()
+                && let Some((_, last_meta, _)) = v.last()
             {
-                by_room.insert(meta.room_id.clone(), meta.clone());
+                let mut merged = last_meta.clone();
+                for (_, m, _) in v.iter() {
+                    for (k, val) in m.extra.iter() {
+                        merged
+                            .extra
+                            .entry(k.clone())
+                            .or_insert_with(|| val.clone());
+                    }
+                }
+                by_room.insert(merged.room_id.clone(), merged);
             }
         }
         by_room.into_values().collect()
@@ -485,6 +500,48 @@ mod tests {
         assert!(reg.forward(&peer, "main", Message::Text("hi2".into()), conn2));
         assert_eq!(rx1.try_recv().unwrap().to_text().unwrap(), "hi2");
         assert!(rx2.try_recv().is_err());
+    }
+
+    /// `rooms_of` treats the opaque `extra` as ROOM-LEVEL: a parent-stamped
+    /// keeper registered FIRST keeps its `parent` in the snapshot even when a
+    /// later child conn (which omits it) is the last-registered. This is what
+    /// lets an out-of-process subagent child inherit parentage from the
+    /// pre-registered room and stay nested across a rooms_check reconcile.
+    #[tokio::test]
+    async fn rooms_of_unions_extra_parent_across_conns() {
+        let reg = make_registry();
+        let peer = "machine_epk".to_string();
+        let (tx_keeper, _rx_k) = mpsc::unbounded_channel::<Message>();
+        let (tx_child, _rx_c) = mpsc::unbounded_channel::<Message>();
+
+        // Parent keeper registers FIRST, carrying parentage in `extra`.
+        let mut keeper_meta = make_meta("child_room");
+        keeper_meta
+            .extra
+            .insert("parent".into(), serde_json::json!("parent_room"));
+        keeper_meta
+            .extra
+            .insert("parentSessionId".into(), serde_json::json!("parent_sid"));
+        reg.register(peer.clone(), keeper_meta, tx_keeper).await;
+
+        // The out-of-process child joins the SAME room LAST, with no parentage.
+        reg.register(peer.clone(), make_meta("child_room"), tx_child).await;
+
+        // Despite the child being last-registered, the keeper's parentage
+        // survives the collapse via the extra-union.
+        let rooms = reg.rooms_of(&peer);
+        let room = rooms
+            .iter()
+            .find(|m| m.room_id == "child_room")
+            .expect("child_room present");
+        assert_eq!(
+            room.extra.get("parent").and_then(|v| v.as_str()),
+            Some("parent_room"),
+        );
+        assert_eq!(
+            room.extra.get("parentSessionId").and_then(|v| v.as_str()),
+            Some("parent_sid"),
+        );
     }
 
     /// Three conns at same (peer, room); one disconnects; remaining two keep
