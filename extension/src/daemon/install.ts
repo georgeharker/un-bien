@@ -131,7 +131,12 @@ export function systemdUnitPath(): string {
 }
 
 export function launchdPlistPath(): string {
-  return join(homedir(), "Library", "LaunchAgents", "dev.unbien.presence.plist");
+  return join(
+    homedir(),
+    "Library",
+    "LaunchAgents",
+    "dev.unbien.presence.plist",
+  );
 }
 
 export const LAUNCHD_LABEL = "dev.unbien.presence";
@@ -287,11 +292,7 @@ export function installService(
     log.push(`activated via launchctl bootstrap gui/${uid}`);
   } else if (plat === "linux") {
     _exec("systemctl", ["--user", "daemon-reload"], log);
-    _exec(
-      "systemctl",
-      ["--user", "enable", "--now", SYSTEMD_UNIT],
-      log,
-    );
+    _exec("systemctl", ["--user", "enable", "--now", SYSTEMD_UNIT], log);
     log.push("activated via systemctl --user enable --now");
   } else {
     // windows — Task Scheduler. The action runs `wscript.exe
@@ -354,11 +355,7 @@ export function uninstallService(): UninstallResult {
     _tryExec("launchctl", ["unload", unitPath], log);
     log.push("deactivated via launchctl bootout");
   } else if (plat === "linux") {
-    _tryExec(
-      "systemctl",
-      ["--user", "disable", "--now", SYSTEMD_UNIT],
-      log,
-    );
+    _tryExec("systemctl", ["--user", "disable", "--now", SYSTEMD_UNIT], log);
     log.push("deactivated via systemctl --user disable --now");
   } else {
     // windows — Task Scheduler (plan/40): stop + delete the task. Only
