@@ -13,7 +13,7 @@ export type UnBienConfig = {
   /**
    * Debug prefs. Fields here gate the file-based diagnostic logs (see
    * `session/debug_log.ts` and `panel_bridge.ts`). Read from config — NOT env —
-   * because the fork usually runs detached and doesn't inherit a shell's env, so
+   * because the extension usually runs detached and doesn't inherit a shell's env, so
    * a persisted config field is the only reliable enable switch. Absent/false by
    * default: no logging.
    */

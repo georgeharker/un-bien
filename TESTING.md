@@ -78,7 +78,7 @@ Trigger each from an agent (pi-ask-user / ctx.ui). Expect a sheet; reply routes 
 
 ## 8. Side panels (plan / subagents / generic)
 
-Now end-to-end: the fork bridges `plan:*` + `subagents:*` in-process buses → `panel_update`
+Now end-to-end: the extension bridges `plan:*` + `subagents:*` in-process buses → `panel_update`
 over the relay (remote_pi `panel_bridge.ts`). Needs a plan source (e.g. cribsheet) and/or
 subagents running on the paired machine.
 

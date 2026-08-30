@@ -1,4 +1,4 @@
-// App -> fork inbound: interpret an envelope-carried pi `RpcCommand` and drive
+// App -> extension inbound: interpret an envelope-carried pi `RpcCommand` and drive
 // the SDK, then answer with a `{ rpc: { type:"response", ... } }` envelope back
 // to the sender. This is the NEW-protocol-native inbound path — it does NOT go
 // through the stock `ClientMessage` / `_routeClientMessageFrom` switch (that,
@@ -37,7 +37,7 @@ export function rpcResponse(
   return { rpc: frame };
 }
 
-/** SDK-facing operations the dispatcher needs; wired to fork primitives. */
+/** SDK-facing operations the dispatcher needs; wired to extension primitives. */
 export interface RpcCommandHandlers {
   prompt(
     message: string,
@@ -64,7 +64,7 @@ export interface RpcCommandHandlers {
   /** Return the session ENTRY log (pi `get_entries`); resolves to
    *  `{ entries, leafId }`. `since` slices to entries AFTER that entry id
    *  (the native delta cursor). This is the transcript source — the app
-   *  reduces the raw entries itself; the fork does NOT replay them. */
+   *  reduces the raw entries itself; the extension does NOT replay them. */
   getEntries?(since?: string): Promise<GetEntriesResult>;
 }
 

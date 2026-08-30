@@ -9,13 +9,13 @@ design/plan graph, then this file can be deleted.
 - **Envelope is the only session wire; stock protocol retired.**
   `ClientMessage`/`ServerMessage` session protocol (`session_sync` →
   `session_history`) is gone. Reconstruction is envelope-native: the app sends
-  `{rpc:{type:"session_sync", id, limit?}}`; the fork replays the last-N history
+  `{rpc:{type:"session_sync", id, limit?}}`; the extension replays the last-N history
   as `{rpc}` live frames folded by the SAME `applyRPC` as the live stream.
   Rejected: keeping a parallel stock path (dual maintenance, drift).
 
 - **`session_sync` metadata rides a trailing `session_sync_end` terminator.**
   The stock `session_history` bundled `session_started_at` / `truncated` / `eos`;
-  the envelope replay is N separate frames with nowhere to hang that. So the fork
+  the envelope replay is N separate frames with nowhere to hang that. So the extension
   emits `{rpc:{type:"session_sync_end", in_reply_to, session_started_at,
   truncated}}` AFTER the replay frames. Its arrival IS the `eos` (no flag).
   Server-side limit clamp is an invariant: `min(client limit ?? server default,

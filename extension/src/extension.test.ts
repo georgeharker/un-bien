@@ -1741,16 +1741,16 @@ describe("multi-channel broadcast (W2D)", () => {
 
   // ── Source-of-truth fan-out (plan/24 W2D) ──────────────────────────────────
   //
-  // The user's own bubble now renders from the fork forwarding pi's
+  // The user's own bubble now renders from the extension forwarding pi's
   // message_end/message_start events as {rpc} envelopes (the stock echo is
   // gone). _broadcastEnvelope must fan every such frame out to EVERY attached
   // peer, so each paired device's session view stays bit-identical.
-  test("fork-forwarded message_end envelope reaches both owner A and owner B", async () => {
+  test("extension-forwarded message_end envelope reaches both owner A and owner B", async () => {
     await _pairForTest("ownerA__1234567890");
     await _pairAdditionalForTest("ownerB__abcdefghij", "Android");
     const sendsBefore = relayRef.current!.send.mock.calls.length;
 
-    // The fork forwards pi's message_end as a {rpc} envelope via the producer.
+    // The extension forwards pi's message_end as a {rpc} envelope via the producer.
     const onMsgEnd = captureEventHandler("message_end");
     onMsgEnd({
       type: "message_end",
@@ -2332,7 +2332,7 @@ describe("multi-channel broadcast (W2D)", () => {
     expect(_getCurrentTurnIdForTest()).toBeNull();
     const sendUserMessage = vi.fn();
     // No wire behavior: rely on the handler's mechanical steer-when-streaming
-    // net (pi.isStreaming), not fork-side steer inference.
+    // net (pi.isStreaming), not extension-side steer inference.
     _setPiForTest({
       sendUserMessage,
       sendMessage: () => undefined,
@@ -2365,7 +2365,7 @@ describe("multi-channel broadcast (W2D)", () => {
 
   // The rpc `prompt` handler is the path the APP actually uses
   // (mapToWire -> {rpc:{type:"prompt", streamingBehavior}}). Per design
-  // 01M14T6J5W it PASSES the app's verb straight to pi's deliverAs (no fork
+  // 01M14T6J5W it PASSES the app's verb straight to pi's deliverAs (no extension
   // steer inference), so a busy followUp queues instead of steering.
   function emitRpcPrompt(peer: string, frame: Record<string, unknown>): void {
     relayRef.current!.emit(
@@ -2446,8 +2446,8 @@ describe("multi-channel broadcast (W2D)", () => {
       streamingBehavior: "steer",
     });
     await new Promise<void>((r) => setImmediate(r));
-    // idle: fork forwards the app's behavior; pi's prompt() ignores it and runs
-    // fresh. The fork does not fabricate a deliverAs when idle.
+    // idle: extension forwards the app's behavior; pi's prompt() ignores it and runs
+    // fresh. The extension does not fabricate a deliverAs when idle.
     expect(sendUserMessage).toHaveBeenCalledWith("hello", {
       deliverAs: "steer",
     });

@@ -681,7 +681,7 @@ describe("peer record corruption isolation", () => {
 // ── Backend precedence: the SELECTED backend wins, other is migration-read ──
 //
 // The flop was a bogus minted identity.json (file) MASKING the real keychain
-// key under the old "file always wins" rule: the fork announced the file key
+// key under the old "file always wins" rule: the extension announced the file key
 // while the mobile stayed paired to keychain. The operator-selectable model
 // fixes it by precedence — the SELECTED backend (default keychain) wins; the
 // other is READ IN PLACE only when the selected one is empty, and never minted

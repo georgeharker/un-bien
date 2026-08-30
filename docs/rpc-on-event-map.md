@@ -1,6 +1,6 @@
 # `pi.on()` ↔ rpc/json frame map (producer reference)
 
-How the in-process fork producer reconstructs pi's `--mode rpc` stream from the
+How the in-process extension producer reconstructs pi's `--mode rpc` stream from the
 extension `pi.on()` catalog. Companion to [`rpc-envelope.md`](./rpc-envelope.md).
 
 **Sources.** rpc/json stream = `JsonAgentSessionEvent` (= `AgentSessionEvent`

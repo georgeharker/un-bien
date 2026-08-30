@@ -1,6 +1,6 @@
 # Machine identity
 
-Every Pi (fork) has one long-term **Ed25519 identity** — a 32-byte seed. Its
+Every Pi (extension) has one long-term **Ed25519 identity** — a 32-byte seed. Its
 **public key (epk)** is what devices pair against and what the relay routes on.
 The relay **only ever sees the public key** (routing + a per-connection
 challenge signature); the seed never leaves the machine.
@@ -9,7 +9,7 @@ Because pairings are keyed on the epk, **pairing durability == seed durability**
 if the seed changes, the epk changes, and every paired device is orphaned. The
 resolver's one job is to never let that happen silently.
 
-> This is the **machine** identity (the fork). It is distinct from the phone-side
+> This is the **machine** identity (the extension). It is distinct from the phone-side
 > **Owner** key, which lives in the iOS data-protection keychain and is unrelated.
 
 ## Storage backends

@@ -849,7 +849,7 @@ let _sessionStartedAt: number | null = null;
 // _sessionManager lives PER-SESSION in _stateFor(sid); the root session's record
 // backs reconstruction — the app reads the transcript via the native get_entries
 // rpc over _rootState().sessionManager.getEntries() (captured from event ctx;
-// survives fork restarts via the persisted session log).
+// survives extension restarts via the persisted session log).
 
 type MeshEnvelope = {
   id: string;
@@ -1031,13 +1031,13 @@ function _persistModelDefault(provider: string, modelId: string): void {
 type ClientUserMessage = Extract<ClientMessage, { type: "user_message" }>;
 
 // ── Per-session state, keyed by pi sessionId ──────────────────────────────
-// The fork re-activates IN-PROCESS for every subagent — each is its own pi
+// The extension re-activates IN-PROCESS for every subagent — each is its own pi
 // AgentSession with its OWN sessionId. Turn/agent/buffer state is therefore
 // PER-SESSION: every event handler records into its FIRING session's record
 // (sid = ctx.sessionManager.getSessionId()); app-facing reads use the ROOT
 // session's record. Subagent records accumulate (held for later surfacing);
 // a root-only broadcast gate keeps app display identical for now. This mirrors
-// pi's own per-AgentSession model rather than a flat fork-authored projection.
+// pi's own per-AgentSession model rather than a flat extension-authored projection.
 interface SessionState {
   turnId: string | null;
   working: boolean;
@@ -1087,7 +1087,7 @@ function _isNonRootSid(sid: string): boolean {
 // Module-level pi reference
 let _pi: ExtensionAPI | null = null;
 
-// Minimal structural views of pi SDK internals the fork reaches for but the
+// Minimal structural views of pi SDK internals the extension reaches for but the
 // public ExtensionAPI type does not surface. Each names exactly the member(s)
 // known to exist on the concrete AgentSession at runtime.
 interface PiEventBusInternals {
@@ -1630,7 +1630,7 @@ function _routeRpcCommandFrom(
   const frame = env.rpc;
   if (!frame || typeof frame !== "object") return; // no {evt} inbound today
   envLog(`rpc inbound: ${String((frame as Record<string, unknown>).type)}`);
-  // extension_ui_response is a reply to a fork-issued dialog, not a command —
+  // extension_ui_response is a reply to an extension-issued dialog, not a command —
   // route it straight to the ui bridge (same target as the stock path).
   if ((frame as Record<string, unknown>).type === "extension_ui_response") {
     // SAFETY: the type-discriminator check directly above proves this frame is
@@ -1652,7 +1652,7 @@ function _routeRpcCommandFrom(
       //  - seed `_rootState().turnId` for a fresh (non-steer) turn so the agent's
       //    reply chunks/done have a target; restore it if the handoff fails.
       // The APP owns the steer-vs-followUp semantic switch (design 01M14T6J5W):
-      // pass its chosen streamingBehavior straight through to pi. The fork does
+      // pass its chosen streamingBehavior straight through to pi. The extension does
       // NOT force steer over a followUp anymore. `shouldSteer` below is now only
       // BOOKKEEPING (turn-seeding + image-preview defer), not the delivery verb.
       const requestedSteer = opts.streamingBehavior === "steer";
@@ -1768,7 +1768,7 @@ function _routeRpcCommandFrom(
       // Native pi get_entries: the app reconstructs the transcript itself from
       // the raw entry log (each message entry carries an AgentMessage). `since`
       // slices to entries AFTER that id (delta cursor); leafId is the cursor to
-      // resume from next time. The fork does NOT replay these — see the app's
+      // resume from next time. The extension does NOT replay these — see the app's
       // SessionState.applyEntries (design 01M15FMQ).
       const sm = _rootState().sessionManager;
       if (!sm) return { entries: [], leafId: null };
@@ -2413,7 +2413,9 @@ function _attachOwner(
         ? _routeRpcCommandFrom(channel, env)
         : _routeUnBienPlaneFrom(channel, env),
     () =>
-      _rootState().sessionManager?.getSessionId() ?? _rootSessionId ?? undefined,
+      _rootState().sessionManager?.getSessionId() ??
+      _rootSessionId ??
+      undefined,
   );
 
   _attachPeerChannel(appPeerId, channel);
@@ -2585,7 +2587,7 @@ const _HOSTNAME = hostname();
 // un-bien capability handshake. PROTOCOL_VERSION bumps on a HARD (breaking)
 // wire change; the app gates UI on capability PRESENCE, not this number.
 const PROTOCOL_VERSION = 1;
-// Features this fork supports, advertised on attach (session_history) + pair_ok.
+// Features this extension supports, advertised on attach (session_history) + pair_ok.
 // `remote_launch` is conditional (added only when local config opts in) — see
 // `_capabilities()`. Passive server->app extras (images/panels) are listed so
 // the app can also gate any future *controls* it grows for them.

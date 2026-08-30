@@ -24,11 +24,11 @@ import type { ClientMessage, ServerMessage } from "../protocol/types.js";
  * mesh peer that lets a paired app reach a machine with NO live pi session:
  * it joins the machine-level control room (roomIdForControl), advertises the
  * `remote_launch` capability, and on a `session_launch` frame spawns a
- * tmux/herdr window via the shared launch module. Owner-auth reuses the fork's
+ * tmux/herdr window via the shared launch module. Owner-auth reuses the extension's
  * exact gate (relay verifies the peer's key; _findKnownPeer checks peers.json).
  *
  * NOT a pi process: no transcript/rpc/panels, no pairing (pairing happens once
- * via any session fork's QR — the presence only trusts already-paired owners).
+ * via any session extension's QR — the presence only trusts already-paired owners).
  */
 
 const RECONNECT_DELAY_MS = 3_000;
@@ -65,7 +65,7 @@ export async function startPresence(): Promise<PresenceHandle> {
     return loadConfig().launch?.backend === "herdr" ? "herdr" : "tmux";
   }
 
-  /** Liveness: answer a stock `ping` with `pong`, mirroring the fork's
+  /** Liveness: answer a stock `ping` with `pong`, mirroring the extension's
    *  transport-control handler (index.ts) so a health check works against an
    *  idle machine too. Distinct from the `presence_status` caps PULL — this is
    *  the plain are-you-there reply, no caps. */
@@ -83,7 +83,7 @@ export async function startPresence(): Promise<PresenceHandle> {
 
   /** Handle a ub-frame from an attached owner. `presence_status` is the
    *  DAEMON-SPECIFIC caps PULL (design 01M1813Q) — reply with caps + hostname +
-   *  backend. `session_launch` mirrors the fork's _routeUnBienPlaneFrom handler:
+   *  backend. `session_launch` mirrors the extension's _routeUnBienPlaneFrom handler:
    *  per-cwd opt-in, machine-config backend, clean exec (no keystrokes). */
   function handleUbFrame(env: EnvelopeMessage, sender: PlainPeerChannel): void {
     if (env.ub === undefined) return;
@@ -128,7 +128,7 @@ export async function startPresence(): Promise<PresenceHandle> {
     const known = await _findKnownPeer(peer);
     if (!known) {
       // Relay-verified but not a paired owner (never paired / revoked). Signal
-      // so the app can react, mirroring the fork's unknown-peer reply.
+      // so the app can react, mirroring the extension's unknown-peer reply.
       try {
         const errCt = Buffer.from(
           JSON.stringify({

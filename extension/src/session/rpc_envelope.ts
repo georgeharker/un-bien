@@ -88,7 +88,7 @@ export type UbFrame =
     }
   | {
       // app->peer: caps request | peer->app: caps response. A machine-level
-      // PULL for capabilities, answered by both a session fork and the idle-
+      // PULL for capabilities, answered by both a session extension and the idle-
       // machine presence daemon (design 01M1813Q). Request carries only `id`;
       // the response fills caps/hostname/backend + echoes in_reply_to.
       type: "presence_status";
@@ -101,7 +101,7 @@ export type UbFrame =
   | { type: "get_session_info"; id?: string } // app->ext: session-info PULL request
   | {
       // ext->app: session-info PULL response — a session's own state, answered
-      // from the fork's tracked data (subagent lifecycle status for now).
+      // from the extension's tracked data (subagent lifecycle status for now).
       type: "session_info";
       status?: string;
       in_reply_to?: string;
@@ -241,7 +241,7 @@ const BUILDERS: Record<string, Builder> = {
   // RPC_EVENT_NAMES NEVER FIRES. (Every other event we forward IS fanned to
   // extensions via _emitExtensionEvent(); queue_update is the lone exception, and
   // the ExtensionAPI exposes only hasPendingMessages():boolean — no queue text,
-  // no subscribe.) So the fork CANNOT send a queue snapshot; the queued display
+  // no subscribe.) So the extension CANNOT send a queue snapshot; the queued display
   // is APP-OWNED (optimistic chip cleared on model-consumption). Kept only to
   // document the frame shape the app's (now dead) handler once consumed. See
   // design 01M158S7.

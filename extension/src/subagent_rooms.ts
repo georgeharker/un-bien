@@ -1,5 +1,8 @@
 import { Buffer } from "node:buffer";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { RelayClient } from "./transport/relay_client.js";
 import { PlainPeerChannel } from "./transport/peer_channel.js";
 import { getOrCreateEd25519Keypair } from "./pairing/storage.js";
@@ -71,7 +74,10 @@ interface ChildRoom {
 
 export interface SubagentRoomsController {
   /** Hook: called at a NON-root session_start with the child's pi + ctx. */
-  onChildSession(childPi: ExtensionAPI, ctx: ExtensionContext | undefined): void;
+  onChildSession(
+    childPi: ExtensionAPI,
+    ctx: ExtensionContext | undefined,
+  ): void;
   dispose(): void;
 }
 
@@ -84,7 +90,7 @@ const NOOP: SubagentRoomsController = {
 /**
  * Root-side init. Subscribes to the subagents:* bus (record metadata) so a
  * child session_start can bind to the record that spawned it. `getParentRoomId`
- * returns the ROOT room id (roomIdForSession(rootSid)) captured fork-side.
+ * returns the ROOT room id (roomIdForSession(rootSid)) captured extension-side.
  */
 export function initSubagentRooms(
   rootPi: ExtensionAPI,
@@ -93,7 +99,7 @@ export function initSubagentRooms(
     /** The ROOT's pi sessionId — the parent link the app nests by (pi id). */
     getParentSessionId: () => string | null;
     /** Emit a panel_update to the ROOT's attached app channels (the subagents
-     *  panel is a root-session surface). Wired to the fork's _panelBroadcast. */
+     *  panel is a root-session surface). Wired to the extension's _panelBroadcast. */
     broadcastPanel: (panel: ServerMessage) => void;
   },
 ): SubagentRoomsController {
@@ -153,6 +159,8 @@ export function initSubagentRooms(
       deps: [] as string[],
       meta: { agentType: s.type, startedAt: s.startedAt, sessionId },
     }));
+    // SAFETY: this object literal IS a valid panel_update ServerMessage; the
+    // ServerMessage union isn't narrowed to that variant at this call site.
     opts.broadcastPanel({
       type: "panel_update",
       key: "subagents",
@@ -162,6 +170,8 @@ export function initSubagentRooms(
     } as unknown as ServerMessage);
   }
 
+  // SAFETY: the pi SDK exposes an `events` bus at runtime that isn't part of
+  // its public typings; we read it defensively (optional) and guard below.
   const events = (
     rootPi as unknown as {
       events?: { on(e: string, h: (d: unknown) => void): () => void };
@@ -379,7 +389,7 @@ async function startChildRoom(args: {
         });
       } else if (f.type === "get_session_info") {
         // Pull: the app asks this subagent for its own info (lifecycle status).
-        // Answered from the fork's tracked state, so it survives app relaunch.
+        // Answered from the extension's tracked state, so it survives app relaunch.
         sender.sendEnvelope({
           ub: {
             type: "session_info",
@@ -391,7 +401,10 @@ async function startChildRoom(args: {
     }
   }
 
-  async function gateAndAttach(peer: string, firstInner: unknown): Promise<void> {
+  async function gateAndAttach(
+    peer: string,
+    firstInner: unknown,
+  ): Promise<void> {
     if (channels.has(peer)) return;
     const known = await _findKnownPeer(peer);
     if (!known) return; // relay-verified but not a paired owner
@@ -445,7 +458,9 @@ async function startChildRoom(args: {
       // Pi ids — the app nests + maps by these; parent (roomId) + subagentId are
       // kept as supplementary (not the logic keys).
       sessionId: args.sessionId,
-      ...(args.parentSessionId ? { parentSessionId: args.parentSessionId } : {}),
+      ...(args.parentSessionId
+        ? { parentSessionId: args.parentSessionId }
+        : {}),
       parent: args.parentRoomId,
       ...(args.subagentId ? { subagentId: args.subagentId } : {}),
     },

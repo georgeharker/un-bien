@@ -1,7 +1,7 @@
-// File-based envelope debug log. The fork usually runs detached (no visible
+// File-based envelope debug log. The extension usually runs detached (no visible
 // stderr), so gated diagnostics go to a file the user can `tail -f`.
 // Enabled by the `debug.envelope` pref in the global config
-// (`extensions/un-bien.json`) — NOT an env var, because the detached fork
+// (`extensions/un-bien.json`) — NOT an env var, because the detached extension
 // doesn't inherit a shell's env. Best-effort, never throws.
 
 import { appendFileSync, mkdirSync } from "node:fs";

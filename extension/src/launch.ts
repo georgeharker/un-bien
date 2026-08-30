@@ -6,13 +6,13 @@ import { loadConfig } from "./config.js";
 import { envLog } from "./session/debug_log.js";
 
 /**
- * Launch backends for remote `session_launch` — shared by the fork (index.ts)
+ * Launch backends for remote `session_launch` — shared by the extension (index.ts)
  * and the regime-2 presence daemon. PTY-hosted backends exec `pi` cleanly (no
  * keystrokes): `tmux` = a WINDOW in one shared named session; `herdr` =
  * `workspace create` then `agent start --kind pi`. `rpc` is a fast-follow.
  */
 
-/** Expand a leading `~`/`~/` to the fork machine's home dir. Node's `fs` does
+/** Expand a leading `~`/`~/` to the extension machine's home dir. Node's `fs` does
  *  NOT expand `~`, so a launch cwd like `~/proj` would fail the existsSync
  *  check and silently abort the launch. Machine-side (the phone's `~` is
  *  meaningless here). Exported for tests. */
