@@ -32,6 +32,21 @@ public struct LiveSession: Identifiable, Equatable, Hashable, Sendable {
     public var isSubagent: Bool { parentSessionID != nil }
 }
 
+/// Daemon/machine status pulled via a `presence_status` request (design
+/// 01M1813Q) — an idle machine's launch capabilities + configured backend,
+/// kept SEPARATE from per-session `capabilities` (there is no session here).
+public struct DaemonPresence: Equatable, Sendable {
+    public var caps: Set<String>
+    public var hostname: String?
+    public var backend: String?
+    public init(caps: Set<String>, hostname: String?, backend: String?) {
+        self.caps = caps
+        self.hostname = hostname
+        self.backend = backend
+    }
+    public func supports(_ cap: String) -> Bool { caps.contains(cap) }
+}
+
 /// A named side-panel (plan, subagents, …) mirrored from a cooperating event
 /// source, surfaced as a top-bar item that badges when it changes.
 public struct PanelState: Identifiable, Equatable, Sendable {
@@ -80,6 +95,11 @@ public final class AppModel: ObservableObject {
     @Published public var thinkingLevel: [String: ThinkingLevel] = [:]
     /// Capabilities advertised by the paired pi per session (handshake).
     @Published public var capabilities: [String: Set<String>] = [:]
+    /// Daemon/machine status pulled via `presence_status` (design 01M1813Q),
+    /// stored SEPARATELY from per-session `capabilities` — it describes an idle
+    /// machine (launch caps + backend), not a live session. Keyed by the
+    /// control-room key `relayID:daemonEPK:controlRoomID`.
+    @Published public var daemonPresence: [String: DaemonPresence] = [:]
     /// A pairing invite opened via the `unbien://` scheme, awaiting a relay
     /// choice. Drives the deep-link relay chooser sheet.
     @Published public var pendingPairing: PendingPairing?
@@ -353,6 +373,23 @@ public final class AppModel: ObservableObject {
                     if envelopeReducers[key] == nil { envelopeReducers[key] = EnvelopeReducer() }
                     return
                 }
+                // Daemon caps PULL response (design 01M1813Q): a DAEMON-SPECIFIC
+                // {type:"presence_status", caps, hostname, backend} frame. Store
+                // machine/daemon status SEPARATELY from per-session capabilities
+                // (this describes an idle machine, not a session) — do NOT fold
+                // it into the transcript reducer. Keyed by the control-room key.
+                if env.type == "ub", let ub = env.ub,
+                   ub["type"]?.stringValue == "presence_status" {
+                    let caps = ub["caps"]?.arrayValue?.compactMap { $0.stringValue } ?? []
+                    // MACHINE-caps entry: key by the MACHINE (relay + canonical
+                    // epk), NOT the control room. The room is only transport.
+                    let mkey = machineCapsKey(relayID: relayID, epk: envelope.peer)
+                    daemonPresence[mkey] = DaemonPresence(
+                        caps: Set(caps),
+                        hostname: ub["hostname"]?.stringValue,
+                        backend: ub["backend"]?.stringValue)
+                    return
+                }
                 // Other un-bien-plane frames (the session_sync_end terminator):
                 // fold via the reducer as a frame — its inner `.type` drives
                 // applyRPC, exactly like an rpc-plane frame.
@@ -453,6 +490,22 @@ public final class AppModel: ObservableObject {
     private func handle(control event: RelayControlIn, relayID: UUID) {
         switch event {
         case let .rooms(peer, rooms):
+            // Authoritative per-peer snapshot (rooms_check on subscribe): RECONCILE,
+            // don't just add. Drop any session for this (relay, peer) whose room
+            // isn't in the snapshot — it ended while we were disconnected/backgrounded
+            // (missed roomEnded); add-only left those as ghosts ("old chats in the
+            // mix"). Then upsert the live ones. Scoped to this peer, so other
+            // machines' sessions are untouched. See design 01M18AK9.
+            // Sessions are keyed by pi sessionId now, so match the snapshot on the
+            // LiveSession.roomID FIELD (routing) — NOT by parsing the key (which is
+            // the sessionId). Parsing the key would treat every sessionId as an
+            // unknown room and purge all live sessions.
+            let liveRoomIDs = Set(rooms.map(\.roomID))
+            for (key, session) in sessions
+            where session.relayID == relayID && session.peerEPK == peer
+            && !liveRoomIDs.contains(session.roomID) {
+                sessions[key] = nil
+            }
             for room in rooms { upsertSession(relayID: relayID, peer: peer, room: room) }
         case let .roomAnnounced(peer, room):
             upsertSession(relayID: relayID, peer: peer, room: room)
@@ -597,6 +650,52 @@ public final class AppModel: ObservableObject {
                            cwd: (trimmedCwd?.isEmpty ?? true) ? nil : trimmedCwd,
                            name: (trimmedName?.isEmpty ?? true) ? nil : trimmedName),
             toPeer: session.peerEPK, room: session.roomID)
+    }
+
+    // MARK: - Idle-machine (presence daemon) control
+
+    /// The MACHINE-caps store key: relay + canonical epk. Daemon caps are a
+    /// MACHINE property, NOT associated with a room (design 01M1813Q) — the
+    /// control room is only the transport address used to reach the daemon.
+    private func machineCapsKey(relayID: UUID, epk: String) -> String {
+        "\(relayID.uuidString):\(Base64.canonicalKey(epk) ?? epk)"
+    }
+
+    /// Daemon/machine caps for a paired machine, if we've pulled them.
+    public func daemonPresence(for machine: PairedMachine) -> DaemonPresence? {
+        daemonPresence[machineCapsKey(relayID: machine.relayID, epk: machine.epk)]
+    }
+
+    /// True when the machine's presence daemon advertised `cap` (e.g.
+    /// `remote_launch`). Gates the idle-machine launch affordance.
+    public func daemonSupports(_ cap: String, machine: PairedMachine) -> Bool {
+        daemonPresence(for: machine)?.supports(cap) ?? false
+    }
+
+    /// Pull a machine's daemon caps: derive its control room and send a
+    /// `presence_status` request there (design 01M1813Q). The daemon, if up,
+    /// replies with { caps, hostname, backend } into the `daemonPresence` store.
+    public func requestDaemonStatus(machine: PairedMachine) async {
+        guard let connection = connections[machine.relayID],
+              let room = Base64.deriveControlRoom(epk: machine.epk) else { return }
+        try? await connection.send(.presenceStatus(id: UUID().uuidString),
+                                   toPeer: machine.epk, room: room)
+    }
+
+    /// Launch a session on an IDLE machine (no live session needed): send
+    /// `session_launch` to the machine's control room, where the presence daemon
+    /// spawns it. The new session then appears via the normal room-announce
+    /// discovery. The machine's `launch.backend` config decides the backend.
+    public func launchOnMachine(cwd: String?, name: String?, machine: PairedMachine) async {
+        guard let connection = connections[machine.relayID],
+              let room = Base64.deriveControlRoom(epk: machine.epk) else { return }
+        let trimmedCwd = cwd?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedName = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        try? await connection.send(
+            .sessionLaunch(id: UUID().uuidString, mode: nil,
+                           cwd: (trimmedCwd?.isEmpty ?? true) ? nil : trimmedCwd,
+                           name: (trimmedName?.isEmpty ?? true) ? nil : trimmedName),
+            toPeer: machine.epk, room: room)
     }
 
     public func setThinking(_ level: ThinkingLevel, session: LiveSession) async {

@@ -108,22 +108,11 @@ import {
   skillsDir,
 } from "./session/global_config.js";
 import { acquireCwdLock, type AcquiredLock } from "./session/cwd_lock.js";
-import { addDaemon, listDaemons, removeDaemon } from "./daemon/registry.js";
-import { EXIT_DAEMON_FRESH_SESSION } from "./daemon/rpc_child.js";
-import {
-  callSupervisor,
-  supervisorOnline,
-  SupervisorOfflineError,
-} from "./daemon/client.js";
-import type { ControlRequest, DaemonInfo } from "./daemon/control_protocol.js";
 import {
   installService,
   uninstallService,
   linkCliBinaries,
   unlinkCliBinaries,
-  LAUNCHD_LABEL,
-  SYSTEMD_UNIT,
-  WINDOWS_TASK_NAME,
 } from "./daemon/install.js";
 import {
   defaultAgentName,
@@ -1754,32 +1743,10 @@ function _routeRpcCommandFrom(
     },
     newSession: async () => {
       const actionCtx = (_lastEventCtx ?? _lastCtx) as ActionCtx | null;
-      const daemonMode = process.env["UNBIEN_DAEMON"] === "1";
-      // Daemon fresh-restart (ported from the retired stock session_new): with no
-      // command ctx — or when the drive below fails on a STALE ctx — the supervisor
-      // relaunches with a genuinely fresh session via process.exit. Ack first (the
-      // response goes out before the 100ms-deferred exit); interactive mode has no
-      // supervisor so it still surfaces the error.
-      const restartFresh = () => {
-        _resetSessionForNew();
-        setTimeout(() => process.exit(EXIT_DAEMON_FRESH_SESSION), 100);
-      };
       if (!actionCtx?.newSession) {
-        if (daemonMode) {
-          restartFresh();
-          return { cancelled: false };
-        }
         throw new Error("new_session unavailable (no command ctx)");
       }
-      try {
-        await actionCtx.newSession({ withSession: async () => {} });
-      } catch (err) {
-        if (daemonMode) {
-          restartFresh();
-          return { cancelled: false };
-        }
-        throw err;
-      }
+      await actionCtx.newSession({ withSession: async () => {} });
       // Restamp the session clock (parity with the retired stock session_new):
       // session_sync_end carries it so the app can detect the pi restart.
       _resetSessionForNew();
@@ -2762,13 +2729,13 @@ let _lastEventCtx: Pick<ExtensionContext, "compact" | "abort" | "ui"> | null =
 const _noopCtx = { ui: { notify: () => undefined }, abort: () => undefined };
 
 // A single Pi process can load this extension TWICE in the SAME session:
-// pi-supervisord launches each daemon child as `pi -e <dist>/index.js`, but if
-// un-bien is ALSO installed as a pi-package (auto-discovered from
-// ~/.pi/agent/extensions or <cwd>/.pi/extensions), Pi loads it a second time
-// for that same session. Both loads receive the same session-scoped `pi` and
-// would re-run registerTool/registerCommand for identical names — a hard
-// duplicate-registration conflict that crashes the daemon child on boot (see
-// daemon/rpc_child.ts). Idempotent, first-load-wins: whichever load runs first
+// when it is launched as `pi -e <dist>/index.js` AND un-bien is ALSO installed
+// as a pi-package (auto-discovered from ~/.pi/agent/extensions or
+// <cwd>/.pi/extensions), Pi loads it a second time for that same session. Both
+// loads receive the same session-scoped `pi` and would re-run
+// registerTool/registerCommand for identical names — a hard
+// duplicate-registration conflict that crashes the process on boot.
+// Idempotent, first-load-wins: whichever load runs first
 // does all the wiring; the duplicate is an inert no-op. A genuine session
 // REPLACEMENT gets a FRESH `pi`, so re-registration for the new session still
 // happens.
@@ -3381,36 +3348,6 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         await _renameAgent(sub.slice("rename".length).trim());
       } else if (sub === "peers") {
         await _cmdPeers(ctx);
-      } else if (sub.startsWith("create")) {
-        await _cmdCreate(sub.slice("create".length).trim(), ctx);
-      } else if (sub.startsWith("remove")) {
-        await _cmdRemove(sub.slice("remove".length).trim(), ctx);
-      } else if (sub === "daemons") {
-        await _cmdDaemonsList(ctx);
-      } else if (sub === "daemon start" || sub.startsWith("daemon start ")) {
-        await _cmdDaemonStart(
-          ctx,
-          sub.slice("daemon start".length).trim() || undefined,
-        );
-      } else if (sub === "daemon stop" || sub.startsWith("daemon stop ")) {
-        await _cmdDaemonStop(
-          ctx,
-          sub.slice("daemon stop".length).trim() || undefined,
-        );
-      } else if (
-        sub === "daemon restart" ||
-        sub.startsWith("daemon restart ")
-      ) {
-        await _cmdDaemonRestart(
-          ctx,
-          sub.slice("daemon restart".length).trim() || undefined,
-        );
-      } else if (sub === "daemon status") {
-        await _cmdDaemonStatus(ctx);
-      } else if (sub.startsWith("daemon send")) {
-        await _cmdDaemonSend(sub.slice("daemon send".length).trim(), ctx);
-      } else if (sub === "cron" || sub.startsWith("cron ")) {
-        await _cmdCron(sub.slice("cron".length).trim(), ctx);
       } else if (sub === "install") {
         _cmdInstall(ctx, { linkCli: true });
       } else if (sub === "uninstall") {
@@ -3524,81 +3461,10 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     },
   });
 
-  // Daemon registry (plan/26 Wave 1) — create + remove. start/stop/send/
-  // status/install/uninstall come in later waves with the supervisor.
-  pi.registerCommand("unbien create", {
-    description:
-      "Register a folder as a daemon and start it (when the supervisor is running)",
-    handler: async (args, ctx) => {
-      _lastCtx = ctx;
-      await _cmdCreate(args.trim(), ctx);
-    },
-  });
-  pi.registerCommand("unbien remove", {
-    description: "Stop + unregister a daemon by id (local config is preserved)",
-    handler: async (args, ctx) => {
-      _lastCtx = ctx;
-      await _cmdRemove(args.trim(), ctx);
-    },
-  });
-
-  // Fleet ops via the supervisor (plan/26 W2). `/unbien stop` stays as
-  // local stop — fleet stop is `/unbien daemon stop`.
-  pi.registerCommand("unbien daemons", {
-    description: "List registered daemons + state",
-    handler: async (_, ctx) => {
-      _lastCtx = ctx;
-      await _cmdDaemonsList(ctx);
-    },
-  });
-  pi.registerCommand("unbien daemon start", {
-    description: "Start daemons: all, or one by id (`daemon start <id>`)",
-    handler: async (args, ctx) => {
-      _lastCtx = ctx;
-      await _cmdDaemonStart(ctx, args.trim() || undefined);
-    },
-  });
-  pi.registerCommand("unbien daemon stop", {
-    description: "Stop daemons: all, or one by id (`daemon stop <id>`)",
-    handler: async (args, ctx) => {
-      _lastCtx = ctx;
-      await _cmdDaemonStop(ctx, args.trim() || undefined);
-    },
-  });
-  pi.registerCommand("unbien daemon restart", {
-    description: "Restart daemons: all, or one by id (`daemon restart <id>`)",
-    handler: async (args, ctx) => {
-      _lastCtx = ctx;
-      await _cmdDaemonRestart(ctx, args.trim() || undefined);
-    },
-  });
-  pi.registerCommand("unbien daemon status", {
-    description: "Show fleet runtime status (pid, uptime, restarts)",
-    handler: async (_, ctx) => {
-      _lastCtx = ctx;
-      await _cmdDaemonStatus(ctx);
-    },
-  });
-  pi.registerCommand("unbien daemon send", {
-    description: 'Send a prompt to a daemon: `daemon send <id> "<text>"`',
-    handler: async (args, ctx) => {
-      _lastCtx = ctx;
-      await _cmdDaemonSend(args.trim(), ctx);
-    },
-  });
-  pi.registerCommand("unbien cron", {
-    description:
-      "Schedule recurring prompts to daemons: `cron <add|list|remove|enable|disable|run|log>`",
-    handler: async (args, ctx) => {
-      _lastCtx = ctx;
-      await _cmdCron(args.trim(), ctx);
-    },
-  });
-
-  // Service install / uninstall (plan/26 W3)
+  // Service install / uninstall — the presence daemon as a system service.
   pi.registerCommand("unbien install", {
     description:
-      "Install pi-supervisord as a system service + link the un-bien CLI (systemd/launchd/Task Scheduler; Windows prompts for admin)",
+      "Install the un-bien presence daemon as a system service + link the un-bien CLI (systemd/launchd/Task Scheduler; Windows prompts for admin)",
     handler: async (_, ctx) => {
       _lastCtx = ctx;
       _cmdInstall(ctx, { linkCli: true });
@@ -3606,7 +3472,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   });
   pi.registerCommand("unbien uninstall", {
     description:
-      "Remove the pi-supervisord system service + the CLI shims (daemons registry preserved; Windows prompts for admin)",
+      "Remove the un-bien presence daemon system service + the CLI shims (Windows prompts for admin)",
     handler: async (_, ctx) => {
       _lastCtx = ctx;
       _cmdUninstall(ctx, { linkCli: true });
@@ -4594,623 +4460,20 @@ async function _cmdRelay(arg: string, ctx: ExtensionContext): Promise<void> {
   }
 }
 
-// ── Daemon registry commands (plan/26 Wave 1) ─────────────────────────────────
-
-/**
- * `/unbien create [<cwd>] [--name <name>]`
- *
- * Promotes a folder to a daemon entry in `~/.pi/un-bien/daemons.json`. The
- * cwd is **always normalized to an absolute realpath** before storage —
- * `~/Movies`, `./Movies`, `../foo/Movies` all collapse to a single
- * canonical entry. Relative paths resolve against the Pi process's
- * current working directory, not the slash-command's `ctx.cwd`.
- *
- * Side effects on the cwd's local config (`<cwd>/.pi/un-bien/config.json`):
- *   - If the config doesn't exist: created with `auto_start_relay=true`
- *     (mandatory for daemons) and `agent_name` from `--name` if provided.
- *   - If the config already exists: left untouched. Re-running `create`
- *     on an existing daemon is idempotent at this layer; the registry
- *     itself rejects duplicate cwds.
- */
-async function _cmdCreate(
-  arg: string,
-  ctx: Pick<ExtensionContext, "ui">,
-): Promise<void> {
-  // Parse `[cwd] [--name "value with spaces" | --name word]` in any order.
-  // The first non-flag token is the cwd; the rest of the line after
-  // `--name` (quoted or unquoted) is the display name.
-  const nameMatch = arg.match(/--name\s+"([^"]+)"|--name\s+(\S+)/);
-  const name = nameMatch ? (nameMatch[1] ?? nameMatch[2]) : undefined;
-  const cwdRaw = arg.replace(/--name\s+"[^"]+"|--name\s+\S+/, "").trim();
-  if (!cwdRaw) {
-    ctx.ui.notify(
-      '[un-bien] Usage: /unbien create <absolute-or-relative-cwd> [--name "Display name"]',
-      "warning",
-    );
-    return;
-  }
-
-  let result: { id: string; cwd: string; name: string };
-  try {
-    result = addDaemon(cwdRaw, name);
-  } catch (err) {
-    ctx.ui.notify(`[un-bien] create failed: ${String(err)}`, "error");
-    return;
-  }
-
-  // No local `.pi/un-bien/config.json` is written anymore — the name lives
-  // in the registry and the supervisor injects the full config (agent_name,
-  // auto_start_relay true) via UNBIEN_DIRECT_CONFIG when it spawns the
-  // daemon. The cwd needs no init folder.
-
-  ctx.ui.notify(
-    `[un-bien] Daemon registered: id=${result.id} name="${result.name}" cwd=${result.cwd}`,
-    "info",
-  );
-
-  // Auto-start: register alone used to leave the daemon idle until the next
-  // supervisor restart (the reported bug — `create` didn't run anything). Ask
-  // the supervisor to spawn THIS daemon now; it reads the name from the
-  // registry and injects the config via env. When the supervisor is offline we
-  // keep the
-  // registration and tell the user it'll boot on the next supervisor start.
-  try {
-    await callSupervisor({ op: "start", id: result.id });
-    ctx.ui.notify(`[un-bien] Daemon started: id=${result.id}`, "info");
-  } catch (err) {
-    if (err instanceof SupervisorOfflineError) {
-      ctx.ui.notify(
-        `[un-bien] Registered, but the supervisor is offline — not running yet. ` +
-          `Run \`unbien install\` (or start \`pi-supervisord\`); it auto-starts on the next supervisor boot.`,
-        "warning",
-      );
-      return;
-    }
-    ctx.ui.notify(
-      `[un-bien] Registered, but auto-start failed: ${String(err)}`,
-      "error",
-    );
-  }
-}
-
-/**
- * `/unbien remove <id>`
- *
- * Unregisters a daemon by its 8-hex-char id (the same id printed by
- * `/unbien create` and `/unbien daemons`). The cwd's local config
- * stays on disk — re-creating later with the same cwd is a no-op
- * because the existing config wins.
- */
-async function _cmdRemove(
-  arg: string,
-  ctx: Pick<ExtensionContext, "ui">,
-): Promise<void> {
-  const id = arg.trim();
-  if (!id) {
-    ctx.ui.notify(
-      "[un-bien] Usage: /unbien remove <id>. Run /unbien daemons to see ids.",
-      "warning",
-    );
-    return;
-  }
-
-  // Prefer the supervisor's `unregister`: it STOPS the running child (SIGTERM →
-  // SIGKILL) BEFORE deleting the registry entry. Removing only the registry
-  // (the old behaviour) left an orphaned `pi --mode rpc` process running with
-  // nothing left to manage it — the reported bug. Fall back to a registry-only
-  // removal when the supervisor is offline (no managed process to stop anyway).
-  try {
-    const data = await callSupervisor({ op: "unregister", id });
-    if (!data.removed) {
-      const known =
-        listDaemons()
-          .map((d) => d.id)
-          .join(", ") || "(none)";
-      ctx.ui.notify(
-        `[un-bien] No daemon with id "${id}". Known ids: ${known}`,
-        "warning",
-      );
-      return;
-    }
-    ctx.ui.notify(
-      `[un-bien] Daemon removed + process stopped: id=${id} cwd=${data.cwd}. ` +
-        `Local config at ${data.cwd}/.pi/un-bien/config.json was kept.`,
-      "info",
-    );
-    return;
-  } catch (err) {
-    if (!(err instanceof SupervisorOfflineError)) {
-      ctx.ui.notify(`[un-bien] remove failed: ${String(err)}`, "error");
-      return;
-    }
-    // Supervisor offline — fall through to registry-only removal below.
-  }
-
-  let result: { removed: boolean; cwd?: string };
-  try {
-    result = removeDaemon(id);
-  } catch (err) {
-    ctx.ui.notify(`[un-bien] remove failed: ${String(err)}`, "error");
-    return;
-  }
-
-  if (!result.removed) {
-    const known =
-      listDaemons()
-        .map((d) => d.id)
-        .join(", ") || "(none)";
-    ctx.ui.notify(
-      `[un-bien] No daemon with id "${id}". Known ids: ${known}`,
-      "warning",
-    );
-    return;
-  }
-
-  ctx.ui.notify(
-    `[un-bien] Daemon removed from registry: id=${id} cwd=${result.cwd}. ` +
-      `Supervisor was offline, so any running process was NOT stopped. Local config kept.`,
-    "warning",
-  );
-}
-
-// ── Fleet-ops commands (plan/26 W2) — talk to the supervisor over UDS ─────────
+// ── Install/uninstall the presence-daemon service ────────────────────────────
 //
-// Every command here is a thin wrapper around `callSupervisor(...)`. When
-// the supervisor isn't running we fall back to a friendly hint instead of
-// the raw error, so the user can't get stuck on "what's wrong?".
-
-function _notifyOffline(
-  ctx: Pick<ExtensionContext, "ui">,
-  err: SupervisorOfflineError,
-): void {
-  ctx.ui.notify(`[un-bien] ${err.message}`, "warning");
-}
-
-function _formatDaemonTable(daemons: DaemonInfo[]): string {
-  if (daemons.length === 0) return "(no daemons registered)";
-  const rows = daemons.map((d) => {
-    const uptime = d.uptime_s === undefined ? "—" : `${d.uptime_s}s`;
-    const pid = d.pid === undefined ? "—" : String(d.pid);
-    const restarts = d.restart_count ?? 0;
-    return `  ${d.id}  ${d.state.padEnd(8)}  pid=${pid}  up=${uptime}  restarts=${restarts}  ${d.name}  ${d.cwd}`;
-  });
-  return rows.join("\n");
-}
+// Installs the un-bien presence daemon as a user-level system service (systemd
+// `--user` unit on Linux, launchd LaunchAgent on macOS, Task Scheduler on
+// Windows). Once installed the presence daemon starts at login + survives
+// reboots. Uninstall is the inverse.
 
 /**
- * `/unbien daemons` — registry + runtime state in one view. When the
- * supervisor is offline we still show registry-only output (state =
- * "stopped" everywhere), so the user can see what's configured even
- * before `install`.
- */
-async function _cmdDaemonsList(
-  ctx: Pick<ExtensionContext, "ui">,
-): Promise<void> {
-  if (!(await supervisorOnline())) {
-    const registry = listDaemons();
-    if (registry.length === 0) {
-      ctx.ui.notify(
-        "[un-bien] No daemons registered. Run /unbien create <cwd>.",
-        "info",
-      );
-      return;
-    }
-    const rows = registry
-      .map((d) => {
-        const cfg = loadLocalConfig(d.cwd);
-        const name = cfg.agent_name ?? defaultAgentName(d.cwd);
-        return `  ${d.id}  ${name}  ${d.cwd}  (supervisor offline)`;
-      })
-      .join("\n");
-    ctx.ui.notify(
-      `[un-bien] Daemons (registry only — run install to bring supervisor up):\n${rows}`,
-      "info",
-    );
-    return;
-  }
-  try {
-    const data = await callSupervisor({ op: "list" });
-    ctx.ui.notify(
-      `[un-bien] Daemons:\n${_formatDaemonTable(data.daemons)}`,
-      "info",
-    );
-  } catch (err) {
-    if (err instanceof SupervisorOfflineError) {
-      _notifyOffline(ctx, err);
-      return;
-    }
-    ctx.ui.notify(`[un-bien] daemons failed: ${String(err)}`, "error");
-  }
-}
-
-async function _cmdDaemonStatus(
-  ctx: Pick<ExtensionContext, "ui">,
-): Promise<void> {
-  try {
-    const data = await callSupervisor({ op: "status" });
-    ctx.ui.notify(
-      `[un-bien] Fleet status:\n${_formatDaemonTable(data.daemons)}`,
-      "info",
-    );
-  } catch (err) {
-    if (err instanceof SupervisorOfflineError) {
-      _notifyOffline(ctx, err);
-      return;
-    }
-    ctx.ui.notify(`[un-bien] status failed: ${String(err)}`, "error");
-  }
-}
-
-async function _cmdDaemonStart(
-  ctx: Pick<ExtensionContext, "ui">,
-  id?: string,
-): Promise<void> {
-  try {
-    if (id) {
-      const data = await callSupervisor({ op: "start", id });
-      ctx.ui.notify(
-        data.started
-          ? `[un-bien] Started daemon ${id} (${data.state}).`
-          : `[un-bien] Daemon ${id} already ${data.state}.`,
-        "info",
-      );
-      return;
-    }
-    const data = await callSupervisor({ op: "start_all" });
-    ctx.ui.notify(
-      `[un-bien] Started ${data.started.length} daemon(s), ` +
-        `${data.already_running.length} already running.`,
-      "info",
-    );
-  } catch (err) {
-    if (err instanceof SupervisorOfflineError) {
-      _notifyOffline(ctx, err);
-      return;
-    }
-    ctx.ui.notify(`[un-bien] start failed: ${String(err)}`, "error");
-  }
-}
-
-async function _cmdDaemonStop(
-  ctx: Pick<ExtensionContext, "ui">,
-  id?: string,
-): Promise<void> {
-  try {
-    if (id) {
-      const data = await callSupervisor({ op: "stop", id });
-      ctx.ui.notify(
-        data.stopped
-          ? `[un-bien] Stopped daemon ${id}.`
-          : `[un-bien] Daemon ${id} already ${data.state}.`,
-        "info",
-      );
-      return;
-    }
-    const data = await callSupervisor({ op: "stop_all" });
-    ctx.ui.notify(
-      `[un-bien] Stopped ${data.stopped.length} daemon(s), ` +
-        `${data.already_stopped.length} already stopped.`,
-      "info",
-    );
-  } catch (err) {
-    if (err instanceof SupervisorOfflineError) {
-      _notifyOffline(ctx, err);
-      return;
-    }
-    ctx.ui.notify(`[un-bien] stop failed: ${String(err)}`, "error");
-  }
-}
-
-async function _cmdDaemonRestart(
-  ctx: Pick<ExtensionContext, "ui">,
-  id?: string,
-): Promise<void> {
-  try {
-    if (id) {
-      const data = await callSupervisor({ op: "restart", id });
-      ctx.ui.notify(
-        `[un-bien] Restarted daemon ${id} (${data.state}).`,
-        "info",
-      );
-      return;
-    }
-    const data = await callSupervisor({ op: "restart_all" });
-    ctx.ui.notify(
-      `[un-bien] Restarted ${data.restarted.length} daemon(s).`,
-      "info",
-    );
-  } catch (err) {
-    if (err instanceof SupervisorOfflineError) {
-      _notifyOffline(ctx, err);
-      return;
-    }
-    ctx.ui.notify(`[un-bien] restart failed: ${String(err)}`, "error");
-  }
-}
-
-/**
- * `/unbien daemon send <id> "<text>"` — injects a prompt into a
- * running daemon via its RPC stdin. The agent processes the prompt as
- * if a user typed it; output flows back via the relay/mesh, not here.
- *
- * Fire-and-forget at this layer — the CLI just confirms delivery.
- */
-async function _cmdDaemonSend(
-  arg: string,
-  ctx: Pick<ExtensionContext, "ui">,
-): Promise<void> {
-  // Parse `<id> <text...>` — id is the first token, rest is the prompt.
-  // The text may be quoted; if so, strip the outer quotes. Otherwise
-  // take the entire remainder verbatim.
-  const m = arg.match(/^(\S+)\s+(?:"([^"]*)"|(.*))$/);
-  if (!m) {
-    ctx.ui.notify(
-      '[un-bien] Usage: /unbien daemon send <id> "<prompt text>"',
-      "warning",
-    );
-    return;
-  }
-  const id = m[1]!;
-  const text = (m[2] ?? m[3] ?? "").trim();
-  if (!text) {
-    ctx.ui.notify("[un-bien] daemon send: prompt text is empty.", "warning");
-    return;
-  }
-  try {
-    const data = await callSupervisor({ op: "send", id, text });
-    if (data.delivered) {
-      ctx.ui.notify(
-        `[un-bien] Sent to ${id}: ${text.slice(0, 60)}${text.length > 60 ? "…" : ""}`,
-        "info",
-      );
-    } else {
-      ctx.ui.notify(
-        `[un-bien] daemon ${id} did not accept the prompt (not running?)`,
-        "warning",
-      );
-    }
-  } catch (err) {
-    if (err instanceof SupervisorOfflineError) {
-      _notifyOffline(ctx, err);
-      return;
-    }
-    ctx.ui.notify(`[un-bien] daemon send failed: ${String(err)}`, "error");
-  }
-}
-
-// ── Cron — scheduled prompts for daemons (plan/39) ──────────────────────────
-
-/** Splits an arg string into tokens, honoring double-quoted groups. */
-function _tokenizeArgs(s: string): string[] {
-  const out: string[] = [];
-  const re = /"([^"]*)"|(\S+)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(s)) !== null) out.push(m[1] === undefined ? m[2]! : m[1]);
-  return out;
-}
-
-/**
- * `/unbien cron <add|list|remove|enable|disable|run|log>` — schedules
- * recurring prompts to daemons via the supervisor. All subcommands require the
- * supervisor running (offline → friendly notice, not a crash).
- */
-async function _cmdCron(
-  arg: string,
-  ctx: Pick<ExtensionContext, "ui">,
-): Promise<void> {
-  const trimmed = arg.trim();
-  const sp = trimmed.indexOf(" ");
-  const sub = (sp === -1 ? trimmed : trimmed.slice(0, sp)).toLowerCase();
-  const rest = sp === -1 ? "" : trimmed.slice(sp + 1).trim();
-  try {
-    switch (sub) {
-      case "":
-      case "list":
-        return await _cronList(ctx);
-      case "add":
-        return await _cronAdd(rest, ctx);
-      case "remove":
-      case "rm":
-        return await _cronMutate(
-          { op: "cron_remove", job_id: rest.trim() },
-          rest.trim(),
-          ctx,
-        );
-      case "enable":
-        return await _cronMutate(
-          { op: "cron_enable", job_id: rest.trim(), enabled: true },
-          rest.trim(),
-          ctx,
-        );
-      case "disable":
-        return await _cronMutate(
-          { op: "cron_enable", job_id: rest.trim(), enabled: false },
-          rest.trim(),
-          ctx,
-        );
-      case "run":
-        return await _cronRun(rest.trim(), ctx);
-      case "log":
-        return await _cronLog(rest, ctx);
-      default:
-        ctx.ui.notify(
-          "[un-bien] Usage: /unbien cron <add|list|remove|enable|disable|run|log>",
-          "warning",
-        );
-    }
-  } catch (err) {
-    if (err instanceof SupervisorOfflineError) {
-      ctx.ui.notify(
-        "[un-bien] Cron needs the supervisor running. Run `unbien install` " +
-          "(or start `pi-supervisord`).",
-        "warning",
-      );
-      return;
-    }
-    ctx.ui.notify(
-      `[un-bien] cron ${sub || "list"} failed: ${String(err)}`,
-      "error",
-    );
-  }
-}
-
-async function _cronAdd(
-  rest: string,
-  ctx: Pick<ExtensionContext, "ui">,
-): Promise<void> {
-  const toks = _tokenizeArgs(rest);
-  let tz: string | undefined;
-  let wake = false;
-  let skipBusy = true;
-  let catchup = false;
-  const pos: string[] = [];
-  for (let i = 0; i < toks.length; i++) {
-    const t = toks[i]!;
-    if (t === "--wake") wake = true;
-    else if (t === "--no-skip-busy") skipBusy = false;
-    else if (t === "--catchup") catchup = true;
-    else if (t === "--tz") tz = toks[++i];
-    else pos.push(t);
-  }
-  const [daemonId, schedule, prompt] = pos;
-  if (!daemonId || !schedule || !prompt) {
-    ctx.ui.notify(
-      '[un-bien] Usage: /unbien cron add <daemonId> "<cron-expr>" "<prompt>" ' +
-        "[--tz Area/City] [--wake] [--no-skip-busy] [--catchup]",
-      "warning",
-    );
-    return;
-  }
-  const req: Extract<ControlRequest, { op: "cron_add" }> = {
-    op: "cron_add",
-    daemon_id: daemonId,
-    schedule,
-    prompt,
-  };
-  if (tz) req.tz = tz;
-  if (wake) req.wake = true;
-  if (!skipBusy) req.skip_if_busy = false;
-  if (catchup) req.catchup = true;
-  const data = await callSupervisor(req);
-  ctx.ui.notify(
-    `[un-bien] Cron ${data.job.id} added → daemon ${daemonId}: "${schedule}"` +
-      `${tz ? ` (${tz})` : ""}. Next run: ${data.job.next_run ?? "?"}`,
-    "info",
-  );
-}
-
-async function _cronList(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
-  const data = await callSupervisor({ op: "cron_list" });
-  if (data.jobs.length === 0) {
-    ctx.ui.notify("[un-bien] No cron jobs.", "info");
-    return;
-  }
-  const lines = data.jobs.map(
-    (j) =>
-      `${j.enabled ? "✓" : "✗"} ${j.id}  "${j.schedule}"${j.tz ? ` (${j.tz})` : ""}  → ${j.daemon_id}  ` +
-      `next:${j.next_run ?? "?"}  last:${j.last_status ?? "—"}${j.last_run ? `@${j.last_run}` : ""}`,
-  );
-  ctx.ui.notify(
-    `[un-bien] Cron jobs (${data.jobs.length}):\n${lines.join("\n")}`,
-    "info",
-  );
-}
-
-async function _cronMutate(
-  req: Extract<ControlRequest, { op: "cron_remove" | "cron_enable" }>,
-  jobId: string,
-  ctx: Pick<ExtensionContext, "ui">,
-): Promise<void> {
-  if (!jobId) {
-    ctx.ui.notify(
-      `[un-bien] Usage: /unbien cron ${req.op === "cron_remove" ? "remove" : "enable|disable"} <jobId>`,
-      "warning",
-    );
-    return;
-  }
-  if (req.op === "cron_remove") {
-    const data = await callSupervisor(req);
-    ctx.ui.notify(
-      data.removed
-        ? `[un-bien] Cron ${jobId} removed.`
-        : `[un-bien] No cron job ${jobId}.`,
-      data.removed ? "info" : "warning",
-    );
-  } else {
-    const data = await callSupervisor(req);
-    ctx.ui.notify(
-      data.updated
-        ? `[un-bien] Cron ${jobId} ${data.enabled ? "enabled" : "disabled"}.`
-        : `[un-bien] No cron job ${jobId}.`,
-      data.updated ? "info" : "warning",
-    );
-  }
-}
-
-async function _cronRun(
-  jobId: string,
-  ctx: Pick<ExtensionContext, "ui">,
-): Promise<void> {
-  if (!jobId) {
-    ctx.ui.notify("[un-bien] Usage: /unbien cron run <jobId>", "warning");
-    return;
-  }
-  const data = await callSupervisor({ op: "cron_run", job_id: jobId });
-  ctx.ui.notify(`[un-bien] Cron ${jobId} fired now → ${data.result}`, "info");
-}
-
-async function _cronLog(
-  rest: string,
-  ctx: Pick<ExtensionContext, "ui">,
-): Promise<void> {
-  const toks = _tokenizeArgs(rest);
-  let jobId: string | undefined;
-  let tail = 20;
-  for (let i = 0; i < toks.length; i++) {
-    const t = toks[i]!;
-    if (t === "--tail") {
-      const n = Number(toks[++i]);
-      if (Number.isFinite(n)) tail = n;
-    } else if (!t.startsWith("--")) jobId = t;
-  }
-  const req: Extract<ControlRequest, { op: "cron_log" }> = {
-    op: "cron_log",
-    tail,
-  };
-  if (jobId) req.job_id = jobId;
-  const data = await callSupervisor(req);
-  if (data.entries.length === 0) {
-    ctx.ui.notify("[un-bien] No cron log entries.", "info");
-    return;
-  }
-  const lines = data.entries.map(
-    (e) =>
-      `${new Date(e.ts).toISOString()}  ${e.fired ? "▶" : "∅"} ${e.result}  ${e.job_id} → ${e.daemon_id}  ${e.prompt_preview}`,
-  );
-  ctx.ui.notify(
-    `[un-bien] Cron log (last ${data.entries.length}):\n${lines.join("\n")}`,
-    "info",
-  );
-}
-
-// ── Install/uninstall the supervisor service (plan/26 W3) ────────────────────
-//
-// Installs `pi-supervisord` as a user-level system service (systemd
-// `--user` unit on Linux, launchd LaunchAgent on macOS). Once installed:
-//   - Supervisor starts at login + survives reboots.
-//   - `unbien daemon start/stop/send/...` work without manually
-//     spawning the supervisor.
-// Uninstall is the inverse — leaves the registry (`daemons.json`) intact,
-// so re-installing later picks up where you left off.
-
-/**
- * `linkCli` controls whether we symlink `un-bien` + `pi-supervisord`
- * into `~/.local/bin/`. The slash-command path passes `true` (user is
- * inside Pi's TUI — they installed via `pi install npm:un-bien` and
- * need us to expose the CLI for them). The standalone-CLI path passes
- * `false` because the user is already running our binary from PATH (they
- * did `npm install -g un-bien`), so re-linking would point their
- * `un-bien` at the Pi-extension copy and diverge on upgrades.
+ * `linkCli` controls whether we symlink `un-bien` into `~/.local/bin/`. The
+ * slash-command path passes `true` (user is inside Pi's TUI — they installed
+ * via `pi install npm:un-bien` and need us to expose the CLI for them). The
+ * standalone-CLI path passes `false` because the user is already running our
+ * binary from PATH (they did `npm install -g un-bien`), so re-linking would
+ * point their `un-bien` at the Pi-extension copy and diverge on upgrades.
  */
 /** Returns true on success, false when install failed (so the standalone CLI
  *  can exit non-zero — e.g. the Cockpit / CI detect failure by exit code).
@@ -5224,7 +4487,7 @@ function _cmdInstall(
   try {
     const result = installService();
     const sections = [
-      `[un-bien] Supervisor service installed (${result.platform}).`,
+      `[un-bien] Presence daemon service installed (${result.platform}).`,
       `  Unit: ${result.unitPath}`,
       `  Steps:\n${result.log.map((l) => "    " + l).join("\n")}`,
     ];
@@ -5239,13 +4502,13 @@ function _cmdInstall(
         if (process.platform === "win32") {
           sections.push(
             `  ⚠ ${link.binDir} was just added to your user PATH (it wasn't there yet).`,
-            `    Open a NEW terminal and run \`unbien daemons\` to verify.`,
+            `    Open a NEW terminal and run \`unbien status\` to verify.`,
           );
         } else {
           sections.push(
             `  ⚠ ${link.binDir} is not on $PATH yet. Add this line to ~/.zshrc / ~/.bashrc:`,
             `      export PATH="$HOME/.local/bin:$PATH"`,
-            `    Then open a new terminal and run \`unbien daemons\` to verify.`,
+            `    Then open a new terminal and run \`unbien status\` to verify.`,
           );
         }
       }
@@ -5266,10 +4529,9 @@ function _cmdUninstall(
   try {
     const result = uninstallService();
     const sections = [
-      `[un-bien] Supervisor service uninstalled (${result.platform}).`,
+      `[un-bien] Presence daemon service uninstalled (${result.platform}).`,
       `  Unit: ${result.unitPath} (${result.removed ? "removed" : "not present"})`,
       `  Steps:\n${result.log.map((l) => "    " + l).join("\n")}`,
-      `  Note: daemons registry (~/.pi/un-bien/daemons.json) kept — re-install restores everything.`,
     ];
     if (linkCli) {
       const unlink = unlinkCliBinaries();
@@ -5801,85 +5063,6 @@ function _resolveToolCwd(): string {
 
 // ── Standalone CLI ────────────────────────────────────────────────────────────
 
-/**
- * `unbien restart-supervisor` — restarts the `pi-supervisord` PROCESS
- * (not the daemons). The supervisor is a long-running Node process with no
- * hot-reload, so after a `dist` rebuild the old code keeps running until the
- * process is restarted. The Cockpit "Restart supervisor" button shells out to
- * this; the OS-specific restart lives here so the app stays cross-platform.
- *
- * Restarting the supervisor re-spawns every daemon as a side effect. Exits 0
- * on success, non-zero on failure (the Cockpit detects failure by exit code).
- */
-/** One step of a restart sequence. `ignoreFailure` steps (e.g. `schtasks /End`
- *  when the task isn't running) don't abort the sequence. */
-export interface RestartStep {
-  cmd: string;
-  args: string[];
-  ignoreFailure?: boolean;
-}
-
-/** Pure: the OS command sequence that restarts the supervisor service, or null
- *  when the platform isn't supported. Most platforms are 1 step; Windows is 2
- *  (`schtasks /End` then `/Run`). Exported for tests. */
-export function _restartSupervisorCommand(
-  platform: NodeJS.Platform,
-  uid: number,
-): RestartStep[] | null {
-  if (platform === "darwin")
-    return [
-      {
-        cmd: "launchctl",
-        args: ["kickstart", "-k", `gui/${uid}/${LAUNCHD_LABEL}`],
-      },
-    ];
-  if (platform === "linux")
-    return [{ cmd: "systemctl", args: ["--user", "restart", SYSTEMD_UNIT] }];
-  if (platform === "win32")
-    return [
-      {
-        cmd: "schtasks",
-        args: ["/End", "/TN", WINDOWS_TASK_NAME],
-        ignoreFailure: true,
-      },
-      { cmd: "schtasks", args: ["/Run", "/TN", WINDOWS_TASK_NAME] },
-    ];
-  return null;
-}
-
-function _restartSupervisor(): void {
-  const uid = process.getuid?.() ?? 0;
-  const steps = _restartSupervisorCommand(process.platform, uid);
-  if (!steps) {
-    console.error(
-      `[un-bien] restart-supervisor is not supported on '${process.platform}' yet. ` +
-        "Restart pi-supervisord manually.",
-    );
-    process.exit(1);
-  }
-  for (const step of steps) {
-    const r = spawnSync(step.cmd, step.args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      encoding: "utf8",
-    });
-    if (r.error) {
-      if (step.ignoreFailure) continue;
-      console.error(
-        `[un-bien] restart-supervisor failed: ${step.cmd} not runnable (${r.error.message}). Is the service installed? Run \`unbien install\`.`,
-      );
-      process.exit(1);
-    }
-    if (r.status !== 0 && !step.ignoreFailure) {
-      const detail = (r.stderr || r.stdout || "").trim();
-      console.error(
-        `[un-bien] restart-supervisor failed (${step.cmd} exited ${r.status})${detail ? `: ${detail}` : ""}.`,
-      );
-      process.exit(r.status === null ? 1 : r.status);
-    }
-  }
-  console.log("[un-bien] Supervisor restarted.");
-}
-
 function _isDirectRun(): boolean {
   try {
     return (
@@ -6022,53 +5205,6 @@ if (_isDirectRun()) {
     } else {
       console.log(`Invalid URL: ${raw}. Must start with http:// or https://`);
     }
-  } else if (subcmd === "create") {
-    // Standalone: `unbien create <cwd> [--name "X"]`. The shell already
-    // split the args and stripped the outer quotes, so an arg like
-    // `Tmp Agent` arrives as a single element with embedded space. Re-add
-    // quotes around any arg containing whitespace so the regex-based
-    // parser (shared with the slash-command path) sees the same shape
-    // as it would from a Pi interactive prompt.
-    const joined = cliArgs.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ");
-    await _cmdCreate(joined, { ui: _cliStubUi() });
-  } else if (subcmd === "remove") {
-    const id = (cliArgs[0] ?? "").trim();
-    await _cmdRemove(id, { ui: _cliStubUi() });
-  } else if (subcmd === "daemons") {
-    // Mirror the slash handler: ask the supervisor when reachable,
-    // fall back to registry-only when not.
-    const stubCtx = { ui: _cliStubUi() };
-    await _cmdDaemonsList(stubCtx);
-  } else if (subcmd === "daemon") {
-    // `unbien daemon <op> [args]`. Reuse the fleet-ops handlers — they
-    // already accept a minimal ctx with `notify`.
-    const op = cliArgs[0] ?? "";
-    const rest = cliArgs
-      .slice(1)
-      .map((a) => (/\s/.test(a) ? `"${a}"` : a))
-      .join(" ");
-    const stubCtx = { ui: _cliStubUi() };
-    if (op === "start") {
-      await _cmdDaemonStart(stubCtx, cliArgs[1]);
-    } else if (op === "stop") {
-      await _cmdDaemonStop(stubCtx, cliArgs[1]);
-    } else if (op === "restart") {
-      await _cmdDaemonRestart(stubCtx, cliArgs[1]);
-    } else if (op === "status") {
-      await _cmdDaemonStatus(stubCtx);
-    } else if (op === "send") {
-      await _cmdDaemonSend(rest, stubCtx);
-    } else {
-      console.log(
-        'Usage: unbien daemon <start|stop|restart [<id>]|status|send <id> "<text>">',
-      );
-    }
-  } else if (subcmd === "cron") {
-    // `unbien cron <op> [args]`. Re-quote args with spaces so the shared
-    // parser sees the same shape as a Pi slash prompt.
-    const joined = cliArgs.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ");
-    const stubCtx = { ui: _cliStubUi() };
-    await _cmdCron(joined, stubCtx);
   } else if (subcmd === "peers") {
     // Read-only roster of the local + cross-PC mesh. Unlike `devices` (which
     // reads paired phones from peers.json), the mesh roster lives only in the
@@ -6087,9 +5223,9 @@ if (_isDirectRun()) {
     await _cmdClaudeCli(cliArgs);
   } else if (subcmd === "install") {
     // CLI mode = user installed via `npm install -g un-bien`, so the
-    // `un-bien` / `pi-supervisord` bins are already on $PATH via npm's
-    // global prefix. Explicit `linkCli: false` so we never stomp those
-    // with symlinks pointing at a parallel Pi-extension install.
+    // `un-bien` bin is already on $PATH via npm's global prefix. Explicit
+    // `linkCli: false` so we never stomp those with symlinks pointing at a
+    // parallel Pi-extension install.
     const stubCtx = { ui: _cliStubUi() };
     // Propagate failure as a non-zero exit so callers (Cockpit / CI) detect it
     // — installService throws on a failed schtasks/launchctl/systemctl step.
@@ -6098,37 +5234,20 @@ if (_isDirectRun()) {
     const stubCtx = { ui: _cliStubUi() };
     // `linkCli: true` even from the CLI: unlinking is ALWAYS safe and must run
     // regardless of how install ran. `unlinkCliBinaries` only removes OUR
-    // reserved symlinks (`un-bien` / `pi-supervisord`) under `~/.local/bin`;
-    // npm-global bins live in a different prefix and are never touched. So a
-    // user who installed via the TUI (`/unbien install`, which links) and
-    // uninstalls from a shell still gets the links cleaned up — the asymmetry
-    // that left an orphaned `~/.local/bin/unbien` behind.
+    // reserved `un-bien` symlink under `~/.local/bin`; npm-global bins live in
+    // a different prefix and are never touched. So a user who installed via the
+    // TUI (`/unbien install`, which links) and uninstalls from a shell still
+    // gets the link cleaned up — the asymmetry that left an orphaned
+    // `~/.local/bin/unbien` behind.
     _cmdUninstall(stubCtx, { linkCli: true });
-  } else if (subcmd === "restart-supervisor") {
-    _restartSupervisor();
   } else {
     console.log(
       [
         "Usage: un-bien <command>",
         "",
-        "Daemon registry:",
-        '  create <cwd> [--name "Name"]   Register a folder as a daemon',
-        "  remove <id>                     Unregister a daemon",
-        "  daemons                         List registered daemons",
-        "",
-        "Fleet control:",
-        "  daemon start [<id>]             Start all daemons, or one by id",
-        "  daemon stop [<id>]              Stop all daemons, or one by id",
-        "  daemon restart [<id>]           Restart all daemons, or one by id",
-        "  daemon status                   Show pid / uptime / restarts",
-        '  daemon send <id> "<text>"       Send a prompt to a daemon',
-        '  cron add <id> "<expr>" "<txt>"  Schedule a recurring prompt (≥60s; --tz, --wake)',
-        "  cron list|run|remove|log        Manage scheduled prompts (needs the supervisor)",
-        "",
         "Service:",
-        "  install                         Install pi-supervisord as a system service",
+        "  install                         Install the un-bien presence daemon as a system service",
         "  uninstall                       Remove the system service",
-        "  restart-supervisor              Restart the pi-supervisord process",
         "",
         "Devices:",
         "  devices                         List paired phones (peers.json)",

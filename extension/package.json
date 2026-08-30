@@ -7,7 +7,6 @@
   "types": "dist/index.d.ts",
   "bin": {
     "unbien": "dist/index.js",
-    "pi-supervisord": "dist/bin/supervisord.js",
     "pi-unbien-presence": "dist/bin/presence.js"
   },
   "scripts": {

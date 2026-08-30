@@ -14,6 +14,7 @@ struct SettingsView: View {
     @State private var fontPreview = "AaBbCc 0O1lI {}[]() => Meslo \u{2713}"
     @AppStorage("renderCacheBlocks") private var cacheBlocks = 400
     @AppStorage("renderCacheImages") private var cacheImages = 200
+    @AppStorage("hideLaunchChipUntilDaemonUp") private var hideChipUntilDaemonUp = false
 
     var body: some View {
         NavigationStack {
@@ -22,6 +23,7 @@ struct SettingsView: View {
                 typographySection
                 transcriptSection
                 subagentsSection
+                machinesSection
                 performanceSection
                 syncSection
                 identitySection
@@ -165,6 +167,16 @@ struct SettingsView: View {
             Text("Subagents")
         } footer: {
             Text("Subagent sessions can appear nested under their parent on Home. By default they are view-only; enable interaction to prompt or steer them.")
+        }
+    }
+
+    private var machinesSection: some View {
+        Section {
+            Toggle("Hide launch chip until daemon is up", isOn: $hideChipUntilDaemonUp)
+        } header: {
+            Text("Machine launch")
+        } footer: {
+            Text("The launch chip starts a new session on a machine via its presence daemon (the machine and its sessions are always shown regardless). When on, the chip stays hidden until that machine's daemon is confirmed up. When off, machines show a “searching…” chip while the daemon is located, then the launch.")
         }
     }
 
