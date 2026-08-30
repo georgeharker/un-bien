@@ -30,7 +30,7 @@
  *   for integration tests.
  */
 
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
@@ -56,14 +56,8 @@ import {
   removePeer,
   snapshotOwnerPubkeys,
   conditionalRemovePeer,
-  type PeerRecord,
 } from "./pairing/storage.js";
 import { MeshClient } from "./mesh/client.js";
-import {
-  canonicalizeEd25519PublicKey,
-  decodeEd25519PublicKey,
-  publicKeyFingerprint,
-} from "./mesh/encoding.js";
 import { SelfRevoke } from "./mesh/self_revoke.js";
 import type { MeshTopologySnapshot } from "./mesh/siblings.js";
 import type {
@@ -171,6 +165,12 @@ import {
   _renderablePngPathFromImage,
   _decodeImagePayload,
 } from "./image_codec.js";
+import {
+  _findKnownPeer,
+  _inspectPeerRecord,
+  _runtimeOwnerFingerprint,
+  type InspectedPeerRecord,
+} from "./pairing/peer_trust.js";
 import { Box, Container, Image, Text } from "@earendil-works/pi-tui";
 
 // ── State machine ─────────────────────────────────────────────────────────────
@@ -1968,85 +1968,6 @@ function _displayName(cwd: string): string {
   return local.agent_name || defaultAgentName(cwd);
 }
 
-// ── Peer lookup helpers ───────────────────────────────────────────────────────
-
-interface InspectedPeerRecord {
-  readonly record: PeerRecord;
-  readonly rawHandle: string;
-  readonly runtimeKey: string | null;
-}
-
-function _rawOwnerFingerprint(rawValue: unknown): string {
-  let fingerprintInput: string;
-  if (typeof rawValue === "string") {
-    fingerprintInput = rawValue;
-  } else {
-    try {
-      const serialized = JSON.stringify(rawValue);
-      const type = rawValue === null ? "null" : typeof rawValue;
-      fingerprintInput = `${type}:${serialized ?? ""}`;
-    } catch {
-      fingerprintInput = `${typeof rawValue}:unserializable`;
-    }
-  }
-  return createHash("sha256")
-    .update(fingerprintInput, "utf8")
-    .digest("hex")
-    .slice(0, 8);
-}
-
-function _runtimeOwnerFingerprint(runtimeKey: string): string {
-  try {
-    return publicKeyFingerprint(
-      decodeEd25519PublicKey(runtimeKey, "Owner runtime key"),
-    );
-  } catch {
-    // Relay authentication guarantees canonical keys in production. This
-    // fallback keeps diagnostics metadata-only at defensive/test boundaries.
-    return _rawOwnerFingerprint(runtimeKey);
-  }
-}
-
-function _inspectPeerRecord(record: unknown): InspectedPeerRecord | null {
-  if (!record || typeof record !== "object") {
-    const fingerprint = _rawOwnerFingerprint(record);
-    console.warn(
-      `[un-bien] event=invalid_owner_record owner_fp=${fingerprint}`,
-    );
-    return null;
-  }
-
-  const candidate = record as Partial<Record<keyof PeerRecord, unknown>>;
-  const rawHandle = candidate.remote_epk;
-  if (typeof rawHandle !== "string") {
-    const fingerprint = _rawOwnerFingerprint(rawHandle);
-    console.warn(
-      `[un-bien] event=invalid_owner_record owner_fp=${fingerprint}`,
-    );
-    return null;
-  }
-
-  const safeRecord: PeerRecord = {
-    name: typeof candidate.name === "string" ? candidate.name : "Unknown Owner",
-    remote_epk: rawHandle,
-    paired_at:
-      typeof candidate.paired_at === "string" ? candidate.paired_at : "",
-  };
-  try {
-    const runtimeKey = canonicalizeEd25519PublicKey(
-      rawHandle,
-      "stored Owner public key",
-    );
-    return { record: safeRecord, rawHandle, runtimeKey };
-  } catch {
-    const fingerprint = _rawOwnerFingerprint(rawHandle);
-    console.warn(
-      `[un-bien] event=invalid_owner_record owner_fp=${fingerprint}`,
-    );
-    return { record: safeRecord, rawHandle, runtimeKey: null };
-  }
-}
-
 function _reportRevocationByFingerprint(canonicalOwnerPubkey: string): void {
   const fingerprint = _runtimeOwnerFingerprint(canonicalOwnerPubkey);
   _pi?.sendMessage({
@@ -2065,22 +1986,6 @@ function _revokeActiveOwnerRuntime(canonicalOwnerPubkey: string): void {
   _detachPeerChannel(canonicalOwnerPubkey);
   _refreshFooter();
   _reportRevocationByFingerprint(canonicalOwnerPubkey);
-}
-
-async function _findKnownPeer(
-  appPeerIdStd: string,
-): Promise<PeerRecord | null> {
-  let runtimeKey: string;
-  try {
-    runtimeKey = canonicalizeEd25519PublicKey(appPeerIdStd, "Relay Owner key");
-  } catch {
-    return null;
-  }
-  for (const record of await listPeers()) {
-    const inspected = _inspectPeerRecord(record);
-    if (inspected?.runtimeKey === runtimeKey) return inspected.record;
-  }
-  return null;
 }
 
 // ── Transition helpers ────────────────────────────────────────────────────────
