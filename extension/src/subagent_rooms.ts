@@ -184,6 +184,50 @@ export function initSubagentRooms(
     } as unknown as ServerMessage);
   }
 
+  // Event-asserted child (docs/subagent-events.md §3B/§4): a child whose id is
+  // supplied in an EVENT rather than detected via an in-process session_start.
+  // The expectation is the child is un-bien-aware and joins the mesh ITSELF, so
+  // it owns its own room/transcript/interaction; this only folds it into the
+  // parent's fleet/panel/status so the parent recognizes + tracks it. Tolerant
+  // of field spelling across emitters (gotgenes `subagents:child:session-created`
+  // and un-bien's own `unbien:subagent:child`); the child sessionId is REQUIRED.
+  function onChildMarker(raw: unknown): void {
+    if (disposed) return;
+    const p = (raw ?? {}) as Record<string, unknown>;
+    const sessionId =
+      (typeof p.sessionId === "string" && p.sessionId) ||
+      (typeof p.childSessionId === "string" && p.childSessionId) ||
+      undefined;
+    if (!sessionId) return; // no child id -> cannot key/track it
+    const id = typeof p.id === "string" ? p.id : undefined;
+    const type = typeof p.type === "string" ? p.type : undefined;
+    const description =
+      typeof p.description === "string" ? p.description : undefined;
+    const status = typeof p.status === "string" ? p.status : undefined;
+    // Enrich if an in-process room already owns this child (dedup on sessionId),
+    // else register it fleet-side WITHOUT building a room (the child owns its own).
+    const existing = panelBySession.get(sessionId);
+    panelBySession.set(sessionId, {
+      roomId: existing?.roomId ?? roomIdForSession(sessionId),
+      type: type ?? existing?.type,
+      description: description ?? existing?.description,
+      status: status ?? existing?.status ?? "started",
+      startedAt: existing?.startedAt ?? Date.now(),
+    });
+    if (id) {
+      recordToSession.set(id, sessionId);
+      const prev = fleet.get(id);
+      fleet.set(id, {
+        id,
+        type: type ?? prev?.type,
+        description: description ?? prev?.description,
+        status: status ?? prev?.status ?? "started",
+        startedAt: prev?.startedAt ?? Date.now(),
+      });
+    }
+    emitPanel();
+  }
+
   // SAFETY: the pi SDK exposes an `events` bus at runtime that isn't part of
   // its public typings; we read it defensively (optional) and guard below.
   const events = (
@@ -235,6 +279,13 @@ export function initSubagentRooms(
     unsub.push(events.on("subagents:failed", onRecord("failed")));
     unsub.push(events.on("subagents:steered", onRecord("steered")));
     unsub.push(events.on("subagents:compacted", onRecord("compacted")));
+    // Event-asserted child markers (§3B): gotgenes' authoritative pre-bind event
+    // and un-bien's own implementation-neutral marker. Additive — absent, only
+    // in-process session_start detection runs.
+    unsub.push(
+      events.on("subagents:child:session-created", onChildMarker),
+    );
+    unsub.push(events.on("unbien:subagent:child", onChildMarker));
   }
 
   function nextRecord(): SubagentRecord | undefined {
