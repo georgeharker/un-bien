@@ -17,6 +17,7 @@ import {
   effectiveAllowRemoteLaunch,
 } from "../session/local_config.js";
 import { envLog } from "../session/debug_log.js";
+import type { ClientMessage, ServerMessage } from "../protocol/types.js";
 
 /**
  * Regime-2 machine-presence core (pi-INDEPENDENT — no pi SDK). A lightweight
@@ -58,6 +59,19 @@ export async function startPresence(): Promise<PresenceHandle> {
   /** The machine's configured launch backend (rpc is a fast-follow). */
   function configuredBackend(): "tmux" | "herdr" {
     return loadConfig().launch?.backend === "herdr" ? "herdr" : "tmux";
+  }
+
+  /** Liveness: answer a stock `ping` with `pong`, mirroring the fork's
+   *  transport-control handler (index.ts) so a health check works against an
+   *  idle machine too. Distinct from the `presence_status` caps PULL — this is
+   *  the plain are-you-there reply, no caps. */
+  function handleStockMessage(msg: ClientMessage, sender: PlainPeerChannel): void {
+    if ((msg as { type?: string }).type === "ping") {
+      sender.send({
+        type: "pong",
+        in_reply_to: (msg as { id?: string }).id,
+      } as ServerMessage);
+    }
   }
 
   /** Handle a ub-frame from an attached owner. `presence_status` is the
@@ -128,7 +142,7 @@ export async function startPresence(): Promise<PresenceHandle> {
       r,
       peer,
       roomId,
-      () => {}, // presence ignores stock ClientMessages (ub plane only)
+      (msg) => handleStockMessage(msg, channel), // liveness ping->pong
       () => channels.delete(peer),
       (env) => handleUbFrame(env, channel),
     );
