@@ -153,6 +153,69 @@ the live panel; `subagents:record` **entry_appended** is the persist/reconstruct
 copy (picked up by `get_entries`). Panels are **evt-only** — Un Bien keeps no
 parallel panel buffer beyond the bridge's `pendingPanels()` replay.
 
+### Subagent sessions: how the association works (what we RELY ON)
+
+A subagent is surfaced as its OWN app session — a distinct relay room under the
+same machine identity (see `extension/src/subagent_rooms.ts`). The association
+rests on exactly two signals:
+
+1. **Child detection — a session fired from within another IS a child
+   (authoritative).** The fork claims ONE root session per process
+   (`_claimRootSession`). Any OTHER `session_start` that fires in-process — a
+   fresh session with a `sessionId` ≠ the root's (`_isNonRootSid`) — is treated as
+   a SUBAGENT CHILD. Its OWN `sessionId` keys the child room
+   (`roomIdForSession(childSessionId)`); the PARENT is the root session (its room
+   id), captured fork-side. This needs NOTHING from `subagents:*` — the in-process
+   non-root `session_start` is the whole signal.
+2. **Record + lifecycle — from `subagents:*`.** We use the subagents manager's
+   bus events (`@tintinweb/pi-subagents`, NOT pi core) — `subagents:started` /
+   `completed` / `failed` / `steered` / `compacted` — for the subagent RECORD
+   (`{ id, type, description, status }`) and the live panel. `started`
+   opens/activates the child room; terminal events settle it (linger-for-view vs
+   close-to-purge is policy, not wire). Nested (non-top-level) subagents are
+   suppressed from this stream, so we see ONE hierarchy level.
+
+**Binding the two** (record `id` ↔ child `sessionId`) is by ARRIVAL ORDER today —
+a `created`/`started` is followed by the child's `session_start` — exact for
+sequential spawns, but able to mis-pair under concurrent/batch spawns. The core
+paths do NOT depend on this bind: child detection, the child room, its transcript,
+and `room_meta.parent` are all exact without it. ONLY the subagents-panel-row →
+session mapping (via `subagentId`) leans on it. Clean fix is upstream:
+`subagents:started` SHOULD carry the child `sessionId` (known by emit time — the
+record's session file exists), letting us match it exactly against the child
+`session_start`'s `ctx.sessionManager.getSessionId()`; `subagents:created` is too
+early (session not built yet).
+
+**Transcript source is NOT the event.** The child transcript is the child pi's OWN
+`pi.on` stream, reconstructed as `{rpc}` frames on the child room; `subagents:*`
+carries only lifecycle + labels, never transcript content.
+
+**Room advertisement.** The child room carries `room_meta.parent` (parent room id)
++ `subagentId` (record id) via the relay's room_meta passthrough, so the app nests
+and navigates from `room_announced` alone. `room_meta` is transport/negotiation
+ONLY — no app state rides it.
+
+**Status is PULLED over the child connection, not pushed.** Lifecycle status
+(`done`/`failed`/`in_progress`/`pending`) is app STATE, so it does NOT ride
+`room_meta` (transport) nor the chat-scoped subagents panel (delivered only on
+`session_sync` attach — absent on the home list). Instead:
+
+1. `subagent_rooms` tracks each child's status from the `subagents:*` events
+   (the SOURCE), keyed by child `sessionId`.
+2. The app issues a `get_session_info` ub PULL to the child room; the fork answers
+   `session_info { status }` from that tracked state. The pull's SEND is what makes
+   the child room attach + reply.
+3. The app stamps `status` on the child `LiveSession` (keyed by child `sessionId`),
+   so the home-list checkmark reads it WITHOUT attaching to the parent.
+4. The pull is re-issued on every `room_announced` — i.e. on reconnect AND app
+   relaunch — so status survives an app restart while the fork stays the source of
+   truth ("track state in the fork, re-query on relaunch").
+
+This is the governing rule in miniature: rooms only aggregate pi sessions across pi
+lifetimes (the app outlives any one pi); everything else — status included — goes
+over pi/extension interfaces (the envelope's `ub`/`rpc` planes), never relay
+features like `room_meta`. Mirrors the `presence_status` caps PULL exactly.
+
 ## ub plane — Un Bien's own protocol
 
 | inner `.type` | direction | payload | purpose |
@@ -161,6 +224,9 @@ parallel panel buffer beyond the bridge's `pendingPanels()` replay.
 | `session_sync` | app→fork | `{ id?, limit? }` | request panels + pending-ui reconstruction |
 | `session_sync_end` | fork→app | `{ in_reply_to?, session_started_at? }` | reconstruction terminator + session clock |
 | `session_launch` | app→fork | `{ mode, cwd?, name? }` | mesh remote-launch of a SEPARATE pi process |
+| `get_session_info` | app→fork | `{ id? }` | PULL a session's own state (subagent lifecycle status) |
+| `session_info` | fork→app | `{ status?, in_reply_to? }` | response to `get_session_info`, from the fork's tracked state |
+| `presence_status` | app↔fork/daemon | `{ id? }` → `{ caps?, hostname?, backend?, in_reply_to? }` | PULL a machine's daemon caps |
 
 `hello` and `session_sync_end` are folded by the app the same way as an rpc
 frame (`session_sync_end`'s inner `.type` drives `applyRPC`). `session_launch` is
@@ -242,11 +308,15 @@ match pi's rpc contract (`text`→`message`, `model_id`→`modelId`,
 | answer a dialog | `{rpc}` `extension_ui_response` | `id`, `value`/`confirmed`/`cancelled` |
 | reconstruct panels+ui | `{ub}` `session_sync` | `id`, `limit?` |
 | remote launch | `{ub}` `session_launch` | `mode`, `cwd?`, `name?` |
+| pull subagent status | `{ub}` `get_session_info` | `id?` → `session_info { status }` |
+| pull daemon caps | `{ub}` `presence_status` | `id?` → `{ caps, hostname, backend }` |
 
 Each pi-native command carries an optional `id`; the fork replies
 `{rpc:{type:"response", command, success, data?, error?, id}}` to the SENDER,
-correlated by `id`. `session_sync` / `session_launch` (ub plane) have their own
-replies (`session_sync_end` / none). `pair_request` is a bare pre-attach frame.
+correlated by `id`. The `{ub}`-plane PULLs have their own replies, correlated by
+`in_reply_to`: `session_sync`→`session_sync_end`, `get_session_info`→`session_info`,
+`presence_status`→`presence_status`; `session_launch` has none. `pair_request` is a
+bare pre-attach frame.
 
 ### Queue = pi's native queue, display = app-owned
 

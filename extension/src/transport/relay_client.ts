@@ -40,6 +40,23 @@ export interface RoomMeta {
   /** Friendly model name (e.g. "claude-sonnet-4.5"). Optional — pi-ext sends
    *  when `ExtensionContext.model` is available; relay/app tolerate absence. */
   model?: string;
+  /** Parent room id, when this room is a SUBAGENT child session:
+   *  the roomId of the spawning (root) session. Absent for normal top-level
+   *  sessions. Lets the app NEST the child under its parent in the home list
+   *  from `room_announced` alone, without attaching. */
+  parent?: string;
+  /** Subagent record id, when this room is a subagent child session. Lets a
+   *  consumer map a subagents-panel row to this room. Rides the relay's
+   *  room_meta passthrough alongside `parent`. */
+  subagentId?: string;
+  /** This room's OWN pi sessionId, and its PARENT's pi sessionId when it is a
+   *  subagent child. Pi ids (NOT roomIds) — the app nests + maps panel rows by
+   *  these, at list time, from room_announced. roomId stays relay-routing only. */
+  sessionId?: string;
+  parentSessionId?: string;
+  /** Caps the room advertises about itself; the presence daemon stamps
+   *  `is_daemon` so the app filters its control room. */
+  caps?: string[];
 }
 
 /** Control frame sent to relay (not routed to app peer). Each publish carries

@@ -64,6 +64,9 @@ export class PlainPeerChannel implements PeerChannel {
       env: EnvelopeMessage,
       sender: PlainPeerChannel,
     ) => void,
+    /** Supplies the SENDING session's pi sessionId, stamped on every outbound
+     *  envelope so the app keys per-session state by the pi id (not the room). */
+    private readonly sessionIdProvider?: () => string | undefined,
   ) {
     const listener = (line: string) => this._onLine(line);
     relay.on("message", listener);
@@ -118,6 +121,8 @@ export class PlainPeerChannel implements PeerChannel {
             ? EVT_KIND
             : RPC_KIND),
       ts: env.ts ?? Date.now(),
+      // Pi sessionId = the wire identity the app keys by (room is routing only).
+      sessionId: env.sessionId ?? this.sessionIdProvider?.(),
     };
     const ct = Buffer.from(JSON.stringify(wire)).toString("base64");
     const outer: OuterEnvelope = { peer: this.remotePeerId, ct };

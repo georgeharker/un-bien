@@ -70,6 +70,14 @@ public actor RelayConnection {
         try await channel.send(encode(RelayControlOut.roomsCheck(peers: peers)))
     }
 
+    /// Re-request presence + rooms snapshots for `peers` WITHOUT re-subscribing:
+    /// a manual reconcile (Home drag-to-refresh) that recovers rooms whose live
+    /// `room_announced` push was missed.
+    public func refreshRooms(peers: [String]) async throws {
+        try await channel.send(encode(RelayControlOut.presenceCheck(peers: peers)))
+        try await channel.send(encode(RelayControlOut.roomsCheck(peers: peers)))
+    }
+
     /// Route a ``ClientMessage`` to a Pi peer/room. The app's stock command frame
     /// is mapped at THIS single seam to pi's first-class rpc verb (rpc plane, pi
     /// acts) or an un-bien-owned frame (ub plane, extension acts) — so AppModel
@@ -132,7 +140,7 @@ public actor RelayConnection {
         case "session_new":
             obj["type"] = .string("new_session")
             return (.rpc, .object(obj))
-        case "session_sync", "session_launch", "presence_status":
+        case "session_sync", "session_launch", "presence_status", "get_session_info":
             // un-bien's OWN protocol (reconstruction request / mesh remote-launch
             // / daemon caps pull) — the extension/daemon acts. The frame keeps its
             // inner type verbatim.

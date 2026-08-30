@@ -75,6 +75,11 @@ import {
 } from "./extension_ui_bridge.js";
 import { createPanelBridge, type PanelBridge } from "./panel_bridge.js";
 import {
+  initSubagentRooms,
+  subagentRoomsEnabled,
+  type SubagentRoomsController,
+} from "./subagent_rooms.js";
+import {
   createRpcEnvelope,
   isEnvelopeFrame,
   helloEnvelope,
@@ -250,6 +255,7 @@ let _myRoomMeta: {
   model?: string;
   thinking?: ThinkingLevel;
   working?: boolean;
+  sessionId?: string;
 } | null = null;
 let _currentModel: string | undefined; // last-known model name
 let _currentThinking: ThinkingLevel | undefined; // last-known thinking level
@@ -776,9 +782,13 @@ function _ctxUi(preferred?: { ui?: unknown } | null): {
 function _safeNotify(
   message: string,
   level: "info" | "warning" | "error" = "info",
+  preferred?: { ui?: unknown } | null,
 ): void {
   try {
-    const ui = _ctxUi();
+    // Prefer the caller's fresh ctx (e.g. a command ctx) over the module's
+    // last-event ctx — a session_start ctx can be ui-less/stale and would
+    // otherwise shadow it, silently dropping the notify.
+    const ui = _ctxUi(preferred);
     if (ui && typeof ui.notify === "function") ui.notify(message, level);
   } catch {
     /* never let notify take down the process */
@@ -900,6 +910,8 @@ export function _resetBridgeOwnersForTest(): void {
   _panelBridge = null;
   _rpcEnvelope?.dispose();
   _rpcEnvelope = null;
+  _subagentRooms?.dispose();
+  _subagentRooms = null;
   _extensionUiBridge?.dispose();
   _extensionUiBridge = null;
 }
@@ -1032,6 +1044,7 @@ interface SessionState {
   agentRun: { active: boolean; generation: number };
   sessionManager: ExtensionContext["sessionManager"] | null;
   model: string | null;
+  thinking: ThinkingLevel | null;
 }
 const _sessions = new Map<string, SessionState>();
 // The session bound to the app room. null until the ROOT session_start fires;
@@ -1050,6 +1063,7 @@ function _stateFor(sid: string): SessionState {
       agentRun: { active: false, generation: 0 },
       sessionManager: null,
       model: null,
+      thinking: null,
     };
     _sessions.set(sid, st);
   }
@@ -1098,6 +1112,12 @@ let _panelBridge: PanelBridge | null = null;
 // (always on, advertised as the `rpc_envelope` capability); runs alongside the
 // stock ServerMessage path only until M4 parity retirement.
 let _rpcEnvelope: { dispose(): void } | null = null;
+
+// Per-child subagent relay rooms — each subagent surfaced to the app as its own
+// session, opt-in via the `subagents.rooms` un-bien setting (a no-op controller
+// otherwise). Owned by the ROOT session; a child session_start calls
+// onChildSession on this same instance.
+let _subagentRooms: SubagentRoomsController | null = null;
 
 let _stopAutoListener: (() => void) | null = null;
 
@@ -2392,6 +2412,8 @@ function _attachOwner(
       env.ub === undefined
         ? _routeRpcCommandFrom(channel, env)
         : _routeUnBienPlaneFrom(channel, env),
+    () =>
+      _rootState().sessionManager?.getSessionId() ?? _rootSessionId ?? undefined,
   );
 
   _attachPeerChannel(appPeerId, channel);
@@ -2803,7 +2825,9 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     _extensionUiBridge?.dispose();
     _extensionUiBridge = createExtensionUiBridge(pi, _uiBroadcast);
     _panelBridge?.dispose();
-    _panelBridge = createPanelBridge(pi, _panelBroadcast);
+    _panelBridge = createPanelBridge(pi, _panelBroadcast, {
+      suppressAgents: subagentRoomsEnabled(),
+    });
     _rpcEnvelope?.dispose();
     _rpcEnvelope = createRpcEnvelope(pi, _broadcastEnvelope, {
       enrichArgs: (tool, args) => {
@@ -2812,6 +2836,12 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         };
         return Array.isArray(e.hunks) ? { hunks: e.hunks } : null;
       },
+    });
+    _subagentRooms?.dispose();
+    _subagentRooms = initSubagentRooms(pi, {
+      getParentRoomId: () => _myRoomId,
+      getParentSessionId: () => _rootSessionId,
+      broadcastPanel: _panelBroadcast,
     });
   }
 
@@ -2875,14 +2905,16 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // SDK fires model_select on settings load + every user switch. We cache the
   // friendly name and broadcast a room_meta_update so the relay can fan it
   // out to subscribed apps without needing a new pair.
-  pi.on("model_select", (event) => {
+  pi.on("model_select", (event, ctx) => {
     const m = event?.model as { name?: string; id?: string } | undefined;
     const modelName = m?.name ?? m?.id;
     if (!modelName) return;
-    // Cache + fan out. Keeps the cached room_meta fresh so a future reconnect
-    // carries the current model in its hello, and pushes a room_meta_update to
-    // apps already subscribed.
-    _setCurrentModel(modelName);
+    // Cache per-sid for THIS session (root + subagent) so a subagent's model is
+    // queryable and never clobbers the root's. Only the ROOT projects to
+    // _currentModel + room_meta (the app-room's model hello/update).
+    const sid = _sidOf(ctx);
+    _stateFor(sid).model = modelName;
+    if (!_isNonRootSid(sid)) _setCurrentModel(modelName);
   });
 
   // Plan/28 Wave D.1: mirror model's room_meta_update path for thinking
@@ -2890,9 +2922,13 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // of starting null. SDK fires `thinking_level_select` on settings load
   // AND on every user toggle (matching `model_select`'s behavior), so
   // late-pairing apps see the current level via `room_meta_updated`.
-  pi.on("thinking_level_select", (event) => {
+  pi.on("thinking_level_select", (event, ctx) => {
     const level = event?.level as ThinkingLevel | undefined;
     if (!level) return;
+    // Cache per-sid; only the ROOT projects to _currentThinking + room_meta.
+    const sid = _sidOf(ctx);
+    _stateFor(sid).thinking = level;
+    if (_isNonRootSid(sid)) return;
     _currentThinking = level;
     if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, thinking: level };
     if (!_relay || !_myRoomId) return;
@@ -2947,11 +2983,11 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // Each session records its OWN sessionManager (no cross-session clobber).
     if (ctx?.sessionManager) st.sessionManager = ctx.sessionManager;
     st.working = true;
-    if (_isNonRootSid(sid)) return; // model hydration + room_meta are root-only
-    // Late model hydration: if the model was still unknown at connect (resolved
-    // lazily by the SDK), grab it on the first turn and fan it out — so a daemon
-    // whose model only materialises at turn 1 still reports it to the app.
-    if (!_currentModel) {
+    // Late model hydration for THIS session: if the model was unknown at
+    // connect (SDK resolves it lazily), grab it on the first turn and cache
+    // per-sid — root AND subagent, so a subagent's model is queryable and the
+    // root's is never clobbered by a child.
+    if (!st.model) {
       try {
         const m = (
           ctx as Partial<ExtensionContext> & {
@@ -2959,11 +2995,15 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
           }
         ).getModel?.();
         const name = m?.name ?? m?.id;
-        if (name) _setCurrentModel(name);
+        if (name) st.model = name;
       } catch {
         /* defensive — never block a turn on a model lookup */
       }
     }
+    if (_isNonRootSid(sid)) return; // room_meta projection is root-only
+    // Root projection: seed the global model + room_meta hello from the root's
+    // cached model, once.
+    if (!_currentModel && st.model) _setCurrentModel(st.model);
     // Plan/32 Part B: publish working=true as room_meta (raw, no debounce —
     // the debounce lives in the app). Same shape as the model/thinking updates.
     // _myRoomMeta is the ROOM projection (driven only by the root session).
@@ -2994,7 +3034,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // Plan/32: compaction feedback. compact() doesn't run a turn, so bracket it
   // with working=true/false here. Returning void = no veto → default
   // compaction proceeds.
-  pi.on("session_before_compact", (event) => {
+  pi.on("session_before_compact", (event, ctx) => {
     if (event.preparation) {
       event.preparation.messagesToSummarize =
         _filterInternalMessagesFromContext(
@@ -3004,13 +3044,16 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         event.preparation.turnPrefixMessages,
       );
     }
-    _publishWorking(true);
+    // working=true brackets the ROOT room's compaction; the per-session message
+    // filtering above always runs, but a subagent that compacts must not
+    // flicker the root's working indicator.
+    if (!_isNonRootSid(_sidOf(ctx))) _publishWorking(true);
   });
-  pi.on("session_compact", () => {
+  pi.on("session_compact", (_event, ctx) => {
     // Live compaction result rides the rpc-envelope compaction_end (app applyRPC),
     // and the persisted CompactionEntry surfaces natively via get_entries. Only
-    // the working=false bracket remains here.
-    _publishWorking(false);
+    // the working=false bracket remains here — the ROOT room's, so guard it.
+    if (!_isNonRootSid(_sidOf(ctx))) _publishWorking(false);
   });
 
   // Re-capture the freshest base ctx on every session replacement so compact
@@ -3019,11 +3062,15 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // New session. Fires on startup/new/fork/reload/resume; the ctx is always
   // bound to the current session.
   pi.on("session_start", (_event, ctx) => {
-    _lastEventCtx = ctx;
     // Register THIS session's record (root + every subagent get their own
     // session_start with their own ctx). Each records its OWN sessionManager —
     // no cross-session clobber (was the unguarded `_sessionManager = ...` bug).
     const sid = _sidOf(ctx);
+    // The module BASE ctx (compact/notify fallback when no fresh ctx is passed)
+    // is the ROOT's — a subagent child's ctx must NOT clobber it, same
+    // no-cross-session-clobber rule as the per-sid sessionManager. Otherwise a
+    // subagent steals the base ctx and root-scoped notifies silently drop.
+    if (!_isNonRootSid(sid)) _lastEventCtx = ctx;
     if (ctx?.sessionManager) _stateFor(sid).sessionManager = ctx.sessionManager;
     // session_shutdown disposes per-session pi-ask subscriptions. A host that
     // reuses this module instance does NOT re-run the factory, so rebind the
@@ -3037,7 +3084,10 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       if (ctx?.sessionManager) _rootSessionId = sid;
       if (!_extensionUiBridge)
         _extensionUiBridge = createExtensionUiBridge(pi, _uiBroadcast);
-      if (!_panelBridge) _panelBridge = createPanelBridge(pi, _panelBroadcast);
+      if (!_panelBridge)
+        _panelBridge = createPanelBridge(pi, _panelBroadcast, {
+          suppressAgents: subagentRoomsEnabled(),
+        });
       if (!_rpcEnvelope)
         _rpcEnvelope = createRpcEnvelope(pi, _broadcastEnvelope, {
           enrichArgs: (tool, args) => {
@@ -3047,6 +3097,16 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
             return Array.isArray(e.hunks) ? { hunks: e.hunks } : null;
           },
         });
+      if (!_subagentRooms)
+        _subagentRooms = initSubagentRooms(pi, {
+          getParentRoomId: () => _myRoomId,
+          getParentSessionId: () => _rootSessionId,
+          broadcastPanel: _panelBroadcast,
+        });
+    } else if (_isNonRootSid(sid)) {
+      // A subagent child session (non-root) — surface it as its own relay room.
+      // `pi` here is the CHILD's ExtensionAPI (per-activation).
+      _subagentRooms?.onChildSession(pi, ctx);
     }
     // Rearm a reused-but-disposed instance. The session_shutdown teardown (below)
     // sets _disposed=true assuming the host re-evaluates THIS module fresh for the
@@ -3139,6 +3199,17 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // best-effort: every step is guarded so a partially-initialised instance
   // (e.g. shutdown lands mid-`_cmdRoot`) tears down without throwing.
   pi.on("session_shutdown", async () => {
+    // A subagent child's session_shutdown owns NOTHING at the module level: the
+    // connection, mesh node, cwd lock, lifecycle generations, and base ctx are
+    // the ROOT's, and its child room outlives the turn (reaped by the root's
+    // _subagentRooms.dispose(), not here). So a non-root shutdown is a no-op.
+    // Without this, a subagent ENDING poisoned _disposed + the generations AND
+    // tore down the root's mesh node / cwd lock; the next root session_start's
+    // `if (_disposed)` rearm then re-ran _cmdRoot, dropping and re-announcing
+    // the root room — the "parent disappears while still running" flap. This is
+    // root-lifecycle authority (Tier 2), NOT the per-sid data path, so an
+    // early return is correct here — there is no session-local state to cache.
+    if (!_isRootSession(pi)) return;
     // Revoke async authority synchronously, before any teardown await. `_disposed`
     // blocks the outgoing continuation immediately; the root and candidate
     // generations keep queued work stale even if a same-module session_start
@@ -3169,6 +3240,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       _panelBridge = null;
       _rpcEnvelope?.dispose();
       _rpcEnvelope = null;
+      _subagentRooms?.dispose();
+      _subagentRooms = null;
       _releaseRootSession(pi);
     }
     // Drop captured ctxs immediately. On module-reuse hosts the same instance
@@ -3304,6 +3377,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         _safeNotify(
           `[un-bien test] ${_runTestScenario(sub.slice("test".length).trim())}`,
           "info",
+          ctx,
         );
       } else if (sub === "rename" || sub.startsWith("rename ")) {
         await _renameAgent(sub.slice("rename".length).trim());
@@ -3856,10 +3930,17 @@ async function _cmdStart(
     cwd: string;
     model?: string;
     thinking?: ThinkingLevel;
+    sessionId?: string;
   } = { name: sessionName, cwd };
   const modelName = _currentModelName();
   if (modelName) roomMeta.model = modelName;
   if (_currentThinking) roomMeta.thinking = _currentThinking;
+  // The room's OWN pi sessionId on the announce — so the app keys per-session
+  // state by the pi id (wire identity), not the routing roomId. roomId stays
+  // relay-routing only.
+  const rootSid =
+    _rootState().sessionManager?.getSessionId() ?? _rootSessionId ?? undefined;
+  if (rootSid) roomMeta.sessionId = rootSid;
   // Persist so _attemptReconnect can replay the same hello payload — without
   // this, reconnect issues a bare hello and the relay creates a "default room"
   // entry that surfaces in the app as a phantom legacy session.

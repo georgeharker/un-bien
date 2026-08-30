@@ -47,6 +47,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 export interface EnvelopeMessage {
   type?: string;
   ts?: number;
+  /** The pi sessionId of the SENDING session — the wire IDENTITY the app keys
+   *  per-session state by. Stamped at the outbound choke. The outer `room` is
+   *  mesh/relay ROUTING only; this is the pi id. */
+  sessionId?: string;
   /** Envelope/pi-rpc protocol version for client decode-guarding. Cross-cutting. */
   protocolVersion?: number;
   rpc?: unknown;
@@ -93,6 +97,14 @@ export type UbFrame =
       hostname?: string; // response: machine hostname
       backend?: string; // response: configured launch backend (tmux|herdr)
       in_reply_to?: string; // response: echoes the request id
+    }
+  | { type: "get_session_info"; id?: string } // app->ext: session-info PULL request
+  | {
+      // ext->app: session-info PULL response — a session's own state, answered
+      // from the fork's tracked data (subagent lifecycle status for now).
+      type: "session_info";
+      status?: string;
+      in_reply_to?: string;
     };
 
 /** Legacy wrapper marker for the rpc/evt plane — still stamped + accepted during

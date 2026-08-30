@@ -61,6 +61,7 @@ export interface PanelBridge {
 export function createPanelBridge(
   pi: ExtensionAPI,
   broadcast: (msg: ServerMessage) => void,
+  opts?: { suppressAgents?: boolean },
 ): PanelBridge | null {
   const eventsRaw = (pi as { events?: EventBus }).events;
   if (!eventsRaw || typeof eventsRaw.on !== "function") {
@@ -274,9 +275,14 @@ export function createPanelBridge(
       broadcastNow(AGENTS_KEY, agentsFrame);
     };
 
-  const unsubAgents = Object.entries(LIFECYCLE).map(([channel, status]) =>
-    events.on(channel, recordAgent(status)),
-  );
+  // When the subagent-rooms feature owns the subagents panel (producing it from
+  // pi child detection), don't ALSO drive it from the bus here — two producers
+  // would fight over the same `subagents` panel key.
+  const unsubAgents = opts?.suppressAgents
+    ? []
+    : Object.entries(LIFECYCLE).map(([channel, status]) =>
+        events.on(channel, recordAgent(status)),
+      );
 
   // NB: unlike pi-plan's TUI (which clears its fleet on session_shutdown to reset
   // the widget), we deliberately KEEP finished agents. Broadcasting an empty

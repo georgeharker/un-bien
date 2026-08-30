@@ -10,6 +10,9 @@ public struct EnvelopeMessage: Codable, Sendable {
     public let type: String?
     /// Epoch ms stamped at send (ordering/debug). Cross-cutting.
     public let ts: Double?
+    /// The SENDING session's pi sessionId — the wire IDENTITY the app keys all
+    /// per-session state by. The outer `room` is mesh/relay routing only.
+    public let sessionId: String?
     /// Envelope/pi-rpc protocol version for decode-guarding. Cross-cutting.
     public let protocolVersion: Int?
     public let rpc: JSONValue?
@@ -25,9 +28,10 @@ public struct EnvelopeMessage: Codable, Sendable {
 
     public init(type: String? = nil, ts: Double? = nil, protocolVersion: Int? = nil,
                 rpc: JSONValue? = nil, evt: EnvelopeEvt? = nil, ub: JSONValue? = nil,
-                aux: JSONValue? = nil) {
+                aux: JSONValue? = nil, sessionId: String? = nil) {
         self.type = type
         self.ts = ts
+        self.sessionId = sessionId
         self.protocolVersion = protocolVersion
         self.rpc = rpc
         self.evt = evt

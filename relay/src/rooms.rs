@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
@@ -26,6 +26,14 @@ pub struct RoomMeta {
     /// always serialized so subscribers can rely on its presence.
     pub working: bool,
     pub started_at: i64,
+    /// Opaque passthrough for any `room_meta` keys the relay does not model
+    /// itself (e.g. app-level session association). The known fields above are
+    /// parsed into the typed struct for the relay's own use; every other key is
+    /// captured here and re-emitted verbatim (flattened) in `room_announced`,
+    /// so app-owned metadata flows end-to-end without the relay learning its
+    /// meaning.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 /// Patch over the mutable `RoomMeta` fields. Each entry distinguishes
