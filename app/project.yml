@@ -111,6 +111,12 @@ targets:
         # CryptoKit (Ed25519) + TLS only — exempt crypto, declared to avoid the
         # per-upload export-compliance prompt.
         ITSAppUsesNonExemptEncryption: false
+        # REQUIRED for Mac App Store submission — the upload processor rejects
+        # the archive without the category UTI. Matches the ASC record's
+        # primary category (Developer Tools).
+        LSApplicationCategoryType: public.app-category.developer-tools
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "2"
     entitlements:
       path: App/macOS/un-bien.entitlements
       properties:
