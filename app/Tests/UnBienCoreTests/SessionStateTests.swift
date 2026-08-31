@@ -273,4 +273,28 @@ final class SessionStateTests: XCTestCase {
                        ["Clarification expired on the bridge", "Answer was not accepted"])
         XCTAssertEqual(Set(notices.map(\.id)).count, 2, "notice ids must be unique (ForEach)")
     }
+
+    // Custom-role messages flagged display:false (un-bien's own bookkeeping:
+    // mesh name assignment, relay state, auto-update) must NOT surface as
+    // transcript notices; display-absent custom messages still render.
+    func testDisplayFalseCustomMessagesAreSuppressed() {
+        var state = SessionState()
+        func customFrame(content: String, display: Bool?) -> JSONValue {
+            var msg: [String: JSONValue] = ["role": .string("custom"), "content": .string(content)]
+            if let display { msg["display"] = .bool(display) }
+            return .object(["type": .string("message_end"), "message": .object(msg)])
+        }
+        // Suppressed: explicitly hidden bookkeeping.
+        state.applyRPC(customFrame(content: "Mesh name: tmp.XXXXXX", display: false))
+        state.applyRPC(customFrame(content: "Relay connected", display: false))
+        // Rendered: display absent (display-intended).
+        state.applyRPC(customFrame(content: "Deploy finished", display: nil))
+        // Rendered: display explicitly true.
+        state.applyRPC(customFrame(content: "Task complete", display: true))
+        let notices = state.items.compactMap { item -> NoticeItem? in
+            if case let .notice(n) = item { return n } else { return nil }
+        }
+        XCTAssertEqual(notices.map(\.message), ["Deploy finished", "Task complete"],
+                       "display:false custom messages must be suppressed; absent/true render")
+    }
 }

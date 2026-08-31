@@ -289,6 +289,14 @@ public struct SessionState: Equatable, Sendable {
                 }
             }
         case "custom":
+            // un-bien's own bookkeeping (mesh name assignment, relay state,
+            // extension auto-update) rides custom-role messages flagged
+            // display:false ON THE WIRE precisely so clients don't surface
+            // them — honor it. They used to render as noise notice rows in
+            // live sessions AND the fixture-replayed demo ("Mesh name:
+            // tmp.XXXXXX" et al). Absent/true still renders (other
+            // extensions' display-intended custom messages).
+            if message?["display"]?.boolValue == false { break }
             noticeSeq += 1
             append(.notice(NoticeItem(id: "custom\(noticeSeq)", code: "custom",
                                       message: message?["content"]?.joinedText() ?? "")))
