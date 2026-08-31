@@ -54,9 +54,15 @@ are ✅; fields it currently ignores (display/telemetry) are ⚪.
 
 **Two properties that shape the design:**
 
-1. **No `sessionId`.** No lifecycle event carries the child Pi `sessionId` — the
-   key un-bien needs to track/route a child. In-process, it recovers the id from
-   the child's `session_start`; **out-of-process, the id must be supplied** (§3).
+1. **No `sessionId` — and the `id` these events carry is not one.** Every
+   `subagents:*` lifecycle event carries the manager's **record `id`** — a
+   per-run bookkeeping key for the subagent instance — never the child Pi
+   `sessionId` (the session identity un-bien tracks and routes by, which
+   appears only on `subagents:child:session-created`/`disposed` and the child's
+   own `session_start`). The two id spaces are deliberately separate; un-bien
+   correlates a record to its session to stamp status (how, and what would make
+   it exact, in §5). In-process, the session id is recovered from the child's
+   `session_start`; **out-of-process, it must be supplied** (§3).
 2. **Top-level only.** The core lifecycle events fire for top-level agents only;
    nested/workflow children emit nothing. So the event stream is not a complete
    census — authoritative existence is the child-marker signal (§3), not these.
@@ -136,40 +142,51 @@ implementation's whole obligation is the announcement —
 - **in-process:** emit `subagents:child:session-created` `{ sessionId,
 parentSessionId? }` synchronously before `bindExtensions()`, and
   `subagents:child:disposed` `{ sessionId }` in the `finally`;
-- **out-of-process:** set env `PI_SUBAGENT_PARENT_SESSION=<parent-session-id>` in
-  the spawned child so it learns its parent.
+- **out-of-process:** gotgenes' own convention sets env
+  `PI_SUBAGENT_PARENT_SESSION` in the spawned child — **un-bien does not consume
+  that env**. un-bien's out-of-process requirement is the rule above: a
+  parent-side marker **with the child id** (`subagents:child:session-created` /
+  `unbien:subagent:child`, emitted once the child id is known). The pre-created
+  keeper does the nesting; without a child-id marker an out-of-process child is
+  undetectable — no keeper, no parentage, no panel row.
 
-un-bien's keeper + relay-inherit path (§3 parentage) makes even the env-less case
-nest, but honoring the convention is the portable contract other tools share.
+### Parentage model: parent-stamped keeper (chosen)
 
-### Parentage model: child-knows-parent (chosen)
+Nesting has ONE model: **the child's room is pre-created with `room_meta.parent`
+(+ `parentSessionId`) already stamped**, on the child's deterministic room
+(`roomIdForSession(childSessionId)`). In-process, the room is built at the
+child's `session_start` with the parent link in its connect `room_meta`; when a
+child MARKER arrives first (gotgenes / `unbien:subagent:child`), the room exists
+even earlier — as a **passive keeper** — and the later `session_start` attaches
+the producer to that same room. Out-of-process, the parent-side marker
+pre-creates that same passive keeper (parent already stamped); the child
+process — un-bien-aware — later joins the SAME deterministic room as the serving
+producer (same machine ⇒ same keypair ⇒ the same `(peer, room)` key). The
+deterministic `roomId` is where the two ends meet without coordinating;
+precedence is **set-once, parent-authoritative** (`update_room_meta` merges
+`parent`/`parentSessionId` into `extra` only if absent, so a later write — or the
+child's own connect — can never clobber or unstamp a pre-set parent). The marker
+events still feed the parent's fleet/panel/status; nesting rides the room's
+`room_meta.parent`, stamped at pre-creation. Creation is **upsert**
+(create-or-enrich) keyed on the **child sessionId** (the deterministic roomId's
+key): the marker, `session_start`, and any re-arrival converge on one room/entry
+— enrich if it exists, never duplicate or double-bind.
 
-Nesting has ONE model: **the child stamps `room_meta.parent` (+ `parentSessionId`)
-on its own deterministic room** (`roomIdForSession(childSessionId)`) — one
-connection, no parent-held placeholder. In-process, the parent builds the child
-room and stamps it; out-of-process, the child's own un-bien stamps it from its
-**spawn context** (parentSessionId handed in at spawn — the same mechanism a
-launched session uses). For the OPPOSITE case — an extension hands us the childId
-on **spawn** of a subagent (parent-knows-child) but the child doesn't know its
-parent — _we_ pre-create the child room with `parentId` already stamped, and when
-the child recreates itself in that same deterministic room it simply **doesn't
-overwrite** `parentId`. The relay backs this: `update_room_meta` writes only the
-fields present in a patch, so a child write that omits `parent` leaves the
-pre-stamped value intact. The deterministic `roomId` is where the two ends meet without
-coordinating; precedence is **set-once, parent-authoritative**. The marker events
-still feed the parent's fleet/panel/status, but nesting always rides the
-child-stamped `room_meta.parent`. Creation is **upsert** (create-or-enrich) keyed
-on that deterministic `roomId`: the marker, `session_start`, and any re-arrival
-converge on one room/entry — enrich if it exists, never duplicate or double-bind.
-(No held keeper is needed and no reap: a child recreates itself in the
-pre-created room, and children live until the **parent connection dies**.)
+**Parent-held keeper + no reap.** The parent ALWAYS holds the child room open
+via the passive keeper — it announces parentage and answers NO owner RPCs (the
+serving side — in-process attach, or the out-of-process child's own connection —
+is the only responder, so a room hosting both conns never double-answers).
+Children linger for the parent's lifetime (transcripts stay visible): a
+`*:child:disposed` marker only STAMPS terminal status — releasing the keeper for
+keeper-only children — and rooms close wholesale at parent `session_shutdown` —
+so there is nothing to reap.
 
-**Child-connection invariant + no reap.** Children linger for the parent's
-lifetime (transcripts stay visible), disposed only on parent `session_shutdown` —
-so there is nothing to reap. And for an out-of-process child, un-bien is
-**observer-only of the child's mesh connection**: the parent never creates,
-produces on, or disposes it — the child owns it. Parent-side awareness rides the
-marker events (fleet/panel/status); nesting rides the child-stamped `room_meta`.
+**Out-of-process footprint.** For an out-of-process child, the keeper is
+un-bien's ONLY footprint on that room: the child owns its own serving
+connection, and disposal (§4) closes only the keeper — the child's connection
+(if still up) keeps the room open until it leaves. Parent-side awareness rides
+the marker events (fleet/panel/status); nesting rides the keeper-stamped
+`room_meta`.
 
 ### Advertising the parent — early vs late (the exact flow)
 
@@ -180,18 +197,21 @@ it.
 
 - **EARLY — gotgenes + out-of-process** (parent known at _creation_). The child
   marker (`subagents:child:session-created` / `unbien:subagent:child`) carries
-  `{ sessionId, parentSessionId }`, so the room is **created with the
-  parent-child relationship already set** in its connect `room_meta` →
-  `room_announced` (first-conn) carries it → the app nests immediately. This is
-  the design; do not remove it.
-- **LATE — tintinweb / in-process** (parent known only at _attach_). tintinweb
-  gives no early child id, so the room is created **optimistically without a
-  parent**; parentage is learned when the child session attaches (`session_start`
-  → SDK header `parentSession`). Because `room_announced` fires **first-conn
-  only**, the late parent is advertised via a **`room_meta_update`** on the
-  already-open room (`ChildRoom.setParent` → `RelayClient.sendControl`), **not** a
-  re-announce and **never** a dispose/rebuild (that would kill an already-set
-  parent).
+  `{ sessionId, parentSessionId? }` — the parent link falls back to the root's
+  session id when omitted — so the room is **created with the parent-child
+  relationship already set** in its connect `room_meta` → `room_announced`
+  (first-conn) carries it → the app nests immediately. This is the design; do not
+  remove it.
+- **LATE — tintinweb / in-process** (no marker → no room until attach). tintinweb
+  gives no early child id, so the room first exists at the child's `session_start`;
+  the parent link stamped there is the ROOT's session id (`getParentSessionId()`)
+  — **not** the SDK header: `SessionHeader.parentSession` is a FILE PATH
+  (`…/<ts>_<id>.jsonl`), never an id, and is deliberately not read. Because
+  `room_announced` fires **first-conn only**, any parentage landing after the room
+  is open — queued during the async build (`pendingParent`), or learned after
+  creation — is advertised via a **`room_meta_update`** on the already-open room
+  (`ChildRoom.setParent` → `RelayClient.sendControl`), **not** a re-announce and
+  **never** a dispose/rebuild (that would kill an already-set parent).
 
 **Relay = set-once.** `update_room_meta` merges the `parent`/`parentSessionId`
 into `extra` **only if absent** (never overrides an existing parent), then fans
@@ -246,10 +266,18 @@ pi.events.emit("unbien:subagent:child", {
   out-of-process.
 
 **Disposal counterpart.** Emit **`unbien:subagent:disposed`** `{ sessionId }` when
-the child session ends (mirroring gotgenes' `subagents:child:disposed`); un-bien
-releases the keeper and drops the child from the panel. For an out-of-process
-child this closes only un-bien's keeper connection — the child's own connection
-(if still up) keeps the room until it leaves.
+the child session ends (mirroring gotgenes' `subagents:child:disposed`, which
+fires in the run's `finally` on success AND error). Disposal is a **terminal
+status stamp, not a removal** (§5): the panel row STAYS, stamped with the
+correlated terminal record status (fallback `stopped`). Then it splits on
+locality — an **in-process** child LINGERS: its room keeps serving the finished
+transcript until parent teardown (the entries stay readable in the captured
+session manager; the room captured it while the ctx was active, so the child
+session's own dispose cannot poison it). A **keeper-only** child (out-of-process,
+or one that died before attaching) has its keeper released — an out-of-process
+child's own connection (if still up) keeps the room until it leaves — and a
+build still connecting when the marker lands is disposed on completion instead
+of registering (tombstone), so no zombie room can appear.
 
 ---
 
@@ -275,6 +303,28 @@ The emitter's contract, uniformly:
 un-bien is a pure consumer of this stream. There is no "query the child" path in
 the contract — an out-of-process authority that goes silent leaves the child
 running-with-last-known-status until a terminal event arrives.
+
+**Correlation — how a record finds its session (and what would make it exact).**
+The status stamp needs the record `id` bound to the child `sessionId`; no event
+carries both, so un-bien prefers whatever is exact, in this order:
+
+1. **A `sessionId` on the record event.** Neither tintinweb nor gotgenes emits
+   this today — but if your implementation can add the child `sessionId` to
+   `subagents:started`, un-bien binds directly, with zero ordering assumptions.
+   This is the one-field fix that makes correlation exact; adding it is the most
+   useful thing an implementation can do here.
+2. **A record `id` on the child marker** (`subagents:child:session-created` /
+   `unbien:subagent:child`) — same exactness from the other side; un-bien binds
+   at the marker.
+3. **gotgenes' published service** — probed structurally (`getRecord(id)`
+   `.outputFile`, the child's session file, matched against the file captured at
+   the child's `session_start`) when present. No package coupling; silent when
+   absent. The `outputFile` pointer survives the child session's release, so the
+   match stays valid for the whole record lifetime.
+4. **Partitioned arrival order** — the base layer for tintinweb: sessions only
+   queue (in-process-tagged at `session_start`); `started`/`resumed` pop tagged
+   entries. Modes are partitioned so concurrent foreground/background spawns
+   cannot cross-bind, and out-of-process entries are never stolen.
 
 **Failure is a status stamp, not a removal.** A launch/agent failure arrives as
 `subagents:failed` (or the marker's `status`) and is simply _stamped_ onto the

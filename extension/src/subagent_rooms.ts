@@ -116,9 +116,23 @@ export function initSubagentRooms(
   if (!resolution.url) return NOOP; // no relay → nothing to surface to
   const relayUrl: string = resolution.url;
 
-  // FIFO of records seen but not yet bound to a child session (arrival-order
-  // bind; see module header). fleet keeps the latest metadata per record id.
-  const pendingRecords: string[] = [];
+  // Correlation queues for record-id <-> child-session binding (arrival order;
+  // no event carries both ids — see module header). PARTITIONED BINDING:
+  // sessions (marker / session_start) only QUEUE — they never pop records;
+  // `created` (background-only in gotgenes) does NOT bind — its id returns at
+  // `started`, by which time its own session_start has tagged its entry; only
+  // `started` / `resumed` pop, and only IN-PROCESS-tagged entries. This keeps a
+  // concurrent foreground+background pair from consuming each other's half
+  // (bg created stealing a queued fg session; fg session_start stealing a
+  // queued bg record), and an out-of-process marker entry (never tagged) from
+  // being stolen by an in-process started. Residual: two same-mode concurrent
+  // spawns cross-bind only if started order diverges from session_start order
+  // — both derive from the manager's admission sequence, so they align.
+  const unboundSessions: string[] = [];
+  const unboundInProcess = new Set<string>();
+  // The child's session JSONL path, captured at its session_start — the join
+  // key for the authoritative service-match binding below.
+  const sessionFileBySession = new Map<string, string>();
   const fleet = new Map<string, SubagentRecord>();
   const children = new Map<string, ChildRoom>();
   // In-flight keeper builds (async connect) reserved by child sessionId, so a
@@ -134,6 +148,16 @@ export function initSubagentRooms(
     string,
     { parentRoomId: string; parentSessionId?: string }
   >();
+  // IN-PROCESS children (a session_start arrived for this sid): disposal
+  // LINGERS — room + panel row stay until parent teardown, the room keeps
+  // serving the FINISHED transcript (§5: terminal status is a STAMP, not a
+  // removal; gotgenes fires child:disposed on success AND error alike).
+  const inProcess = new Set<string>();
+  // KEEPER-ONLY children RELEASED by a disposal marker. Doubles as the tombstone
+  // for the disposed-while-building race: a startChildRoom still connecting when
+  // the marker lands checks this on completion and disposes instead of
+  // registering a room nobody will ever attach to.
+  const keeperReleased = new Set<string>();
   let disposed = false;
 
   // Subagents PANEL state, keyed by CHILD sessionId (pi data). The panel is
@@ -180,6 +204,18 @@ export function initSubagentRooms(
         return v || "pending";
     }
   }
+
+  // Terminal statuses for disposal stamping (the §1 vocabulary's end states): a
+  // disposal marker keeps an existing terminal stamp (usually landed via the
+  // correlated subagents:completed/failed record event, fired before the run's
+  // finally); anything else (running/queued/…) falls back to "stopped".
+  const TERMINAL_STATUSES = new Set([
+    "completed",
+    "failed",
+    "error",
+    "aborted",
+    "stopped",
+  ]);
 
   function emitPanel(): void {
     if (disposed) return;
@@ -238,7 +274,7 @@ export function initSubagentRooms(
       startedAt: existing?.startedAt ?? Date.now(),
     });
     if (id) {
-      recordToSession.set(id, sessionId);
+      bindRecord(id, sessionId);
       const prev = fleet.get(id);
       fleet.set(id, {
         id,
@@ -247,8 +283,18 @@ export function initSubagentRooms(
         status: status ?? prev?.status ?? "started",
         startedAt: prev?.startedAt ?? Date.now(),
       });
+    } else if (
+      ![...recordToSession.values()].includes(sessionId) &&
+      !unboundSessions.includes(sessionId)
+    ) {
+      // No record id on the marker (gotgenes never carries one): queue the
+      // session for the started/created record's symmetric pop.
+      unboundSessions.push(sessionId);
     }
     emitPanel();
+    envLog(
+      `subagent marker: sid=${sessionId.slice(0, 8)} id=${id ?? "-"} queued=${unboundSessions.length}`,
+    );
 
     // Pre-create the passive KEEPER (holds the room open + room_meta.parent) so
     // an event-asserted / out-of-process child NESTS immediately; an in-process
@@ -279,10 +325,17 @@ export function initSubagentRooms(
 
   // Paired disposal (gotgenes `subagents:child:disposed` = `{ sessionId }`, fired
   // in the run's finally on success AND error; un-bien's own
-  // `unbien:subagent:disposed` mirrors it). The child session is gone — release
-  // our keeper/room + drop it from the panel. For an out-of-process child this
-  // closes only OUR keeper conn; the child's own conn (if still up) keeps the
-  // room until it leaves. Inert for tintinweb (never emits this).
+  // `unbien:subagent:disposed` mirrors it; inert for tintinweb). Disposal is a
+  // TERMINAL STATUS STAMP on the panel row (kept — §5 "failure is a status
+  // stamp, not a removal"), then splits on whether the child ever attached
+  // in-process:
+  //  - IN-PROCESS (session_start seen): LINGER — keep the room serving the
+  //    finished transcript until parent teardown. It stays interactive-readable
+  //    from the app; nothing is torn down here.
+  //  - KEEPER-ONLY (out-of-process child, or one that died before attaching):
+  //    release the keeper. An out-of-process child's own conn (if still up)
+  //    keeps the room; a fast-fail had no transcript to lose. The stamped panel
+  //    row stays either way — the error surface.
   function onChildDisposed(raw: unknown): void {
     const p = (raw ?? {}) as Record<string, unknown>;
     const sessionId =
@@ -290,12 +343,25 @@ export function initSubagentRooms(
       (typeof p.childSessionId === "string" && p.childSessionId) ||
       undefined;
     if (!sessionId) return;
-    children.get(sessionId)?.dispose();
-    children.delete(sessionId);
-    building.delete(sessionId);
-    pendingAttach.delete(sessionId);
-    pendingParent.delete(sessionId);
-    panelBySession.delete(sessionId);
+    envLog(
+      `subagent disposed: sid=${sessionId.slice(0, 8)} inProcess=${inProcess.has(sessionId)}`,
+    );
+    // Stamp the row terminal: the correlated subagents:completed/failed record
+    // event usually landed first (fired before the run's finally); "stopped" is
+    // the honest fallback when nothing terminal did.
+    const row = panelBySession.get(sessionId);
+    if (row) {
+      const cur = normalizeStatus(row.status);
+      row.status = TERMINAL_STATUSES.has(cur) ? cur : "stopped";
+    }
+    if (!inProcess.has(sessionId)) {
+      keeperReleased.add(sessionId);
+      children.get(sessionId)?.dispose();
+      children.delete(sessionId);
+      building.delete(sessionId);
+      pendingAttach.delete(sessionId);
+      pendingParent.delete(sessionId);
+    }
     emitPanel();
   }
 
@@ -324,28 +390,74 @@ export function initSubagentRooms(
         const description =
           typeof p.description === "string" ? p.description : undefined;
         const prev = fleet.get(id);
+        // `resumed` (gotgenes detached-resume) fires NO started — it jumps
+        // straight to a terminal payload whose `status` discriminates. Use it
+        // when it's terminal, else stamp the channel verbatim.
+        let stamp = status;
+        if (status === "resumed" && typeof p.status === "string") {
+          const s = normalizeStatus(p.status);
+          if (TERMINAL_STATUSES.has(s)) stamp = s;
+        }
         fleet.set(id, {
           id,
           type: type ?? prev?.type,
           description: description ?? prev?.description,
-          status,
+          status: stamp,
           startedAt: prev?.startedAt ?? Date.now(),
         });
-        if (status === "created" || status === "started") {
-          if (!pendingRecords.includes(id)) pendingRecords.push(id);
+        if (!recordToSession.has(id)) {
+          // FUTURE-PROOF direct bind — neither implementation emits this TODAY
+          // (tintinweb 0.19.0 / gotgenes 21.x carry only the record id), but the
+          // child sessionId on record events is the one-field upstream fix that
+          // makes binding exact (our module-header TODO has waited for it). If a
+          // release adds it, prefer it over every heuristic.
+          const payloadSid =
+            typeof p.sessionId === "string" ? p.sessionId : undefined;
+          if (payloadSid && panelBySession.has(payloadSid)) {
+            bindRecord(id, payloadSid);
+          } else {
+            // Layer 1 — AUTHORITATIVE: service outputFile match (any event,
+            // any time, no ordering assumptions). Falls through to the FIFO
+            // when the service is absent or has no file yet.
+            bindByServiceMatch(id);
+          }
+        }
+        if (status === "started" || status === "resumed") {
+          if (!recordToSession.has(id)) {
+            // Layer 2 — BASE (partitioned FIFO): only started/resumed pop — and
+            // only IN-PROCESS-tagged entries. `created` (background-only in
+            // gotgenes) does NOT bind: its id returns at started, by which time
+            // its own session_start has tagged its entry. Sessions never pop
+            // records. This partitions the modes so a concurrent fg+bg pair
+            // can't consume each other's half, and an out-of-process marker
+            // entry (never tagged) can't be stolen by an in-process started.
+            const idx = unboundSessions.findIndex((s) =>
+              unboundInProcess.has(s),
+            );
+            if (idx !== -1) {
+              const sid = unboundSessions.splice(idx, 1)[0];
+              unboundInProcess.delete(sid);
+              bindRecord(id, sid);
+            }
+          }
         }
         // Already bound to a child? reflect the status/labels on its panel row.
         const sid = recordToSession.get(id);
         const st = sid ? panelBySession.get(sid) : undefined;
         if (st) {
-          st.status = status;
+          st.status = stamp;
           if (type) st.type = type;
           if (description) st.description = description;
           emitPanel();
         }
+        envLog(
+          `subagents evt: ${status} id=${id} bound=${sid !== undefined} ` +
+            `queued=${unboundSessions.length}(${unboundInProcess.size} ip)`,
+        );
       };
     unsub.push(events.on("subagents:created", onRecord("created")));
     unsub.push(events.on("subagents:started", onRecord("started")));
+    unsub.push(events.on("subagents:resumed", onRecord("resumed")));
     unsub.push(events.on("subagents:completed", onRecord("completed")));
     unsub.push(events.on("subagents:failed", onRecord("failed")));
     unsub.push(events.on("subagents:steered", onRecord("steered")));
@@ -357,11 +469,53 @@ export function initSubagentRooms(
     unsub.push(events.on("unbien:subagent:child", onChildMarker));
     unsub.push(events.on("subagents:child:disposed", onChildDisposed));
     unsub.push(events.on("unbien:subagent:disposed", onChildDisposed));
+  } else {
+    envLog(
+      "subagent bus: pi.events MISSING — no marker/record/disposed events will arrive (rooms still work via session_start)",
+    );
   }
 
-  function nextRecord(): SubagentRecord | undefined {
-    const id = pendingRecords.shift();
-    return id ? fleet.get(id) : undefined;
+  /** Bind record id <-> child session, draining the session from the unbound
+   *  FIFO. Single binding per record and per session (both sides check first). */
+  function bindRecord(recId: string, sessionId: string): void {
+    recordToSession.set(recId, sessionId);
+    const i = unboundSessions.indexOf(sessionId);
+    if (i !== -1) unboundSessions.splice(i, 1);
+  }
+
+  // AUTHORITATIVE correlation, zero coupling (layer 1): gotgenes publishes its
+  // typed SubagentsService on globalThis under Symbol.for — we probe it
+  // STRUCTURALLY (getRecord -> outputFile only, no package import). The
+  // record's outputFile is the child's session JSONL path, which we captured
+  // at the child's session_start: an exact match binds record<->session with
+  // NO ordering assumptions, on ANY event (even a terminal one arriving
+  // unbound). Silent when the service is absent — tintinweb (different global,
+  // a possible future adapter) and out-of-process children ride the FIFO base
+  // layer / the marker-with-id convention instead.
+  interface SubagentServiceLike {
+    getRecord(id: string): { outputFile?: string } | undefined;
+  }
+  function bindByServiceMatch(recId: string): boolean {
+    let file: string | undefined;
+    try {
+      const svc = (globalThis as Record<symbol, unknown>)[
+        Symbol.for("@gotgenes/pi-subagents:service")
+      ] as SubagentServiceLike | undefined;
+      file = svc?.getRecord(recId)?.outputFile;
+    } catch {
+      return false;
+    }
+    if (typeof file !== "string") return false;
+    const sid = unboundSessions.find(
+      (s) => sessionFileBySession.get(s) === file,
+    );
+    if (!sid) return false;
+    const i = unboundSessions.indexOf(sid);
+    if (i !== -1) unboundSessions.splice(i, 1);
+    unboundInProcess.delete(sid);
+    bindRecord(recId, sid);
+    envLog(`subagent bind: service match id=${recId} sid=${sid.slice(0, 8)}`);
+    return true;
   }
 
   // Idempotent create-or-attach, keyed by child sessionId (the deterministic
@@ -408,7 +562,10 @@ export function initSubagentRooms(
       onClosed: () => children.delete(sessionId),
     }).then((room) => {
       building.delete(sessionId);
-      if (disposed) {
+      // Controller teardown OR a disposal marker that landed while this build
+      // was connecting (keeperReleased tombstone) — nobody will ever attach to
+      // this room; dispose instead of registering it.
+      if (disposed || keeperReleased.has(sessionId)) {
         room.dispose();
         return;
       }
@@ -434,6 +591,13 @@ export function initSubagentRooms(
     const ro = async (): Promise<never> => {
       throw new Error("subagent session is read-only");
     };
+    // Capture the sessionManager ONCE, while the ctx is ACTIVE: the child
+    // session's dispose() (fired by the manager when its run ends) invalidates
+    // the ctx WRAPPER — a later `ctx.sessionManager` read would throw the
+    // staleness error. The SessionManager itself stays readable (in-memory
+    // entry log; the SDK even types a ReadonlySessionManager for this), which is
+    // what lets a LINGERED room keep serving the finished transcript.
+    const sm = ctx.sessionManager;
     return {
       prompt: ro,
       steer: ro,
@@ -442,7 +606,6 @@ export function initSubagentRooms(
       setModel: ro,
       setThinkingLevel: ro,
       getEntries: async (since?: string) => {
-        const sm = ctx.sessionManager;
         const all = sm.getEntries();
         const sliced =
           typeof since === "string"
@@ -463,33 +626,48 @@ export function initSubagentRooms(
     if (disposed || !ctx?.sessionManager) return;
     const sessionId = ctx.sessionManager.getSessionId();
     if (!sessionId) return;
+    // In-process lifecycle: disposal of THIS sid lingers (see inProcess). A
+    // resurrected session id (resume of the same session file) re-opens it.
+    inProcess.add(sessionId);
+    keeperReleased.delete(sessionId);
+    // Capture the session file — the join key for service-match binding.
+    const sessionFile = ctx.sessionManager.getSessionFile?.();
+    if (typeof sessionFile === "string") {
+      sessionFileBySession.set(sessionId, sessionFile);
+    }
     const parentRoomId = opts.getParentRoomId();
     if (!parentRoomId) return; // root room not up yet — nothing to nest under
 
     // UPSERT reconcile (deterministic roomId is the meeting point): if a child
     // MARKER (subagents:child:session-created / unbien:subagent:child) already
     // registered this child, that binding is AUTHORITATIVE — enrich it and SKIP
-    // the arrival-order record pop (removes the mis-bind risk). Otherwise fall
-    // back to arrival-order correlation. Either way we converge on ONE entry.
+    // the arrival-order record pop for IDENTITY (removes the mis-bind risk).
+    // BUT still BIND the next pending record unless this session already owns
+    // one: the gotgenes marker carries no record id, so skipping the pop
+    // entirely left the later subagents:completed/failed {id} events unbindable
+    // — the row's status stuck on started/running forever (both the panel and
+    // get_session_info answers, which read this same map). Identity stays
+    // marker-authoritative; only the record BINDING falls back to arrival order.
     const existing = panelBySession.get(sessionId);
-    const rec = existing ? undefined : nextRecord();
+    const alreadyBound = [...recordToSession.values()].includes(sessionId);
+    if (!alreadyBound) {
+      // QUEUE + TAG, never pop (partitioned binding): the entry becomes
+      // poppable by a later started/resumed record. The marker usually queued
+      // it already; session_start is what TAGS it in-process.
+      if (!unboundSessions.includes(sessionId)) unboundSessions.push(sessionId);
+      unboundInProcess.add(sessionId);
+    }
     const roomId = existing?.roomId ?? roomIdForSession(sessionId);
-    const name =
-      existing?.description ??
-      existing?.type ??
-      rec?.description ??
-      rec?.type ??
-      "subagent";
+    const name = existing?.description ?? existing?.type ?? "subagent";
 
     // Register/enrich the panel row keyed by the CHILD sessionId (identity from
-    // detection); labels/status enrich from the bound record + later events.
-    if (rec?.id) recordToSession.set(rec.id, sessionId);
+    // detection); labels enrich from a bound record's events once correlated.
     panelBySession.set(sessionId, {
       roomId,
-      type: existing?.type ?? rec?.type,
-      description: existing?.description ?? rec?.description,
-      status: existing?.status ?? rec?.status ?? "started",
-      startedAt: existing?.startedAt ?? rec?.startedAt ?? Date.now(),
+      type: existing?.type,
+      description: existing?.description,
+      status: existing?.status ?? "started",
+      startedAt: existing?.startedAt ?? Date.now(),
     });
     emitPanel();
 
@@ -528,7 +706,6 @@ export function initSubagentRooms(
       parentSessionId,
       startedAt,
       name,
-      subagentId: rec?.id,
       makeHandlers,
       getStatus: () => normalizeStatus(panelBySession.get(sessionId)?.status),
     });
