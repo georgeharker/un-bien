@@ -174,6 +174,11 @@ extension AppModel {
                     // The key IS the pi sessionId now, so a replaced session is
                     // simply a NEW key with fresh state — no reset needed here.
                     if envelopeReducers[key] == nil { envelopeReducers[key] = EnvelopeReducer() }
+                    // A hello is proof of life from the (re-)attached extension: a
+                    // resumed session's fresh instance greets on room re-join. If
+                    // this key's transcript was marked ended (the OUTGOING
+                    // instance's session_shutdown, e.g. reason "resume"), retract.
+                    markResumed(key: key)
                     return
                 }
                 // Daemon caps PULL response (design 01M1813Q): a DAEMON-SPECIFIC
@@ -322,6 +327,19 @@ extension AppModel {
         }
     }
 
+    /// Retract a session's ended state (banner + input lock): the session was
+    /// RESUMED — its room re-advertised and/or a fresh extension instance
+    /// greeted over the re-joined room. Clears BOTH stores: the next envelope
+    /// fold overwrites `transcripts[key]` from the reducer's own copy, so
+    /// clearing only the transcript copy would resurrect the flag one frame
+    /// later. No-op (and no spurious @Published churn) when not ended.
+    func markResumed(key: String) {
+        guard transcripts[key]?.ended == true else { return }
+        transcripts[key]?.markResumed()
+        envelopeReducers[key]?.markResumed()
+        log.notice("session resumed: ended banner retracted key=\(String(key.suffix(12)), privacy: .public)")
+    }
+
     private func handle(control event: RelayControlIn, relayID: UUID) {
         switch event {
         case let .rooms(peer, rooms):
@@ -406,6 +424,13 @@ extension AppModel {
         // room_announced); the pull below refreshes it.
         session.status = sessions[session.id]?.status
         sessions[session.id] = session
+        // A re-advertised room means the session is live again — the resume
+        // flow: the OUTGOING extension instance broadcast session_shutdown
+        // (banner up), then the fresh instance re-joined the SAME room under
+        // the durable session id. Covers room_announced pushes AND rooms_check
+        // recovery on (re)connect. An actually-dead session's room is torn
+        // down, so it never re-advertises — no false retraction.
+        markResumed(key: session.id)
         // PULL the subagent's lifecycle status over its OWN connection, re-issued
         // on every announce so it survives app relaunch (design 01M18PCM). The
         // send itself is what makes the child room attach + answer.

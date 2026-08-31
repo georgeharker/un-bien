@@ -22,6 +22,10 @@ public struct SessionState: Equatable, Sendable {
 
     /// Set once the paired pi session has shut down (`rpc:session_shutdown`).
     /// The UI shows a "session ended" banner and refuses further input.
+    /// RETRACTABLE: a pi session can be RESUMED — the fresh extension instance
+    /// re-joins the same room under the durable session id — so a live
+    /// `turn_start` (see applyRPC) or an explicit `markResumed()` (room
+    /// re-advertise / hello) clears it and the banner drops.
     public private(set) var ended: Bool = false
 
     /// Index of each addressable item so updates are O(1).
@@ -42,6 +46,13 @@ public struct SessionState: Equatable, Sendable {
     private var rpcTurnSeq = 0
 
     public init() {}
+
+    /// Retract the ended state: the session was resumed (its room re-advertised
+    /// and/or a fresh extension instance greeted). Drops the banner and
+    /// re-enables the composer. Live turns also clear it (see `turn_start`).
+    public mutating func markResumed() {
+        ended = false
+    }
 
     /// Usage from the most recent assistant turn that reported it (for a status
     /// line). `agent_done`/`agent_message` carry per-turn token counts.
@@ -162,6 +173,13 @@ public struct SessionState: Equatable, Sendable {
         guard let type = frame["type"]?.stringValue else { return }
         switch type {
         case "turn_start":
+            // A LIVE turn means the session is running again (resumed):
+            // retract the ended banner. `turn_start` is live-ONLY — a
+            // get_entries / session_sync replay never synthesizes it
+            // (applyEntries emits just message_end / tool_execution_* /
+            // compaction_end) — so backfilling an ENDED session's history
+            // can't false-clear the flag.
+            ended = false
             rpcTurnSeq += 1
             rpcTurn = "t\(rpcTurnSeq)"
             activeTurnID = rpcTurn

@@ -70,6 +70,15 @@ public struct EnvelopeReducer {
         for message in messages { apply(message) }
     }
 
+    /// Retract the session-ended state: the pi session was RESUMED (the fresh
+    /// extension instance re-joined the same room under the durable session
+    /// id). Forwarded by the app on room re-advertise / hello — it must clear
+    /// the reducer's own copy too, or the next `apply` fold would resurrect
+    /// the flag when it overwrites `transcripts[key]` from `session`.
+    public mutating func markResumed() {
+        session.markResumed()
+    }
+
     // MARK: - rpc plane
 
     private mutating func applyRpc(_ rpc: JSONValue, aux: JSONValue? = nil) {

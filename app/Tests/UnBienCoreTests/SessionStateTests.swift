@@ -221,4 +221,37 @@ final class SessionStateTests: XCTestCase {
         XCTAssertEqual(card.state, .ok)
         XCTAssertEqual(card.tool, "bash")
     }
+
+    // The ended flag is RETRACTABLE: a pi session can be RESUMED (the fresh
+    // extension instance re-joins the same room under the durable session id),
+    // so a live `turn_start` (live-ONLY — replays never synthesize it) and an
+    // explicit `markResumed()` (room re-advertise / hello) both clear it, while
+    // a get_entries backfill of an ENDED session's history must NOT.
+    func testEndedRetractsOnResumeSignals() {
+        var state = SessionState()
+        XCTAssertFalse(state.ended)
+
+        state.applyRPC(.object(["type": .string("session_shutdown")]))
+        XCTAssertTrue(state.ended)
+
+        // Backfill of the ended session's history: replay frames only — the
+        // session is still dead, we're just refetching the entry log.
+        state.applyEntries([
+            .object(["type": .string("message"), "id": .string("e1"),
+                     "message": .object(["role": .string("user"), "timestamp": .number(1),
+                                         "content": .string("hi")])]),
+        ])
+        XCTAssertTrue(state.ended, "get_entries backfill must not retract ended")
+
+        // A live turn: the session is running again — banner drops.
+        state.applyRPC(.object(["type": .string("turn_start")]))
+        XCTAssertFalse(state.ended, "a live turn_start retracts ended")
+
+        // It can end again, and the explicit retraction (room re-advertise /
+        // hello on resume) clears it once more.
+        state.applyRPC(.object(["type": .string("session_shutdown")]))
+        XCTAssertTrue(state.ended)
+        state.markResumed()
+        XCTAssertFalse(state.ended, "markResumed retracts ended")
+    }
 }
