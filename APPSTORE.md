@@ -78,10 +78,14 @@ sandbox at runtime.
 `project.yml`): CryptoKit Ed25519 + TLS = standard/exempt crypto, declared so
 uploads don't prompt.
 
-### 6. 🔲 Privacy policy URL
+### 6. ✅ Privacy policy URL
 
-Hard requirement in App Store Connect. Does not exist yet — publish a page and
-record the URL. (Can live on the Quarto docs site.)
+Published as a docs-site page: `docs/privacy.md` (rendered at
+<https://docs.georgeharker.com/un-bien/docs/privacy.html> — deployed by the
+docs workflow on push). Content matches the privacy manifest: nothing
+
+collected, nothing tracked, no fixed servers; local storage + keychain;
+user-hosted relays (with the trust-model caveat).
 
 ### 7. 🔲 Reviewability — the app is inert without infrastructure
 
@@ -147,17 +151,37 @@ questionnaire, support URL, marketing URL, copyright.
 Per platform: iPhone 6.9", iPad 13", Mac. (Onboarding, session list, live
 transcript, tool-approval, mesh view are the natural set.)
 
-### 10. 🔲 Store metadata
+### 10. 🔲 Store metadata (copy drafted — paste into ASC)
 
-Name, subtitle, description, keywords, promo text, "what's new", and the
-**privacy nutrition labels** (mirror the privacy manifest — minimal/none).
+- **Name:** Un Bien
+- **Subtitle** (≤30): Your Pi agents, on your phone
+- **Keywords:** pi,agent,coding,developer,ai,remote,terminal,relay,transcript,mesh
+- **Promo text** (≤170): Attach to your Pi coding-agent sessions from your phone — stream transcripts, watch tool calls, answer questions, and steer the agent. Self-hosted; nothing leaves your machines.
+- **Description (lead):**
+  > Un Bien is a native iOS/macOS client for the Pi coding agent. Pair your
+  > phone with your own machines over a relay you host, then attach to running
+  > agent sessions: live transcripts with styled edit diffs and tool results,
+  > inline images, thinking blocks, plan & subagent panels — and an interactive
+  > prompt for ask-style clarifications. Steer mid-turn or queue follow-ups;
+  > launch new sessions on paired machines (opt-in, machine-side).
+  >
+  > Self-hosted by design: there is no Un Bien cloud, no account, and no
+  > telemetry — your relay, your keys, your machines. Includes a read-only demo
+  > mode so you can look around without any setup.
+- **What's new (1.0):** Initial release.
+- **Privacy nutrition labels:** mirror the manifest — Data Not Collected,
+  no tracking. Category answers: everything "none".
+- **Support URL:** <https://docs.georgeharker.com/un-bien> (the docs site
+  home — Install & setup is the practical entry); issues:
+  <https://github.com/georgeharker/un-bien/issues>.
 
-### 11. 🔲 LICENSE + in-app third-party acknowledgements
+### 11. ✅ LICENSE + in-app third-party acknowledgements
 
-Existing `todo` plan item. Add root `LICENSE` (MIT) and a Settings
-acknowledgements screen: Highlightr (MIT) + bundled highlight.js (BSD-3),
-swift-markdown-ui (MIT), NetworkImage (MIT), swift-cmark (cmark BSD-2). Preserve
-remote-pi attribution.
+- Root `LICENSE` (MIT, © 2026 George Harker); the remote-pi MIT license +
+  attribution preserved in `extension/LICENSE` and the README.
+- Settings → Acknowledgements section: Highlightr + bundled highlight.js
+  (MIT/BSD-3), swift-markdown-ui (MIT), NetworkImage (MIT), swift-cmark /
+  cmark-gfm (BSD-2), + the remote-pi derivation footer.
 
 ### 12. 🔲 Archive / upload pipeline
 

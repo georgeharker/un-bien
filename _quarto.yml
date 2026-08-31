@@ -4,6 +4,7 @@ project:
     - index.md
     - README.md # README files must be listed explicitly; globs skip them
     - docs/install.md
+    - docs/privacy.md
     - extension/README.md
     - extension/docs/daemon.md
     - relay/README.md
@@ -42,6 +43,8 @@ website:
         href: README.md
       - text: "Install & setup"
         href: docs/install.md
+      - text: "Privacy policy"
+        href: docs/privacy.md
       - section: "Extension"
         href: extension/README.md
         contents:

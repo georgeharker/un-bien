@@ -27,6 +27,7 @@ struct SettingsView: View {
                 machinesSection
                 performanceSection
                 syncSection
+                acknowledgementsSection
                 identitySection
             }
             .formStyle(.grouped)
@@ -184,6 +185,21 @@ struct SettingsView: View {
             Text("Demo")
         } footer: {
             Text("Canned sessions replayed from recorded transcript fixtures — no relay or machine needed, and the transcript is read-only. On by default until you add a relay.")
+        }
+    }
+
+    /// Third-party acknowledgements (App Store requirement for bundled code;
+    /// plan item: license housekeeping). Direct deps + markdown-ui's transitives.
+    private var acknowledgementsSection: some View {
+        Section {
+            LabeledContent("Highlightr + highlight.js", value: "MIT / BSD-3")
+            LabeledContent("swift-markdown-ui", value: "MIT")
+            LabeledContent("NetworkImage", value: "MIT")
+            LabeledContent("swift-cmark (cmark-gfm)", value: "BSD-2")
+        } header: {
+            Text("Acknowledgements")
+        } footer: {
+            Text("Un Bien is derived from remote-pi by Jacob Moura (MIT). Full license texts are in the repository: github.com/georgeharker/un-bien.")
         }
     }
 
