@@ -111,12 +111,12 @@ RUST_LOG=info ./target/release/un-bien-relay
 
 ### Relay environment variables
 
-| Variable            | Default                         | Description                                        |
-| ------------------- | ------------------------------- | -------------------------------------------------- |
-| `UNBIEN_RELAY_PORT` | `3000`                          | Port for the WS upgrade, `/health`, and `/mesh/*`. |
+| Variable              | Default                                                        | Description                                                                        |
+| --------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `UNBIEN_RELAY_PORT`   | `3000`                                                         | Port for the WS upgrade, `/health`, and `/mesh/*`.                                 |
 | `UNBIEN_MESH_DB_PATH` | `/data/mesh.db` (Docker) · `<state root>/mesh.db` (bare metal) | SQLite membership DB (`UNBIEN_STATE_DIR`/XDG state root; parent dir auto-created). |
-| `UNBIEN_STATE_DIR`   | `~/.local/state/un-bien`        | State root (mesh DB default, relay log).          |
-| `RUST_LOG`          | *(none)*                        | Log filter — e.g. `info`, `debug`.                 |
+| `UNBIEN_STATE_DIR`    | `~/.local/state/un-bien`                                       | State root (mesh DB default, relay log).                                           |
+| `RUST_LOG`            | _(none)_                                                       | Log filter — e.g. `info`, `debug`.                                                 |
 
 ### Keep it running
 
@@ -228,12 +228,12 @@ Manage devices with `/unbien devices` and `/unbien revoke <shortid>`.
 
 ## Where things live
 
-| What | Path |
-| --- | --- |
-| Global extension settings | `~/.pi/extensions/un-bien.json` |
-| Per-directory config | `<cwd>/.pi/un-bien/config.json` |
-| State (sessions, identity, daemons, logs) | `~/.local/state/un-bien/` (`UNBIEN_STATE_DIR` relocates) |
-| Relay membership DB | `UNBIEN_MESH_DB_PATH` (`/data/mesh.db` in Docker; bare metal: `<state root>/mesh.db`) |
+| What                                      | Path                                                                                  |
+| ----------------------------------------- | ------------------------------------------------------------------------------------- |
+| Global extension settings                 | `~/.pi/extensions/un-bien.json`                                                       |
+| Per-directory config                      | `<cwd>/.pi/un-bien/config.json`                                                       |
+| State (sessions, identity, daemons, logs) | `~/.local/state/un-bien/` (`UNBIEN_STATE_DIR` relocates)                              |
+| Relay membership DB                       | `UNBIEN_MESH_DB_PATH` (`/data/mesh.db` in Docker; bare metal: `<state root>/mesh.db`) |
 
 The complete settings reference — every config field and environment variable —
 is in the [extension guide](../extension/README.md#configuration--settings).
