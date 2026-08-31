@@ -5,6 +5,23 @@ import UnBienCore
 import WebKit
 #endif
 
+/// Y offset of the bottom sentinel within the ScrollView's visible frame,
+/// reported EVERY FRAME — "pinned to bottom" is derived continuously from
+/// it (design 01M1B9F6). Appearance events lose the race against streaming
+/// arrivals: a follow scrollTo can re-pin the sentinel before its
+/// onDisappear ever lands, so a user who just scrolled up keeps getting
+/// yanked. Continuous evaluation closes that race within one frame.
+private struct SentinelMinYKey: PreferenceKey {
+    static let defaultValue: CGFloat = .infinity
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = min(value, nextValue()) }
+}
+
+/// Visible height of the transcript ScrollView.
+private struct ViewportHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
 /// Session transcript: streamed Markdown (swift-markdown-ui) with Highlightr
 /// code blocks, collapsible tool-call cards, and a text input bar (DESIGN §7).
 struct TranscriptView: View {
@@ -14,20 +31,41 @@ struct TranscriptView: View {
     @Environment(\.appTheme) private var theme
     @Environment(\.typography) private var typography
 
-    /// Topmost visible message id (SwiftUI .scrollPosition binding) — both the
-    /// "which is visible" capture and the restore target (design 01M1ADBB).
-    @State private var scrollAnchor: String?
     /// Restore runs once per view lifetime, after items first populate.
     @State private var didRestoreScroll = false
-    /// Newest message on screen (bottom sentinel) — gates auto-follow so an
-    /// incoming message only scrolls a reader who was already at the bottom.
+    /// Currently-materialized row ids (LazyVStack onAppear/onDisappear) — the
+    /// capture source for scroll memory (design 01M1B9F6): the bottom-most
+    /// visible row is approximately the highest-index materialized row (may
+    /// overshoot into the prefetch buffer by a row or two — accepted).
+    /// Self-heals: onAppear re-fires on re-materialization.
+    @State private var materializedIDs: Set<String> = []
+    /// Whether the viewport is PINNED to the transcript's bottom edge — gates
+    /// auto-follow so an incoming row only scrolls a reader who was already at
+    /// the bottom. Evaluated CONTINUOUSLY from the sentinel probe's geometry
+    /// (every frame), not appearance events (design 01M1B9F6).
     @State private var atBottom = true
+    /// Visible height of the transcript ScrollView (pairs with the sentinel's
+    /// minY to evaluate the pin).
+    @State private var viewportHeight: CGFloat = 0
 
     private var items: [TranscriptItem] {
         let all = model.transcripts[session.id]?.items ?? []
         guard !model.showThinking else { return all }
         // Preference: hide reasoning/thinking blocks from the transcript.
         return all.filter { if case .reasoning = $0 { return false } else { return true } }
+    }
+
+    /// Record the scroll position (design 01M1B9F6): the bottom-most
+    /// materialized row, mapped to the nearest replay-STABLE anchor
+    /// at-or-above. Transient rows (streaming/positional bubbles, reasoning,
+    /// notices) are never persisted, so the memory survives the
+    /// streaming→settle re-key and get_entries re-syncs.
+    private func rememberVisibleAnchor() {
+        guard didRestoreScroll else { return }
+        guard let bottom = items.lastIndex(where: { materializedIDs.contains($0.id) }) else { return }
+        if let anchor = items.stableAnchor(atOrAbove: bottom) {
+            model.rememberScroll(id: anchor, session: session)
+        }
     }
 
     var body: some View {
@@ -44,42 +82,64 @@ struct TranscriptView: View {
                                           hideInputRich: model.hideInputWhenRich)
                                 .equatable()
                                 .id(item.id)
+                                .onAppear { materializedIDs.insert(item.id) }
+                                .onDisappear { materializedIDs.remove(item.id) }
                         }
                     }
-                    .scrollTargetLayout()
                     .padding()
                     // Cap line length on wide windows; centered. No-op on phones.
                     .frame(maxWidth: 1100, alignment: .leading)
                     .frame(maxWidth: .infinity, alignment: .center)
-                    // Bottom sentinel: reliably reports whether the newest message
-                    // is on screen (LazyVStack recycling makes row onAppear flaky).
-                    // Sits outside scrollTargetLayout so it never becomes an anchor.
+                    // Bottom sentinel probe: reports its Y offset within the
+                    // ScrollView's visible frame every frame; `atBottom` is
+                    // derived from it continuously. (Row onAppear is flaky under
+                    // LazyVStack recycling, and appearance events lose the race
+                    // against streaming arrivals.)
                     Color.clear.frame(height: 1)
-                        .onAppear { atBottom = true }
-                        .onDisappear { atBottom = false }
+                        .background(GeometryReader { geo in
+                            Color.clear.preference(
+                                key: SentinelMinYKey.self,
+                                value: geo.frame(in: .named("transcript-scroll")).minY)
+                        })
                 }
-                .scrollPosition(id: $scrollAnchor)
+                .coordinateSpace(name: "transcript-scroll")
+                .background(GeometryReader { geo in
+                    Color.clear.preference(key: ViewportHeightKey.self, value: geo.size.height)
+                })
                 .onChange(of: items.count, initial: true) { _, _ in
                     guard !items.isEmpty else { return }
                     if !didRestoreScroll {
                         didRestoreScroll = true
-                        // Restore the remembered topmost message; fall back to the
-                        // bottom when there's nothing remembered (or it's gone).
+                        // Restore to the remembered STABLE row, attaching at the
+                        // BOTTOM of its extent; fall back to the bottom when
+                        // nothing is remembered (or it's gone).
                         if let remembered = model.rememberedScroll(session: session),
                            items.contains(where: { $0.id == remembered }) {
-                            scrollAnchor = remembered
+                            proxy.scrollTo(remembered, anchor: .bottom)
+                            // The sentinel never appeared before this programmatic
+                            // scroll; sync the auto-follow gate so a mid-transcript
+                            // restore isn't immediately yanked down by the next
+                            // incoming message.
+                            atBottom = remembered == items.last?.id
                         } else if let last = items.last {
                             proxy.scrollTo(last.id, anchor: .bottom)
+                            atBottom = true
                         }
                     } else if atBottom, let last = items.last {
-                        // Only follow new messages when already at the bottom.
-                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                        // Only follow new rows while pinned to the bottom. Snap
+                        // (no animation): animated follows during streaming are
+                        // what made the pull-down feel like fighting the user.
+                        proxy.scrollTo(last.id, anchor: .bottom)
                     }
                 }
-                .onChange(of: scrollAnchor) { _, new in
-                    guard didRestoreScroll, let new else { return }
-                    model.rememberScroll(id: new, session: session)
+                // Capture: remember the bottom-most visible row (design 01M1B9F6).
+                .onChange(of: materializedIDs) { _, _ in rememberVisibleAnchor() }
+                .onPreferenceChange(SentinelMinYKey.self) { minY in
+                    // Pinned: the content's end sits at (or within a small slack
+                    // of) the viewport's bottom edge.
+                    atBottom = minY < viewportHeight + 24
                 }
+                .onPreferenceChange(ViewportHeightKey.self) { viewportHeight = $0 }
                 #if os(iOS)
                 // Swipe the transcript down to dismiss the composer keyboard.
                 .scrollDismissesKeyboard(.interactively)
@@ -302,7 +362,10 @@ struct TranscriptView: View {
     }
 
     private var inputBar: some View {
-        ComposerBar(session: session)
+        // Sending/queueing is intent to engage the newest content: re-pin the
+        // follow gate so the outgoing row (and its reply) are followed even if
+        // the user had scrolled up first.
+        ComposerBar(session: session, onSent: { atBottom = true })
     }
 
     /// Composer replacement for a view-only subagent session (read-only).
@@ -321,6 +384,7 @@ struct TranscriptView: View {
 /// and diffs the entire message list on every evaluation.
 private struct ComposerBar: View {
     let session: LiveSession
+    var onSent: () -> Void = {}
     @EnvironmentObject private var model: AppModel
     @Environment(\.appTheme) private var theme
     @Environment(\.typography) private var typography
@@ -348,6 +412,7 @@ private struct ComposerBar: View {
                 guard !trimmed.isEmpty else { return }
                 let text = trimmed
                 draft = ""
+                onSent()
                 Task { await model.queueMessage(text, to: session) }
             } label: {
                 Image(systemName: "tray.and.arrow.down").font(.title3)
@@ -366,6 +431,7 @@ private struct ComposerBar: View {
         let text = trimmed
         guard !text.isEmpty else { return }
         draft = ""
+        onSent()
         Task { await model.sendMessage(text, to: session) }
     }
 }

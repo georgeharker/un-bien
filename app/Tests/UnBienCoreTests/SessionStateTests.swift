@@ -2,19 +2,83 @@ import XCTest
 @testable import UnBienCore
 
 final class SessionStateTests: XCTestCase {
-    func testLoadHistoryRebuildsTranscriptInOrder() {
+    // Scroll-memory anchoring (design 01M1B9F6): only replay-stable rows may be
+    // persisted as anchors. Streaming assistant bubbles (positional a{n} ids,
+    // re-keyed to {identify}-a at settle), reasoning segments (live-only), and
+    // notices are transient — anchorID nil. Settled assistant, user, tool rows
+    // are stable. Also: a bubble interrupted by a tool card is closed
+    // (streaming=false) but KEEPS its positional id — anchorID must stay nil.
+    func testAnchorIDExcludesTransientRows() {
         var state = SessionState()
-        let events: [SessionHistoryEvent] = [
-            .userInput(timestamp: 1, id: "u1", text: "list files", images: nil),
-            .toolRequest(timestamp: 2, toolCallID: "tc1", tool: "bash", args: ["command": .string("ls")]),
-            .toolResult(timestamp: 3, toolCallID: "tc1", result: .string("a\nb"), error: nil, images: nil),
-            .agentMessage(timestamp: 4, inReplyTo: "u1", text: "two files", usage: nil, images: nil),
-        ]
-        state.loadHistory(events, sessionStartedAt: 1_716_234_500_000)
-        XCTAssertEqual(state.sessionStartedAt, 1_716_234_500_000)
-        XCTAssertEqual(state.items.count, 3) // user, tool (filled), assistant
-        guard case let .tool(card) = state.items[1] else { return XCTFail("no tool") }
-        XCTAssertEqual(card.state, .ok)
+        state.applyRPC(.object(["type": .string("message_end"),
+                                "message": .object(["role": .string("user"), "timestamp": .number(1),
+                                                    "content": .string("hi")])]))
+        state.applyRPC(.object(["type": .string("turn_start")]))
+        state.applyRPC(.object(["type": .string("message_update"),
+                                "assistantMessageEvent": .object(["type": .string("text_delta"),
+                                                                  "delta": .string("hel")])]))
+        // While streaming: positional id, transient — not an anchor.
+        XCTAssertEqual(state.items.count, 2)
+        XCTAssertNotNil(state.items[0].anchorID, "user rows anchor")
+        guard case let .assistant(streaming) = state.items[1] else { return XCTFail("no bubble") }
+        XCTAssertTrue(streaming.streaming)
+        XCTAssertNil(state.items[1].anchorID, "streaming assistant rows must NOT anchor")
+
+        // Interleaved reasoning CLOSES the text bubble (mid-turn interleaving):
+        // streaming=false but the positional id is KEPT — still not an anchor.
+        state.applyRPC(.object(["type": .string("message_update"),
+                                "assistantMessageEvent": .object(["type": .string("thinking_delta"),
+                                                                  "delta": .string("hm")])]))
+        guard case .assistant(let closed) = state.items[1] else { return XCTFail("no bubble") }
+        XCTAssertFalse(closed.streaming)
+        XCTAssertNil(state.items[1].anchorID,
+                     "closed-but-positional bubble must NOT anchor (id is re-keyed only at message_end)")
+        guard case .reasoning = state.items[2] else { return XCTFail("no reasoning row") }
+        XCTAssertNil(state.items[2].anchorID, "reasoning rows must NOT anchor")
+
+        // A tool card is stable (toolCallID-keyed) and anchors.
+        state.applyRPC(.object(["type": .string("tool_execution_start"), "toolCallId": .string("tc1"),
+                                "toolName": .string("bash"), "args": .object([:])]))
+        XCTAssertNotNil(state.items[3].anchorID, "tool cards anchor")
+
+        // Settle (message_end with responseId): the appended identify-keyed
+        // bubble is replay-stable and anchors on its own id.
+        state.applyRPC(.object(["type": .string("message_end"),
+                                "message": .object(["role": .string("assistant"), "timestamp": .number(2),
+                                                    "responseId": .string("resp_1"),
+                                                    "content": .array([.object(["type": .string("text"),
+                                                                                "text": .string("hello")])])])]))
+        guard let settledIdx = state.items.indices.first(where: {
+            if case let .assistant(b) = state.items[$0] { return b.replayStable }
+            return false
+        }) else { return XCTFail("no replay-stable bubble after message_end") }
+        XCTAssertEqual(state.items[settledIdx].anchorID, state.items[settledIdx].id,
+                       "a settled replay-stable row anchors on its own id")
+        XCTAssertEqual(state.items[settledIdx].id, "assistant:rresp_1-a")
+    }
+
+    // The capture walk (design 01M1B9F6): given the bottom-most visible row's
+    // index, anchor to the nearest replay-stable row at-or-above.
+    func testStableAnchorAtOrAboveWalksToNearestStableRow() {
+        var state = SessionState()
+        state.applyRPC(.object(["type": .string("message_end"),
+                                "message": .object(["role": .string("user"), "timestamp": .number(1),
+                                                    "content": .string("hi")])]))
+        state.applyRPC(.object(["type": .string("turn_start")]))
+        state.applyRPC(.object(["type": .string("message_update"),
+                                "assistantMessageEvent": .object(["type": .string("text_delta"),
+                                                                  "delta": .string("run")])]))
+        state.applyRPC(.object(["type": .string("tool_execution_start"), "toolCallId": .string("tc1"),
+                                "toolName": .string("bash"), "args": .object([:])]))
+        XCTAssertEqual(state.items.count, 3, "user, streaming bubble, tool card")
+        let items = state.items
+        // Bottom-most visible is the transient streaming row → walks UP to the user row.
+        XCTAssertEqual(items.stableAnchor(atOrAbove: 1), items[0].anchorID)
+        // Bottom-most is the tool card → anchors to itself.
+        XCTAssertEqual(items.stableAnchor(atOrAbove: 2), items[2].anchorID)
+        // Out of range → nil.
+        XCTAssertNil(items.stableAnchor(atOrAbove: -1))
+        XCTAssertNil(items.stableAnchor(atOrAbove: 99))
     }
 
     // A session_sync re-open replays the SAME pi messages as faithful

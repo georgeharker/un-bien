@@ -186,7 +186,23 @@ public final class AppModel: ObservableObject {
     /// observing it would rerender the whole transcript as the user scrolls.
     /// Best-effort persisted to UserDefaults so a cold relaunch can also restore.
     private var lastViewedScroll: [String: String] = [:] {
-        didSet { persistLastViewedScroll() }
+        didSet {
+            guard lastViewedScroll != oldValue else { return }
+            scheduleScrollPersist()
+        }
+    }
+    /// Debounced UserDefaults persistence for scroll memory (design 01M1B9F6):
+    /// rememberScroll fires on every row materialization change while
+    /// scrolling, so the write must not land per-settle (v1 persisted on every
+    /// scroll settle).
+    private var scrollPersistTask: Task<Void, Never>?
+    private func scheduleScrollPersist() {
+        scrollPersistTask?.cancel()
+        scrollPersistTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.persistLastViewedScroll()
+        }
     }
 
     private static let iCloudDefaultsKey = "com.georgeharker.un-bien.owner-key.icloud-sync"
@@ -841,13 +857,15 @@ public final class AppModel: ObservableObject {
 
     // MARK: - Scroll restore
 
-    /// Remembered topmost-visible message id for a session, or nil if none.
+    /// Remembered bottom-most visible STABLE row id for a session, or nil.
     public func rememberedScroll(session: LiveSession) -> String? {
         lastViewedScroll[session.id]
     }
 
-    /// Record the topmost-visible message id as the user scrolls (design 01M1ADBB).
+    /// Record the bottom-most visible STABLE row id as the user scrolls
+    /// (design 01M1B9F6).
     public func rememberScroll(id: String, session: LiveSession) {
+        guard lastViewedScroll[session.id] != id else { return }
         lastViewedScroll[session.id] = id
     }
 
@@ -860,6 +878,9 @@ public final class AppModel: ObservableObject {
     /// the on-disk copy prunes too) — otherwise it accumulates as rooms end.
     private func forgetSession(key: String) {
         lastViewedScroll[key] = nil
+        // Flush immediately — the didSet only schedules a debounced write.
+        scrollPersistTask?.cancel()
+        persistLastViewedScroll()
     }
 
     // MARK: - Pairing

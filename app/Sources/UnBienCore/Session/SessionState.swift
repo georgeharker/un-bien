@@ -60,28 +60,6 @@ public struct SessionState: Equatable, Sendable {
         return nil
     }
 
-    /// Rebuild from a history replay (replaces current state).
-    public mutating func loadHistory(_ events: [SessionHistoryEvent], sessionStartedAt: Int) {
-        self = SessionState()
-        self.sessionStartedAt = sessionStartedAt
-        for event in events { applyHistory(event) }
-    }
-
-    public mutating func applyHistory(_ event: SessionHistoryEvent) {
-        switch event {
-        case let .userInput(_, id, text, images):
-            append(.user(UserBubble(id: id, text: text, images: images ?? [])))
-        case let .toolRequest(_, toolCallID, tool, args):
-            openToolCard(toolCallID: toolCallID, tool: tool, args: args)
-        case let .toolResult(_, toolCallID, result, error, images):
-            fillToolCard(toolCallID: toolCallID, result: result, error: error, images: images ?? [])
-        case let .agentMessage(_, inReplyTo, text, usage, images):
-            settleAssistant(inReplyTo: inReplyTo, text: text, usage: usage, images: images ?? [])
-        case let .compaction(_, summary, tokensBefore):
-            appendCompaction(summary: summary, tokensBefore: tokensBefore)
-        }
-    }
-
     // MARK: - Mutators
 
     /// Append a non-chunk row. Closes the open streaming bubble first, so the
@@ -133,24 +111,6 @@ public struct SessionState: Equatable, Sendable {
             openAssistantIndex = items.count - 1
         }
         activeTurnID = inReplyTo
-    }
-
-    private mutating func settleAssistant(inReplyTo: String, text: String, usage: Usage?,
-                                          images: [WireImage] = []) {
-        if let index = openAssistantIndex, case var .assistant(bubble) = items[index],
-           bubble.inReplyTo == inReplyTo {
-            bubble.text = text
-            bubble.usage = usage ?? bubble.usage
-            if !images.isEmpty { bubble.images = images }
-            items[index] = .assistant(bubble)
-            closeOpenAssistant()
-        } else {
-            assistantSeq += 1
-            append(.assistant(AssistantBubble(id: "a\(assistantSeq)", inReplyTo: inReplyTo,
-                                              text: text, streaming: false,
-                                              usage: usage, images: images)))
-        }
-        if activeTurnID == inReplyTo { activeTurnID = nil }
     }
 
     private mutating func openToolCard(toolCallID: String, tool: String, args: [String: JSONValue]) {
@@ -296,7 +256,8 @@ public struct SessionState: Equatable, Sendable {
                     if !text.isEmpty || !images.isEmpty {
                         append(.assistant(AssistantBubble(id: bubbleID, inReplyTo: turn,
                                                           text: text, streaming: false,
-                                                          usage: nil, images: images)))
+                                                          usage: nil, images: images,
+                                                          replayStable: true)))
                     }
                 }
             }
@@ -389,7 +350,8 @@ public struct SessionState: Equatable, Sendable {
         items[index] = .assistant(AssistantBubble(id: bubbleID, inReplyTo: old.inReplyTo,
                                                   text: old.text, streaming: false,
                                                   usage: old.usage,
-                                                  images: images.isEmpty ? old.images : images))
+                                                  images: images.isEmpty ? old.images : images,
+                                                  replayStable: true))
         appendedIDs.insert(items[index].id)
     }
 

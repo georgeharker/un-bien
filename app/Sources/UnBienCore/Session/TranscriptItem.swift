@@ -20,6 +20,19 @@ public enum TranscriptItem: Equatable, Sendable, Identifiable {
         case let .notice(notice): return "notice:\(notice.id)"
         }
     }
+
+    /// The id consumers may PERSIST for position anchoring (scroll memory,
+    /// design 01M1B9F6). nil on rows whose ids are not replay-stable:
+    /// streaming/positional assistant bubbles (re-keyed to `{identify}-a` at
+    /// settle), live-only reasoning segments, and ephemeral notices. NEVER
+    /// persist a raw `id` for anchoring — only `anchorID`.
+    public var anchorID: String? {
+        switch self {
+        case .user, .tool, .compaction: return id
+        case let .assistant(bubble): return bubble.replayStable ? id : nil
+        case .reasoning, .notice: return nil
+        }
+    }
 }
 
 /// A system notice surfaced in the transcript — e.g. an `error` from the Pi
@@ -70,17 +83,26 @@ public struct AssistantBubble: Equatable, Sendable {
     public var text: String
     /// True while `agent_chunk`s are still arriving (before `agent_done`).
     public var streaming: Bool
+    /// Whether this row's id is REPLAY-STABLE — derived from the message's own
+    /// identity (`identify`), so a get_entries/session_sync replay of the same
+    /// message resolves to the same id. True only for bubbles built (or
+    /// re-keyed) at `message_end`; delta-built bubbles carry positional ids
+    /// re-keyed at settle (design 01M1B9F6). Note `streaming == false` alone
+    /// does NOT imply this: a bubble interrupted by a tool card is closed
+    /// (streaming=false) but keeps its positional id.
+    public var replayStable: Bool
     public var usage: Usage?
     /// Agent-emitted inline graphics (plots/diagrams), rendered in the bubble.
     /// Arrive on the settling `agent_message` (live + history), keeping images
     /// in the conversation flow rather than a separate row.
     public var images: [WireImage]
     public init(id: String, inReplyTo: String, text: String, streaming: Bool,
-                usage: Usage? = nil, images: [WireImage] = []) {
+                usage: Usage? = nil, images: [WireImage] = [], replayStable: Bool = false) {
         self.id = id
         self.inReplyTo = inReplyTo
         self.text = text
         self.streaming = streaming
+        self.replayStable = replayStable
         self.usage = usage
         self.images = images
     }
@@ -127,5 +149,20 @@ public struct CompactionMarker: Equatable, Sendable {
         self.id = id
         self.summary = summary
         self.tokensBefore = tokensBefore
+    }
+}
+
+extension Array where Element == TranscriptItem {
+    /// Nearest replay-stable anchor id at-or-above `index` (design 01M1B9F6).
+    /// Scroll-memory capture calls this with the bottom-most VISIBLE row's
+    /// index; a transient row (streaming/positional bubble, reasoning, notice)
+    /// walks UP to the nearest persistable row. nil when nothing at-or-above
+    /// is stable or `index` is out of range.
+    public func stableAnchor(atOrAbove index: Int) -> String? {
+        guard index >= 0, index < count else { return nil }
+        for i in stride(from: index, through: 0, by: -1) {
+            if let anchor = self[i].anchorID { return anchor }
+        }
+        return nil
     }
 }
