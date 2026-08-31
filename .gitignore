@@ -23,6 +23,10 @@ data/
 # stay out of the repo; set here or via the UNBIEN_IPHONE env var.
 .iphone-device
 
+# App Store screenshot/video capture OUTPUT (scripts/appstore-screenshots.sh)
+# — submission assets live in App Store Connect, not the repo.
+store-screensshots/
+
 # Xcode build products (iOS/mac device builds)
 app/build/
 

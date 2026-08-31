@@ -139,6 +139,27 @@ babysitting burden through review + every re-review isn't worth it. Video-only
 was rejected: it doesn't change what the binary shows, and the empty-shell
 first impression is the 2.1/4.2 trigger.
 
+### Video recording script (real pi, mirrors the demo's shape)
+
+**Before recording:** relay up + a real pi session with un-bien connected +
+phone paired (all true today). Demo mode OFF (Settings) so Home shows only
+real content. Start iOS screen recording (Control Center). Record the Mac
+terminal with the system recorder or Screen Studio. **Blur the machine name**
+wherever it appears (Home rows / relay headers) — one masked rectangle in
+post is enough; store screenshots need no blur (see §9).
+
+| #   | Surface          | Action / paste-able prompt                                                                                                                               |
+| --- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Mac terminal     | Fresh pi session; `/unbien` shows relay connected. Type: `How do I print text in red in zsh? Show the escape-sequence way and the prompt-expansion way.` |
+| 2   | Phone Home       | The machine's session appears (blur the machine name).                                                                                                   |
+| 3   | Phone transcript | Tap in — the turn streams live: text, then the answer with code blocks (the `\e[31m` + `%F{red}` pair).                                                  |
+| 4   | Second session   | Prompt: `Before you write any code, use ask_user to ask me whether the new header should be a filled bar or a minimal underline.`                        |
+| 5   | Phone            | The ask badge appears on Home; tap in — the ask sheet presents; ANSWER FROM THE PHONE (the interactive surface).                                         |
+| 6   | Phone Home       | Both sessions listed (blur machine name).                                                                                                                |
+| 7   | (optional)       | Demo-mode banner shot — Settings → Demo on, one canned transcript — shows the reviewability affordance.                                                  |
+
+Cut to 30–60 s; land it unlisted and put the URL in the review notes.
+
 ## Standard submission work
 
 ### 8. 🔲 App Store Connect records
@@ -146,10 +167,29 @@ first impression is the 2.1/4.2 trigger.
 Create iOS + macOS records: primary/secondary category, age-rating
 questionnaire, support URL, marketing URL, copyright.
 
-### 9. 🔲 Screenshots
+### 9. 🔲 Screenshots (capture pipeline ready — shoot + upload)
 
-Per platform: iPhone 6.9", iPad 13", Mac. (Onboarding, session list, live
-transcript, tool-approval, mesh view are the natural set.)
+**Tooling:** `scripts/appstore-screenshots.sh` — `setup iphone` boots the 6.9"
+iPhone 17 Pro Max simulator (1320×2864), builds + installs + launches the app
+(demo mode ON by default → deterministic canned content); navigate in the
+Simulator, then `shot <name>` after each surface; files land numbered in
+`store-screenshots/<device>/`. `setup ipad` same for iPad Pro 13" (2064×2752).
+Mac shots: run `UnBien-macOS` directly + the system capture tool.
+
+**Surface checklist (per device, natural set):**
+
+1. Onboarding / owner-key creation
+2. Home — demo mode's two sessions (main + nested subagent) + pending-ask
+   badge; the demo relay is named "Demo", so NO machine-name blur is needed
+   in store shots
+3. Transcript — the zsh red-print answer: markdown + the two code blocks
+   (`\e[31m` escape + `%F{red}` prompt-expansion)
+4. Edit-diff tool card (unrolled)
+5. Ask sheet — the design question ("filled bar or minimal underline")
+6. Settings — theme picker / Licenses screen
+
+iPhone 6.9" is REQUIRED; iPad 13" required (universal family); Mac for the
+macOS platform. ASC accepts the native simulator dimensions directly.
 
 ### 10. 🔲 Store metadata (copy drafted — paste into ASC)
 
