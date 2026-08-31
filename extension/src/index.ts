@@ -2421,9 +2421,17 @@ function _wakeAgent(
     return { ok: false, detail }
   }
   try {
-    const options = steeringBehavior
-      ? { deliverAs: steeringBehavior }
-      : undefined
+    // expandPromptTemplates: true — TUI PARITY for app-sent text. pi's
+    // sendUserMessage defaults it to FALSE, so a "/"-prefixed message typed
+    // in the PHONE composer reached the MODEL as literal text (observed:
+    // "ignoring the two /unbien pair statements prior in the chat") instead
+    // of dispatching as a command like the same text typed in the TUI. pi's
+    // prompt() dispatches extension commands FIRST — even mid-stream — so
+    // steering a running turn with a command now behaves identically too.
+    const options = {
+      ...(steeringBehavior ? { deliverAs: steeringBehavior } : {}),
+      expandPromptTemplates: true,
+    }
     _pi.sendUserMessage(content, options)
     return { ok: true }
   } catch (err) {

@@ -1385,6 +1385,7 @@ describe("multi-channel broadcast (W2D)", () => {
     expect(sendUserMessage).toHaveBeenCalledTimes(1)
     expect(sendUserMessage).toHaveBeenCalledWith("refine this", {
       deliverAs: "steer",
+      expandPromptTemplates: true,
     })
   })
 
@@ -1418,6 +1419,7 @@ describe("multi-channel broadcast (W2D)", () => {
     expect(sendUserMessage).toHaveBeenCalledTimes(1)
     expect(sendUserMessage).toHaveBeenCalledWith("refine while stale", {
       deliverAs: "steer",
+      expandPromptTemplates: true,
     })
     expect(_getCurrentTurnIdForTest()).toBe("msg-stale-steer")
   })
@@ -1456,6 +1458,7 @@ describe("multi-channel broadcast (W2D)", () => {
     expect(sendUserMessage).toHaveBeenCalledTimes(1)
     expect(sendUserMessage).toHaveBeenCalledWith("late correction", {
       deliverAs: "steer",
+      expandPromptTemplates: true,
     })
     expect(_getCurrentTurnIdForTest()).toBe("msg-busy-no-mode")
   })
@@ -1492,6 +1495,7 @@ describe("multi-channel broadcast (W2D)", () => {
     await new Promise<void>((r) => setImmediate(r))
     expect(sendUserMessage).toHaveBeenCalledWith("after you're done", {
       deliverAs: "followUp",
+      expandPromptTemplates: true,
     })
   })
 
@@ -1511,6 +1515,7 @@ describe("multi-channel broadcast (W2D)", () => {
     await new Promise<void>((r) => setImmediate(r))
     expect(sendUserMessage).toHaveBeenCalledWith("refine now", {
       deliverAs: "steer",
+      expandPromptTemplates: true,
     })
   })
 
@@ -1526,6 +1531,7 @@ describe("multi-channel broadcast (W2D)", () => {
     await new Promise<void>((r) => setImmediate(r))
     expect(sendUserMessage).toHaveBeenCalledWith("oops racing", {
       deliverAs: "steer",
+      expandPromptTemplates: true,
     })
   })
 
@@ -1547,6 +1553,7 @@ describe("multi-channel broadcast (W2D)", () => {
     // fresh. The extension does not fabricate a deliverAs when idle.
     expect(sendUserMessage).toHaveBeenCalledWith("hello", {
       deliverAs: "steer",
+      expandPromptTemplates: true,
     })
   })
 
