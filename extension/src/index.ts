@@ -154,6 +154,7 @@ import {
   _deployAgentNetworkSkill,
 } from "./commands/housekeeping.js"
 import { registerUnbienCommands } from "./commands/register.js"
+import { createTestHooks } from "./test_hooks.js"
 
 // ── State machine ─────────────────────────────────────────────────────────────
 //
@@ -847,138 +848,6 @@ let _pendingMeshMessages: MeshEnvelope[] = []
 // mesh delivery targets the ROOT run, so the drain reads _rootState().agentRun.
 let _meshDrainScheduled = false
 
-/** Test-only override of the message buffer. */
-/**
- * Test-only: emulate what `/unbien` does on the returning-user path
- * (join the local mesh, then start the relay) without touching the FS for
- * a `localConfigExists()` lookup. Lets tests bring the relay up without
- * mocking the wizard or the local config storage.
- *
- * Typed loosely to accept any ctx shape with `ui.notify` + `cwd` — the
- * unit tests use minimal mocks that don't satisfy the full
- * `ExtensionContext` interface.
- */
-export async function _connectForTest(ctx: unknown): Promise<void> {
-  const real = ctx as Parameters<typeof _cmdJoin>[1]
-  await _cmdJoin(deps, real)
-  await _cmdStart(deps, real)
-}
-
-/** Test-only: tear everything down (mirrors `/unbien stop`). */
-export async function _stopForTest(ctx: unknown): Promise<void> {
-  await _cmdStop(deps, ctx as Parameters<typeof _cmdStop>[1])
-}
-
-/** Test-only: read/reset the `_disposed` flag. Production clears it only when
- *  a host reuses this module for a replacement session; tests share one module
- *  across cases, so they also reset it to avoid cross-test pollution. */
-export function _getDisposedForTest(): boolean {
-  return _disposed
-}
-export function _setDisposedForTest(v: boolean): void {
-  _disposed = v
-}
-
-/** Test-only: reset the once-per-session auto-init gate so session_start re-runs it. */
-export function _resetAutoInitedForTest(): void {
-  _autoInited = false
-}
-
-/** Test-only: clear the globalThis panel/ui bridge ownership so each fresh
- *  `extension(pi)` in a shared test process can (re)claim and rebuild bridges. */
-export function _resetBridgeOwnersForTest(): void {
-  const g = globalThis as typeof globalThis & {
-    [_ROOT_SESSION_OWNER_KEY]?: ExtensionAPI
-  }
-  delete g[_ROOT_SESSION_OWNER_KEY]
-  _panelBridge?.dispose()
-  _panelBridge = null
-  _rpcEnvelope?.dispose()
-  _rpcEnvelope = null
-  _subagentRooms?.dispose()
-  _subagentRooms = null
-  _extensionUiBridge?.dispose()
-  _extensionUiBridge = null
-}
-
-/** Test-only: reset the keyed per-session state at a TEST BOUNDARY (beforeEach).
- *  Must NOT be folded into _resetBridgeOwnersForTest — that fires mid-test on
- *  every captureEventHandler call and would wipe state a test seeds across two
- *  captures (e.g. input seeds turnId, message_update reads it). */
-export function _resetSessionsForTest(): void {
-  _sessions.clear()
-  _rootSessionId = null
-}
-
-/** Test-only: set the auto-init gate for lifecycle replacement tests. */
-export function _setAutoInitedForTest(value: boolean): void {
-  _autoInited = value
-}
-
-/** Test-only: true when this instance holds a live local-mesh node. */
-export function _hasMeshNodeForTest(): boolean {
-  return _meshNode !== null
-}
-
-/** Test-only: drive the current real SelfRevoke producer through one sweep. */
-export async function _checkSelfRevokeForTest(): Promise<void> {
-  await _selfRevoke?.checkOnce()
-}
-
-/** Test-only: the effective (possibly `#N`-suffixed) name the cwd-lock reserved. */
-export function _getLockedNameForTest(): string | null {
-  return _lockedName
-}
-
-/** Test-only: release + clear the cwd lock (the lock normally survives stop). */
-export function _resetCwdLockForTest(): void {
-  try {
-    _cwdLock?.release()
-  } catch {
-    /* ignored */
-  }
-  _cwdLock = null
-  _lockedName = null
-}
-
-/**
- * Test-only: relay-only startup, no UDS mesh join. Replaces the old
- * `unbien relay start` handler that some tests captured to bring up
- * the relay in isolation (e.g. ping/pong tests that don't care about the
- * agent-network broker).
- */
-export async function _startRelayForTest(ctx: unknown): Promise<void> {
-  await _cmdStart(deps, ctx as Parameters<typeof _cmdStart>[1])
-}
-
-/** Test-only: public marker for canceled-keypair cache regression checks. */
-export function _getCachedPublicKeyForTest(): string | null {
-  return _cachedEd25519
-    ? Buffer.from(_cachedEd25519.publicKey).toString("base64")
-    : null
-}
-
-/** Test-only override of session started timestamp. */
-export function _setSessionStartedAtForTest(ts: number | null): void {
-  _sessionStartedAt = ts
-}
-
-/** Test-only: reset the cached model name (between tests). */
-export function _setCurrentModelForTest(name: string | undefined): void {
-  _currentModel = name
-}
-
-/** Test-only: read the active turn id used for plain `cancel` routing. */
-export function _getCurrentTurnIdForTest(): string | null {
-  return _rootState().turnId
-}
-
-/** Test-only: override the bound AgentSession so a spy can capture the
- *  content handed to `sendUserMessage` (plan/30 multimodal ingest). */
-export function _setPiForTest(pi: unknown): void {
-  _pi = pi as typeof _pi
-}
-
 /**
  * Persist a model change to the PROJECT settings (`<cwd>/.pi/settings.json`) so
  * a model picked from the app survives a Pi/daemon restart. `pi.setModel` only
@@ -1147,11 +1016,6 @@ function _isCurrentRootLifecycle(generation: number): boolean {
   return !_disposed && generation === _rootLifecycleGeneration
 }
 
-/** Test-only: exposes pending reconnect timer state. */
-export function _hasPendingReconnect(): boolean {
-  return _reconnectTimer !== null
-}
-
 /**
  * Public state-snapshot helper. Returns the derived UX state, not the raw
  * `_state` enum: the W2D refactor collapsed the internal machine to
@@ -1162,16 +1026,6 @@ export function _hasPendingReconnect(): boolean {
 export function _getState(): "idle" | "started" | "paired" {
   if (_state === "idle") return "idle"
   return _activePeers.size > 0 ? "paired" : "started"
-}
-
-/** Test-only: number of owners currently attached via PlainPeerChannel. */
-export function _getActivePeerCountForTest(): number {
-  return _activePeers.size
-}
-
-/** Test-only: true if a specific peer (base64 std) has an attached channel. */
-export function _hasActivePeerForTest(appPeerIdStd: string): boolean {
-  return _activePeers.has(appPeerIdStd)
 }
 
 // ── Multi-channel helpers ─────────────────────────────────────────────────────
@@ -2974,6 +2828,114 @@ const deps: CommandDeps = {
   renameAgent: _renameAgent,
 }
 
+// ── Test-only hooks seam ──────────────────────────────────────────────────────
+//
+// The _xForTest surface lives in ./test_hooks.ts (a factory over this module's
+// state + helpers — that module never imports ../index.js). The one-line
+// re-exports below preserve the exact export names every existing test
+// (extension.test.ts + the colocated command tests) imports.
+const _testHooks = createTestHooks({
+  commandDeps: deps,
+  get disposed() {
+    return _disposed
+  },
+  set disposed(v) {
+    _disposed = v
+  },
+  set autoInited(v: boolean) {
+    _autoInited = v
+  },
+  get panelBridge() {
+    return _panelBridge
+  },
+  set panelBridge(v) {
+    _panelBridge = v
+  },
+  get rpcEnvelope() {
+    return _rpcEnvelope
+  },
+  set rpcEnvelope(v) {
+    _rpcEnvelope = v
+  },
+  get subagentRooms() {
+    return _subagentRooms
+  },
+  set subagentRooms(v) {
+    _subagentRooms = v
+  },
+  get extensionUiBridge() {
+    return _extensionUiBridge
+  },
+  set extensionUiBridge(v) {
+    _extensionUiBridge = v
+  },
+  set rootSessionId(v: string | null) {
+    _rootSessionId = v
+  },
+  get cwdLock() {
+    return _cwdLock
+  },
+  set cwdLock(v) {
+    _cwdLock = v
+  },
+  get lockedName() {
+    return _lockedName
+  },
+  set lockedName(v: string | null) {
+    _lockedName = v
+  },
+  set sessionStartedAt(v: number | null) {
+    _sessionStartedAt = v
+  },
+  set currentModel(v: string | undefined) {
+    _currentModel = v
+  },
+  set pi(v: ExtensionAPI | null) {
+    _pi = v
+  },
+  rootSessionOwnerKey: _ROOT_SESSION_OWNER_KEY,
+  sessions: _sessions,
+  get meshNode() {
+    return _meshNode
+  },
+  get selfRevoke() {
+    return _selfRevoke
+  },
+  get cachedEd25519() {
+    return _cachedEd25519
+  },
+  get reconnectTimer() {
+    return _reconnectTimer
+  },
+  activePeers: _activePeers,
+  rootState: _rootState,
+  deliverMeshMessageToAgent: _deliverMeshMessageToAgent,
+})
+
+export const _connectForTest = _testHooks.connectForTest
+export const _stopForTest = _testHooks.stopForTest
+export const _getDisposedForTest = _testHooks.getDisposedForTest
+export const _setDisposedForTest = _testHooks.setDisposedForTest
+export const _resetAutoInitedForTest = _testHooks.resetAutoInitedForTest
+export const _resetBridgeOwnersForTest = _testHooks.resetBridgeOwnersForTest
+export const _resetSessionsForTest = _testHooks.resetSessionsForTest
+export const _setAutoInitedForTest = _testHooks.setAutoInitedForTest
+export const _hasMeshNodeForTest = _testHooks.hasMeshNodeForTest
+export const _checkSelfRevokeForTest = _testHooks.checkSelfRevokeForTest
+export const _getLockedNameForTest = _testHooks.getLockedNameForTest
+export const _resetCwdLockForTest = _testHooks.resetCwdLockForTest
+export const _startRelayForTest = _testHooks.startRelayForTest
+export const _getCachedPublicKeyForTest = _testHooks.getCachedPublicKeyForTest
+export const _setSessionStartedAtForTest = _testHooks.setSessionStartedAtForTest
+export const _setCurrentModelForTest = _testHooks.setCurrentModelForTest
+export const _getCurrentTurnIdForTest = _testHooks.getCurrentTurnIdForTest
+export const _setPiForTest = _testHooks.setPiForTest
+export const _hasPendingReconnect = _testHooks.hasPendingReconnect
+export const _getActivePeerCountForTest = _testHooks.getActivePeerCountForTest
+export const _hasActivePeerForTest = _testHooks.hasActivePeerForTest
+export const _deliverMeshMessageToAgentForTest =
+  _testHooks.deliverMeshMessageToAgentForTest
+
 const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   const applied = _appliedRegistry()
   if (applied.has(pi)) return // this session's pi was already wired
@@ -3619,11 +3581,6 @@ function _deliverMeshMessageToAgent(env: MeshEnvelope): void {
   }
   _pendingMeshMessages.push(env)
   _scheduleMeshMessageDrain()
-}
-
-/** Test-only entry point for verifying mesh-to-agent delivery semantics. */
-export function _deliverMeshMessageToAgentForTest(env: MeshEnvelope): void {
-  _deliverMeshMessageToAgent(env)
 }
 
 // ── routeClientMessage ────────────────────────────────────────────────────────
