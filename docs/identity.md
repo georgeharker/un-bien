@@ -21,7 +21,7 @@ The seed lives in one **selected backend**, configured in `un-bien.json`
 {
   "identity": {
     "storage": "keychain",   // "keychain" (default) | "file"
-    "path": "~/.pi/un-bien/identity.json"  // file backend only; this is the default
+    "path": "~/.local/state/un-bien/identity.json"  // file backend only; this is the default
   }
 }
 ```
@@ -72,7 +72,7 @@ expected identity (e.g. after moving machines).
 
 ## Extracting the seed
 
-- **File backend:** `cat <identity.path>` (default `~/.pi/un-bien/identity.json`).
+- **File backend:** `cat <identity.path>` (default `~/.local/state/un-bien/identity.json`).
   The file is the `{ "pk": …, "sk": … }` JSON — that *is* the seed material.
 - **Keychain backend:** read it from the OS keyring (Keychain Access on macOS,
   etc.). The agent does not extract keychain secrets.

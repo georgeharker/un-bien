@@ -18,7 +18,7 @@ import { loadConfig } from "../config.js"
  * Credential Manager on Windows — DPAPI-backed). When the keyring is
  * unavailable (headless Linux without a D-Bus session, Docker containers,
  * VPS without GNOME Keyring/KWallet running) we fall back to a
- * file-backed store at `~/.pi/un-bien/identity.json` with `0o600`
+ * file-backed store at `~/.local/state/un-bien/identity.json` with `0o600`
  * permissions and the parent dir at `0o700`.
  *
  * **Migration**: previous builds used `keytar` against service
@@ -74,7 +74,8 @@ export class PairedIdentityMissingError extends Error {
         "paired device. This usually means this process cannot reach the same " +
         "keyring as the session that paired (e.g. a systemd --user daemon vs. " +
         "your desktop session). Fix the service's keyring access, or pin the " +
-        "identity by copying the paired keypair to ~/.pi/un-bien/identity.json " +
+        "identity by copying the paired keypair to " +
+        "~/.local/state/un-bien/identity.json " +
         "(0600), which both contexts read first. " +
         `Cause: ${String(cause)}`,
     )
@@ -347,7 +348,7 @@ function _selectedStorageBackend(): IdentityStorageBackend {
 }
 
 /** Resolved file-backend path (`identity.path` in un-bien.json), default
- *  `~/.pi/un-bien/identity.json`. */
+ *  `~/.local/state/un-bien/identity.json`. */
 function _identityFilePath(): string {
   const p = loadConfig().identity?.path
   return p && p.length > 0 ? p : IDENTITY_FILE

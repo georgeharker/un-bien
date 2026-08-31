@@ -158,7 +158,7 @@ export function vbsLauncherPath(): string {
  * Combined stdout/stderr log for the Windows launcher daemon. The Task
  * Scheduler launches it hidden via wscript, so without this redirect its output
  * would vanish — mirrors launchd/systemd, which already log to
- * `~/.pi/un-bien/launcher.log`.
+ * `<state root>/launcher.log` (default `~/.local/state/un-bien/`).
  */
 export function launcherLogPath(): string {
   return join(unbienStateHome(), "launcher.log")

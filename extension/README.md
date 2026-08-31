@@ -100,7 +100,7 @@ current turn, and receive any later reply through the inbox/turn flow with
 `re` correlating it to the original message id.
 
 Peers on the same machine talk over a Unix domain socket at
-`~/.pi/un-bien/sessions/<session-name>/broker.sock`. When sibling PCs are paired,
+`~/.local/state/un-bien/sessions/<session-name>/broker.sock`. When sibling PCs are paired,
 a leader-capable Extension or MCP participant bridges the opaque cross-PC
 addresses over the relay; local-only use stays on UDS when relay access is off.
 Useful for splitting work across roles (`backend`, `frontend`, `tests`,
@@ -240,7 +240,7 @@ Once the relay is up (`/unbien relay status` shows `started` or `paired`):
 
 A QR code is printed in the terminal. Scan it with the Un Bien mobile app.
 Pairing is **per machine** — once a device is paired, every Pi process on
-this machine accepts it (it lives in `~/.pi/un-bien/peers.json`).
+this machine accepts it (it lives in `~/.local/state/un-bien/peers.json`).
 
 To list paired devices:
 
@@ -374,7 +374,7 @@ original message id.
 
 The wire format is a 5-field envelope `{ from, to, id, re, body }` serialized
 as one JSON line per message. The leader's broker writes an `audit.jsonl`
-log at `~/.pi/un-bien/sessions/<name>/audit.jsonl` for postmortem inspection.
+log at `~/.local/state/un-bien/sessions/<name>/audit.jsonl` for postmortem inspection.
 
 Useful commands:
 
@@ -455,7 +455,7 @@ the mesh/app like any prompt; the cron layer only audits the dispatch.
   Without it there is no scheduler, and `cron` commands say so instead of
   silently pretending to schedule.
 - **Audit**: every fire **and** every skip appends one line to
-  `~/.pi/un-bien/cron.jsonl` with a `result` of `delivered`,
+  `~/.local/state/un-bien/cron.jsonl` with a `result` of `delivered`,
   `woke_and_delivered`, `deliver_failed`, `skipped_busy`, `skipped_down`, or
   `skipped_disabled` — read it with `unbien cron log`.
 
@@ -545,14 +545,14 @@ unbien uninstall                   # remove the supervisor service (registry kep
 
 `uninstall` is reversible — re-running `install` later brings every
 registered daemon back. To wipe the registry entirely, `rm
-~/.pi/un-bien/daemons.json`.
+~/.local/state/un-bien/daemons.json`.
 
 ### Where to find logs
 
 | Platform | Command                                      |
 | -------- | -------------------------------------------- |
 | Linux    | `journalctl --user -u unbien-supervisord -f` |
-| macOS    | `tail -f ~/.pi/un-bien/supervisord.log`      |
+| macOS    | `tail -f ~/.local/state/un-bien/supervisord.log`      |
 
 Each spawned daemon's stderr is forwarded into the supervisor's log
 with a `[<cwd>]` prefix, so a single log stream shows every agent.
@@ -582,13 +582,13 @@ with a `[<cwd>]` prefix, so a single log stream shows every agent.
 | --------------------------------------------- | ----------------- | ------------------------------------------------------------------------------ |
 | `~/.pi/extensions/un-bien.json`               | Per-user (global) | `relay` URL, `defaults`, `identity`, `debug` — the global settings (see below) |
 | `<cwd>/.pi/un-bien/config.json`               | Per-directory     | `agent_name`, `auto_start_relay`, `allow_remote_launch`                        |
-| `~/.pi/un-bien/identity.json`                 | Per-machine       | Paired identity keypair (file identity backend; `0600`)                        |
-| `~/.pi/un-bien/peers.json`                    | Per-machine       | Paired mobile devices                                                          |
-| `~/.pi/un-bien/sessions/<name>/`              | Per-session       | Broker socket + `audit.jsonl`                                                  |
-| `~/.pi/un-bien/daemons.json`                  | Per-machine       | Daemon registry                                                                |
-| `~/.pi/un-bien/cron.json` · `cron.jsonl`      | Per-machine       | Cron registry + fire/skip audit log                                            |
-| `~/.pi/un-bien/supervisor.sock`               | Per-machine       | Supervisor control socket                                                      |
-| `~/.pi/un-bien/skills/agent-network/SKILL.md` | Per-user          | Agent skill the LLM reads                                                      |
+| `~/.local/state/un-bien/identity.json`                 | Per-machine       | Paired identity keypair (file identity backend; `0600`)                        |
+| `~/.local/state/un-bien/peers.json`                    | Per-machine       | Paired mobile devices                                                          |
+| `~/.local/state/un-bien/sessions/<name>/`              | Per-session       | Broker socket + `audit.jsonl`                                                  |
+| `~/.local/state/un-bien/daemons.json`                  | Per-machine       | Daemon registry                                                                |
+| `~/.local/state/un-bien/cron.json` · `cron.jsonl`      | Per-machine       | Cron registry + fire/skip audit log                                            |
+| `~/.local/state/un-bien/supervisor.sock`               | Per-machine       | Supervisor control socket                                                      |
+| `~/.local/state/un-bien/skills/agent-network/SKILL.md` | Per-user          | Agent skill the LLM reads                                                      |
 
 ### Global settings — `~/.pi/extensions/un-bien.json`
 
@@ -610,9 +610,9 @@ fields are optional:
   // Pi's long-term Ed25519 seed: "keychain" (OS-secured, default) or "file"
   // (a 0600 seed file — the SSH-private-key model: cat-able, portable,
   // works headless). `path` overrides the file-backend location
-  // (default ~/.pi/un-bien/identity.json). The unselected backend is still
+  // (default ~/.local/state/un-bien/identity.json). The unselected backend is still
   // READ to recover an existing identity, but never written.
-  "identity": { "storage": "keychain", "path": "~/.pi/un-bien/identity.json" },
+  "identity": { "storage": "keychain", "path": "~/.local/state/un-bien/identity.json" },
 
   // File-based diagnostic logs. Off by default. Read from config (not env)
   // because the daemon fork usually runs detached without a shell's env.
@@ -635,14 +635,24 @@ Written by the `/unbien` setup wizard:
 | Variable               | Purpose                                                                                                                    |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `UNBIEN_RELAY`         | Relay URL override (highest precedence, ahead of the config file). CI / one-off use.                                       |
-| `UNBIEN_DIR`           | Absolute override of the **state** dir itself (no `.pi/un-bien` suffix). The knob for an XDG-style relocation.             |
-| `UNBIEN_HOME`          | Stand-in `$HOME`; state lives at `<UNBIEN_HOME>/.pi/un-bien`. When both are set, `UNBIEN_DIR` wins.                        |
+| `UNBIEN_STATE_DIR`     | Absolute override of the **state** dir itself. The knob for relocating state. Highest precedence of the state knobs.       |
+| `UNBIEN_DIR`           | Legacy absolute override of the **state** dir itself (no suffix appended). Lower precedence than `UNBIEN_STATE_DIR`.       |
+| `UNBIEN_HOME`          | Legacy stand-in `$HOME`; state lives at `<UNBIEN_HOME>/.pi/un-bien`. Lower precedence than `UNBIEN_DIR`.                   |
 | `PI_CODING_AGENT_DIR`  | The Pi host's settings root (default `~/.pi`); the global config lives at `<PI_CODING_AGENT_DIR>/extensions/un-bien.json`. |
 | `UNBIEN_DIRECT_CONFIG` | Inline per-cwd config (JSON) instead of a `.pi/un-bien/config.json` file — used by the daemon supervisor.                  |
 
-`UNBIEN_DIR`/`UNBIEN_HOME` relocate un-bien **state** (sessions, daemon
-registries, cwd locks, paired identity). `PI_CODING_AGENT_DIR` relocates only
-the global **config**, so it can sit beside the coding agent's own settings.
+The state root resolves as `UNBIEN_STATE_DIR` > `UNBIEN_DIR` > `UNBIEN_HOME` >
+`${XDG_STATE_HOME:-~/.local/state}/un-bien` — the XDG-style default. `UNBIEN_DIR`/
+`UNBIEN_HOME` relocate un-bien **state** (sessions, daemon registries, cwd
+locks, paired identity) and stay honored for older deployments. On first use
+of the new default, a one-time best-effort migration moves any legacy
+`~/.pi/un-bien` state (peers.json included) into the new root.
+`PI_CODING_AGENT_DIR` relocates only the global **config**, so it can sit
+beside the coding agent's own settings.
+
+**Deprecated**: the relay no longer defaults its SQLite DB to a CWD-relative
+`data/mesh.db` — see the relay README for its `UNBIEN_MESH_DB_PATH` /
+state-root resolution.
 
 Override the relay for a single run without persisting:
 
