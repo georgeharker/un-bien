@@ -171,8 +171,9 @@ export interface RenderVars {
   launcher: string
   home: string
   user: string
-  /** PATH inherited so `pi --mode rpc` resolves the same way it does
-   *  interactively. We snapshot `process.env.PATH` at install time. */
+  /** PATH inherited so `tmux`/`herdr` (the remote-launch backends) and `pi`
+   *  resolve the same way they do interactively. We snapshot
+   *  `process.env.PATH` at install time. */
   path: string
   /** Windows only: absolute path of the VBScript launcher the Task Scheduler
    *  action runs via `wscript.exe`. Empty on POSIX (templates ignore `{VBS}`). */
@@ -275,6 +276,13 @@ export function installService(
     writeFileSync(unitPath, rendered) // launchd/systemd → UTF-8
   }
   log.push(`wrote ${unitPath}`)
+
+  if (plat === "macos") {
+    // launchd creates the plist's Standard{Out,Error}Path file, but not its
+    // parent directory — ensure the state root exists so the {LOG} redirect
+    // doesn't silently vanish on a machine that never ran the extension.
+    mkdirSync(dirname(vars.logPath), { recursive: true })
+  }
 
   if (plat === "macos") {
     // Unload first in case a stale entry exists from a prior install —

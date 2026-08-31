@@ -1,18 +1,18 @@
-# Daemon mode — troubleshooting
+# Remote launch & launcher daemon — troubleshooting
 
-Companion to the README's [Daemon mode](../README.md#daemon-mode) section.
+Companion to the README's [Remote launch](../README.md#remote-launch) section.
 Each scenario starts with the symptom you'd actually observe, followed by
-likely causes and how to fix.
+likely causes and how to fix it.
 
 ---
 
 ## 1. `unbien install` fails
 
-### "supervisor script not found"
+### "launcher script not found"
 
-```
-[un-bien] install failed: Error: supervisor script not found at
-/Users/x/dist/bin/supervisord.js. Run `pnpm build` (dev) or
+```text
+[un-bien] install failed: Error: launcher script not found at
+/Users/x/dist/bin/launcher.js. Run `pnpm build` (dev) or
 `npm install -g @geohar/un-bien` (prod) first.
 ```
 
@@ -24,21 +24,20 @@ exist yet, or from a partial install.
 cd extension && pnpm build
 
 # Production install:
-npm install -g @geohar/un-bien   # or pnpm install -g @geohar/un-bien
-which pi-supervisord             # confirm bin is on PATH
+npm install -g @geohar/un-bien
 unbien install
 ```
 
 ### "launchctl: bootstrap … already running"
 
 A previous install left a stale entry. The fix is built into `install` —
-re-run it and the supervisor unloads the old entry before bootstrapping
-the new one. If it still fails:
+re-run it and the launcher unloads the old entry before bootstrapping the
+new one. If it still fails:
 
 ```bash
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/dev.unbien.supervisord.plist
-launchctl unload ~/Library/LaunchAgents/dev.unbien.supervisord.plist 2>/dev/null
-rm ~/Library/LaunchAgents/dev.unbien.supervisord.plist
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/dev.unbien.launcher.plist
+launchctl unload ~/Library/LaunchAgents/dev.unbien.launcher.plist 2>/dev/null
+rm ~/Library/LaunchAgents/dev.unbien.launcher.plist
 unbien install
 ```
 
@@ -54,237 +53,162 @@ systemctl --user daemon-reload
 unbien install
 ```
 
+### Windows: the UAC prompt fails or is declined
+
+`unbien install` needs elevation **once** — only the `schtasks /Create`
+that registers the task requires admin. Accept the prompt when it appears.
+Stopping/starting the task afterwards (`/End`, `/Run`) works un-elevated.
+
 ---
 
-## 2. Supervisor doesn't start at login
+## 2. The launcher doesn't start at login
 
 ### Check the service status
 
 ```bash
 # Linux
-systemctl --user status unbien-supervisord
-journalctl --user -u unbien-supervisord -n 50
+systemctl --user status unbien-launcher
+journalctl --user -u unbien-launcher -n 50
 
 # macOS
-launchctl list | grep unbien
-tail -100 ~/.pi/un-bien/supervisord.log
+launchctl list | grep dev.unbien
+tail -100 ~/.local/state/un-bien/launcher.log
 ```
 
 ### Common failures
 
-- **`pi: command not found`** in the log — Pi's binary isn't on the
-  PATH that the unit inherited. `unbien install` captures
-  `process.env.PATH` at install time; if you installed Pi *after*
-  running install, re-run `unbien install` to refresh.
-- **`Cannot find module …`** — the path baked into the unit doesn't
-  match where `dist/bin/supervisord.js` actually lives. Happens if you
-  uninstalled then reinstalled the package to a different location.
-  Fix: `unbien uninstall && unbien install`.
-- **Permission denied on UDS** — `~/.pi/un-bien/` exists with wrong
-  perms (rare; only happens if you ran `pi` as `sudo` once). Delete
-  the dir and let it re-create: `rm -rf ~/.pi/un-bien && unbien install`.
+- **`node: cannot find module …`** or immediate exit — the absolute paths
+  baked into the unit/plist no longer match where the package lives. This
+  happens when you reinstall Node via a version manager (nvm/fnm) or
+  uninstall/reinstall the package to a different location. Fix:
+  `unbien uninstall && unbien install` (install snapshots the current
+  node binary and paths).
+- **`tmux: command not found`** (at launch time, not startup) — the PATH
+  captured at install time didn't include the remote-launch backend.
+  Install tmux (or herdr), then re-run `unbien install` to refresh PATH.
+- **First connect race** — the launcher logs `initial connect failed (…)
+— retrying every 3000ms` and retries on its own. This is normal when
+  the relay starts in the same breath; it clears once the relay is up.
 
-### Run the supervisor in the foreground for debugging
+### Run the launcher in the foreground for debugging
 
-Bypass systemd/launchd and run it directly so you can see startup
-errors live:
+Bypass systemd/launchd and run it directly so you can see startup errors
+live:
 
 ```bash
-pi-supervisord
-# or: node $(npm root -g)/@geohar/un-bien/dist/bin/supervisord.js
+unbien-launcher          # from @geohar/un-bien-launcher
+# or, from the extension package:
+node $(npm root -g)/@geohar/un-bien/dist/bin/launcher.js
 ```
 
-Ctrl-C to stop. If that works but the service doesn't, the problem is
-in the unit/plist environment (PATH, HOME) — re-run `unbien install`.
+If it prints `[un-bien launcher] listening on control room …` and stays
+up, the daemon itself is fine — the problem is in the unit/plist
+environment (PATH, node path). Re-run `unbien install`.
 
 ---
 
-## 3. A specific daemon stays `crashed`
+## 3. The app can't launch a session on this machine
 
-`unbien daemon status` shows one row with `state=crashed` and a
-restart count near 4 (the supervisor gives up after exponential
-backoff: 1s, 5s, 30s, 5min).
+The launcher is running and the app sees the machine's control room, but
+launch requests do nothing.
 
-### Step 1 — read the daemon's stderr
+### Remote launch is not enabled for that directory
 
-The supervisor forwards each daemon's stderr with a `[<cwd>]` prefix:
+The launcher only honors `session_launch` where it's opted in:
 
-```bash
-# Linux
-journalctl --user -u unbien-supervisord -f | grep '\[/Users/x/Movies\]'
-
-# macOS
-tail -f ~/.pi/un-bien/supervisord.log | grep '\[/Users/x/Movies\]'
+```jsonc
+// <cwd>/.pi/un-bien/config.json — per directory
+{ "allow_remote_launch": true }
 ```
 
-### Step 2 — run that daemon manually
+or machine-wide, in `~/.pi/extensions/un-bien.json`:
 
-Reproduce the failure with full visibility:
-
-```bash
-cd /Users/x/Movies
-UNBIEN_DAEMON=1 pi --mode rpc -e $(npm root -g)/@geohar/un-bien/dist/index.js
+```jsonc
+{ "defaults": { "allow_remote_launch": true } }
 ```
 
-Common reasons a daemon won't start:
+### Turn on the diagnostic log
 
-- **Local config missing.** `cd` into the daemon's folder and check
-  `.pi/un-bien/config.json` exists with `auto_start_relay: true`.
-  Recreate via `unbien create <cwd>` (it provisions a default config
-  when missing).
-- **Pi extension config drift.** Pi's own settings (model, API keys)
-  reset → daemon fails to authenticate to the provider. Run
-  `cd <cwd> && pi` interactively to fix.
-- **Port/UDS collision.** Another Pi process is already running in
-  that cwd. The cwd-lock should reject the second one, but stale UDS
-  sockets sometimes linger; check `lsof ~/.pi/un-bien/locks/<roomId>.sock`.
+The launcher writes its decisions to the envelope debug log. Enable it in
+`~/.pi/extensions/un-bien.json`:
 
-### Step 3 — force a re-spawn
-
-After fixing the underlying problem, kick the supervisor:
-
-```bash
-unbien daemon restart      # bounces every daemon
+```jsonc
+{ "debug": { "envelope": true } }
 ```
+
+then reproduce and read
+`~/.local/state/un-bien/envelope-debug.log` — look for
+`remote launch disabled on this machine` (the opt-in above) or
+`session_launch error: …` (the backend failing to spawn).
+
+### The backend is missing or misconfigured
+
+`launch.backend` in the global config picks the spawn mechanism — `tmux`
+(default) or `herdr`. The chosen binary must be on the PATH the service
+inherited (see §2). Verify what the launcher will use from any Pi
+session: `/unbien config`.
+
+### "Peer not paired — re-scan QR"
+
+The app's device key isn't in this machine's `peers.json` (never paired
+here, or revoked). Pairing is interactive: run `/unbien pair` in any Pi
+session on the machine and scan the QR from the app.
 
 ---
 
-## 4. `daemon send` says "daemon not running"
+## 4. The app can't see the machine at all
 
-The supervisor has the registry entry but no live child for that id.
-Most common cause: the daemon never started OR it crashed past the
-retry budget.
-
-```bash
-unbien daemon status       # is state running?
-unbien daemon start        # spawn any that aren't running
-# Then retry send.
-```
-
-If `daemon start` shows `started=0, already_running=N`, the supervisor
-isn't actually spawning. Possible reasons:
-- Registry empty: `unbien daemons` to verify.
-- Child crashes faster than the status check: `daemon status` immediately
-  after start may still show `running` for a few seconds before the
-  exit event marks it crashed. Re-check 2-3 seconds later.
+- **Relay mismatch.** The launcher uses the same global relay config as
+  the extension — check `/unbien config` and make sure the app is pointed
+  at the same URL.
+- **Launcher not running.** Check §2; the control room only exists while
+  the launcher is connected.
 
 ---
 
-## 5. Mobile app doesn't connect to a daemon
-
-The daemon is up but the app doesn't see it.
-
-### Confirm the daemon is paired
-
-`pair_request` must have happened **before** the folder became a daemon
-(daemons don't show QRs themselves):
-
-```bash
-cd <daemon-cwd>
-pi
-> /unbien devices         # confirm the device is listed
-> /unbien stop            # stop interactive session — daemon takes over
-unbien daemon restart
-```
-
-### Confirm the relay URL matches
-
-The daemon uses the cwd's local config (`<cwd>/.pi/un-bien/config.json`
-agent_name) plus the global relay in `~/.pi/extensions/un-bien.json`. Verify
-with:
-
-```bash
-cd <daemon-cwd>
-pi
-> /unbien status
-```
-
-The relay line should match what the mobile app is connecting to. If
-not, update the relay URL and bounce the daemon:
-
-```bash
-unbien set-relay https://relay.example.tld
-unbien daemon restart
-```
-
----
-
-## 6. Registry corrupted / partial
-
-Symptom: `unbien daemons` errors out or shows nothing despite
-having created entries.
-
-```bash
-cat ~/.pi/un-bien/daemons.json    # inspect
-```
-
-The file should be:
-
-```json
-{
-  "daemons": [
-    { "cwd": "/Users/x/Movies" },
-    { "cwd": "/Users/x/Projects/backend" }
-  ]
-}
-```
-
-Fix manually if needed (it's a JSON list of `{cwd}` entries), or wipe
-and re-create:
-
-```bash
-rm ~/.pi/un-bien/daemons.json
-unbien create ~/Movies --name "Video Editor"
-unbien create ~/Projects/backend --name "Backend"
-unbien daemon restart
-```
-
----
-
-## 7. Uninstall cleanly + re-install from scratch
+## 5. Uninstall cleanly + re-install from scratch
 
 When you suspect everything is misconfigured:
 
 ```bash
-unbien uninstall                 # removes service, keeps registry
-rm -rf ~/.pi/un-bien             # nukes registry + paired devices + keys
+unbien uninstall                    # removes the service, keeps config + pairing
+rm -rf ~/.local/state/un-bien       # nukes pairing + identity (re-pair after this)
 npm uninstall -g @geohar/un-bien
 npm install -g @geohar/un-bien
 unbien install
-# Then re-pair + re-create daemons from scratch.
+# Then re-pair from scratch: pi → /unbien pair
 ```
 
-This is the "nuke everything" path. After this, the only state left is
-each cwd's `<cwd>/.pi/un-bien/config.json` — which you can either
-keep (re-create restores the daemon) or delete (full reset).
+This is the "nuke everything" path. After it, the only state left is each
+cwd's `<cwd>/.pi/un-bien/config.json`, which you can keep or delete for a
+full reset.
 
 ---
 
-## 8. Diagnostic commands cheat-sheet
+## 6. Diagnostic commands cheat-sheet
 
 ```bash
-# Where is the supervisor's UDS?
-ls -la ~/.pi/un-bien/supervisor.sock
+# Service status
+systemctl --user status unbien-launcher          # Linux
+launchctl list | grep dev.unbien                 # macOS
+schtasks /Query /TN RemotePiLauncher             # Windows
 
-# Talk to the supervisor manually (raw JSONL):
-echo '{"op":"list"}' | nc -U ~/.pi/un-bien/supervisor.sock
+# Logs
+journalctl --user -u unbien-launcher -f          # Linux
+tail -f ~/.local/state/un-bien/launcher.log      # macOS / Windows
 
-# Where are the daemon configs?
-find ~/Projects -name "config.json" -path "*/.pi/un-bien/*" 2>/dev/null
+# Global config the launcher reads (relay, launch backend, defaults)
+cat ~/.pi/extensions/un-bien.json
 
-# Where are the cwd locks?
-ls ~/.pi/un-bien/locks/
+# Paired devices (per machine)
+cat ~/.local/state/un-bien/peers.json
 
-# Where are the paired devices?
-cat ~/.pi/un-bien/peers.json
-
-# What Pi binary is the supervisor about to spawn?
-unbien install --dry-run      # (not implemented; check ~/Library/LaunchAgents or systemd unit manually)
-
-# Quick liveness check
-unbien daemon status
+# What the extension thinks (from any Pi session, in pi):
+#   /unbien config
+#   /unbien status
+#   /unbien devices
 ```
 
 If after walking the list you're still stuck, file an issue with the
-output of `unbien daemon status`, the recent supervisor log, and
-the contents of `~/.pi/un-bien/daemons.json`.
+output of the service status, the launcher log, and the contents of
+`~/.pi/extensions/un-bien.json`.

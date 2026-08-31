@@ -124,8 +124,8 @@ describe("renderTemplate", () => {
     home: "/Users/x",
     user: "jacob",
     path: "/usr/local/bin:/usr/bin:/bin",
-    vbs: "/Users/x/.pi/un-bien/RemotePiLauncherRun.vbs",
-    logPath: "/Users/x/.pi/un-bien/launcher.log",
+    vbs: "/Users/x/.local/state/un-bien/RemotePiLauncherRun.vbs",
+    logPath: "/Users/x/.local/state/un-bien/launcher.log",
   }
 
   test("substitutes every placeholder in systemd template", () => {
@@ -151,9 +151,7 @@ describe("renderTemplate", () => {
     expect(out).not.toContain("{PATH}")
     expect(out).toContain(`<string>${vars.node}</string>`)
     expect(out).toContain(`<string>${vars.launcher}</string>`)
-    expect(out).toContain(
-      `<string>${vars.home}/.pi/un-bien/launcher.log</string>`,
-    )
+    expect(out).toContain(`<string>${vars.logPath}</string>`)
   })
 
   test("global replacement (multiple occurrences of same placeholder)", () => {

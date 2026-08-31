@@ -33,8 +33,8 @@ multiple Pi sessions on your machines can discover and message each other.
 - **Image display** — renders images your tools and the agent produce.
 - **Local agent mesh** — several Pi sessions coordinating over a local broker,
   optionally bridged across machines through the relay.
-- **Daemon mode** — keep a Pi running in the background, answering prompts and
-  cron jobs while you're away.
+- **Remote launch** — a small launcher daemon lets the app start Pi sessions on
+  your machine (via tmux/herdr) even when no Pi is running.
 
 > **Status:** WIP and actively maturing — functional and usable today, with
 > polish landing toward the first public release.
@@ -43,11 +43,11 @@ multiple Pi sessions on your machines can discover and message each other.
 
 ## Where to next
 
-| I want to…                     | Document                                        |
-| ------------------------------ | ----------------------------------------------- |
-| Get the big picture            | [Overview (README)](README.md)                  |
-| Install & set everything up    | [Install & setup](docs/install.md)              |
-| Use the extension & commands   | [Extension guide](extension/README.md)          |
+| I want to…                                       | Document                               |
+| ------------------------------------------------ | -------------------------------------- |
+| Get the big picture                              | [Overview (README)](README.md)         |
+| Install & set everything up                      | [Install & setup](docs/install.md)     |
+| Use the extension & commands                     | [Extension guide](extension/README.md) |
 | Go deeper (design, protocol, building & signing) | [Design & development](docs/design.md) |
 
 ---

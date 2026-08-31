@@ -409,55 +409,16 @@ real name to the peer.
 | `/unbien relay url <url>`             | Same as `set-relay`                                                            |
 | `/unbien config`                      | Show the effective relay URL and its source (env / config / unset)             |
 
-### Daemon fleet (one supervisor, N background Pis — see [Daemon mode](#daemon-mode))
+### Service install & remote launch (see [Remote launch](#remote-launch))
 
-| Command                                     | Description                                                                   |
-| ------------------------------------------- | ----------------------------------------------------------------------------- |
-| `/unbien create <cwd> [--name X]`           | Register a folder as a daemon                                                 |
-| `/unbien remove <id>`                       | Unregister a daemon (local config preserved)                                  |
-| `/unbien daemons`                           | List registered daemons + state                                               |
-| `/unbien daemon start`                      | Start every registered daemon                                                 |
-| `/unbien daemon stop`                       | Stop every running daemon (`/unbien stop` stops only the local terminal)      |
-| `/unbien daemon restart`                    | Stop + start all daemons                                                      |
-| `/unbien daemon status`                     | Detailed runtime status (pid, uptime, restart count)                          |
-| `/unbien daemon send <id> "<text>"`         | Send a prompt to a specific daemon                                            |
-| `/unbien cron add <id> "<expr>" "<prompt>"` | Schedule a recurring prompt (`--tz`, `--wake`, `--no-skip-busy`, `--catchup`) |
-| `/unbien cron list`                         | List scheduled jobs (schedule, enabled, next run, last status)                |
-| `/unbien cron run <jobId>`                  | Fire a job now (ignores its schedule)                                         |
-| `/unbien cron enable\|disable <jobId>`      | Toggle a job on/off                                                           |
-| `/unbien cron remove <jobId>`               | Delete a job                                                                  |
-| `/unbien cron log [<jobId>] [--tail N]`     | Read the fire/skip audit log                                                  |
-| `/unbien install`                           | Install `pi-supervisord` as a system service                                  |
-| `/unbien uninstall`                         | Remove the system service (registry preserved)                                |
+| Command             | Description                                                                        |
+| ------------------- | ---------------------------------------------------------------------------------- |
+| `/unbien install`   | Install the **unbien-launcher** daemon as a system service + link the `unbien` CLI |
+| `/unbien uninstall` | Remove the launcher service + CLI links (pairing and config preserved)             |
 
 All commands above work both as Pi slash commands (interactive) and as
 shell-level `unbien <subcommand>` when the package is installed
 globally (`npm install -g @geohar/un-bien`).
-
-### Scheduled prompts (`cron`)
-
-`unbien cron` schedules **recurring prompts** to daemons through the
-supervisor — e.g. a daily "summarise new PRs". Output flows fire-and-forget to
-the mesh/app like any prompt; the cron layer only audits the dispatch.
-
-- **Schedule** is a cron expression (croner syntax; an optional 6th _seconds_
-  field is supported), with an optional IANA timezone via `--tz`:
-
-  ```sh
-  unbien cron add a1b2c3d4 "0 9 * * *" "Summarise new PRs" --tz America/Sao_Paulo
-  ```
-
-- **Minimum interval is 60s** — more frequent schedules are rejected (guards
-  token cost + pileup). A fire is **skipped when the daemon is mid-turn**
-  (`--no-skip-busy` to override); `--wake` starts a stopped daemon first;
-  `--catchup` runs once on supervisor start if the previous run was missed.
-- **Prerequisite**: the supervisor must run as a service (`unbien install`).
-  Without it there is no scheduler, and `cron` commands say so instead of
-  silently pretending to schedule.
-- **Audit**: every fire **and** every skip appends one line to
-  `~/.local/state/un-bien/cron.jsonl` with a `result` of `delivered`,
-  `woke_and_delivered`, `deliver_failed`, `skipped_busy`, `skipped_down`, or
-  `skipped_disabled` — read it with `unbien cron log`.
 
 ### Footer + title
 
@@ -472,105 +433,89 @@ tabs.
 
 ---
 
-## Daemon mode
+## Remote launch
 
-When you want a Pi to keep running in the background (responding to
-mobile prompts at 3am, processing cron jobs, monitoring a folder while
-you're not at the keyboard), promote it to a **daemon** managed by a
-single OS-level supervisor.
+The **unbien-launcher** is a lightweight mesh peer — **not** a Pi session — that
+lets a paired app reach your machine even when no Pi is running. It reuses the
+machine's un-bien config (identity + relay), joins the machine-level control
+room, advertises `remote_launch`, and spawns a `pi` window via `tmux` (default)
+or `herdr` when the app asks for one.
 
 See [`docs/daemon.md`](./docs/daemon.md) for troubleshooting.
 
 ### One-time setup
 
 ```bash
-# Install the package globally so `unbien` and `pi-supervisord`
-# are on your PATH (`pi install npm:@geohar/un-bien` alone makes the Pi
-# extension available but does NOT expose the CLI binaries — see
+# Install the package globally so the `unbien` CLI is on your PATH
+# (`pi install npm:@geohar/un-bien` alone makes the Pi extension available
+# but does NOT expose the CLI binary — see
 # https://docs.npmjs.com/cli/v10/configuring-npm/package-json#bin).
 npm install -g @geohar/un-bien
 
-# Install the supervisor as a user-level system service. Linux uses
+# Install the launcher as a user-level system service. Linux uses
 # systemd --user; macOS uses launchd LaunchAgent. Both auto-start at
 # login and survive reboots.
 unbien install
 ```
 
+Or from inside Pi: `/unbien install` — same service, plus it links the
+`unbien` CLI into `~/.local/bin` so no global npm install is needed.
+
 The `install` command:
 
-- Writes `~/.config/systemd/user/unbien-supervisord.service` (Linux)
-  or `~/Library/LaunchAgents/dev.unbien.supervisord.plist` (macOS)
+- Writes `~/.config/systemd/user/unbien-launcher.service` (Linux) or
+  `~/Library/LaunchAgents/dev.unbien.launcher.plist` (macOS); on Windows it
+  registers a Task Scheduler task (`RemotePiLauncher`) and prompts for
+  elevation once
 - Activates it via `systemctl --user enable --now` or `launchctl bootstrap`
-- The supervisor starts immediately and re-starts on every login
+- The launcher starts immediately and re-starts on every login
 
-### Per-folder workflow
+A standalone package exists for running the launcher in the foreground, no
+service: `npm install -g @geohar/un-bien-launcher` → `unbien-launcher`. Same
+daemon, shipped as its own binary (see the
+[launcher README](../launcher/README.md)).
 
-For each agent you want to keep alive 24/7:
+### Enable remote launch
 
-```bash
-# 1. Configure the agent interactively first (one time).
-cd ~/Movies
-pi                                 # /unbien → setup wizard, /unbien pair, etc
+The launcher only spawns sessions where remote launch is **opted in**:
 
-# 2. Promote to a daemon. The id is derived from the cwd
-#    (sha256(realpath)[:8]), stable across machines.
-unbien create ~/Movies --name "Video Editor"
-# → Daemon registered: id=4e39152d name="Video Editor" cwd=/Users/x/Movies
+- per directory: `allow_remote_launch: true` in `<cwd>/.pi/un-bien/config.json`
+- or machine-wide: `defaults.allow_remote_launch: true` in the global config
+  (`~/.pi/extensions/un-bien.json`)
 
-# 3. Start it (supervisor spawns `pi --mode rpc` for this folder).
-unbien daemon start
-```
-
-Now you can:
-
-```bash
-unbien daemons                     # list + state
-unbien daemon status               # uptime, pid, restart count
-unbien daemon send 4e39152d "Cut the first 30 seconds of latest clip"
-unbien daemon stop                 # stop all
-unbien daemon restart              # restart all
-```
-
-The agent receives the prompt as if a user typed it; its response flows
-back through the relay/mesh you configured during interactive setup —
-mobile app sees it live, other agents on the same machine can see it
-via the local UDS mesh.
+The spawn backend is machine-wide: `launch.backend` in the global config —
+`tmux` (default; one shared `un-bien` tmux session, a window per launched Pi)
+or `herdr`. The backend binary must be on PATH: `unbien install` snapshots
+your PATH at install time, so re-run it after installing new tools.
 
 ### Removing or uninstalling
 
 ```bash
-unbien remove <id>                 # unregister one daemon (config preserved)
-unbien uninstall                   # remove the supervisor service (registry kept)
+unbien uninstall        # remove the launcher service (pairing + config kept)
 ```
 
-`uninstall` is reversible — re-running `install` later brings every
-registered daemon back. To wipe the registry entirely, `rm
-~/.local/state/un-bien/daemons.json`.
+`uninstall` is reversible — re-running `install` later brings the launcher
+back. Pairing and identity live in the state root and are never touched.
 
 ### Where to find logs
 
-| Platform | Command                                      |
-| -------- | -------------------------------------------- |
-| Linux    | `journalctl --user -u unbien-supervisord -f` |
-| macOS    | `tail -f ~/.local/state/un-bien/supervisord.log`      |
-
-Each spawned daemon's stderr is forwarded into the supervisor's log
-with a `[<cwd>]` prefix, so a single log stream shows every agent.
+| Platform | Command                                                 |
+| -------- | ------------------------------------------------------- |
+| Linux    | `journalctl --user -u unbien-launcher -f`               |
+| macOS    | `tail -f ~/.local/state/un-bien/launcher.log`           |
+| Windows  | `Get-Content ~\.local\state\un-bien\launcher.log -Wait` |
 
 ### Caveats
 
-- **Tool execution is not gated.** Daemons inherit the same Pi config
-  the interactive run uses — Bash, Edit, Write etc. all execute without
-  prompting. Configure Pi's tool permissions to taste before promoting
-  a folder to daemon.
-- **Pairing still happens interactively.** Daemons don't show a QR
-  themselves; the keypair + paired devices come from the prior `pi`
-  session in the same folder.
-- **Single supervisor.** If `pi-supervisord` crashes all daemons go
-  down with it. systemd/launchd restarts it within seconds; daemons
-  come back automatically.
-- **One daemon per cwd.** The `roomIdForCwd` derivation makes daemons
-  by-path; two daemons in the same folder is rejected at `create` time.
+- **Pairing still happens interactively.** The launcher doesn't show a QR; it
+  only trusts owners already paired via `/unbien pair` in a Pi session on
+  this machine.
+- **Tool execution is not gated.** A launched Pi inherits the same Pi config
+  an interactive run uses — Bash, Edit, Write etc. all execute without
+  prompting. Configure Pi's tool permissions to taste before enabling
+  `allow_remote_launch`.
+- **Same identity, same relay.** The launcher reads the machine's global
+  config — `/unbien config` shows exactly what it will use.
 
 ---
 
@@ -578,16 +523,13 @@ with a `[<cwd>]` prefix, so a single log stream shows every agent.
 
 ### Files
 
-| Path                                          | Scope             | What's in it                                                                   |
-| --------------------------------------------- | ----------------- | ------------------------------------------------------------------------------ |
-| `~/.pi/extensions/un-bien.json`               | Per-user (global) | `relay` URL, `defaults`, `identity`, `debug` — the global settings (see below) |
-| `<cwd>/.pi/un-bien/config.json`               | Per-directory     | `agent_name`, `auto_start_relay`, `allow_remote_launch`                        |
+| Path                                                   | Scope             | What's in it                                                                   |
+| ------------------------------------------------------ | ----------------- | ------------------------------------------------------------------------------ |
+| `~/.pi/extensions/un-bien.json`                        | Per-user (global) | `relay` URL, `defaults`, `identity`, `debug` — the global settings (see below) |
+| `<cwd>/.pi/un-bien/config.json`                        | Per-directory     | `agent_name`, `auto_start_relay`, `allow_remote_launch`                        |
 | `~/.local/state/un-bien/identity.json`                 | Per-machine       | Paired identity keypair (file identity backend; `0600`)                        |
 | `~/.local/state/un-bien/peers.json`                    | Per-machine       | Paired mobile devices                                                          |
 | `~/.local/state/un-bien/sessions/<name>/`              | Per-session       | Broker socket + `audit.jsonl`                                                  |
-| `~/.local/state/un-bien/daemons.json`                  | Per-machine       | Daemon registry                                                                |
-| `~/.local/state/un-bien/cron.json` · `cron.jsonl`      | Per-machine       | Cron registry + fire/skip audit log                                            |
-| `~/.local/state/un-bien/supervisor.sock`               | Per-machine       | Supervisor control socket                                                      |
 | `~/.local/state/un-bien/skills/agent-network/SKILL.md` | Per-user          | Agent skill the LLM reads                                                      |
 
 ### Global settings — `~/.pi/extensions/un-bien.json`
@@ -605,6 +547,12 @@ fields are optional:
   // Machine-wide fallback for every per-cwd config that doesn't set the field.
   // Pin auto-start once instead of dropping a file into every repo.
   "defaults": { "auto_start_relay": true },
+
+  // Remote-launch backend a `session_launch` request uses on THIS machine:
+  // "tmux" (default; one shared tmux session, a window per launched Pi) or
+  // "herdr". Machine-wide choice — whether remote launch is enabled at all
+  // stays the per-cwd `allow_remote_launch` flag.
+  "launch": { "backend": "tmux" },
 
   // Machine-identity storage. `storage` selects the PRIMARY backend for this
   // Pi's long-term Ed25519 seed: "keychain" (OS-secured, default) or "file"
@@ -639,12 +587,11 @@ Written by the `/unbien` setup wizard:
 | `UNBIEN_DIR`           | Legacy absolute override of the **state** dir itself (no suffix appended). Lower precedence than `UNBIEN_STATE_DIR`.       |
 | `UNBIEN_HOME`          | Legacy stand-in `$HOME`; state lives at `<UNBIEN_HOME>/.pi/un-bien`. Lower precedence than `UNBIEN_DIR`.                   |
 | `PI_CODING_AGENT_DIR`  | The Pi host's settings root (default `~/.pi`); the global config lives at `<PI_CODING_AGENT_DIR>/extensions/un-bien.json`. |
-| `UNBIEN_DIRECT_CONFIG` | Inline per-cwd config (JSON) instead of a `.pi/un-bien/config.json` file — used by the daemon supervisor.                  |
+| `UNBIEN_DIRECT_CONFIG` | Inline per-cwd config (JSON) instead of a `.pi/un-bien/config.json` file — CI / one-off use.                               |
 
 The state root resolves as `UNBIEN_STATE_DIR` > `UNBIEN_DIR` > `UNBIEN_HOME` >
 `${XDG_STATE_HOME:-~/.local/state}/un-bien` — the XDG-style default. `UNBIEN_DIR`/
-`UNBIEN_HOME` relocate un-bien **state** (sessions, daemon registries, cwd
-locks, paired identity) and stay honored for older deployments. On first use
+`UNBIEN_HOME` relocate un-bien **state** (sessions, cwd locks, paired identity) and stay honored for older deployments. On first use
 of the new default, a one-time best-effort migration moves any legacy
 `~/.pi/un-bien` state (peers.json included) into the new root.
 `PI_CODING_AGENT_DIR` relocates only the global **config**, so it can sit

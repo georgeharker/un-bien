@@ -18,14 +18,15 @@
   <true/>
 
   <key>StandardOutPath</key>
-  <string>{HOME}/.pi/un-bien/launcher.log</string>
+  <string>{LOG}</string>
   <key>StandardErrorPath</key>
-  <string>{HOME}/.pi/un-bien/launcher.log</string>
+  <string>{LOG}</string>
 
   <key>EnvironmentVariables</key>
   <dict>
-    <!-- Inherit the user's shell PATH so `pi --mode rpc` resolves to the
-         same binary it would in Terminal.app (Homebrew / npm-global / etc.). -->
+    <!-- Inherit the user's shell PATH so `tmux`/`herdr` (the remote-launch
+         backends) and `pi` resolve the same way they would in Terminal.app
+         (Homebrew / npm-global / etc.). -->
     <key>PATH</key>
     <string>{PATH}</string>
     <key>HOME</key>

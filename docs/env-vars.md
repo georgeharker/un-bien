@@ -63,14 +63,14 @@ tailscale address).
 
 ### `UNBIEN_DAEMON` _(live)_
 
-`1` = daemon-mode init: the extension always auto-inits (used by spawned
-daemon processes; interactive sessions gate auto-init on a local config
-already existing).
+`1` = headless init: the extension always auto-inits (used by detached
+processes like the launcher; interactive sessions gate auto-init on a local
+config already existing).
 
 ### `UNBIEN_DIRECT_CONFIG` _(live)_
 
-Signals that a direct config is present at `process.cwd()` (set by the
-supervisor for daemon processes).
+Inline per-cwd config — the env var's value IS the JSON (used instead of a
+`<cwd>/.pi/un-bien/config.json` file; useful for detached/headless processes).
 
 ## Adopted from pi
 

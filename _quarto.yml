@@ -50,7 +50,7 @@ website:
         contents:
           - text: "Extension guide"
             href: extension/README.md
-          - text: "Daemon mode & troubleshooting"
+          - text: "Remote launch & troubleshooting"
             href: extension/docs/daemon.md
       - section: "Design & development"
         href: docs/design.md
