@@ -174,6 +174,14 @@ public final class AppModel: ObservableObject {
     /// each on the reconnected relay — openSession only fires on view appear,
     /// not reconnect (design 01M15FMQ).
     private var openSessions: [String: LiveSession] = [:]
+    /// Last-viewed TOPMOST message id per session (session.id key), for
+    /// scroll-restore on re-entry (design 01M1ADBB). Deliberately NOT @Published:
+    /// it's written on every scroll-settle and read only once on restore, so
+    /// observing it would rerender the whole transcript as the user scrolls.
+    /// Best-effort persisted to UserDefaults so a cold relaunch can also restore.
+    private var lastViewedScroll: [String: String] = [:] {
+        didSet { persistLastViewedScroll() }
+    }
 
     private static let iCloudDefaultsKey = "com.georgeharker.un-bien.owner-key.icloud-sync"
     private static let themeKey = "com.georgeharker.un-bien.theme"
@@ -185,6 +193,7 @@ public final class AppModel: ObservableObject {
     private static let hideInputRichKey = "com.georgeharker.un-bien.hide-input-when-rich"
     private static let showSubagentsKey = "com.georgeharker.un-bien.show-subagents-home"
     private static let subagentsInteractiveKey = "com.georgeharker.un-bien.subagents-interactive"
+    private static let lastViewedScrollKey = "com.georgeharker.un-bien.last-viewed-scroll"
     /// Backstop grace for an UNCONSUMED optimistic queued chip (design 01M158S7).
     /// Long by design: consumption (user message_end) is the primary clear, so
     /// this only catches truly-stuck chips (text-normalization miss / dropped
@@ -214,6 +223,10 @@ public final class AppModel: ObservableObject {
             UserDefaults.standard.object(forKey: Self.showSubagentsKey) as? Bool ?? true
         self.subagentsInteractive =
             UserDefaults.standard.object(forKey: Self.subagentsInteractiveKey) as? Bool ?? false
+        if let data = UserDefaults.standard.data(forKey: Self.lastViewedScrollKey),
+           let saved = try? JSONDecoder().decode([String: String].self, from: data) {
+            self.lastViewedScroll = saved
+        }
         self.identityStore = identityStore
             ?? KeychainOwnerIdentityStore(syncsToICloud: syncOn)
     }
@@ -545,6 +558,7 @@ public final class AppModel: ObservableObject {
             where session.relayID == relayID && session.peerEPK == peer
             && !liveRoomIDs.contains(session.roomID) {
                 sessions[key] = nil
+                forgetSession(key: key)
             }
             for room in rooms { upsertSession(relayID: relayID, peer: peer, room: room) }
         case let .roomAnnounced(peer, room):
@@ -827,6 +841,29 @@ public final class AppModel: ObservableObject {
                                    toPeer: session.peerEPK, room: session.roomID)
     }
 
+    // MARK: - Scroll restore
+
+    /// Remembered topmost-visible message id for a session, or nil if none.
+    public func rememberedScroll(session: LiveSession) -> String? {
+        lastViewedScroll[session.id]
+    }
+
+    /// Record the topmost-visible message id as the user scrolls (design 01M1ADBB).
+    public func rememberScroll(id: String, session: LiveSession) {
+        lastViewedScroll[session.id] = id
+    }
+
+    private func persistLastViewedScroll() {
+        guard let data = try? JSONEncoder().encode(lastViewedScroll) else { return }
+        UserDefaults.standard.set(data, forKey: Self.lastViewedScrollKey)
+    }
+
+    /// Drop a dropped/ended session's remembered scroll (didSet re-persists, so
+    /// the on-disk copy prunes too) — otherwise it accumulates as rooms end.
+    private func forgetSession(key: String) {
+        lastViewedScroll[key] = nil
+    }
+
     // MARK: - Queued messages
 
     public func queueMessage(_ text: String, to session: LiveSession) async {
@@ -842,6 +879,29 @@ public final class AppModel: ObservableObject {
         try? await connection.send(
             .userMessage(id: UUID().uuidString, text: text, images: nil, streamingBehavior: "followUp"),
             toPeer: session.peerEPK, room: session.roomID)
+    }
+
+    /// Delete one queued chip. pi has no per-item queue removal, so the only
+    /// primitive is `clear_queue` (drops the whole steering/follow-up queue and
+    /// returns its text). We clear pi's queue, then reissue the SURVIVORS in
+    /// order — each with its original verb — so the net effect is "the queue
+    /// minus that message" (see pi.dev/docs/latest/rpc#clear-queue). The app's
+    /// optimistic chip list is the reissue source of truth; the clear_queue rpc
+    /// response is inert here (its survivors' chips clear on the usual
+    /// text-correlated consumption). Sends are sequential on one connection, so
+    /// pi sees clear BEFORE the reissued prompts.
+    public func deleteQueued(_ item: QueuedMessageItem, from session: LiveSession) async {
+        guard let connection = connections[session.relayID] else { return }
+        let survivors = (queued[session.id] ?? []).filter { $0.id != item.id }
+        queued[session.id] = survivors  // optimistically drop the tapped chip
+        try? await connection.send(.clearQueue(id: UUID().uuidString),
+                                   toPeer: session.peerEPK, room: session.roomID)
+        for survivor in survivors {
+            try? await connection.send(
+                .userMessage(id: UUID().uuidString, text: survivor.text, images: nil,
+                             streamingBehavior: survivor.kind),
+                toPeer: session.peerEPK, room: session.roomID)
+        }
     }
 
     /// Insert an OPTIMISTIC pending chip for a message submitted WHILE BUSY. Both

@@ -38,6 +38,10 @@ public enum ClientMessage: Equatable, Sendable {
     case getSessionInfo(id: String)
     /// Response to an `extension_ui_request` (select/confirm/input/editor).
     case extensionUiResponse(ExtensionUiResponse)
+    /// Native pi `clear_queue` rpc — drop the steering/follow-up queue. Used by
+    /// the queued-chip X: pi has no per-item delete, so the app clears the whole
+    /// queue then reissues the survivors (design: delete-queued = clear+reissue).
+    case clearQueue(id: String)
 
     public enum ToolDecision: String, Codable, Sendable {
         case allow, deny
@@ -62,6 +66,7 @@ public enum ClientMessage: Equatable, Sendable {
         case .presenceStatus: return "presence_status"
         case .getSessionInfo: return "get_session_info"
         case .extensionUiResponse: return "extension_ui_response"
+        case .clearQueue: return "clear_queue"
         }
     }
 }

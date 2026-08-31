@@ -14,6 +14,15 @@ struct TranscriptView: View {
     @Environment(\.appTheme) private var theme
     @Environment(\.typography) private var typography
 
+    /// Topmost visible message id (SwiftUI .scrollPosition binding) — both the
+    /// "which is visible" capture and the restore target (design 01M1ADBB).
+    @State private var scrollAnchor: String?
+    /// Restore runs once per view lifetime, after items first populate.
+    @State private var didRestoreScroll = false
+    /// Newest message on screen (bottom sentinel) — gates auto-follow so an
+    /// incoming message only scrolls a reader who was already at the bottom.
+    @State private var atBottom = true
+
     private var items: [TranscriptItem] {
         let all = model.transcripts[session.id]?.items ?? []
         guard !model.showThinking else { return all }
@@ -37,13 +46,39 @@ struct TranscriptView: View {
                                 .id(item.id)
                         }
                     }
+                    .scrollTargetLayout()
                     .padding()
                     // Cap line length on wide windows; centered. No-op on phones.
                     .frame(maxWidth: 1100, alignment: .leading)
                     .frame(maxWidth: .infinity, alignment: .center)
+                    // Bottom sentinel: reliably reports whether the newest message
+                    // is on screen (LazyVStack recycling makes row onAppear flaky).
+                    // Sits outside scrollTargetLayout so it never becomes an anchor.
+                    Color.clear.frame(height: 1)
+                        .onAppear { atBottom = true }
+                        .onDisappear { atBottom = false }
                 }
-                .onChange(of: items.count) { _, _ in
-                    if let last = items.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
+                .scrollPosition(id: $scrollAnchor)
+                .onChange(of: items.count, initial: true) { _, _ in
+                    guard !items.isEmpty else { return }
+                    if !didRestoreScroll {
+                        didRestoreScroll = true
+                        // Restore the remembered topmost message; fall back to the
+                        // bottom when there's nothing remembered (or it's gone).
+                        if let remembered = model.rememberedScroll(session: session),
+                           items.contains(where: { $0.id == remembered }) {
+                            scrollAnchor = remembered
+                        } else if let last = items.last {
+                            proxy.scrollTo(last.id, anchor: .bottom)
+                        }
+                    } else if atBottom, let last = items.last {
+                        // Only follow new messages when already at the bottom.
+                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
+                }
+                .onChange(of: scrollAnchor) { _, new in
+                    guard didRestoreScroll, let new else { return }
+                    model.rememberScroll(id: new, session: session)
                 }
                 #if os(iOS)
                 // Swipe the transcript down to dismiss the composer keyboard.
@@ -244,6 +279,15 @@ struct TranscriptView: View {
                     HStack(spacing: 4) {
                         Image(systemName: isSteer ? "arrow.turn.up.right" : "clock")
                         Text(item.text).lineLimit(2)
+                        // Remove this queued message: pi has no per-item delete,
+                        // so AppModel clears the queue and reissues the survivors.
+                        Button {
+                            Task { await model.deleteQueued(item, from: session) }
+                        } label: {
+                            Image(systemName: "xmark")
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Remove queued message")
                     }
                     .font(.caption)
                     .padding(.horizontal, 8).padding(.vertical, 5)

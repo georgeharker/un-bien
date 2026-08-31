@@ -82,6 +82,8 @@ extension ClientMessage: Codable {
             try container.encode(id, forKey: .id)
         case let .getSessionInfo(id):
             try container.encode(id, forKey: .id)
+        case let .clearQueue(id):
+            try container.encode(id, forKey: .id)
         case let .extensionUiResponse(response):
             try container.encode(response.id, forKey: .id)
             try container.encodeIfPresent(response.value, forKey: .value)
@@ -140,6 +142,8 @@ extension ClientMessage: Codable {
                                 level: try container.decode(ThinkingLevel.self, forKey: .level))
         case "list_models":
             self = .listModels(id: try string(.id))
+        case "clear_queue":
+            self = .clearQueue(id: try string(.id))
         case "extension_ui_response":
             self = .extensionUiResponse(ExtensionUiResponse(
                 id: try string(.id),
