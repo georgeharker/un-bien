@@ -1,24 +1,24 @@
 import SwiftUI
 import UnBienCore
 
-/// What a launch sheet targets: an existing session's machine (carrier room) or
-/// an IDLE machine reached via its presence-daemon control room (regime 2).
+/// What a launch sheet targets: a paired machine, reached via its
+/// presence-daemon control room (regime 2). MACHINE-level ONLY (user UX
+/// decision 2026-08-31) — per-session launch chips are gone; the daemon is
+/// the single launch surface.
 enum LaunchTarget: Identifiable {
-    case session(LiveSession)
     case machine(PairedMachine)
 
     var id: String {
         switch self {
-        case let .session(s): return "session:\(s.id)"
         case let .machine(m): return "machine:\(m.id)"
         }
     }
 }
 
-/// Start a new pi session on a paired machine (`session_launch`). Shown only
-/// when `remote_launch` is advertised — by a live session's hello (carrier
-/// room) or an idle machine's presence daemon (control room). The launched
-/// session appears in the list via the normal room-announce discovery.
+/// Start a new pi session on a paired machine (`session_launch` over its
+/// presence-daemon control room). Shown when the machine's daemon advertises
+/// `remote_launch`. The launched session appears in the list via the normal
+/// room-announce discovery.
 struct LaunchSessionSheet: View {
     let target: LaunchTarget
     @EnvironmentObject var model: AppModel
@@ -82,10 +82,7 @@ struct LaunchSessionSheet: View {
     }
 
     private func launch() async {
-        switch target {
-        case let .session(s):
-            await model.launchSession(cwd: cwd, name: name, session: s)
-        case let .machine(m):
+        if case let .machine(m) = target {
             await model.launchOnMachine(cwd: cwd, name: name, machine: m)
         }
     }

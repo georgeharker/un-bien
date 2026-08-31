@@ -65,10 +65,10 @@ struct HomeView: View {
         .sheet(item: $pairingRelay) { relay in
             PairSheet(relay: relay).environmentObject(model)
         }
-        // Launch a NEW session from Home. For a live session, remote_launch is a
-        // room-scoped cap gated on that row's session (its room is a valid
-        // carrier). For an IDLE machine (regime 2), the presence daemon answers
-        // presence_status with its caps and the launch rides the control room.
+        // Launch a NEW session from Home — MACHINE-level only (user UX
+        // decision 2026-08-31): the affordance is the machine row's chip, gated
+        // on that machine's presence daemon (regime 2 control room). A machine
+        // without the daemon offers no launch.
         .sheet(item: $launchTarget) { target in
             LaunchSessionSheet(target: target).environmentObject(model)
         }
@@ -239,20 +239,9 @@ struct HomeView: View {
                         .foregroundStyle(subagentStatusColor(status))
                         .accessibilityLabel("Subagent status: \(status)")
                 }
-                // A NEW-conversation launch on THIS machine. remote_launch is a
-                // room-scoped cap and this row's room is a valid carrier;
-                // borderless so the tap doesn't trigger row navigation.
-                if model.supports("remote_launch", session: session) {
-                    Spacer(minLength: 8)
-                    Button {
-                        launchTarget = .session(session)
-                    } label: {
-                        Image(systemName: "plus.circle").imageScale(.large)
-                    }
-                    .buttonStyle(.borderless)
-                    .tint(theme.accent)
-                    .accessibilityLabel("New conversation on this machine")
-                }
+                // NOTE: no per-session launch chip — launch is MACHINE-level
+                // only (user UX decision 2026-08-31): the affordance lives on
+                // the machine row, gated on its presence daemon.
             }
             .padding(.leading, indented ? 16 : 0)
         }
