@@ -49,7 +49,6 @@ import {
 import {
   addPeer,
   getOrCreateEd25519Keypair,
-  describeIdentity,
   KeyringUnavailableError,
   PairedIdentityMissingError,
   listPeers,
@@ -168,6 +167,14 @@ import {
   type InspectedPeerRecord,
 } from "./pairing/peer_trust.js"
 import { Box, Container, Image, Text } from "@earendil-works/pi-tui"
+import type { CommandDeps } from "./commands/deps.js"
+import {
+  _cmdStatus,
+  _cmdPeers,
+  _cmdList,
+  _cmdConfig,
+  _cmdIdentity,
+} from "./commands/info.js"
 
 // ── State machine ─────────────────────────────────────────────────────────────
 //
@@ -2803,6 +2810,32 @@ function _releaseRootSession(pi: ExtensionAPI): void {
   if (g[_ROOT_SESSION_OWNER_KEY] === pi) delete g[_ROOT_SESSION_OWNER_KEY]
 }
 
+// ── Command seam ──────────────────────────────────────────────────────────────
+//
+// The /unbien handlers live in ./commands/ and reach this module's state
+// and helpers ONLY through this object (command modules never import
+// ../index.js — no circular imports). Mutable module state is exposed as
+// accessor closures so handlers and this module always see the same
+// variables.
+const deps: CommandDeps = {
+  get state() {
+    return _state
+  },
+  get relayUrl() {
+    return _relayUrl
+  },
+  get meshNode() {
+    return _meshNode
+  },
+  get sessionPeerCount() {
+    return _sessionPeerCount
+  },
+  get hasGlobalPairings() {
+    return _hasGlobalPairings
+  },
+  activePeers: _activePeers,
+}
+
 const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   const applied = _appliedRegistry()
   if (applied.has(pi)) return // this session's pi was already wired
@@ -3359,13 +3392,13 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       } else if (sub === "setup") {
         await _cmdSetup(ctx)
       } else if (sub === "status") {
-        _cmdStatus(ctx)
+        _cmdStatus(deps, ctx)
       } else if (sub === "stop") {
         await _cmdStop(ctx)
       } else if (sub === "pair" || sub.startsWith("pair ")) {
         await _cmdPair(ctx, sub.slice("pair".length).trim())
       } else if (sub === "devices") {
-        await _cmdList(ctx)
+        await _cmdList(deps, ctx)
       } else if (sub.startsWith("revoke")) {
         await _cmdRevoke(sub.slice("revoke".length).trim(), ctx)
       } else if (sub.startsWith("set-relay")) {
@@ -3373,7 +3406,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       } else if (sub === "relay" || sub.startsWith("relay ")) {
         await _cmdRelay(sub.slice("relay".length).trim(), ctx)
       } else if (sub === "config") {
-        _cmdConfig(ctx)
+        _cmdConfig(deps, ctx)
       } else if (sub === "identity" || sub.startsWith("identity ")) {
         await _cmdIdentity(ctx)
       } else if (sub === "test" || sub.startsWith("test ")) {
@@ -3386,7 +3419,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       } else if (sub === "rename" || sub.startsWith("rename ")) {
         await _renameAgent(sub.slice("rename".length).trim())
       } else if (sub === "peers") {
-        await _cmdPeers(ctx)
+        await _cmdPeers(deps, ctx)
       } else if (sub === "install") {
         _cmdInstall(ctx, { linkCli: true })
       } else if (sub === "uninstall") {
@@ -3411,7 +3444,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     description: "Show local mesh + relay status",
     handler: async (_, ctx) => {
       _lastCtx = ctx
-      _cmdStatus(ctx)
+      _cmdStatus(deps, ctx)
     },
   })
   pi.registerCommand("unbien stop", {
@@ -3433,7 +3466,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     description: "List paired mobile devices",
     handler: async (_, ctx) => {
       _lastCtx = ctx
-      await _cmdList(ctx)
+      await _cmdList(deps, ctx)
     },
   })
   pi.registerCommand("unbien rename", {
@@ -3463,7 +3496,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     description: "Show the effective relay URL and where it came from",
     handler: async (_, ctx) => {
       _lastCtx = ctx
-      _cmdConfig(ctx)
+      _cmdConfig(deps, ctx)
     },
   })
   pi.registerCommand("unbien identity", {
@@ -3496,7 +3529,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     description: "List local + cross-PC mesh peers, grouped by PC label",
     handler: async (_, ctx) => {
       _lastCtx = ctx
-      await _cmdPeers(ctx)
+      await _cmdPeers(deps, ctx)
     },
   })
 
@@ -3532,81 +3565,6 @@ export default extension
 // ── Command implementations ───────────────────────────────────────────────────
 
 /**
- * `/unbien status` — full state snapshot. Two lines: local mesh + relay.
- *
- * Always callable; safe when nothing is up (renders the off variants).
- * Reuses the same icons as the footer so terminal + status output stay
- * visually consistent.
- */
-function _cmdStatus(ctx: Pick<ExtensionContext, "ui">): void {
-  const relayUrl = _relayUrl ?? resolveRelayUrl().url ?? "not configured"
-
-  // Mesh line
-  let meshLine: string
-  if (_meshNode) {
-    const name = _meshNode.name()
-    meshLine = `🟢 Local mesh: connected as "${name}" (${_sessionPeerCount} peer${_sessionPeerCount === 1 ? "" : "s"})`
-  } else {
-    meshLine = "⚪ Local mesh: not connected"
-  }
-
-  // Relay line — paired state is derived from _activePeers.size now.
-  let relayLine: string
-  if (_state === "idle") {
-    relayLine = `⚪ Relay: off (${relayUrl}) — run /unbien to start`
-  } else if (_activePeers.size > 0) {
-    const count = _activePeers.size
-    const shortids = [..._activePeers.keys()]
-      .map((peerId) => peerId.slice(0, 8))
-      .join(", ")
-    relayLine = `🟢 Relay: ${count} owner${count === 1 ? "" : "s"} online (${shortids}) (${relayUrl})`
-  } else {
-    relayLine = _hasGlobalPairings
-      ? `🟢 Relay: on, waiting for an app to connect (${relayUrl})`
-      : `🟡 Relay: on, waiting for first pairing (${relayUrl})`
-  }
-
-  ctx.ui.notify(`[un-bien]\n  ${meshLine}\n  ${relayLine}`, "info")
-}
-
-/**
- * Plan/25 Wave D: `/unbien peers`.
- *
- * Queries the local broker for the aggregated peer inventory (`list_peers`
- * returns locals + cross-PC entries prefixed with `<pc_label>:`). Formats
- * the result grouped by source so users can see at a glance who's on
- * their machine vs. on a paired sibling Pi.
- */
-async function _cmdPeers(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
-  if (!_meshNode) {
-    ctx.ui.notify(
-      "[un-bien] Not on the local mesh. Run /unbien to join.",
-      "warning",
-    )
-    return
-  }
-  let peers: string[]
-  try {
-    const reply = await _meshNode.request(
-      "broker",
-      { type: "list_peers" },
-      2000,
-    )
-    peers = (reply.body as { peers?: string[] } | null)?.peers ?? []
-  } catch (err) {
-    ctx.ui.notify(`[un-bien] peers list failed: ${String(err)}`, "error")
-    return
-  }
-  // Exclude self from the printed list — `list_peers` returns every peer
-  // registered with the broker including the caller, which is noise here.
-  const selfName = _meshNode.name()
-  ctx.ui.notify(
-    `[un-bien] peers:\n${formatPeerInventory(peers, selfName)}`,
-    "info",
-  )
-}
-
-/**
  * Root handler for `/unbien`. On first run (no local config) drops into
  * the wizard; on subsequent runs auto-joins the local mesh + starts the
  * relay (if opted in during setup), then prints the status.
@@ -3633,7 +3591,7 @@ async function _cmdRoot(
     }
     if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) return
     if (!restartAuthority) {
-      _cmdStatus(ctx)
+      _cmdStatus(deps, ctx)
       return
     }
   }
@@ -3710,7 +3668,7 @@ async function _cmdRootInner(
     // next line validates the structural assumption before any method call.
     const ui = ctx.ui as unknown as WizardUI
     if (typeof ui.select !== "function") {
-      _cmdStatus(ctx)
+      _cmdStatus(deps, ctx)
       return
     }
     const baseDefault = defaultAgentName(cwd)
@@ -3733,7 +3691,7 @@ async function _cmdRootInner(
     if (!_isCurrentRootLifecycle(rootLifecycleGeneration) || !_meshNode) return
     if (effectiveAutoStartRelay(newConfig)) await _cmdStart(ctx)
     if (!_isCurrentRootLifecycle(rootLifecycleGeneration) || !_meshNode) return
-    _cmdStatus(ctx)
+    _cmdStatus(deps, ctx)
     return
   }
 
@@ -3750,7 +3708,7 @@ async function _cmdRootInner(
   if (!_isCurrentRootLifecycle(rootLifecycleGeneration) || !_meshNode) return
   if (effectiveAutoStartRelay(config) && _state === "idle") await _cmdStart(ctx)
   if (!_isCurrentRootLifecycle(rootLifecycleGeneration) || !_meshNode) return
-  _cmdStatus(ctx)
+  _cmdStatus(deps, ctx)
 }
 
 /**
@@ -4234,29 +4192,6 @@ async function _cmdStop(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
   _refreshFooter(ctx)
 }
 
-async function _cmdList(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
-  const peers = await listPeers()
-  if (peers.length === 0) {
-    ctx.ui.notify("[un-bien] No paired devices.", "info")
-    return
-  }
-  // Multi-channel (W2D): each peer is either `online` (channel attached
-  // right now) or `offline` (in peers.json but not connected). Replaces
-  // the singleton " (active)" marker that only ever marked one peer.
-  const lines = peers
-    .flatMap((record) => {
-      const inspected = _inspectPeerRecord(record)
-      if (!inspected) return []
-      const tag =
-        inspected.runtimeKey !== null && _activePeers.has(inspected.runtimeKey)
-          ? " 🟢 online"
-          : " ⚪ offline"
-      return `• ${inspected.rawHandle.slice(0, 8)} — ${inspected.record.name}${tag}`
-    })
-    .join("\n")
-  ctx.ui.notify(`[un-bien] Paired devices:\n${lines}`, "info")
-}
-
 async function _cmdRevoke(
   arg: string,
   ctx: Pick<ExtensionContext, "ui" | "cwd">,
@@ -4386,52 +4321,6 @@ function _cmdSetRelay(arg: string, ctx: Pick<ExtensionContext, "ui">): void {
 }
 
 /**
- * `/unbien config` — print the effective relay URL and where it came from.
- *
- * Documented in the README ("Verify the active URL and its source") and in
- * CLAUDE.md, but like the `relay` family (issue #119) it had no handler and
- * fell through to the status panel, which shows the URL but not the source —
- * so `env` vs `config` vs `default` was unverifiable without a restart.
- */
-function _cmdConfig(ctx: Pick<ExtensionContext, "ui">): void {
-  const { url, source } = resolveRelayUrl()
-  const origin =
-    source === "env"
-      ? "UNBIEN_RELAY environment variable"
-      : source === "config"
-        ? "extensions/un-bien.json (set via /unbien set-relay)"
-        : "not set — run /unbien set-relay <url> or set UNBIEN_RELAY"
-  const live =
-    _relayUrl && _relayUrl !== url
-      ? `\n  ⚠ Live connection still on ${_relayUrl} — run /unbien relay stop then /unbien relay start to apply.`
-      : ""
-  ctx.ui.notify(
-    `[un-bien]\n  Relay URL: ${url ?? "(none)"}\n  Source: ${source} — ${origin}${live}`,
-    "info",
-  )
-}
-
-/**
- * `/unbien identity` — report NON-SECRET identity state (active EPK, backend,
- * resolved source). The private seed is NEVER shown: command output is
- * LLM-visible, so extraction stays a manual `cat`/keychain op. Read-only
- * (never mints).
- */
-async function _cmdIdentity(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
-  const info = await describeIdentity()
-  const backendLine =
-    info.backend === "file" ? `file (${info.filePath})` : "keychain"
-  const epkLine = info.epk ?? "(none yet — minted on first use)"
-  const sourceLine = info.detail
-    ? `${info.source} — ${info.detail}`
-    : info.source
-  ctx.ui.notify(
-    `[un-bien] identity\n  Backend: ${backendLine}\n  EPK (public): ${epkLine}\n  Source: ${sourceLine}`,
-    info.source === "error" ? "error" : "info",
-  )
-}
-
-/**
  * `/unbien relay [start|stop|status|url <url>]` — issue #119.
  *
  * The README has always documented this family (`relay url` to point at a
@@ -4479,7 +4368,7 @@ async function _cmdRelay(arg: string, ctx: ExtensionContext): Promise<void> {
       _refreshFooter(ctx)
       return
     case "status":
-      _cmdStatus(ctx)
+      _cmdStatus(deps, ctx)
       _emitRelayState(true)
       return
     case "url":
