@@ -122,22 +122,19 @@ import {
 import { _expandTilde, _launchSession } from "./launch.js"
 import { _enrichToolArgs } from "./enrich_tool_args.js"
 import {
-  IMAGE_PREVIEW_MIME,
-  _imageCacheRootDir,
-  _imageExtension,
-  _safeFilenameToken,
-  _safePreviewPath,
-  _cleanupPreviewFile,
-  _renderablePngPathFromImage,
-  _decodeImagePayload,
-} from "./image_codec.js"
-import {
   _findKnownPeer,
   _inspectPeerRecord,
   _runtimeOwnerFingerprint,
   type InspectedPeerRecord,
 } from "./pairing/peer_trust.js"
-import { Box, Container, Image, Text } from "@earendil-works/pi-tui"
+import {
+  _deliverImageUserMessage,
+  _flushPendingReceivedImagePreviews,
+  _isReceivedImageContextMessage,
+  _registerReceivedImageRenderer,
+  clearPendingReceivedImagePreviews,
+  type ImagePipelineDeps,
+} from "./session/received_images.js"
 import { CommandDeps } from "./commands/deps.js"
 import {
   type RootRestartAuthority,
@@ -204,23 +201,6 @@ let _relayUrl: string | null = null // URL used by current _relay connection
  */
 const _activePeers = new Map<string, PlainPeerChannel>()
 let _peerShort = "" // shortid of the most recently attached peer (UX hint only)
-
-const UNBIEN_RECEIVED_IMAGE_TYPE = "un-bien:received-image"
-
-type ReceivedImageDetails = {
-  messageId: string
-  index: number
-  mime: string
-  size?: number
-  path?: string
-  previewPath?: string
-  text?: string
-  error?: string
-  reason?: string
-}
-
-type ReceivedImagePreviewDelivery = "immediate" | "defer"
-const _pendingReceivedImagePreviews: ReceivedImageDetails[] = []
 
 let _myRoomId: string | null = null // this Pi's room id (derived from the session id)
 
@@ -356,235 +336,6 @@ function _publishWorking(working: boolean): void {
   }
 }
 
-function _sendReceivedImagePreviewNow(details: ReceivedImageDetails): void {
-  if (!_pi) return
-  try {
-    _pi.sendMessage<ReceivedImageDetails>({
-      customType: UNBIEN_RECEIVED_IMAGE_TYPE,
-      content: "",
-      display: true,
-      details,
-    })
-  } catch {
-    // TUI preview is best-effort; skip on failure.
-  }
-}
-
-function _shouldDeferReceivedImagePreview(): boolean {
-  return _rootState().turnId !== null || _myRoomMeta?.working === true
-}
-
-function _sendReceivedImagePreview(
-  details: ReceivedImageDetails,
-  delivery: ReceivedImagePreviewDelivery = "immediate",
-): void {
-  if (delivery === "defer" || _shouldDeferReceivedImagePreview()) {
-    _pendingReceivedImagePreviews.push(details)
-    return
-  }
-  _sendReceivedImagePreviewNow(details)
-}
-
-function _flushPendingReceivedImagePreviews(): void {
-  if (_pendingReceivedImagePreviews.length === 0) return
-  const pending = _pendingReceivedImagePreviews.splice(0)
-  for (const details of pending) _sendReceivedImagePreviewNow(details)
-}
-
-async function _collectReceivedImagePreviews(
-  msg: ClientUserMessage,
-): Promise<ReceivedImageDetails[]> {
-  if (!msg.images || msg.images.length === 0) return []
-
-  const previews: ReceivedImageDetails[] = []
-  const text = typeof msg.text === "string" ? msg.text : ""
-  const dir = _imageCacheRootDir()
-
-  for (let i = 0; i < msg.images.length; i += 1) {
-    const image = msg.images[i]
-    const mime = typeof image?.mime === "string" ? image.mime : "unknown"
-
-    if (!image || typeof image.data !== "string") {
-      console.error(`[un-bien] malformed image in message ${msg.id} index=${i}`)
-      previews.push({
-        messageId: msg.id,
-        index: i,
-        mime,
-        ...(text ? { text } : {}),
-        error: "malformed image payload",
-        reason: "missing mime/data payload fields",
-      })
-      continue
-    }
-
-    const decoded = _decodeImagePayload(image.data, image.mime)
-    if (!decoded.ok) {
-      console.error(
-        `[un-bien] skipped image id=${msg.id} index=${i}: ${decoded.reason}`,
-      )
-      previews.push({
-        messageId: msg.id,
-        index: i,
-        mime: image.mime,
-        ...(text ? { text } : {}),
-        error: "invalid image payload",
-        reason: decoded.reason,
-      })
-      continue
-    }
-
-    const ext = _imageExtension(image.mime)
-    if (!ext) {
-      console.error(
-        `[un-bien] unsupported image mime in message ${msg.id} index=${i}: ${image.mime}`,
-      )
-      previews.push({
-        messageId: msg.id,
-        index: i,
-        mime: image.mime,
-        ...(text ? { text } : {}),
-        error: "invalid image payload",
-        reason: `unsupported mime: ${image.mime}`,
-      })
-      continue
-    }
-
-    const filename = `${_safeFilenameToken(msg.id)}-${i}.${ext}`
-    const path = join(dir, filename)
-
-    try {
-      writeFileSync(path, decoded.decoded, { mode: 0o600 })
-      try {
-        chmodSync(path, 0o600)
-      } catch {
-        /* best-effort permission hardening */
-      }
-
-      const previewPath =
-        image.mime === IMAGE_PREVIEW_MIME
-          ? undefined
-          : await _renderablePngPathFromImage(
-              image.data,
-              image.mime,
-              _safePreviewPath(dir, msg.id, i),
-            )
-
-      previews.push({
-        messageId: msg.id,
-        index: i,
-        mime: image.mime,
-        size: decoded.size,
-        path,
-        ...(previewPath ? { previewPath } : {}),
-        ...(text ? { text } : {}),
-      })
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
-      console.error(
-        `[un-bien] failed saving image id=${msg.id} index=${i}: ${detail}`,
-      )
-      previews.push({
-        messageId: msg.id,
-        index: i,
-        mime: image.mime,
-        ...(text ? { text } : {}),
-        path,
-        error: "failed to save image",
-        reason: detail,
-      })
-    }
-  }
-
-  return previews
-}
-
-async function _emitReceivedImagePreviews(
-  msg: ClientUserMessage,
-  delivery: ReceivedImagePreviewDelivery = "immediate",
-): Promise<void> {
-  const previews = await _collectReceivedImagePreviews(msg)
-  for (const preview of previews) _sendReceivedImagePreview(preview, delivery)
-}
-
-function _registerReceivedImageRenderer(pi: ExtensionAPI): void {
-  pi.registerMessageRenderer<ReceivedImageDetails>(
-    UNBIEN_RECEIVED_IMAGE_TYPE,
-    (message, _options, theme) => {
-      const details = (message.details ?? {}) as Partial<ReceivedImageDetails>
-      const path = typeof details.path === "string" ? details.path : ""
-      const previewPath =
-        typeof details.previewPath === "string" ? details.previewPath : ""
-      const mime =
-        typeof details.mime === "string"
-          ? details.mime
-          : "application/octet-stream"
-      const inlineImagePath =
-        previewPath.length > 0
-          ? previewPath
-          : mime === IMAGE_PREVIEW_MIME
-            ? path
-            : ""
-      const size = typeof details.size === "number" ? details.size : undefined
-      const index =
-        typeof details.index === "number" ? details.index : undefined
-      const text = typeof details.text === "string" ? details.text.trim() : ""
-      const messageId =
-        typeof details.messageId === "string" ? details.messageId : "unknown"
-      const error =
-        typeof details.error === "string" ? details.error : undefined
-      const reason =
-        typeof details.reason === "string" ? details.reason : undefined
-
-      const label = `📷 Photo from Android (${messageId}${index === undefined ? "" : ` #${index}`})`
-      const lines = [
-        theme.fg("customMessageLabel", label),
-        theme.fg("customMessageText", `Saved: ${path || "(not saved)"}`),
-      ]
-      if (size !== undefined)
-        lines.push(theme.fg("customMessageText", `Size: ${size} bytes`))
-      if (mime) lines.push(theme.fg("customMessageText", `MIME: ${mime}`))
-      if (error) lines.push(theme.fg("customMessageText", `Error: ${error}`))
-      if (reason) lines.push(theme.fg("customMessageText", `Reason: ${reason}`))
-      if (text) lines.push(theme.fg("customMessageText", `Text: ${text}`))
-
-      const container = new Container()
-      const metadata = new Box(1, 1, (line) =>
-        theme.bg("customMessageBg", line),
-      )
-      metadata.addChild(new Text(lines.join("\n")))
-      container.addChild(metadata)
-
-      if (inlineImagePath && !error) {
-        try {
-          const imageData = readFileSync(inlineImagePath).toString("base64")
-          if (imageData.length > 0) {
-            const image = new Image(imageData, IMAGE_PREVIEW_MIME, {
-              fallbackColor: (str) => theme.fg("customMessageText", str),
-            })
-            // Keep Kitty image rows out of Box padding/background so pi-tui can
-            // preserve the empty reserved rows that make inline images visible.
-            container.addChild(image)
-          }
-        } catch {
-          // Keep the metadata-only fallback on any IO/terminal issue.
-        }
-      }
-
-      return container
-    },
-  )
-}
-
-function _isReceivedImageContextMessage(message: unknown): boolean {
-  return (
-    typeof message === "object" &&
-    message !== null &&
-    (message as { role?: unknown }).role === "custom" &&
-    (message as { customType?: unknown }).customType ===
-      UNBIEN_RECEIVED_IMAGE_TYPE
-  )
-}
-
 /**
  * Issue #105 — pure-data events must not reach the model.
  *
@@ -625,70 +376,6 @@ function _filterInternalMessagesFromContext<T>(messages: T[] | undefined): T[] {
           !_isPureDataContextMessage(message),
       )
     : []
-}
-
-function _contentFromUserMessage(
-  msg: ClientUserMessage,
-): Parameters<ExtensionAPI["sendUserMessage"]>[0] {
-  return msg.images && msg.images.length > 0
-    ? [
-        ...msg.images.map((img) => ({
-          type: "image" as const,
-          data: img.data,
-          mimeType: img.mime,
-        })),
-        { type: "text" as const, text: msg.text },
-      ]
-    : msg.text
-}
-
-async function _deliverImageUserMessage(
-  sender: PlainPeerChannel,
-  msg: ClientUserMessage,
-  shouldSteer: boolean,
-): Promise<void> {
-  const previewDelivery: ReceivedImagePreviewDelivery =
-    shouldSteer || _rootState().turnId !== null || _myRoomMeta?.working === true
-      ? "defer"
-      : "immediate"
-  const emitPreview = async () => {
-    try {
-      await _emitReceivedImagePreviews(msg, previewDelivery)
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
-      console.error(
-        `[un-bien] failed emitting image preview id=${msg.id}: ${detail}`,
-      )
-    }
-  }
-  if (previewDelivery === "immediate") {
-    await emitPreview()
-  } else {
-    void emitPreview().finally(() => {
-      if (!_shouldDeferReceivedImagePreview())
-        _flushPendingReceivedImagePreviews()
-    })
-  }
-
-  const previousTurnId = _rootState().turnId
-  const seededTurnId = !shouldSteer || _rootState().turnId === null
-  if (seededTurnId) _rootState().turnId = msg.id
-
-  const wake = _wakeAgent(
-    _contentFromUserMessage(msg),
-    `app user_message id=${msg.id} (+${msg.images?.length ?? 0} image)`,
-    "steer",
-  )
-  if (!wake.ok) {
-    if (seededTurnId) _rootState().turnId = previousTurnId
-    sender.send({
-      type: "error",
-      code: "internal_error",
-      in_reply_to: msg.id,
-      message: `Agent rejected incoming message: ${wake.detail}`,
-    })
-    return
-  }
 }
 
 // ── Cross-PC mesh wiring (plan/25 Wave B/C) ───────────────────────────────────
@@ -1502,7 +1189,7 @@ function _routeRpcCommandFrom(
       }
       // Image path mirrors the stock handler (SDK handoff WITH images + echo).
       if (msg.images && msg.images.length > 0) {
-        await _deliverImageUserMessage(sender, msg, shouldSteer)
+        await _deliverImageUserMessage(imageDeps, sender, msg, shouldSteer)
         return
       }
       const previousTurnId = _rootState().turnId
@@ -1842,7 +1529,7 @@ function _goIdle(): void {
   _activePeers.clear()
   _peerShort = ""
   _rootState().turnId = null
-  _pendingReceivedImagePreviews.length = 0
+  clearPendingReceivedImagePreviews()
 
   // Invalidate async producers and bridge ownership before closing the host
   // Relay. A synchronous/delayed close callback must observe stale identity.
@@ -2636,6 +2323,22 @@ function _releaseRootSession(pi: ExtensionAPI): void {
   if (g[_ROOT_SESSION_OWNER_KEY] === pi) delete g[_ROOT_SESSION_OWNER_KEY]
 }
 
+// ── Received-image pipeline seam ──────────────────────────────────────────
+//
+// The image-preview domain lives in ./session/received_images.ts and reaches
+// this module's state + helpers ONLY through this object (that module never
+// imports ../index.js — no circular imports). Same pattern as CommandDeps.
+const imageDeps: ImagePipelineDeps = {
+  get pi() {
+    return _pi
+  },
+  rootState: _rootState,
+  get myRoomMeta() {
+    return _myRoomMeta
+  },
+  wakeAgent: _wakeAgent,
+}
+
 // ── Command seam ──────────────────────────────────────────────────────────────
 //
 // The /unbien handlers live in ./commands/ and reach this module's state
@@ -3106,7 +2809,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // envelope (turn_end / agent_settled), so no stock agent_done is sent; we
     // only clear the turn id used for queue/turn correlation.
     if (st.turnId) st.turnId = null
-    _flushPendingReceivedImagePreviews()
+    _flushPendingReceivedImagePreviews(imageDeps)
     settleRun()
   })
 
