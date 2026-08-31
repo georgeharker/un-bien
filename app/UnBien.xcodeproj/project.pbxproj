@@ -11,11 +11,14 @@
 		4BF70302A5ACE76E1E05E803 /* UnBienApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 105D6ECB55459B12DC4E7F91 /* UnBienApp.swift */; };
 		5EB8545E494D5758AE60C296 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 363F503535BEAFD31CBD4424 /* Assets.xcassets */; };
 		6E00E326DF525B73178588E7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 363F503535BEAFD31CBD4424 /* Assets.xcassets */; };
+		7A8F1AAEA8103F1DF9290D41 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 05C112673CDC32F4C230FA6D /* PrivacyInfo.xcprivacy */; };
 		958EE8CD05A8B6ACDF732B51 /* UnBienApp in Frameworks */ = {isa = PBXBuildFile; productRef = 59C154A563AD5B08B3955A71 /* UnBienApp */; };
 		B4145D91BFDF8D7B4DB00DA9 /* UnBienApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 105D6ECB55459B12DC4E7F91 /* UnBienApp.swift */; };
+		D821A4852418B275C5C2385F /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 05C112673CDC32F4C230FA6D /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		05C112673CDC32F4C230FA6D /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		105D6ECB55459B12DC4E7F91 /* UnBienApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnBienApp.swift; sourceTree = "<group>"; };
 		1D913B5BB0A3D0C3C487F6F1 /* UnBien-macOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "UnBien-macOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		363F503535BEAFD31CBD4424 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -65,6 +68,7 @@
 			isa = PBXGroup;
 			children = (
 				363F503535BEAFD31CBD4424 /* Assets.xcassets */,
+				05C112673CDC32F4C230FA6D /* PrivacyInfo.xcprivacy */,
 				105D6ECB55459B12DC4E7F91 /* UnBienApp.swift */,
 			);
 			path = Shared;
@@ -177,6 +181,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				6E00E326DF525B73178588E7 /* Assets.xcassets in Resources */,
+				D821A4852418B275C5C2385F /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -185,6 +190,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				5EB8545E494D5758AE60C296 /* Assets.xcassets in Resources */,
+				7A8F1AAEA8103F1DF9290D41 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

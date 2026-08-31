@@ -21,50 +21,62 @@ Legend: ✅ done · ⚠️ gap · 🔲 to do.
 
 ## Blockers — App Review rejects without these
 
-### 1. 🔲 Privacy manifest (`PrivacyInfo.xcprivacy`)
+### 1. ✅ Privacy manifest (`PrivacyInfo.xcprivacy`)
 
-Required by Apple since May 2024; none exists in the repo. Add one per app
-target declaring:
+Added `app/App/Shared/PrivacyInfo.xcprivacy` (bundled into both targets via the
+shared sources path):
 
-- **Data collection:** effectively none (mesh config is local JSON; no
-  analytics/tracking). Declare accordingly.
-- **Required-reason APIs** actually used: Keychain, `UserDefaults` (if used),
-  file-timestamp / disk-space APIs pulled in transitively. Provide the reason
-  codes.
+- **Data collection / tracking:** none — `NSPrivacyCollectedDataTypes` empty,
+  `NSPrivacyTracking` false (mesh config is local JSON; no analytics).
+- **Required-reason APIs:** UserDefaults `CA92.1` (app-only preferences:
+  theme, toggles, scroll memory) + file-timestamp `C617.1` (in-container,
+  transitive). NB: **Keychain is NOT a required-reason category** — Apple's
+  five categories are UserDefaults / file-timestamp / disk-space /
+  system-boot-time / active-keyboard (verified against the vendor docs;
+  `C56D.1` is a UserDefaults SDK-wrapper code, not a keychain one).
+- If App Store Connect's upload scan (ITMS-91053) flags disk-space or
+  boot-time APIs pulled in by a dependency, add that category then.
 
-### 2. ⚠️ App Transport Security posture
+### 2. ✅ App Transport Security posture
 
-Both Info.plists set `NSAppTransportSecurity → NSAllowsArbitraryLoads = true`.
-Global arbitrary-loads is the single biggest review risk. The app only dials
-user-specified `ws://` on localhost / LAN / Tailnet.
+**Settled (2026-08-31, empirically):** `NSAllowsArbitraryLoads = true` stays,
+with the justification below in the review notes. We TRIED the "preferred"
+`NSAllowsLocalNetworking` posture and it severed every phone pairing within
+minutes — the primary connection path is **Tailscale**, whose 100.64/10 CGNAT
+range is not RFC1918 and therefore NOT covered by the local-network exemption.
+Relay endpoints are user-configured (localhost / LAN / Tailnet / self-hosted
+VPS) and unknowable at build time, so arbitrary loads is the honest posture for
+a user-configured self-hosted-server client — the same class as SSH and
+home-automation clients. Long-term tightening: `wss://` relays (`tailscale
+serve` issues ts.net certs) would allow revisiting.
 
-- **Preferred:** replace with `NSAllowsLocalNetworking = true` (permitted for
-  local endpoints) instead of arbitrary loads.
-- Keep a written justification in App Review notes either way.
-- **Decision required** before finalizing plists + review notes.
+Review-notes justification:
 
-### 3. 🔲 Local Network permission (iOS)
+> The app is a client for user-configured, self-hosted relay servers — the
+> user enters the address (localhost, LAN, VPN, or their own VPS). No fixed
+> hosts exist to enumerate, and the app makes no connections to arbitrary
+> internet hosts beyond the one the user configures.
 
-Add `NSLocalNetworkUsageDescription` — iOS prompts on first LAN connection to a
-relay. Missing today. (Add a Bonjour services key only if service discovery is
-introduced; not needed for paste/QR-addressed relays.)
+### 3. ✅ Local Network permission (iOS)
 
-### 4. 🔲 macOS App Sandbox
+`NSLocalNetworkUsageDescription` added (pinned in `project.yml`, flows to the
+generated plist): "Un Bien connects to relays on your local network to reach
+the machines running your agents." No Bonjour key — paste/QR-addressed relays
+do no service discovery.
 
-Mac App Store **requires** the sandbox. macOS entitlements currently carry only
-the keychain group. Add:
+### 4. ✅ macOS App Sandbox
 
-- `com.apple.security.app-sandbox = true`
-- `com.apple.security.network.client = true` (outbound WebSocket only; no server
-  entitlement)
+`com.apple.security.app-sandbox = true` + `com.apple.security.network.client
+= true` added to the macOS entitlements (pinned in `project.yml`). Both
+targets build clean with them (device + macOS verified 2026-08-31).
+Still to do under §13 TestFlight: re-test Keychain + relay connect UNDER the
+sandbox at runtime.
 
-Already flagged in `DEPLOY.md`. Re-test Keychain + relay connect under sandbox.
+### 5. ✅ Export compliance
 
-### 5. 🔲 Export compliance
-
-Set `ITSAppUsesNonExemptEncryption` in Info.plist. The app uses CryptoKit
-(Ed25519) + TLS — standard crypto, almost certainly **exempt**, but it must be
-declared or every upload prompts.
+`ITSAppUsesNonExemptEncryption = false` set in both Info.plists (pinned in
+`project.yml`): CryptoKit Ed25519 + TLS = standard/exempt crypto, declared so
+uploads don't prompt.
 
 ### 6. 🔲 Privacy policy URL
 
@@ -99,9 +111,29 @@ way. Two routes, not mutually exclusive:
   scenario source, two players). Note the existing `/unbien test` harness alone
   does **not** solve this — it runs on the extension side and still needs relay + Pi.
 
-**Chosen (phased):** Route A for the v1 submission to move fast, with Route B
-(demo mode) as the durable follow-up. If babysitting a relay + Pi session on
-Apple's re-review schedule proves too costly, promote Route B ahead of v1.
+**Chosen (user, 2026-08-31): Route B demo mode for v1, with docs + screencast
+in the review notes as the COMPLEMENT — not Route A, not video-only.** Split of
+roles:
+
+- **Demo mode (the load-bearing 2.1 answer):** a "Try the demo" affordance on
+  onboarding loads an in-memory fake mesh with canned sessions — replaying the
+  SAME fixture corpus the extension-side `/unbien test` harness broadcasts,
+  folded through the real `applyRPC` reducer. Deliberately READ-ONLY and
+  honestly labeled (a "demo data" banner, composer disabled) so it reads as
+  "the app works", not marketing — no fake agent replies. It exists so the
+  binary is never an empty shell for the reviewer.
+- **Docs + screencast (the complement):** a public setup-docs page + a short
+  video of the REAL flow (relay, pairing, live agent turn) in the review
+  notes — covering exactly what fixtures can't show — plus the principled
+  note that there is no service to provision (client of user-owned
+  machines; no account system).
+- **Never pre-host a relay.** If a reviewer explicitly demands live access,
+  stand one up that hour, for that review only.
+
+Route A (standing demo relay + session) is RETIRED as the v1 plan — the
+babysitting burden through review + every re-review isn't worth it. Video-only
+was rejected: it doesn't change what the binary shows, and the empty-shell
+first impression is the 2.1/4.2 trigger.
 
 ## Standard submission work
 
@@ -139,11 +171,9 @@ does not need separate notarization — that's for direct distribution.)
 Run a beta pass before public release — especially the iOS Local-Network prompt
 flow and the macOS sandboxed Keychain + relay-connect flow.
 
-## Two decisions to settle first
+## Both v1-blocking decisions are settled
 
-These shape multiple downstream tasks, so lock them before writing plists/notes:
-
-1. **ATS posture** (task 2) — `NSAllowsLocalNetworking` vs. arbitrary-loads +
-   justification.
-2. **Reviewability strategy** (task 7) — demo relay+session vs. screencast vs.
-   demo mode.
+1. **ATS posture** (task 2) — `NSAllowsArbitraryLoads` + review-notes
+   justification (empirically settled; see task 2).
+2. **Reviewability strategy** (task 7) — Route B demo mode + docs/screencast
+   complement; never pre-host a relay (see task 7).

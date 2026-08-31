@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- App privacy manifest (App Store requirement since May 2024).
+	     un-bien collects nothing and tracks nothing: mesh config is local
+	     JSON, the owner key stays in the keychain, no analytics. The
+	     required-reason declarations cover what the binary actually uses:
+	     - UserDefaults (CA92.1): app-only preferences (theme, toggles,
+	       scroll memory).
+	     - File timestamps (C617.1): timestamps of files inside the app's
+	       own container (transitive FileManager/stat use).
+	     Keychain is NOT a required-reason category (the five Apple
+	     categories are UserDefaults / file-timestamp / disk-space /
+	     system-boot-time / active-keyboard) — no declaration needed.
+	     If App Store Connect's upload scan (ITMS-91053) flags disk-space
+	     or boot-time APIs from a dependency, add that category here. -->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>C617.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

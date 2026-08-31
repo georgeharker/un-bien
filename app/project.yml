@@ -31,10 +31,25 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: com.georgeharker.un-bien.pair
             CFBundleURLSchemes: [unbien]
-        # Relays are user-specified plaintext ws:// endpoints on private
-        # networks (localhost / LAN / Tailnet) — allow non-TLS loads.
+        # Relays are USER-SPECIFIED plaintext ws:// endpoints — localhost, LAN,
+        # Tailnet (100.64/10 CGNAT — NOT RFC1918, so NSAllowsLocalNetworking
+        # does NOT cover it; verified by the 2026-08-31 tailscale regression
+        # that severed every phone pairing), or a self-hosted VPS. The endpoint
+        # set is unknowable at build time, so arbitrary loads is the honest
+        # posture, with a written justification in the App Review notes — the
+        # standard stance for user-configured self-hosted-server clients (SSH
+        # / home-automation class). Long-term tightening: wss:// relays
+        # (tailscale serve issues ts.net certs) would allow revisiting this.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+        # iOS 14+ prompts for this on the first LAN connection to a relay —
+        # missing description is an App Review rejection.
+        NSLocalNetworkUsageDescription: >-
+          Un Bien connects to relays on your local network to reach the
+          machines running your agents.
+        # CryptoKit (Ed25519) + TLS only — standard/exempt crypto, declared so
+        # uploads don't prompt for export compliance every time.
+        ITSAppUsesNonExemptEncryption: false
     entitlements:
       path: App/iOS/un-bien.entitlements
       properties:
@@ -72,13 +87,25 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: com.georgeharker.un-bien.pair
             CFBundleURLSchemes: [unbien]
+        # User-specified relay endpoints (localhost / LAN / Tailnet CGNAT /
+        # self-hosted VPS) — same arbitrary-loads posture + review-notes
+        # justification as the iOS target (Tailnet 100.64/10 is not RFC1918;
+        # NSAllowsLocalNetworking does not cover it).
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+        # CryptoKit (Ed25519) + TLS only — exempt crypto, declared to avoid the
+        # per-upload export-compliance prompt.
+        ITSAppUsesNonExemptEncryption: false
     entitlements:
       path: App/macOS/un-bien.entitlements
       properties:
         keychain-access-groups:
           - $(AppIdentifierPrefix)com.georgeharker.un-bien.app
+        # Mac App Store REQUIRES the sandbox. Network CLIENT only (outbound
+        # WebSocket; no server entitlement) — see APPSTORE.md + DEPLOY.md.
+        # Re-test Keychain + relay connect under sandbox before submission.
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.georgeharker.un-bien.app
