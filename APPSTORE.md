@@ -81,7 +81,7 @@ uploads don't prompt.
 ### 6. ✅ Privacy policy URL
 
 Published as a docs-site page: `docs/privacy.md` (rendered at
-<https://docs.georgeharker.com/un-bien/docs/privacy.html> — deployed by the
+<https://docs.georgeharker.com/un-bien/main/docs/privacy.html> — deployed by the
 docs workflow on push). Content matches the privacy manifest: nothing
 
 collected, nothing tracked, no fixed servers; local storage + keychain;
@@ -213,7 +213,7 @@ macOS platform. ASC accepts the native simulator dimensions directly.
 - **What's new (1.0):** Initial release.
 - **Privacy nutrition labels:** mirror the manifest — Data Not Collected,
   no tracking. Category answers: everything "none".
-- **Support URL:** <https://docs.georgeharker.com/un-bien> (the docs site
+- **Support URL:** <https://docs.georgeharker.com/un-bien/main> (the docs site
   home — Install & setup is the practical entry); issues:
   <https://github.com/georgeharker/un-bien/issues>.
 
