@@ -196,7 +196,9 @@ macOS platform. ASC accepts the native simulator dimensions directly.
 - **Name:** Un Bien
 - **Subtitle** (≤30): Your Pi agents, on your phone
 - **Keywords:** pi,agent,coding,developer,ai,remote,terminal,relay,transcript,mesh
-- **Promo text** (≤170): Attach to your Pi coding-agent sessions from your phone — stream transcripts, watch tool calls, answer questions, and steer the agent. Self-hosted; nothing leaves your machines.
+- **Promo text** (159/170): Attach to your Pi coding-agent sessions from
+  your phone — stream transcripts, watch tool calls, and steer the agent.
+  Self-hosted; nothing leaves your machines.
 - **Description (lead):**
   > Un Bien is a native iOS/macOS client for the Pi coding agent. Pair your
   > phone with your own machines over a relay you host, then attach to running
