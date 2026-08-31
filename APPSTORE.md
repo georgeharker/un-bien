@@ -243,17 +243,21 @@ step; the script pins `/usr/bin` first for the export so the system rsync
 resolves. UPLOAD stays manual (Xcode Organizer / Transporter / `xcrun altool
 --upload-app`) until the ASC records exist — then it can be scripted.
 
-### 13. 🟡 TestFlight beta pass (IN PROGRESS — builds live 2026-08-31)
+### 13. 🟢 TestFlight beta pass (builds verified 2026-08-31)
 
-iOS 1.0(2) + macOS 1.0(2) uploaded after two processor bounces (fixed:
+iOS 1.0(2) + macOS 1.0(2) live after two processor bounces (fixed:
 `UISupportedInterfaceOrientations` for the universal build; macOS
-`LSApplicationCategoryType`). Both "Ready to test"; internal testing set up.
-**VERIFIED on both platforms: the distribution builds connect to the real
- relay — iOS (ATS + Local Network + Tailscale path) and macOS (sandboxed
- Keychain + relay connect, first run outside Xcode).** Still to exercise:
-ask-from-phone; machine-row launch (needs the launcher daemon). Then: paste
-review notes (text-first, per §7 decision), pick builds on each 1.0, submit
-per platform.
+`LSApplicationCategoryType`). **VERIFIED on both platforms:** distribution
+builds connect to the real relay (iOS: ATS + Local Network + Tailscale;
+macOS: sandboxed Keychain + relay), and the ask flow presents + works from
+the app side. Operational notes: a backgrounded iOS app suspends its relay
+socket (misses live pushes; sync replay heals on foreground), and asks land
+under the ASKING session's key — the Home badge is the discovery surface
+when the wrong transcript is open.
+
+**Remaining:** paste review notes (text-first, per §7), pick builds on each
+1.0, submit per platform. Optional: launch-chip test (needs the launcher
+daemon).
 
 ## Both v1-blocking decisions are settled
 
