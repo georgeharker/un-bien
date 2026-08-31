@@ -58,6 +58,9 @@ export async function startLauncher(): Promise<LauncherHandle> {
 
   let stopped = false;
   let relay: RelayClient | null = null;
+  // One in-flight reconnect chain, not N: `close` on the CURRENT relay and a
+  // failed connectOnce can both schedule; without the guard they multiply.
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   const channels = new Map<string, PlainPeerChannel>();
 
   /** The machine's configured launch backend (rpc is a fast-follow). */
@@ -188,7 +191,9 @@ export async function startLauncher(): Promise<LauncherHandle> {
 
   function scheduleReconnect(): void {
     if (stopped) return;
-    setTimeout(() => {
+    if (reconnectTimer) return; // a retry chain is already pending
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
       if (stopped) return;
       connectOnce().catch(() => scheduleReconnect());
     }, RECONNECT_DELAY_MS);
@@ -212,13 +217,26 @@ export async function startLauncher(): Promise<LauncherHandle> {
     );
   }
 
-  await connectOnce();
+  // A DAEMON must not die on a first-connect race: a profile `up` can start
+  // the launcher in the same breath as the relay, whose port may not be
+  // listening yet — a fatal initial connect made the launcher exit(1) and the
+  // sharedserver's health check merely WARN (the "tends to just die" symptom).
+  // Post-connect drops already retried; the INITIAL connect now does too.
+  try {
+    await connectOnce();
+  } catch (err) {
+    envLog(
+      `launcher: initial connect failed (${err instanceof Error ? err.message : String(err)}) — retrying every ${RECONNECT_DELAY_MS}ms`,
+    );
+    scheduleReconnect();
+  }
 
   return {
     roomId,
     epk,
     stop() {
       stopped = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       for (const ch of channels.values()) {
         try {
           ch.detach();
