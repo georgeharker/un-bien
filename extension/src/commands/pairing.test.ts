@@ -283,6 +283,7 @@ const {
   _getLockedNameForTest,
   _resetCwdLockForTest,
   _resetSessionsForTest,
+  _seedRootSessionForTest,
   _handleControl,
   _deliverMeshMessageToAgentForTest,
   CTRL_PREFIX,
@@ -294,6 +295,10 @@ const { acquireCwdLock } = await import("../session/cwd_lock.js")
 // _resetBridgeOwnersForTest — that fires mid-test on each captureEventHandler.
 beforeEach(() => {
   _resetSessionsForTest()
+  // design 01M1CAW0: no room announce before the session id exists — seed the
+  // root session so relay-bringing-up tests run post-session (production
+  // always has one by the time /unbien runs).
+  _seedRootSessionForTest()
 })
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

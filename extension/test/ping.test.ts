@@ -85,6 +85,8 @@ const {
   routeClientMessage,
   _startRelayForTest,
   _stopForTest,
+  _resetSessionsForTest,
+  _seedRootSessionForTest,
 } = await import("../src/index.js");
 
 import type { ExtensionAPI, ExtensionFactory } from "@mariozechner/pi-coding-agent";
@@ -148,6 +150,12 @@ describe("ping → pong roundtrip", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     relayRef.current = null;
+
+    // design 01M1CAW0: the relay refuses to announce a room before the
+    // session id exists — seed the root session (production always has one
+    // by the time /unbien runs).
+    _resetSessionsForTest();
+    _seedRootSessionForTest();
 
     // Stop any active session first (idempotent — safe when already idle).
     await _stopForTest(makeMockCtx());

@@ -69,8 +69,11 @@ export async function _cmdPair(
   // the relay. Without a live WS there's nothing for the scan to land on.
   if (deps.state === "idle" || !deps.relay) {
     ctx.ui.notify(
-      "[un-bien] Pair requires the relay to be connected. " +
-        "Run /unbien to start it (or fix your relay URL via /unbien set-relay).",
+      deps.relayStartDeferred
+        ? "[un-bien] Relay start is deferred until this session has an id " +
+            "(design 01M1CAW0) — try pairing again once the session has started."
+        : "[un-bien] Pair requires the relay to be connected. " +
+            "Run /unbien to start it (or fix your relay URL via /unbien set-relay).",
       "warning",
     )
     return
@@ -94,7 +97,20 @@ export async function _cmdPair(
   // session answers the pair_request — no fan-out race. Trust still lands on the
   // MACHINE: pair_ok persists a PairedMachine keyed by epk, and the app then
   // discovers all the machine's sessions via room_announced.
+  // design 01M1CAW0: the QR room MUST equal the room the Pi actually announces
+  // (session-id-derived). With the relay up that is always `deps.myRoomId`; a
+  // null here means no session id exists — refuse rather than mint a QR for a
+  // cwd-derived room the Pi will never announce (the app would address a dead
+  // room and pairing would silently misroute).
   const roomId = deps.myRoomId ?? deps.deriveRoomId(cwd, sessionName)
+  if (roomId === null) {
+    ctx.ui.notify(
+      "[un-bien] No session id yet — cannot mint a pairing QR (design " +
+        "01M1CAW0). Try again once this session has started.",
+      "error",
+    )
+    return
+  }
   const qrUri = buildQRUri(token, edKp.publicKey, sessionName, roomId)
   // Render both the QR ASCII and the copy-paste URI inside the Pi TUI's
   // chat panel via `pi.sendMessage` — the same channel the SDK uses for

@@ -65,7 +65,7 @@ import {
 } from "./session/rpc_envelope.js"
 import { dispatchRpcCommand } from "./session/rpc_inbound.js"
 import { envLog } from "./session/debug_log.js"
-import { roomIdFor, roomIdForSession } from "./rooms.js"
+import { roomIdForSession } from "./rooms.js"
 import { registerAgentTools } from "./session/tools.js"
 import { formatPeerInventory } from "./session/peer_inventory.js"
 import { MeshNode } from "./session/mesh_node.js"
@@ -200,13 +200,24 @@ let _peerShort = "" // shortid of the most recently attached peer (UX hint only)
 
 let _myRoomId: string | null = null // this Pi's room id (derived from the session id)
 
-/** THE App<->Pi room id for the current chat session. Prefers the STABLE pi
- *  session id (durable across resume) so the room can't drift when the assigned
- *  name changes on reconnect; falls back to the legacy (cwd, name) derivation
- *  only when no session id is available yet (pre-sessionManager edge). */
-function _deriveRoomId(cwd: string, name: string): string {
+/** True when a relay start was DEFERRED because no session id existed yet
+ *  (design 01M1CAW0). The root session_start handler re-runs the start once
+ *  the session id becomes available. */
+let _relayStartDeferred = false
+
+/** THE App<->Pi room id for the current chat session: ALWAYS derived from the
+ *  STABLE pi session id (durable across resume) so the room can't drift when
+ *  the assigned name changes on reconnect. Returns null when no session id
+ *  exists yet — the legacy (cwd, name) fallback is RETIRED (design 01M1CAW0):
+ *  it was identical for same-cwd processes, so a pre-session subprocess could
+ *  announce the SAME room an earlier session occupies (and a parent's keeper
+ *  then stamped set-once parentage onto that shared room). Callers must SKIP
+ *  the room announce/join on null — never guess a cwd-derived room id.
+ *  `cwd`/`name` are still accepted because callers derive them for room_meta
+ *  labels, but they no longer key the room. */
+function _deriveRoomId(_cwd: string, _name: string): string | null {
   const sid = _rootState().sessionManager?.getSessionId()
-  return sid ? roomIdForSession(sid) : roomIdFor(cwd, name)
+  return sid ? roomIdForSession(sid) : null
 }
 
 // Plan/28 Wave D.1: `thinking` published alongside `model` so the app's
@@ -1507,7 +1518,6 @@ const relayDeps: RelayLifecycleDeps = {
   safeNotify: _safeNotify,
   refreshPairingsCache: _refreshPairingsCache,
   displayName: _displayName,
-  deriveRoomId: _deriveRoomId,
   attachBridgeIfReady: _attachBridgeIfReady,
   routeClientMessageFrom: _routeClientMessageFrom,
   routeRpcCommandFrom: _routeRpcCommandFrom,
@@ -1634,6 +1644,12 @@ const deps: CommandDeps = {
   },
   set relayLifecycleGeneration(v) {
     _setRelayLifecycleGeneration(v)
+  },
+  get relayStartDeferred() {
+    return _relayStartDeferred
+  },
+  set relayStartDeferred(v) {
+    _relayStartDeferred = v
   },
   get rootLifecycleGeneration() {
     return _rootLifecycleGeneration
@@ -1782,6 +1798,9 @@ const _testHooks = createTestHooks({
   set pi(v: ExtensionAPI | null) {
     _pi = v
   },
+  set relayStartDeferred(v: boolean) {
+    _relayStartDeferred = v
+  },
   rootSessionOwnerKey: _ROOT_SESSION_OWNER_KEY,
   sessions: _sessions,
   get meshNode() {
@@ -1798,6 +1817,12 @@ const _testHooks = createTestHooks({
   },
   activePeers: _activePeers,
   rootState: _rootState,
+  seedRootSession(sid: string) {
+    _rootSessionId = sid
+    _stateFor(sid).sessionManager = {
+      getSessionId: () => sid,
+    } as ExtensionContext["sessionManager"]
+  },
   deliverMeshMessageToAgent: _deliverMeshMessageToAgent,
 })
 
@@ -1808,6 +1833,7 @@ export const _setDisposedForTest = _testHooks.setDisposedForTest
 export const _resetAutoInitedForTest = _testHooks.resetAutoInitedForTest
 export const _resetBridgeOwnersForTest = _testHooks.resetBridgeOwnersForTest
 export const _resetSessionsForTest = _testHooks.resetSessionsForTest
+export const _seedRootSessionForTest = _testHooks.seedRootSessionForTest
 export const _setAutoInitedForTest = _testHooks.setAutoInitedForTest
 export const _hasMeshNodeForTest = _testHooks.hasMeshNodeForTest
 export const _checkSelfRevokeForTest = _testHooks.checkSelfRevokeForTest
@@ -2153,6 +2179,17 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       // A subagent child session (non-root) — surface it as its own relay room.
       // `pi` here is the CHILD's ExtensionAPI (per-activation).
       _subagentRooms?.onChildSession(pi, ctx)
+    }
+    // design 01M1CAW0 (announce waits for the session id): a relay start that
+    // was deferred because no session id existed re-runs NOW — the root
+    // session's sessionManager was captured above, so _deriveRoomId has an id
+    // to announce. Root session_starts only (a child never owned the relay);
+    // the flag stays armed when this session_start still carries no id.
+    if (deps.relayStartDeferred && !_isNonRootSid(sid)) {
+      if (_rootState().sessionManager?.getSessionId()) {
+        deps.relayStartDeferred = false
+        void _cmdStart(deps, ctx)
+      }
     }
     // Rearm a reused-but-disposed instance. The session_shutdown teardown (below)
     // sets _disposed=true assuming the host re-evaluates THIS module fresh for the

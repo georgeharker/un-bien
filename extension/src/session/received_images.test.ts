@@ -260,6 +260,7 @@ const {
   _setPiForTest,
   _connectForTest,
   _resetSessionsForTest,
+  _seedRootSessionForTest,
 } = indexModule
 
 // Keyed per-session state (_sessions Map + _rootSessionId) is module-global;
@@ -267,6 +268,10 @@ const {
 // _resetBridgeOwnersForTest — that fires mid-test on each captureEventHandler.
 beforeEach(() => {
   _resetSessionsForTest()
+  // design 01M1CAW0: no room announce before the session id exists — seed the
+  // root session so relay-bringing-up tests run post-session (production
+  // always has one by the time /unbien runs).
+  _seedRootSessionForTest()
 })
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
