@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import {
   dispatchRpcCommand,
   type GetEntriesResult,
+  pageEntries,
   rpcResponse,
   type RpcCommandHandlers,
 } from "./rpc_inbound.js";
@@ -191,6 +193,62 @@ describe("dispatchRpcCommand", () => {
     expect(
       await dispatchRpcCommand({ type: "get_entries", id: "g3" }, handlers()),
     ).toBeNull();
+  });
+
+  // get_entries backfill paging: the reply is ONE budget-bounded page; the
+  // shape stays pi-faithful ({entries, leafId} — no extra fields). The app
+  // loops `since: leafId` until an empty page.
+  describe("pageEntries", () => {
+    const mk = (id: string, size: number) =>
+      ({
+        type: "message",
+        id,
+        text: "x".repeat(Math.max(0, size - 40)),
+      }) as unknown as SessionEntry;
+
+    it("small log → single page, complete, leafId passes through", () => {
+      const all = [mk("e1", 100), mk("e2", 100)];
+      expect(pageEntries(all, undefined, "e2")).toEqual({
+        entries: all,
+        leafId: "e2",
+      });
+    });
+
+    it("budget exceeded → partial page, leafId = last INCLUDED entry id", () => {
+      const all = [mk("e1", 100_000), mk("e2", 100_000), mk("e3", 100_000)];
+      const page = pageEntries(all, undefined, "e3", 150_000);
+      expect(page.entries.map((e) => e.id)).toEqual(["e1", "e2"]);
+      expect(page.leafId).toBe("e2");
+    });
+
+    it("resumes after `since`; an unknown since restarts from index 0 (helper tolerance — handlers pre-validate)", () => {
+      const all = [mk("e1", 10), mk("e2", 10), mk("e3", 10)];
+      expect(
+        pageEntries(all, "e1", "e3", 1000).entries.map((e) => e.id),
+      ).toEqual(["e2", "e3"]);
+      expect(
+        pageEntries(all, "nope", "e3", 1000).entries.map((e) => e.id),
+      ).toEqual(["e1", "e2", "e3"]);
+    });
+
+    it("a single entry larger than the budget still rides alone (guaranteed progress)", () => {
+      const all = [mk("e1", 500_000), mk("e2", 10)];
+      const page = pageEntries(all, undefined, "e2", 1000);
+      expect(page.entries.map((e) => e.id)).toEqual(["e1"]);
+      expect(page.leafId).toBe("e1");
+    });
+
+    it("nothing after since → empty terminal page; empty log → passthrough", () => {
+      const all = [mk("e1", 10)];
+      expect(pageEntries(all, "e1", "e1")).toEqual({
+        entries: [],
+        leafId: "e1",
+      });
+      expect(pageEntries([], undefined, null)).toEqual({
+        entries: [],
+        leafId: null,
+      });
+    });
   });
 
   it("returns null for unhandled / typeless commands (forward-compat)", async () => {

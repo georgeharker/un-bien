@@ -501,6 +501,29 @@ public final class AppModel: ObservableObject {
                     if let rpc = env.rpc, rpc["type"]?.stringValue == "response" {
                         resumeAwaitedReply(rpc) // request/reply correlation, by id
                         handleRpcResponse(rpc, key: key) // side effects, by command
+                        // get_entries backfill PAGING (design 01M1BANZ): the
+                        // reply is ONE budget-bounded page of a possibly
+                        // multi-MB entry log. The frame stays pi-faithful
+                        // ({entries, leafId}, no extra fields) — the loop is
+                        // implied by pi's own since-cursor semantics: keep
+                        // fetching with the page's leafId until an empty page
+                        // (or an error / nil leaf). Folding is idempotent
+                        // (identify dedup), so pages + live frames interleave
+                        // freely.
+                        if let page = rpc["data"],
+                           rpc["command"]?.stringValue == "get_entries",
+                           rpc["success"]?.boolValue == true,
+                           let entries = page["entries"]?.arrayValue, !entries.isEmpty,
+                           let leaf = page["leafId"]?.stringValue,
+                           let conn = connections[relayID] {
+                            let peer = envelope.peer, room = envelope.room
+                            let n = entries.count
+                            let leafTail = String(leaf.suffix(8))
+                            let keyTail = String(key.suffix(12))
+                            log.notice("get_entries page key=\(keyTail, privacy: .public) n=\(n, privacy: .public) leaf=\(leafTail, privacy: .public) — fetching next page")
+                            Task { try? await conn.send(.getEntries(id: UUID().uuidString, since: leaf),
+                                                         toPeer: peer, room: room) }
+                        }
                     }
                     // Queue display is APP-OWNED. pi never delivers queue_update
                     // to extensions — it's routed only to the host subscribe stream,

@@ -87,6 +87,8 @@ import {
 } from "./session/rpc_envelope.js";
 import {
   dispatchRpcCommand,
+  GET_ENTRIES_PAGE_BUDGET_BYTES,
+  pageEntries,
   type RpcCommandHandlers,
 } from "./session/rpc_inbound.js";
 import { envLog } from "./session/debug_log.js";
@@ -1765,22 +1767,28 @@ function _routeRpcCommandFrom(
       return (_pi as unknown as PiQueueControl).clearQueue();
     },
     getEntries: async (since?: string) => {
-      // Native pi get_entries: the app reconstructs the transcript itself from
-      // the raw entry log (each message entry carries an AgentMessage). `since`
-      // slices to entries AFTER that id (delta cursor); leafId is the cursor to
-      // resume from next time. The extension does NOT replay these — see the app's
-      // SessionState.applyEntries (design 01M15FMQ).
+      // Native pi get_entries, PAGED (design: get_entries backfill paging): the
+      // app reconstructs the transcript itself from the raw entry log (each
+      // message entry carries an AgentMessage), one budget-bounded page per
+      // reply so a long session's multi-MB log never blows a transport cap (the
+      // single-frame reply exceeded URLSessionWebSocketTask's 1 MiB default and
+      // was silently dropped). Frame shapes stay PI-FAITHFUL — no extra fields;
+      // the app loops `since: leafId` until an empty page. The extension does
+      // NOT replay these — see the app's SessionState.applyEntries (design
+      // 01M15FMQ).
       const sm = _rootState().sessionManager;
-      if (!sm) return { entries: [], leafId: null };
+      // Unbound → ERROR (pi always has a session here; a silent empty page on
+      // the fork side reads as "no history" — make the failure visible).
+      if (!sm) throw new Error("get_entries unavailable (no session bound)");
       const all = sm.getEntries();
-      const sliced =
-        typeof since === "string"
-          ? (() => {
-              const i = all.findIndex((e) => e.id === since);
-              return i === -1 ? all : all.slice(i + 1);
-            })()
-          : all;
-      return { entries: sliced, leafId: sm.getLeafId() };
+      // pi-faithful `since` semantics (rpc-mode.js): unknown id → error, not a
+      // silent restart from the beginning.
+      if (
+        typeof since === "string" &&
+        all.findIndex((e) => e.id === since) === -1
+      )
+        throw new Error(`Entry not found: ${since}`);
+      return pageEntries(all, since, sm.getLeafId());
     },
   };
   void dispatchRpcCommand(frame as Record<string, unknown>, handlers)

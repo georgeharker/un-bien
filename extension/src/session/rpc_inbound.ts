@@ -13,11 +13,61 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { EnvelopeMessage } from "./rpc_envelope.js";
 
-/** Native pi `get_entries` result: the raw entry log + the leaf cursor to
- *  resume from. The app reduces `entries` into its transcript itself. */
+/** Native pi `get_entries` result — the shape is PI-FAITHFUL by decision
+ *  (rpc plane matches pi as directly as possible): `{entries, leafId}` with NO
+ *  extra fields. One budget-bounded PAGE of the entry log per reply; the app
+ *  keeps refetching with `since: leafId` until an empty page (pi's own
+ *  since-cursor semantics — works against any faithful peer). See design:
+ *  get_entries backfill paging. */
 export interface GetEntriesResult {
   entries: SessionEntry[];
   leafId: string | null;
+}
+
+/** Page budget for get_entries replies (design: get_entries backfill paging).
+ *  Keeps each reply frame comfortably under every transport cap: the relay's
+ *  500 KiB POST /mesh body limit, URLSessionWebSocketTask's 1 MiB default
+ *  maximumMessageSize, and the 4 MiB WS outer-envelope limit. ~256 KiB of
+ *  entries leaves ample headroom for envelope + signature overhead. This is
+ *  chunking BEHAVIOR, not protocol — the frame shapes stay byte-faithful to
+ *  pi's rpc (`success(id, "get_entries", { entries, leafId })`). */
+export const GET_ENTRIES_PAGE_BUDGET_BYTES = 256 * 1024;
+
+/** Slice the entry log into one budget-bounded page starting AFTER `since`
+ *  (undefined = from the start). Handlers pre-validate `since` pi-faithfully
+ *  (unknown id → `Entry not found` error); this helper stays tolerant (an
+ *  unknown id restarts from index 0) for direct/test use. Always includes at
+ *  least one entry when any remain, so a single oversized entry (a giant tool
+ *  result) still makes progress on its own. `leafId` is the session's current
+ *  leaf cursor, returned when the page completes the log; a partial page
+ *  returns its last INCLUDED entry's id as the resume cursor. */
+export function pageEntries(
+  all: SessionEntry[],
+  since: string | undefined,
+  leafId: string | null,
+  budgetBytes: number = GET_ENTRIES_PAGE_BUDGET_BYTES,
+): GetEntriesResult {
+  const start =
+    typeof since === "string"
+      ? (() => {
+          const i = all.findIndex((e) => e.id === since);
+          return i === -1 ? 0 : i + 1;
+        })()
+      : 0;
+  const remaining = all.slice(start);
+  if (remaining.length === 0) return { entries: [], leafId };
+  const page: SessionEntry[] = [];
+  let used = 0;
+  for (const e of remaining) {
+    page.push(e);
+    used += JSON.stringify(e).length;
+    if (used >= budgetBytes) break;
+  }
+  const complete = page.length === remaining.length;
+  return {
+    entries: page,
+    leafId: complete ? leafId : (page[page.length - 1]?.id ?? leafId),
+  };
 }
 
 /** Build a `{ rpc: response }` envelope. Correlates by the command's `id`. */
@@ -61,10 +111,14 @@ export interface RpcCommandHandlers {
   /** Clear the steering/follow-up queue (pi `clear_queue`); resolves to the
    *  removed {steering, followUp} text. */
   clearQueue?(): Promise<unknown>;
-  /** Return the session ENTRY log (pi `get_entries`); resolves to
-   *  `{ entries, leafId }`. `since` slices to entries AFTER that entry id
-   *  (the native delta cursor). This is the transcript source — the app
-   *  reduces the raw entries itself; the extension does NOT replay them. */
+  /** Return ONE budget-bounded page of the session ENTRY log (pi
+   *  `get_entries`); resolves to the pi-faithful `{ entries, leafId }` — no
+   *  extra fields. `since` slices to entries AFTER that entry id (the native
+   *  delta cursor / page resume). The app refetches with `since: leafId` until
+   *  an empty page (design: get_entries backfill paging). This is the
+   *  transcript source — the app reduces the raw entries itself; the extension
+   *  does NOT replay them. An unknown `since` must throw `Entry not found:`
+   *  (pi-faithful error semantics, not a silent restart). */
   getEntries?(since?: string): Promise<GetEntriesResult>;
 }
 

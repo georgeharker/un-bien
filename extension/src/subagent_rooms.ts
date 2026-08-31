@@ -11,6 +11,7 @@ import { roomIdForSession } from "./rooms.js";
 import { loadConfig, resolveRelayUrl } from "./config.js";
 import {
   dispatchRpcCommand,
+  pageEntries,
   type RpcCommandHandlers,
 } from "./session/rpc_inbound.js";
 import {
@@ -606,15 +607,18 @@ export function initSubagentRooms(
       setModel: ro,
       setThinkingLevel: ro,
       getEntries: async (since?: string) => {
+        // PAGED like the root room's handler (design: get_entries backfill
+        // paging) — a lingered child's finished transcript can also exceed a
+        // transport cap in one frame. pi-faithful `since` semantics: unknown
+        // id → `Entry not found` error (dispatch turns a throw into
+        // success:false + error on the response envelope).
         const all = sm.getEntries();
-        const sliced =
-          typeof since === "string"
-            ? (() => {
-                const i = all.findIndex((e) => e.id === since);
-                return i === -1 ? all : all.slice(i + 1);
-              })()
-            : all;
-        return { entries: sliced, leafId: sm.getLeafId() };
+        if (
+          typeof since === "string" &&
+          all.findIndex((e) => e.id === since) === -1
+        )
+          throw new Error(`Entry not found: ${since}`);
+        return pageEntries(all, since, sm.getLeafId());
       },
     };
   }
