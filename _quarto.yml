@@ -7,6 +7,7 @@ project:
     - extension/README.md
     - extension/docs/daemon.md
     - relay/README.md
+    - launcher/README.md
     - docs/design.md
     - DESIGN.md
     - docs/rpc-envelope.md
@@ -71,6 +72,8 @@ website:
         contents:
           - text: "Self-host the relay"
             href: relay/README.md
+          - text: "Machine launcher daemon"
+            href: launcher/README.md
 
 format:
   html:
