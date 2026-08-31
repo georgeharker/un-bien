@@ -239,10 +239,7 @@ impl PeerRegistry {
                 let mut merged = last_meta.clone();
                 for (_, m, _) in v.iter() {
                     for (k, val) in m.extra.iter() {
-                        merged
-                            .extra
-                            .entry(k.clone())
-                            .or_insert_with(|| val.clone());
+                        merged.extra.entry(k.clone()).or_insert_with(|| val.clone());
                     }
                 }
                 by_room.insert(merged.room_id.clone(), merged);
@@ -333,9 +330,7 @@ impl PeerRegistry {
                         if let Some(ref ps) = patch.parent_session_id {
                             meta.extra
                                 .entry("parentSessionId".to_string())
-                                .or_insert_with(|| {
-                                    serde_json::Value::String(ps.clone())
-                                });
+                                .or_insert_with(|| serde_json::Value::String(ps.clone()));
                         }
                     }
                     // All conns at this key carry the same post-patch state
@@ -384,10 +379,7 @@ impl PeerRegistry {
             // Subagent parentage (post-patch, from `extra`) rides along so the
             // app can re-nest a child whose parent was learned late.
             if let Some(p) = &current_parent {
-                meta_obj.insert(
-                    "parent".to_string(),
-                    serde_json::Value::String(p.clone()),
-                );
+                meta_obj.insert("parent".to_string(), serde_json::Value::String(p.clone()));
             }
             if let Some(ps) = &current_parent_session {
                 meta_obj.insert(
@@ -569,7 +561,8 @@ mod tests {
         reg.register(peer.clone(), keeper_meta, tx_keeper).await;
 
         // The out-of-process child joins the SAME room LAST, with no parentage.
-        reg.register(peer.clone(), make_meta("child_room"), tx_child).await;
+        reg.register(peer.clone(), make_meta("child_room"), tx_child)
+            .await;
 
         // Despite the child being last-registered, the keeper's parentage
         // survives the collapse via the extra-union.
