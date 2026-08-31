@@ -200,7 +200,7 @@ it.
   `{ sessionId, parentSessionId }` — **`parentSessionId` is REQUIRED for
   nesting** (design 01M1CAW0): a marker without it creates the room **without
   a parent** (a top-level orphan + a loud `marker without parent — not
-  guessing` log), awaiting a parent-bearing re-marker. The previous
+guessing` log), awaiting a parent-bearing re-marker. The previous
   receiver-root fallback ("the parent link falls back to the root's session id
   when omitted") is **REMOVED** — it silently bound children to whatever
   process received the marker, which was the phantom-parent vector. A spawner
