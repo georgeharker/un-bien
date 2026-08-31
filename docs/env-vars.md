@@ -5,7 +5,7 @@ All knobs, one page. Status marks: **live** = honored by the running code,
 
 ## State & location
 
-### `UNBIEN_STATE_DIR` *(landing — design 01M1CB6Q)*
+### `UNBIEN_STATE_DIR` _(landing — design 01M1CB6Q)_
 
 The state root for everything that is **not config**: the extension's logs
 (`envelope-debug.log`, `panel-bridge.log`), locks, sessions dir, deployed
@@ -23,19 +23,19 @@ Config is intentionally NOT here — it stays at
 below). A one-time migration moves old `~/.pi/un-bien` contents into the
 resolved root (move-old-if-new-absent; never throws; `peers.json` carried).
 
-### `UNBIEN_DIR` *(live, legacy)*
+### `UNBIEN_DIR` _(live, legacy)_
 
 Absolute override of the state dir itself (pre-`UNBIEN_STATE_DIR` knob, kept
 for the test suites). Lower precedence than `UNBIEN_STATE_DIR`.
 
-### `UNBIEN_HOME` *(live, legacy)*
+### `UNBIEN_HOME` _(live, legacy)_
 
 Stand-in `$HOME`; state lives at `<UNBIEN_HOME>/.pi/un-bien`. Long-standing
 test/override knob; lowest precedence of the three.
 
 ## Relay
 
-### `UNBIEN_MESH_DB_PATH` *(live)*
+### `UNBIEN_MESH_DB_PATH` _(live)_
 
 Direct override for the relay's room-state database path — wins over
 everything, including the state-root derivation. Before the state-dir change
@@ -43,17 +43,17 @@ the default was **CWD-relative** `data/mesh.db` (the relay's DB location was
 an accident of its launch directory — three stray `mesh.db` files existed on
 disk because of it); the new default derives from the state root.
 
-### `UNBIEN_RELAY_PORT` *(live)*
+### `UNBIEN_RELAY_PORT` _(live)_
 
 Relay listen port. Default: `3000`.
 
-### `RELAY_MAX_CT_MIB` *(live)*
+### `RELAY_MAX_CT_MIB` _(live)_
 
 Outer-envelope ciphertext cap, in MiB, enforced by the relay on WS frames.
 Default: `4`. Raise only with reason — it is the transport's frame ceiling
 (see also the get_entries paging budget, which keeps replies well under it).
 
-### `UNBIEN_RELAY` *(live)*
+### `UNBIEN_RELAY` _(live)_
 
 Relay URL override for the extension (highest precedence over the config
 file's `relay` field; used for dev and network moves — e.g. pointing at a
@@ -61,20 +61,20 @@ tailscale address).
 
 ## Extension mode flags
 
-### `UNBIEN_DAEMON` *(live)*
+### `UNBIEN_DAEMON` _(live)_
 
 `1` = daemon-mode init: the extension always auto-inits (used by spawned
 daemon processes; interactive sessions gate auto-init on a local config
 already existing).
 
-### `UNBIEN_DIRECT_CONFIG` *(live)*
+### `UNBIEN_DIRECT_CONFIG` _(live)_
 
 Signals that a direct config is present at `process.cwd()` (set by the
 supervisor for daemon processes).
 
 ## Adopted from pi
 
-### `PI_CODING_AGENT_DIR` *(pi's own)*
+### `PI_CODING_AGENT_DIR` _(pi's own)_
 
 Determines the config tree; un-bien's config lives at
 `<PI_CODING_AGENT_DIR>/extensions/un-bien.json`. Un-bien does not move config
@@ -86,11 +86,13 @@ into the state root by design.
 - `UNBIEN_MCP_CWD`, `UNBIEN_MCP_NAME` — mesh MCP server context injection.
 - `UNBIEN_RECEIVED_IMAGE_TYPE` — received-image type tag plumbing.
 - `RELAY_ID_RE`, `RELAY_RECONNECT_BACKOFFS_MS` — relay test fixtures.
-- `UNBIEN_ALLOW_FILE_IDENTITY` — ⚠️ **known footgun.** Currently unread by
-  production code (tests only) yet exported in some shells; on 2026-08-29 it
-  combined with a transient Keychain lock to silently mint a NEW machine
-  identity, producing stale pairing + connection flaps that looked like a code
-  regression. If you find it exported, remove it.
+- `UNBIEN_ALLOW_FILE_IDENTITY` — ❌ **REMOVED from un-bien** (see
+  `docs/identity.md`): the fail-loud identity-resolver redesign deleted it;
+  nothing reads it. Its old silent fallback to a file identity caused the
+  2026-08-29 phantom-identity incident (transient Keychain lock → new machine
+  identity minted → stale pairing + connection flaps). The headless use case
+  it served is now config: `"identity": { "storage": "file" }` in
+  `un-bien.json`. If you find it exported anywhere, delete it.
 
 ## Related designs
 
