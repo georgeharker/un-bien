@@ -144,4 +144,8 @@ export interface CommandDeps {
   ): void
   /** Queue an inbound mesh message for agent delivery. */
   deliverMeshMessageToAgent(env: Envelope): void
+  /** Reads peers.json and refreshes the global-pairings cache + footer. */
+  refreshPairingsCache(): void
+  /** Tear down a connected owner's channel (revoke / disconnect). */
+  detachPeerChannel(appPeerId: string): void
 }
