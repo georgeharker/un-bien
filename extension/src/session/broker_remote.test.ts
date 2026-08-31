@@ -1934,9 +1934,7 @@ describe("BrokerRemote canonical topology and receiver-local routing", () => {
     )
 
     const grouped = br.getAllRemote()
-    expect(Object.hasOwn(grouped, "__proto__")).toBe(
-      true,
-    )
+    expect(Object.hasOwn(grouped, "__proto__")).toBe(true)
     expect(grouped["__proto__"]).toEqual(["remote"])
     expect(Object.getPrototypeOf(grouped)).toBe(Object.prototype)
   })
