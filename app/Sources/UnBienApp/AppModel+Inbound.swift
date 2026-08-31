@@ -115,6 +115,24 @@ extension AppModel {
             forSession[panelKey] = PanelState(key: panelKey, title: title, icon: icon,
                                               data: data, changed: !wasOpen)
             panels[key] = forSession
+            // Subagents panel rows carry each child's live status (meta.sessionId)
+            // — fold it into the child LiveSessions so the HOME status chip
+            // updates live. The session_info pull only fires on room announce /
+            // reconnect, so without this the chip sticks on running until then.
+            if panelKey == "subagents" {
+                var updates: [String: String] = [:]  // LiveSession key -> status
+                for item in data["items"]?.arrayValue ?? [] {
+                    guard let sid = item["meta"]?["sessionId"]?.stringValue,
+                          let status = item["status"]?.stringValue else { continue }
+                    for (k, s) in sessions
+                    where s.sessionID == sid && s.relayID == relayID && s.peerEPK == peer {
+                        updates[k] = status
+                    }
+                }
+                for (k, status) in updates {
+                    sessions[k]?.status = status
+                }
+            }
         default:
             break
         }
