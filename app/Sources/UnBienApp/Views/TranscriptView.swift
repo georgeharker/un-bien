@@ -33,6 +33,12 @@ struct TranscriptView: View {
 
     /// Restore runs once per view lifetime, after items first populate.
     @State private var didRestoreScroll = false
+    /// Pending second-pass re-anchor (design 01M1B9F6 follow-up): the restore
+    /// scrollTo computes against ESTIMATED geometry for a not-yet-materialized
+    /// lazy row and can land top-of-box instead of bottom-of-box. Set at
+    /// restore; consumed in `reanchorIfNeeded(proxy:)` once the target row
+    /// actually renders (real height), or cleared if it leaves items.
+    @State private var reanchorTarget: String?
     /// Currently-materialized row ids (LazyVStack onAppear/onDisappear) — the
     /// capture source for scroll memory (design 01M1B9F6): the bottom-most
     /// visible row is approximately the highest-index materialized row (may
@@ -65,6 +71,23 @@ struct TranscriptView: View {
         guard let bottom = items.lastIndex(where: { materializedIDs.contains($0.id) }) else { return }
         if let anchor = items.stableAnchor(atOrAbove: bottom) {
             model.rememberScroll(id: anchor, session: session)
+        }
+    }
+
+    /// Second-pass re-anchor: when the restore target row materializes (its id
+    /// enters the materialized set — real height, not an estimate), issue the
+    /// scrollTo ONE more time so the anchor lands on true geometry. Self-resolves
+    /// within a frame or two of the restore; cleared when the target leaves
+    /// items so it can never fire late and fight the user.
+    private func reanchorIfNeeded(proxy: ScrollViewProxy) {
+        guard let target = reanchorTarget else { return }
+        guard items.contains(where: { $0.id == target }) else {
+            reanchorTarget = nil
+            return
+        }
+        if materializedIDs.contains(target) {
+            reanchorTarget = nil
+            proxy.scrollTo(target, anchor: .bottom)
         }
     }
 
@@ -116,6 +139,10 @@ struct TranscriptView: View {
                         if let remembered = model.rememberedScroll(session: session),
                            items.contains(where: { $0.id == remembered }) {
                             proxy.scrollTo(remembered, anchor: .bottom)
+                            // The scrollTo above runs on ESTIMATED geometry for a
+                            // far-down, not-yet-materialized row; re-anchor on the
+                            // materialized pass (reanchorIfNeeded).
+                            reanchorTarget = remembered
                             // The sentinel never appeared before this programmatic
                             // scroll; sync the auto-follow gate so a mid-transcript
                             // restore isn't immediately yanked down by the next
@@ -123,6 +150,7 @@ struct TranscriptView: View {
                             atBottom = remembered == items.last?.id
                         } else if let last = items.last {
                             proxy.scrollTo(last.id, anchor: .bottom)
+                            reanchorTarget = last.id
                             atBottom = true
                         }
                     } else if atBottom, let last = items.last {
@@ -132,8 +160,12 @@ struct TranscriptView: View {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
                 }
-                // Capture: remember the bottom-most visible row (design 01M1B9F6).
-                .onChange(of: materializedIDs) { _, _ in rememberVisibleAnchor() }
+                // Capture: remember the bottom-most visible row (design 01M1B9F6);
+                // consume a pending restore re-anchor when its row materializes.
+                .onChange(of: materializedIDs) { _, _ in
+                    rememberVisibleAnchor()
+                    reanchorIfNeeded(proxy: proxy)
+                }
                 .onPreferenceChange(SentinelMinYKey.self) { minY in
                     // Pinned: the content's end sits at (or within a small slack
                     // of) the viewport's bottom edge.
@@ -441,7 +473,9 @@ private struct ComposerBar: View {
 /// (render-on-need). Equality is (item, themeID, typography): a theme/font
 /// change still re-renders (themeID/typography differ); a sibling row changing
 /// does not. NOTE: scroll/visual correctness needs on-device verification.
-private struct TranscriptRow: View, Equatable {
+/// (Internal — not private — so the extracted TranscriptPerfPreview harness and
+/// previews can reuse the exact live rendering.)
+struct TranscriptRow: View, Equatable {
     let item: TranscriptItem
     let themeID: ThemeID
     let theme: AppTheme
@@ -921,52 +955,3 @@ private extension JSONValue {
         return ""
     }
 }
-
-#if DEBUG
-/// Scroll-perf harness: a large synthetic transcript rendered exactly as the
-/// live view (TranscriptRow + .equatable() in a LazyVStack), so scroll can be
-/// profiled in Xcode / the simulator BEFORE the protocol data-feed exists.
-private struct TranscriptPerfPreview: View {
-    private let theme = ThemeID.tokyoNight.theme
-    private let typography = Typography()
-    private let items: [TranscriptItem]
-
-    init() {
-        items = (0..<400).map { index in
-            switch index % 4 {
-            case 0:
-                return .user(UserBubble(id: "u\(index)", text: "Question \(index): how do I do the thing?"))
-            case 1:
-                return .assistant(AssistantBubble(
-                    id: "a\(index)", inReplyTo: "u\(index - 1)",
-                    text: "Answer \(index): some **markdown** plus code.\n\n```swift\nlet value = \(index)\nprint(value)\n```\n",
-                    streaming: false))
-            case 2:
-                return .tool(ToolCard(
-                    toolCallID: "t\(index)", tool: "bash",
-                    args: ["command": .string("echo \(index)")],
-                    result: .string("output line \(index)"), state: .ok))
-            default:
-                return .reasoning(ReasoningBlock(id: "r\(index)", text: "Considering approach \(index)\u{2026}", streaming: false))
-            }
-        }
-    }
-
-    var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12) {
-                ForEach(items) { item in
-                    TranscriptRow(item: item, themeID: .tokyoNight, theme: theme,
-                                  typography: typography, expandRich: true, hideInputRich: true)
-                        .equatable()
-                        .id(item.id)
-                }
-            }
-            .padding()
-        }
-        .background(theme.background)
-    }
-}
-
-#Preview("Transcript scroll perf") { TranscriptPerfPreview() }
-#endif
