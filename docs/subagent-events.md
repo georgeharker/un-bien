@@ -197,11 +197,18 @@ it.
 
 - **EARLY — gotgenes + out-of-process** (parent known at _creation_). The child
   marker (`subagents:child:session-created` / `unbien:subagent:child`) carries
-  `{ sessionId, parentSessionId? }` — the parent link falls back to the root's
-  session id when omitted — so the room is **created with the parent-child
+  `{ sessionId, parentSessionId }` — **`parentSessionId` is REQUIRED for
+  nesting** (design 01M1CAW0): a marker without it creates the room **without
+  a parent** (a top-level orphan + a loud `marker without parent — not
+  guessing` log), awaiting a parent-bearing re-marker. The previous
+  receiver-root fallback ("the parent link falls back to the root's session id
+  when omitted") is **REMOVED** — it silently bound children to whatever
+  process received the marker, which was the phantom-parent vector. A spawner
+  that learns the parent LATE must re-emit the marker with `parentSessionId`
+  (it funnels through the same idempotent `ensureChildRoom` → `setParent`).
+  When the marker carries it, the room is **created with the parent-child
   relationship already set** in its connect `room_meta` → `room_announced`
-  (first-conn) carries it → the app nests immediately. This is the design; do not
-  remove it.
+  (first-conn) carries it → the app nests immediately.
 - **LATE — tintinweb / in-process** (no marker → no room until attach). tintinweb
   gives no early child id, so the room first exists at the child's `session_start`;
   the parent link stamped there is the ROOT's session id (`getParentSessionId()`)
@@ -229,7 +236,9 @@ completion — create can occur late.
 ### The rule, restated
 
 - **Marker given → respected** (authoritative; supersedes arrival-order
-  correlation; the only signal for out-of-process children).
+  correlation; the only signal for out-of-process children). A parent-less
+  marker is a deliberate top-level orphan until a parent-bearing re-marker
+  (design 01M1CAW0 — never guessed).
 - **In-process → auto-detected** (Regime A stays the default, no cooperation
   needed).
 - **Different process → include the child id** in the marker, or un-bien cannot
