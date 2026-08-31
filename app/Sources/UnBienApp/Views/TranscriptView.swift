@@ -167,6 +167,7 @@ struct TranscriptView: View {
     var body: some View {
         VStack(spacing: 0) {
             if model.hasEnded(session) { endedBanner }
+            if model.isDemo(session) { demoBanner }
             statusStrip
             ScrollViewReader { proxy in
                 ScrollView {
@@ -446,6 +447,21 @@ struct TranscriptView: View {
         .padding(.horizontal, 12).padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(theme.secondaryText)
+    }
+
+    /// Demo-mode banner (AppModel+Demo): honest labeling so the canned
+    /// transcript reads as "the app works", never as a live session.
+    private var demoBanner: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "theatermasks.fill")
+            Text("Demo data — canned transcript, read-only")
+            Spacer(minLength: 0)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(theme.background)
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(theme.accent)
     }
 
     @ViewBuilder

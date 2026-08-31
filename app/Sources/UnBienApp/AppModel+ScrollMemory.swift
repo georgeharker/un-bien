@@ -28,6 +28,10 @@ extension AppModel {
     /// Record the bottom-most visible STABLE row id as the user scrolls
     /// (design 01M1B9F6).
     public func rememberScroll(id: String, session: LiveSession) {
+        // Demo sessions never persist scroll memory (their ids are stable
+        // across launches — a demo anchor would shadow nothing and pollute
+        // the store).
+        guard !isDemo(session) else { return }
         guard lastViewedScroll[session.id] != id else { return }
         lastViewedScroll[session.id] = id
     }

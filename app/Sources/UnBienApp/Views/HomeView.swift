@@ -145,11 +145,15 @@ struct HomeView: View {
                     }
                     // Relay config (edit URL/name + remove) lives one level in,
                     // in the settings sheet — keeps the row calm and the
-                    // destructive delete off the row.
-                    Button {
-                        settingsRelay = relay
-                    } label: {
-                        Label("Relay settings", systemImage: "gearshape")
+                    // destructive delete off the row. Neither button applies to
+                    // the transient DEMO relay (nothing to pair against; removal
+                    // is the Settings toggle's job).
+                    if relay.id != AppModel.demoRelayID {
+                        Button {
+                            settingsRelay = relay
+                        } label: {
+                            Label("Relay settings", systemImage: "gearshape")
+                        }
                     }
                 } header: {
                     RelayHeader(relay: relay, health: model.relayHealth[relay.id] ?? .offline)

@@ -11,6 +11,9 @@ extension AppModel {
     // MARK: - Relays
 
     public func addRelay(name: String, url: String) async {
+        // The first REAL relay turns demo mode off (default-off once a relay
+        // exists; re-enable any time from Settings).
+        if demoMode { setDemoMode(false) }
         let relay = RelayConfig(name: name, url: url)
         mesh.addRelay(relay)
         await connect(relay)
@@ -41,7 +44,10 @@ extension AppModel {
     }
 
     func connectAll() async {
-        for relay in mesh.config.relays { await connect(relay) }
+        // The demo relay is in-memory fixture playback — never a socket.
+        for relay in mesh.config.relays where relay.id != Self.demoRelayID {
+            await connect(relay)
+        }
     }
 
     /// Home drag-to-refresh: re-request the rooms snapshot on every connected

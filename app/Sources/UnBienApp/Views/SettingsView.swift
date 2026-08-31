@@ -23,6 +23,7 @@ struct SettingsView: View {
                 typographySection
                 transcriptSection
                 subagentsSection
+                demoSection
                 machinesSection
                 performanceSection
                 syncSection
@@ -170,13 +171,35 @@ struct SettingsView: View {
         }
     }
 
+    /// Demo mode (App Store reviewability): canned fixture sessions under a
+    /// transient demo relay — on by default until the first real relay is
+    /// added, re-enable here. Read-only by design.
+    private var demoSection: some View {
+        Section {
+            Toggle("Demo mode", isOn: Binding(
+                get: { model.demoMode },
+                set: { model.setDemoMode($0) }
+            ))
+        } header: {
+            Text("Demo")
+        } footer: {
+            Text("Canned sessions replayed from recorded transcript fixtures — no relay or machine needed, and the transcript is read-only. On by default until you add a relay.")
+        }
+    }
+
     private var machinesSection: some View {
         Section {
             Toggle("Hide launch chip until daemon is up", isOn: $hideChipUntilDaemonUp)
         } header: {
             Text("Machine launch")
         } footer: {
-            Text("The launch chip starts a new session on a machine via its presence daemon (the machine and its sessions are always shown regardless). When on, the chip stays hidden until that machine's daemon is confirmed up. When off, machines show a “searching…” chip while the daemon is located, then the launch.")
+            Text("""
+            The launch chip starts a new session on a machine via its presence \
+            daemon (the machine and its sessions are always shown regardless). \
+            When on, the chip stays hidden until that machine's daemon is \
+            confirmed up. When off, machines show a “searching…” chip while the \
+            daemon is located, then the launch.
+            """)
         }
     }
 

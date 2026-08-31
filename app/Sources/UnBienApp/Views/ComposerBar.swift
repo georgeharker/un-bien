@@ -18,6 +18,9 @@ struct ComposerBar: View {
 
     private var trimmed: String { draft.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var ended: Bool { model.hasEnded(session) }
+    /// Demo sessions are fixture playback — read-only (design 01M1CGET…).
+    private var demo: Bool { model.isDemo(session) }
+    private var locked: Bool { ended || demo }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -28,12 +31,14 @@ struct ComposerBar: View {
                     Image(systemName: "stop.circle.fill").font(.title2)
                 }
             }
-            MessageComposer(text: $draft, placeholder: ended ? "Session ended" : "Message",
+            MessageComposer(text: $draft,
+                            placeholder: ended ? "Session ended"
+                                         : demo ? "Demo transcript — read-only" : "Message",
                             font: typography.monoPlatformFont(size: typography.bodySize),
                             onSend: send)
                 .padding(.horizontal, 6)
                 .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
-                .disabled(ended)
+                .disabled(locked)
             Button {
                 guard !trimmed.isEmpty else { return }
                 let text = trimmed
@@ -43,11 +48,11 @@ struct ComposerBar: View {
             } label: {
                 Image(systemName: "tray.and.arrow.down").font(.title3)
             }
-            .disabled(trimmed.isEmpty || ended)
+            .disabled(trimmed.isEmpty || locked)
             Button(action: send) {
                 Image(systemName: "arrow.up.circle.fill").font(.title2)
             }
-            .disabled(trimmed.isEmpty || ended)
+            .disabled(trimmed.isEmpty || locked)
         }
         .padding(10)
         .background(theme.background)

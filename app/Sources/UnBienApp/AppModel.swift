@@ -105,6 +105,14 @@ public final class AppModel: ObservableObject {
     @Published public var subagentsInteractive: Bool {
         didSet { UserDefaults.standard.set(subagentsInteractive, forKey: Self.subagentsInteractiveKey) }
     }
+    /// Demo mode (App Store reviewability, design 01M1CGET…): canned fixture
+    /// sessions + a transient demo relay, read-only. DEFAULTS ON when no relay
+    /// has ever been added (fresh install / App Review reviewer), turns OFF
+    /// automatically when the first real relay is added; re-enable from
+    /// Settings. Driver: AppModel+Demo.
+    @Published public var demoMode: Bool = false {
+        didSet { UserDefaults.standard.set(demoMode, forKey: Self.demoModeKey) }
+    }
 
     /// The active theme palette for the selected `themeID`.
     public var theme: AppTheme { themeID.theme }
@@ -157,6 +165,10 @@ public final class AppModel: ObservableObject {
     private static let showSubagentsKey = "com.georgeharker.un-bien.show-subagents-home"
     private static let subagentsInteractiveKey = "com.georgeharker.un-bien.subagents-interactive"
     static let lastViewedScrollKey = "com.georgeharker.un-bien.last-viewed-scroll"
+    /// The demo mesh's transient relay id (AppModel+Demo). Hex-stable so the
+    /// session-id namespace is deterministic across launches.
+    public static let demoRelayID = UUID(uuidString: "D3A0DE00-0000-4000-8000-000000000001")!
+    private static let demoModeKey = "com.georgeharker.un-bien.demo-mode"
     /// Backstop grace for an UNCONSUMED optimistic queued chip (design 01M158S7).
     /// Long by design: consumption (user message_end) is the primary clear, so
     /// this only catches truly-stuck chips (text-normalization miss / dropped
@@ -192,6 +204,12 @@ public final class AppModel: ObservableObject {
         }
         self.identityStore = identityStore
             ?? KeychainOwnerIdentityStore(syncsToICloud: syncOn)
+        // Demo default: ON only for a relay-less (fresh) install; an explicit
+        // Settings choice persists and wins from then on. Runs AFTER full
+        // initialization (loadDemoSessions touches published state).
+        self.demoMode = (UserDefaults.standard.object(forKey: Self.demoModeKey) as? Bool)
+            ?? mesh.config.relays.isEmpty
+        if demoMode { loadDemoSessions() }
     }
 
     // MARK: - Onboarding / identity
@@ -260,6 +278,7 @@ public final class AppModel: ObservableObject {
     }
 
     public func sendMessage(_ text: String, to session: LiveSession) async {
+        guard !isDemo(session) else { return }  // read-only fixture playback
         guard !hasEnded(session) else { return }
         guard let connection = connections[session.relayID] else { return }
         // Busy -> this STEERS into the running turn (pi holds it in the steering
