@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
-import { realpathSync } from "node:fs";
-import { defaultAgentName } from "./session/local_config.js";
+import { createHash } from "node:crypto"
+import { realpathSync } from "node:fs"
+import { defaultAgentName } from "./session/local_config.js"
 
 /**
  * Deterministic room id derived from a cwd. Two Pi processes in the same
@@ -11,14 +11,14 @@ import { defaultAgentName } from "./session/local_config.js";
  * Format: first 12 chars of base64url(sha256(realpath)).
  */
 export function roomIdForCwd(cwd: string): string {
-  let target: string;
+  let target: string
   try {
-    target = realpathSync(cwd);
+    target = realpathSync(cwd)
   } catch {
     // cwd doesn't exist (unlikely in production) — fallback to raw path.
-    target = cwd;
+    target = cwd
   }
-  return createHash("sha256").update(target).digest("base64url").slice(0, 12);
+  return createHash("sha256").update(target).digest("base64url").slice(0, 12)
 }
 
 /**
@@ -34,10 +34,7 @@ export function roomIdForCwd(cwd: string): string {
  * keeps the raw session id off the wire.
  */
 export function roomIdForSession(sessionId: string): string {
-  return createHash("sha256")
-    .update(sessionId)
-    .digest("base64url")
-    .slice(0, 12);
+  return createHash("sha256").update(sessionId).digest("base64url").slice(0, 12)
 }
 
 /**
@@ -60,20 +57,20 @@ export function roomIdForSession(sessionId: string): string {
  * Pi never announces.
  */
 export function roomIdFor(cwd: string, name?: string): string {
-  if (!name || name === defaultAgentName(cwd)) return roomIdForCwd(cwd);
-  let target: string;
+  if (!name || name === defaultAgentName(cwd)) return roomIdForCwd(cwd)
+  let target: string
   try {
-    target = realpathSync(cwd);
+    target = realpathSync(cwd)
   } catch {
-    target = cwd;
+    target = cwd
   }
   // NUL separator (U+0000): impossible in a POSIX path and stripped from any
   // sanitized name, so the cwd/name boundary is unambiguous.
-  const sep = String.fromCharCode(0);
+  const sep = String.fromCharCode(0)
   return createHash("sha256")
     .update(target + sep + name)
     .digest("base64url")
-    .slice(0, 12);
+    .slice(0, 12)
 }
 
 /**
@@ -92,9 +89,9 @@ export function roomIdFor(cwd: string, name?: string): string {
  * Stable across restarts. 12-char `base64url(sha256("\0control\0" + epk))`.
  */
 export function roomIdForControl(epk: string): string {
-  const sep = String.fromCharCode(0);
+  const sep = String.fromCharCode(0)
   return createHash("sha256")
     .update(sep + "control" + sep + epk)
     .digest("base64url")
-    .slice(0, 12);
+    .slice(0, 12)
 }

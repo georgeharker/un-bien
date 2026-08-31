@@ -1,11 +1,11 @@
-import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
-import { ipcAddress, usesNamedPipe } from "./ipc.js";
-import { unbienStateHome } from "../paths.js";
+import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs"
+import { join } from "node:path"
+import { ipcAddress, usesNamedPipe } from "./ipc.js"
+import { unbienStateHome } from "../paths.js"
 
-const HOME_PI_REMOTE = unbienStateHome();
-const SESSIONS_DIR = join(HOME_PI_REMOTE, "sessions");
-const SKILLS_DIR = join(HOME_PI_REMOTE, "skills");
+const HOME_PI_REMOTE = unbienStateHome()
+const SESSIONS_DIR = join(HOME_PI_REMOTE, "sessions")
+const SKILLS_DIR = join(HOME_PI_REMOTE, "skills")
 /**
  * Fixed UDS session name. The local mesh is single per machine — every Pi
  * process on the host shares this broker. Previous versions exposed
@@ -14,12 +14,12 @@ const SKILLS_DIR = join(HOME_PI_REMOTE, "skills");
  * every install converged on one session anyway and multi-session UX added
  * friction without value.
  */
-export const LOCAL_SESSION_NAME = "local";
+export const LOCAL_SESSION_NAME = "local"
 
 /** Ensures the new subdirs exist inside the existing ~/.pi/un-bien/. */
 export function ensureGlobalDirs(): void {
-  mkdirSync(SESSIONS_DIR, { recursive: true });
-  mkdirSync(SKILLS_DIR, { recursive: true });
+  mkdirSync(SESSIONS_DIR, { recursive: true })
+  mkdirSync(SKILLS_DIR, { recursive: true })
 }
 
 /**
@@ -28,40 +28,40 @@ export function ensureGlobalDirs(): void {
  * both the same; only the address string differs.
  */
 export function sessionSockPath(name: string): string {
-  return ipcAddress(`broker-${name}`, join(SESSIONS_DIR, name, "broker.sock"));
+  return ipcAddress(`broker-${name}`, join(SESSIONS_DIR, name, "broker.sock"))
 }
 
 /** Path to the audit log for a named session. */
 export function sessionAuditPath(name: string): string {
-  return join(SESSIONS_DIR, name, "audit.jsonl");
+  return join(SESSIONS_DIR, name, "audit.jsonl")
 }
 
 /** Path to the session metadata JSON. */
 export function sessionMetaPath(name: string): string {
-  return join(SESSIONS_DIR, name, "session.json");
+  return join(SESSIONS_DIR, name, "session.json")
 }
 
 export function sessionsDir(): string {
-  return SESSIONS_DIR;
+  return SESSIONS_DIR
 }
 
 export function skillsDir(): string {
-  return SKILLS_DIR;
+  return SKILLS_DIR
 }
 
 /** Lists discovered session names from disk. */
 export function listSessions(): string[] {
-  ensureGlobalDirs();
+  ensureGlobalDirs()
   try {
     return readdirSync(SESSIONS_DIR).filter((entry) => {
       try {
-        return statSync(join(SESSIONS_DIR, entry)).isDirectory();
+        return statSync(join(SESSIONS_DIR, entry)).isDirectory()
       } catch {
-        return false;
+        return false
       }
-    });
+    })
   } catch {
-    return [];
+    return []
   }
 }
 
@@ -73,6 +73,6 @@ export function listSessions(): string[] {
  * legacy `session/wizard.ts` consumes this.
  */
 export function sessionHasSock(name: string): boolean {
-  if (usesNamedPipe()) return false;
-  return existsSync(sessionSockPath(name));
+  if (usesNamedPipe()) return false
+  return existsSync(sessionSockPath(name))
 }

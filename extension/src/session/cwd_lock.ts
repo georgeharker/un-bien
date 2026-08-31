@@ -1,10 +1,10 @@
-import { mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
-import type { Server } from "node:net";
-import { roomIdFor } from "../rooms.js";
-import { removeStaleSock, tryBind, tryConnect } from "./leader_election.js";
-import { ipcAddress, usesNamedPipe } from "./ipc.js";
-import { unbienStateHome } from "../paths.js";
+import { mkdirSync } from "node:fs"
+import { dirname, join } from "node:path"
+import type { Server } from "node:net"
+import { roomIdFor } from "../rooms.js"
+import { removeStaleSock, tryBind, tryConnect } from "./leader_election.js"
+import { ipcAddress, usesNamedPipe } from "./ipc.js"
+import { unbienStateHome } from "../paths.js"
 
 /**
  * Per-cwd singleton lock for `/unbien`. At most one Pi process per
@@ -36,22 +36,22 @@ import { unbienStateHome } from "../paths.js";
  *  dir away from the developer's real `~/.pi/un-bien/locks` via
  *  `UNBIEN_DIR` / `UNBIEN_HOME` — the shared override every site honors. */
 function locksDir(): string {
-  return join(unbienStateHome(), "locks");
+  return join(unbienStateHome(), "locks")
 }
 
 export interface AcquiredLock {
-  ok: true;
+  ok: true
   /** Manual release. Optional — process exit cleans up too. */
-  release(): void;
+  release(): void
 }
 
 export interface RefusedLock {
-  ok: false;
+  ok: false
   /** Where the live lock socket lives, in case the caller wants to log it. */
-  lockPath: string;
+  lockPath: string
 }
 
-export type CwdLockResult = AcquiredLock | RefusedLock;
+export type CwdLockResult = AcquiredLock | RefusedLock
 
 /**
  * Lock id for an agent. Keyed by **(cwd, name)** so several agents can run in
@@ -66,7 +66,7 @@ export type CwdLockResult = AcquiredLock | RefusedLock;
  * `roomIdFor`.
  */
 function lockIdFor(cwd: string, name?: string): string {
-  return roomIdFor(cwd, name);
+  return roomIdFor(cwd, name)
 }
 
 /**
@@ -74,13 +74,13 @@ function lockIdFor(cwd: string, name?: string): string {
  * POSIX → a `.sock` file under `locksDir()`; Windows → a per-user named pipe.
  */
 export function lockPathFor(cwd: string, name?: string): string {
-  const id = lockIdFor(cwd, name);
-  return ipcAddress(`lock-${id}`, join(locksDir(), `${id}.sock`));
+  const id = lockIdFor(cwd, name)
+  return ipcAddress(`lock-${id}`, join(locksDir(), `${id}.sock`))
 }
 
 /** Back-compat alias: the cwd-only lock path (no name component). */
 export function lockPathForCwd(cwd: string): string {
-  return lockPathFor(cwd);
+  return lockPathFor(cwd)
 }
 
 /**
@@ -101,49 +101,49 @@ export async function acquireCwdLock(
   cwd: string,
   name?: string,
 ): Promise<CwdLockResult> {
-  const lockPath = lockPathFor(cwd, name);
+  const lockPath = lockPathFor(cwd, name)
   // POSIX: the lock socket is a file under locksDir → ensure the dir exists.
   // Windows: lockPath is a named pipe (`\\.\pipe\…`) — no parent dir to create.
-  if (!usesNamedPipe()) mkdirSync(dirname(lockPath), { recursive: true });
+  if (!usesNamedPipe()) mkdirSync(dirname(lockPath), { recursive: true })
 
   // First attempt: bind directly.
-  let server: Server | null = await tryBind(lockPath);
-  if (server) return _acquired(server, lockPath);
+  let server: Server | null = await tryBind(lockPath)
+  if (server) return _acquired(server, lockPath)
 
   // Bind failed — check whether the existing socket has a live listener.
-  const probe = await tryConnect(lockPath);
+  const probe = await tryConnect(lockPath)
   if (probe) {
-    probe.destroy();
-    return { ok: false, lockPath };
+    probe.destroy()
+    return { ok: false, lockPath }
   }
 
   // POSIX: a leftover stale `.sock` file blocks the bind → clean it + retry.
   // Windows: a named pipe auto-disappears when its owner exits, so there is
   // never a stale pipe to remove.
-  if (!usesNamedPipe()) removeStaleSock(lockPath);
-  server = await tryBind(lockPath);
-  if (server) return _acquired(server, lockPath);
+  if (!usesNamedPipe()) removeStaleSock(lockPath)
+  server = await tryBind(lockPath)
+  if (server) return _acquired(server, lockPath)
 
   // Race: someone else bound between our unlink and retry. Treat as held.
-  return { ok: false, lockPath };
+  return { ok: false, lockPath }
 }
 
 function _acquired(server: Server, _lockPath: string): AcquiredLock {
-  let released = false;
+  let released = false
   // Don't keep the event loop alive just to hold the socket — the Pi
   // process has its own reasons to stay up (relay WS, broker, etc.).
   // When those are gone, the OS will tear the socket down with us.
-  server.unref();
+  server.unref()
   return {
     ok: true,
     release: () => {
-      if (released) return;
-      released = true;
+      if (released) return
+      released = true
       try {
-        server.close();
+        server.close()
       } catch {
         /* ignored */
       }
     },
-  };
+  }
 }

@@ -1,5 +1,5 @@
-import type { Socket } from "node:net";
-import { setTimeout as delay } from "node:timers/promises";
+import type { Socket } from "node:net"
+import { setTimeout as delay } from "node:timers/promises"
 import {
   type Envelope,
   type TransportErrorReason,
@@ -9,9 +9,9 @@ import {
   parse,
   serialize,
   EnvelopeError,
-} from "./envelope.js";
-import { joinOrLead, type ElectionResult } from "./leader_election.js";
-import { Broker } from "./broker.js";
+} from "./envelope.js"
+import { joinOrLead, type ElectionResult } from "./leader_election.js"
+import { Broker } from "./broker.js"
 
 /**
  * Symmetric peer-in-session API. Hides whether you are leader or follower;
@@ -22,12 +22,12 @@ import { Broker } from "./broker.js";
  * Failover: when the leader dies, follower socket emits `close`. Remaining
  * peers re-run `joinOrLead`. One becomes the new leader; others reconnect.
  */
-export type MessageHandler = (env: Envelope) => void;
-export type ReconnectHandler = () => void;
+export type MessageHandler = (env: Envelope) => void
+export type ReconnectHandler = () => void
 
 export interface SessionPeerOptions {
-  sockPath: string;
-  name: string;
+  sockPath: string
+  name: string
   /**
    * Working directory of this agent. Sent in the `register` so the broker can
    * key peers by the (cwd, name) pair: two agents in the SAME folder with the
@@ -35,30 +35,30 @@ export interface SessionPeerOptions {
    * restart), so the broker take-over the name instead of suffixing `#N`.
    * Optional for backward-compat with peers that predate this field.
    */
-  cwd?: string;
+  cwd?: string
   /** Replace an existing same-(cwd,name) registration instead of accepting a
    *  broker-assigned `#N`. Use only for stable logical identities; ordinary
    *  multi-agent sessions should leave this false. */
-  takeoverExisting?: boolean;
-  auditPath?: string;
+  takeoverExisting?: boolean
+  auditPath?: string
   /** Per-request default timeout (ms). Override per call if needed. */
-  defaultTimeoutMs?: number;
+  defaultTimeoutMs?: number
 }
 
-const DEFAULT_TIMEOUT_MS = 30_000;
-const ACK_TIMEOUT_MS = 5_000;
-const FAILOVER_RETRY_MS = 100;
+const DEFAULT_TIMEOUT_MS = 30_000
+const ACK_TIMEOUT_MS = 5_000
+const FAILOVER_RETRY_MS = 100
 
-export type AckStatus = "received" | "busy" | "denied" | "timeout";
+export type AckStatus = "received" | "busy" | "denied" | "timeout"
 
 export interface AckResult {
-  status: AckStatus;
+  status: AckStatus
   /** The original envelope id that was awaiting ACK. */
-  id: string;
+  id: string
   /** Target name reported by broker (when ACK arrived). Undefined on timeout. */
-  target?: string;
-  error?: `transport_error: ${TransportErrorReason}`;
-  reason?: TransportErrorReason;
+  target?: string
+  error?: `transport_error: ${TransportErrorReason}`
+  reason?: TransportErrorReason
 }
 
 export class MeshTransportError extends Error {
@@ -66,15 +66,15 @@ export class MeshTransportError extends Error {
     readonly reason: TransportErrorReason,
     readonly correlationId: string,
   ) {
-    super(`transport_error: ${reason}`);
-    this.name = "MeshTransportError";
+    super(`transport_error: ${reason}`)
+    this.name = "MeshTransportError"
   }
 }
 
 interface AckBody {
-  type: "ack";
-  status: "received" | "busy" | "denied";
-  target: string;
+  type: "ack"
+  status: "received" | "busy" | "denied"
+  target: string
 }
 
 function hasExactAckType(body: unknown): body is { type: "ack" } {
@@ -83,7 +83,7 @@ function hasExactAckType(body: unknown): body is { type: "ack" } {
     body !== null &&
     Object.hasOwn(body, "type") &&
     (body as { type: unknown }).type === "ack"
-  );
+  )
 }
 
 function expectedAckSender(destination: string): string {
@@ -95,10 +95,10 @@ function expectedAckSender(destination: string): string {
     /^[A-Za-z]:[\\/]/.test(destination) ||
     destination.startsWith("\\\\")
   ) {
-    return "broker";
+    return "broker"
   }
-  const remote = /^([^:]+):.+$/.exec(destination);
-  return remote ? `${remote[1]}:broker` : "broker";
+  const remote = /^([^:]+):.+$/.exec(destination)
+  return remote ? `${remote[1]}:broker` : "broker"
 }
 
 function asAckBody(body: unknown): AckBody | null {
@@ -107,94 +107,94 @@ function asAckBody(body: unknown): AckBody | null {
     !Object.hasOwn(body, "status") ||
     !Object.hasOwn(body, "target")
   ) {
-    return null;
+    return null
   }
 
   const { status, target } = body as {
-    type: "ack";
-    status: unknown;
-    target: unknown;
-  };
+    type: "ack"
+    status: unknown
+    target: unknown
+  }
   if (
     (status !== "received" && status !== "busy" && status !== "denied") ||
     typeof target !== "string"
   ) {
-    return null;
+    return null
   }
 
-  return { type: "ack", status, target };
+  return { type: "ack", status, target }
 }
 
 export class SessionPeer {
-  private readonly opts: SessionPeerOptions;
+  private readonly opts: SessionPeerOptions
   /** Clean leaf name actually assigned by the broker (may carry a `#N`
    *  collision suffix). Used for display + self-filtering. */
-  private assignedName: string;
+  private assignedName: string
   /** Canonical address assigned by the broker (`[<pc>:]<cwd>@<nome>`, or just
    *  the name for a legacy broker). This is the routing/identity key the mesh
    *  uses; callers ECHO it, never compose it. */
-  private assignedAddress: string;
-  private role: "leader" | "follower" = "follower";
-  private broker: Broker | null = null;
-  private socket: Socket | null = null;
-  private buf = "";
+  private assignedAddress: string
+  private role: "leader" | "follower" = "follower"
+  private broker: Broker | null = null
+  private socket: Socket | null = null
+  private buf = ""
   /** Map of in-flight request ids → resolver. Used by `request()`. */
   private readonly pending = new Map<
     string,
     {
-      resolve: (env: Envelope) => void;
-      reject: (err: Error) => void;
-      timer: ReturnType<typeof setTimeout>;
+      resolve: (env: Envelope) => void
+      reject: (err: Error) => void
+      timer: ReturnType<typeof setTimeout>
     }
-  >();
+  >()
   /** Map of in-flight send ids → ACK resolver. Used by `sendWithAck()`. */
   private readonly ackPending = new Map<
     string,
     {
-      expectedFrom: string;
-      resolve: (result: AckResult) => void;
-      timer: ReturnType<typeof setTimeout>;
+      expectedFrom: string
+      resolve: (result: AckResult) => void
+      timer: ReturnType<typeof setTimeout>
     }
-  >();
-  private readonly handlers = new Set<MessageHandler>();
-  private readonly reconnectHandlers = new Set<ReconnectHandler>();
-  private leftFlag = false;
+  >()
+  private readonly handlers = new Set<MessageHandler>()
+  private readonly reconnectHandlers = new Set<ReconnectHandler>()
+  private leftFlag = false
 
   constructor(opts: SessionPeerOptions) {
-    this.opts = opts;
-    this.assignedName = opts.name;
-    this.assignedAddress = opts.name;
+    this.opts = opts
+    this.assignedName = opts.name
+    this.assignedAddress = opts.name
   }
 
   // ── public API ────────────────────────────────────────────────────────────
 
   /** Joins or leads the session at `sockPath`. Resolves with the assigned name. */
   async start(): Promise<string> {
-    return this._joinOrLead();
+    return this._joinOrLead()
   }
 
   /** Returns the clean leaf name as assigned by the broker (after any `#N`). */
   name(): string {
-    return this.assignedName;
+    return this.assignedName
   }
 
   /** Returns the canonical address (`[<pc>:]<cwd>@<nome>`) assigned by the
    *  broker — the key the mesh routes on. Equals `name()` against a legacy
    *  broker that returns no address. */
   address(): string {
-    return this.assignedAddress;
+    return this.assignedAddress
   }
 
   /** Returns "leader" or "follower" — current role. */
   currentRole(): "leader" | "follower" {
-    return this.role;
+    return this.role
   }
 
   /** Returns the locally-hosted Broker when this peer is the leader, or
    *  null when it's a follower. Wave 25C uses this to attach the
    *  cross-PC router. */
   localBroker(): Broker | null {
-    return this.broker;
+    return this.broker
   }
 
   /**
@@ -211,8 +211,8 @@ export class SessionPeer {
     body: unknown,
     re: string | null = null,
   ): Promise<void> {
-    const env = envelope(this.assignedName, to, body, re);
-    await this._writeEnvelope(env);
+    const env = envelope(this.assignedName, to, body, re)
+    await this._writeEnvelope(env)
   }
 
   /**
@@ -232,25 +232,25 @@ export class SessionPeer {
     re: string | null = null,
     timeoutMs: number = ACK_TIMEOUT_MS,
   ): Promise<AckResult> {
-    const env = envelope(this.assignedName, to, body, re);
+    const env = envelope(this.assignedName, to, body, re)
     return new Promise<AckResult>((resolve) => {
       const timer = setTimeout(() => {
-        this.ackPending.delete(env.id);
-        resolve({ status: "timeout", id: env.id });
-      }, timeoutMs);
+        this.ackPending.delete(env.id)
+        resolve({ status: "timeout", id: env.id })
+      }, timeoutMs)
       this.ackPending.set(env.id, {
         expectedFrom: expectedAckSender(to),
         resolve,
         timer,
-      });
+      })
       this._writeEnvelope(env).catch(() => {
-        const slot = this.ackPending.get(env.id);
-        if (!slot) return;
-        clearTimeout(slot.timer);
-        this.ackPending.delete(env.id);
-        resolve({ status: "timeout", id: env.id });
-      });
-    });
+        const slot = this.ackPending.get(env.id)
+        if (!slot) return
+        clearTimeout(slot.timer)
+        this.ackPending.delete(env.id)
+        resolve({ status: "timeout", id: env.id })
+      })
+    })
   }
 
   /**
@@ -263,26 +263,26 @@ export class SessionPeer {
     body: unknown,
     timeoutMs: number = this.opts.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS,
   ): Promise<Envelope> {
-    const env = envelope(this.assignedName, to, body, null);
+    const env = envelope(this.assignedName, to, body, null)
     return new Promise<Envelope>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pending.delete(env.id);
-        reject(new Error(`request to ${to} timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-      this.pending.set(env.id, { resolve, reject, timer });
+        this.pending.delete(env.id)
+        reject(new Error(`request to ${to} timed out after ${timeoutMs}ms`))
+      }, timeoutMs)
+      this.pending.set(env.id, { resolve, reject, timer })
       this._writeEnvelope(env).catch((err) => {
-        const slot = this.pending.get(env.id);
-        if (!slot) return;
-        clearTimeout(slot.timer);
-        this.pending.delete(env.id);
-        reject(err);
-      });
-    });
+        const slot = this.pending.get(env.id)
+        if (!slot) return
+        clearTimeout(slot.timer)
+        this.pending.delete(env.id)
+        reject(err)
+      })
+    })
   }
 
   onMessage(handler: MessageHandler): () => void {
-    this.handlers.add(handler);
-    return () => this.handlers.delete(handler);
+    this.handlers.add(handler)
+    return () => this.handlers.delete(handler)
   }
 
   /**
@@ -292,8 +292,8 @@ export class SessionPeer {
    * the broker may have lost in the transition (e.g., peer list).
    */
   onReconnect(handler: ReconnectHandler): () => void {
-    this.reconnectHandlers.add(handler);
-    return () => this.reconnectHandlers.delete(handler);
+    this.reconnectHandlers.add(handler)
+    return () => this.reconnectHandlers.delete(handler)
   }
 
   /**
@@ -302,59 +302,59 @@ export class SessionPeer {
    * a soft rejoin: leaves & rejoins with the new name.
    */
   async rename(newName: string): Promise<string> {
-    await this._teardownConn();
-    this.opts.name = newName;
-    this.assignedName = newName;
-    return this._joinOrLead();
+    await this._teardownConn()
+    this.opts.name = newName
+    this.assignedName = newName
+    return this._joinOrLead()
   }
 
   async leave(): Promise<void> {
-    this.leftFlag = true;
-    await this._teardownConn();
+    this.leftFlag = true
+    await this._teardownConn()
   }
 
   // ── join / failover loop ──────────────────────────────────────────────────
 
   private async _joinOrLead(): Promise<string> {
-    const result: ElectionResult = await joinOrLead(this.opts.sockPath);
+    const result: ElectionResult = await joinOrLead(this.opts.sockPath)
     if (result.role === "leader") {
-      this.role = "leader";
+      this.role = "leader"
       this.broker = new Broker({
         server: result.server,
         auditPath: this.opts.auditPath,
-      });
+      })
       // Leader also registers itself as a peer so other followers see it +
       // can address it. We create a self-loopback socket via the broker's
       // internal API: easiest is to open a real client connection back to
       // our own server.
-      return this._registerAsClient();
+      return this._registerAsClient()
     } else {
-      this.role = "follower";
-      this._wireSocket(result.socket);
-      return this._registerOver(result.socket);
+      this.role = "follower"
+      this._wireSocket(result.socket)
+      return this._registerOver(result.socket)
     }
   }
 
   private async _registerAsClient(): Promise<string> {
-    const { createConnection } = await import("node:net");
-    const sock = createConnection(this.opts.sockPath);
+    const { createConnection } = await import("node:net")
+    const sock = createConnection(this.opts.sockPath)
     await new Promise<void>((resolve, reject) => {
-      sock.once("connect", () => resolve());
-      sock.once("error", reject);
-    });
-    this._wireSocket(sock);
-    return this._registerOver(sock);
+      sock.once("connect", () => resolve())
+      sock.once("error", reject)
+    })
+    this._wireSocket(sock)
+    return this._registerOver(sock)
   }
 
   private _wireSocket(sock: Socket): void {
-    this.socket = sock;
-    this.buf = "";
-    sock.setEncoding("utf8");
-    sock.on("data", (chunk: string) => this._onData(chunk));
-    sock.on("close", () => this._onSocketClose(sock));
+    this.socket = sock
+    this.buf = ""
+    sock.setEncoding("utf8")
+    sock.on("data", (chunk: string) => this._onData(chunk))
+    sock.on("close", () => this._onSocketClose(sock))
     sock.on("error", () => {
       /* close will follow */
-    });
+    })
   }
 
   private _registerOver(sock: Socket): Promise<string> {
@@ -363,43 +363,43 @@ export class SessionPeer {
       const wait = setTimeout(
         () => reject(new Error("register_ack timeout")),
         5_000,
-      );
+      )
       const onceListener = (raw: unknown) => {
-        clearTimeout(wait);
+        clearTimeout(wait)
         // plan/38: a new broker returns `address_assigned` (canonical key) +
         // `name_assigned` (clean leaf). Read both with cross-fallback so we work
         // against either a new broker OR a legacy one (only `name_assigned`,
         // where address == name).
         const ack = raw as {
-          type?: string;
-          name_assigned?: string;
-          address_assigned?: string;
-        };
+          type?: string
+          name_assigned?: string
+          address_assigned?: string
+        }
         const name =
           typeof ack?.name_assigned === "string"
             ? ack.name_assigned
-            : ack?.address_assigned;
+            : ack?.address_assigned
         const address =
           typeof ack?.address_assigned === "string"
             ? ack.address_assigned
-            : ack?.name_assigned;
+            : ack?.name_assigned
         if (
           ack &&
           ack.type === "register_ack" &&
           typeof name === "string" &&
           typeof address === "string"
         ) {
-          this.assignedName = name;
-          this.assignedAddress = address;
-          this._preAckListener = null;
-          resolve(name);
+          this.assignedName = name
+          this.assignedAddress = address
+          this._preAckListener = null
+          resolve(name)
         } else {
           reject(
             new Error(`expected register_ack, got: ${JSON.stringify(raw)}`),
-          );
+          )
         }
-      };
-      this._preAckListener = onceListener;
+      }
+      this._preAckListener = onceListener
       const req =
         JSON.stringify({
           type: "register",
@@ -409,26 +409,26 @@ export class SessionPeer {
           // as "no take-over", i.e. the old #N behavior).
           ...(this.opts.cwd === undefined ? {} : { cwd: this.opts.cwd }),
           ...(this.opts.takeoverExisting === true ? { takeover: true } : {}),
-        }) + "\n";
+        }) + "\n"
       try {
-        sock.write(req);
+        sock.write(req)
       } catch (e) {
-        clearTimeout(wait);
-        reject(e as Error);
+        clearTimeout(wait)
+        reject(e as Error)
       }
-    });
+    })
   }
 
-  private _preAckListener: ((raw: unknown) => void) | null = null;
+  private _preAckListener: ((raw: unknown) => void) | null = null
 
   private _onData(chunk: string): void {
-    this.buf += chunk;
-    let nl: number;
+    this.buf += chunk
+    let nl: number
     while ((nl = this.buf.indexOf("\n")) >= 0) {
-      const line = this.buf.slice(0, nl);
-      this.buf = this.buf.slice(nl + 1);
-      if (!line) continue;
-      this._handleLine(line);
+      const line = this.buf.slice(0, nl)
+      this.buf = this.buf.slice(nl + 1)
+      if (!line) continue
+      this._handleLine(line)
     }
   }
 
@@ -436,21 +436,21 @@ export class SessionPeer {
     // Before register_ack: parse loosely as an ack control message.
     if (this._preAckListener) {
       try {
-        const parsed = JSON.parse(line) as unknown;
-        this._preAckListener(parsed);
+        const parsed = JSON.parse(line) as unknown
+        this._preAckListener(parsed)
       } catch {
         // Garbage during register window — ignore.
       }
-      return;
+      return
     }
 
     // Regular envelope.
-    let env: Envelope;
+    let env: Envelope
     try {
-      env = parse(line);
+      env = parse(line)
     } catch (e) {
-      if (e instanceof EnvelopeError) return;
-      throw e;
+      if (e instanceof EnvelopeError) return
+      throw e
     }
 
     // Reserve every raw transport_error body before either pending map can
@@ -460,85 +460,85 @@ export class SessionPeer {
       const trusted =
         env.from === "broker" && env.re !== null
           ? asTransportErrorBody(env.body)
-          : null;
+          : null
       if (trusted && env.re !== null) {
-        this._consumeAckTransportError(env.re, trusted.reason);
-        this._rejectRequestTransportError(env.re, trusted.reason);
-        return;
+        this._consumeAckTransportError(env.re, trusted.reason)
+        this._rejectRequestTransportError(env.re, trusted.reason)
+        return
       }
-      this._dispatchToHandlers(env);
-      return;
+      this._dispatchToHandlers(env)
+      return
     }
 
     // Reserve exact broker ACKs before generic correlation or handler dispatch.
     // The sender is bound when the send begins: local sends accept only
     // `broker`, while remote alias sends accept only `<alias>:broker`.
-    const fromBroker = env.from === "broker" || env.from.endsWith(":broker");
+    const fromBroker = env.from === "broker" || env.from.endsWith(":broker")
     if (fromBroker && hasExactAckType(env.body)) {
-      const ackBody = asAckBody(env.body);
+      const ackBody = asAckBody(env.body)
       if (env.re !== null && ackBody) {
-        const slot = this.ackPending.get(env.re);
+        const slot = this.ackPending.get(env.re)
         if (slot && slot.expectedFrom === env.from) {
-          clearTimeout(slot.timer);
-          this.ackPending.delete(env.re);
+          clearTimeout(slot.timer)
+          this.ackPending.delete(env.re)
           slot.resolve({
             status: ackBody.status,
             id: env.re,
             target: ackBody.target,
-          });
+          })
         }
       }
-      return;
+      return
     }
 
     // Correlate replies for `request()`.
     if (env.re) {
-      const slot = this.pending.get(env.re);
+      const slot = this.pending.get(env.re)
       if (slot) {
-        clearTimeout(slot.timer);
-        this.pending.delete(env.re);
-        slot.resolve(env);
-        return;
+        clearTimeout(slot.timer)
+        this.pending.delete(env.re)
+        slot.resolve(env)
+        return
       }
     }
 
     // Otherwise dispatch to subscribers.
-    this._dispatchToHandlers(env);
+    this._dispatchToHandlers(env)
   }
 
   private _consumeAckTransportError(
     correlationId: string,
     reason: TransportErrorReason,
   ): void {
-    const pendingId = correlationId.toLowerCase();
-    const slot = this.ackPending.get(pendingId);
-    if (!slot) return;
-    clearTimeout(slot.timer);
-    this.ackPending.delete(pendingId);
+    const pendingId = correlationId.toLowerCase()
+    const slot = this.ackPending.get(pendingId)
+    if (!slot) return
+    clearTimeout(slot.timer)
+    this.ackPending.delete(pendingId)
     slot.resolve({
       status: reason === "offline" ? "timeout" : "denied",
       id: pendingId,
       error: `transport_error: ${reason}`,
       reason,
-    });
+    })
   }
 
   private _rejectRequestTransportError(
     correlationId: string,
     reason: TransportErrorReason,
   ): void {
-    const pendingId = correlationId.toLowerCase();
-    const slot = this.pending.get(pendingId);
-    if (!slot) return;
-    clearTimeout(slot.timer);
-    this.pending.delete(pendingId);
-    slot.reject(new MeshTransportError(reason, pendingId));
+    const pendingId = correlationId.toLowerCase()
+    const slot = this.pending.get(pendingId)
+    if (!slot) return
+    clearTimeout(slot.timer)
+    this.pending.delete(pendingId)
+    slot.reject(new MeshTransportError(reason, pendingId))
   }
 
   private _dispatchToHandlers(env: Envelope): void {
     for (const h of this.handlers) {
       try {
-        h(env);
+        h(env)
       } catch {
         /* handler errors don't break peer */
       }
@@ -547,13 +547,13 @@ export class SessionPeer {
 
   private async _writeEnvelope(env: Envelope): Promise<void> {
     if (!this.socket || this.socket.destroyed) {
-      throw new Error("session peer not connected");
+      throw new Error("session peer not connected")
     }
-    this.socket.write(serialize(env));
+    this.socket.write(serialize(env))
   }
 
   private async _onSocketClose(closedSock: Socket): Promise<void> {
-    if (this.leftFlag) return; // intentional leave
+    if (this.leftFlag) return // intentional leave
     // Only the CURRENT socket dying is a real failover. A close from a socket
     // we've already replaced — `rename()` (teardown + rejoin) or a prior
     // reconnect — must NOT trigger another `_joinOrLead`, or we'd double-
@@ -562,18 +562,18 @@ export class SessionPeer {
     // (teardown done, rejoin in flight) or already the new socket — either way
     // `!== closedSock`, so we skip. Genuine leader death: `this.socket` is still
     // the (now-closed) follower socket → identity matches → we re-elect.
-    if (this.socket !== closedSock) return;
+    if (this.socket !== closedSock) return
     // Attempt to re-elect once. New leader will bind sockPath; we either
     // become leader ourselves or rejoin as follower.
-    await delay(FAILOVER_RETRY_MS);
-    if (this.leftFlag || this.socket !== closedSock) return;
+    await delay(FAILOVER_RETRY_MS)
+    if (this.leftFlag || this.socket !== closedSock) return
     try {
-      await this._joinOrLead();
+      await this._joinOrLead()
       // The new broker's peers map starts fresh — consumers must re-query
       // any cached state (peer count, etc.) that depended on the old broker.
       for (const h of this.reconnectHandlers) {
         try {
-          h();
+          h()
         } catch {
           /* handler errors don't break peer */
         }
@@ -585,31 +585,31 @@ export class SessionPeer {
 
   private async _teardownConn(): Promise<void> {
     for (const [id, slot] of this.pending) {
-      clearTimeout(slot.timer);
-      this.pending.delete(id);
-      slot.reject(new Error("peer leaving"));
+      clearTimeout(slot.timer)
+      this.pending.delete(id)
+      slot.reject(new Error("peer leaving"))
     }
     for (const [id, slot] of this.ackPending) {
-      clearTimeout(slot.timer);
-      this.ackPending.delete(id);
-      slot.resolve({ status: "timeout", id });
+      clearTimeout(slot.timer)
+      this.ackPending.delete(id)
+      slot.resolve({ status: "timeout", id })
     }
 
     if (this.socket) {
       try {
-        this.socket.destroy();
+        this.socket.destroy()
       } catch {
         /* ignored */
       }
-      this.socket = null;
+      this.socket = null
     }
     if (this.broker) {
       try {
-        await this.broker.close();
+        await this.broker.close()
       } catch {
         /* ignored */
       }
-      this.broker = null;
+      this.broker = null
     }
   }
 }

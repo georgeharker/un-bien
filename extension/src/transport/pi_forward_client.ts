@@ -1,6 +1,6 @@
-import { EventEmitter } from "node:events";
-import type { RelayClient } from "./relay_client.js";
-import type { Envelope } from "../session/envelope.js";
+import { EventEmitter } from "node:events"
+import type { RelayClient } from "./relay_client.js"
+import type { Envelope } from "../session/envelope.js"
 
 /**
  * Plan/25 Wave A wire types — must stay bit-compatible with the relay's
@@ -20,15 +20,15 @@ import type { Envelope } from "../session/envelope.js";
  */
 
 interface PiEnvelopeFrame {
-  type: "pi_envelope";
-  to_pc: string;
-  envelope: Envelope;
+  type: "pi_envelope"
+  to_pc: string
+  envelope: Envelope
 }
 
 interface PiEnvelopeInFrame {
-  type: "pi_envelope_in";
-  from_pc: string;
-  envelope: Envelope;
+  type: "pi_envelope_in"
+  from_pc: string
+  envelope: Envelope
 }
 
 /** Outbound API + inbound listener for Pi↔Pi envelope forwarding via relay. */
@@ -38,17 +38,17 @@ export interface PiForwardClientEvents {
    * to this Pi. `fromPc` is the verified Pi-pubkey of the sender (relay
    * authoritative — defense against spoofed `envelope.from`).
    */
-  envelope: [env: Envelope, fromPc: string];
+  envelope: [env: Envelope, fromPc: string]
 }
 
 export class PiForwardClient extends EventEmitter {
-  private readonly onRelayMessage: (line: string) => void;
-  private detached = false;
+  private readonly onRelayMessage: (line: string) => void
+  private detached = false
 
   constructor(private readonly relay: RelayClient) {
-    super();
-    this.onRelayMessage = (line) => this._handleLine(line);
-    this.relay.on("message", this.onRelayMessage);
+    super()
+    this.onRelayMessage = (line) => this._handleLine(line)
+    this.relay.on("message", this.onRelayMessage)
   }
 
   /**
@@ -59,14 +59,14 @@ export class PiForwardClient extends EventEmitter {
    * surfaces as `status: "timeout"` upstream regardless.
    */
   sendEnvelopeToPi(toPc: string, env: Envelope): void {
-    if (this.detached) return;
+    if (this.detached) return
     const frame: PiEnvelopeFrame = {
       type: "pi_envelope",
       to_pc: toPc,
       envelope: env,
-    };
+    }
     try {
-      this.relay.send(JSON.stringify(frame));
+      this.relay.send(JSON.stringify(frame))
     } catch {
       // relay not connected; broker_remote's pending logic will time out
     }
@@ -74,34 +74,34 @@ export class PiForwardClient extends EventEmitter {
 
   /** Stop listening to the relay. Call from `_goIdle` / shutdown. */
   detach(): void {
-    if (this.detached) return;
-    this.detached = true;
-    this.relay.off("message", this.onRelayMessage);
+    if (this.detached) return
+    this.detached = true
+    this.relay.off("message", this.onRelayMessage)
   }
 
   private _handleLine(line: string): void {
     // The relay multiplexes several frame types over the same WS; we only
     // care about `pi_envelope_in`. Other frames (outer-encrypted owner
     // envelopes, control replies) are silently ignored.
-    let parsed: unknown;
+    let parsed: unknown
     try {
-      parsed = JSON.parse(line);
+      parsed = JSON.parse(line)
     } catch {
-      return;
+      return
     }
-    if (!parsed || typeof parsed !== "object") return;
-    const o = parsed as Partial<PiEnvelopeInFrame>;
-    if (o.type !== "pi_envelope_in") return;
+    if (!parsed || typeof parsed !== "object") return
+    const o = parsed as Partial<PiEnvelopeInFrame>
+    if (o.type !== "pi_envelope_in") return
     if (
       typeof o.from_pc !== "string" ||
       !o.envelope ||
       typeof o.envelope !== "object"
     )
-      return;
+      return
 
     // Cheap shape check — full envelope parse happens downstream in broker_remote.
-    const env = o.envelope as Envelope;
-    if (typeof env.from !== "string" || typeof env.id !== "string") return;
-    this.emit("envelope", env, o.from_pc);
+    const env = o.envelope as Envelope
+    if (typeof env.from !== "string" || typeof env.id !== "string") return
+    this.emit("envelope", env, o.from_pc)
   }
 }

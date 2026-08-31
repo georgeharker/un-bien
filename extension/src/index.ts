@@ -30,22 +30,22 @@
  *   for integration tests.
  */
 
-import { randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto"
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
   ExtensionFactory,
-} from "@earendil-works/pi-coding-agent";
-import { SettingsManager } from "@earendil-works/pi-coding-agent";
-import type { Ed25519Keypair } from "./pairing/crypto.js";
+} from "@earendil-works/pi-coding-agent"
+import { SettingsManager } from "@earendil-works/pi-coding-agent"
+import type { Ed25519Keypair } from "./pairing/crypto.js"
 import {
   buildQRUri,
   qrSession,
   renderQRAscii,
   clampPairTtlMs,
   TOKEN_TTL_MS,
-} from "./pairing/qr.js";
+} from "./pairing/qr.js"
 import {
   addPeer,
   getOrCreateEd25519Keypair,
@@ -56,66 +56,66 @@ import {
   removePeer,
   snapshotOwnerPubkeys,
   conditionalRemovePeer,
-} from "./pairing/storage.js";
-import { MeshClient } from "./mesh/client.js";
-import { SelfRevoke } from "./mesh/self_revoke.js";
-import type { MeshTopologySnapshot } from "./mesh/siblings.js";
+} from "./pairing/storage.js"
+import { MeshClient } from "./mesh/client.js"
+import { SelfRevoke } from "./mesh/self_revoke.js"
+import type { MeshTopologySnapshot } from "./mesh/siblings.js"
 import type {
   ClientMessage,
   PairErrorCode,
   ServerMessage,
   ThinkingLevel,
-} from "./protocol/types.js";
-import { RelayClient, RoomAlreadyOpenError } from "./transport/relay_client.js";
-import { PlainPeerChannel } from "./transport/peer_channel.js";
+} from "./protocol/types.js"
+import { RelayClient, RoomAlreadyOpenError } from "./transport/relay_client.js"
+import { PlainPeerChannel } from "./transport/peer_channel.js"
 import {
   createExtensionUiBridge,
   type ExtensionUiBridge,
   type ExtensionUiResponseWire,
-} from "./extension_ui_bridge.js";
-import { createPanelBridge, type PanelBridge } from "./panel_bridge.js";
+} from "./extension_ui_bridge.js"
+import { createPanelBridge, type PanelBridge } from "./panel_bridge.js"
 import {
   initSubagentRooms,
   subagentRoomsEnabled,
   type SubagentRoomsController,
-} from "./subagent_rooms.js";
+} from "./subagent_rooms.js"
 import {
   createRpcEnvelope,
   isEnvelopeFrame,
   helloEnvelope,
   type EnvelopeMessage,
-} from "./session/rpc_envelope.js";
+} from "./session/rpc_envelope.js"
 import {
   dispatchRpcCommand,
   GET_ENTRIES_PAGE_BUDGET_BYTES,
   pageEntries,
   type RpcCommandHandlers,
-} from "./session/rpc_inbound.js";
-import { envLog } from "./session/debug_log.js";
-import { roomIdFor, roomIdForSession } from "./rooms.js";
-import { registerAgentTools } from "./session/tools.js";
-import { formatPeerInventory } from "./session/peer_inventory.js";
-import { MeshNode } from "./session/mesh_node.js";
+} from "./session/rpc_inbound.js"
+import { envLog } from "./session/debug_log.js"
+import { roomIdFor, roomIdForSession } from "./rooms.js"
+import { registerAgentTools } from "./session/tools.js"
+import { formatPeerInventory } from "./session/peer_inventory.js"
+import { MeshNode } from "./session/mesh_node.js"
 import {
   wireFromModel,
   type ActionCtx,
   type ActionPi,
-} from "./actions/handlers.js";
-import { ensureModelRegistry } from "./actions/registry.js";
+} from "./actions/handlers.js"
+import { ensureModelRegistry } from "./actions/registry.js"
 import {
   ensureGlobalDirs,
   LOCAL_SESSION_NAME,
   sessionAuditPath,
   sessionSockPath,
   skillsDir,
-} from "./session/global_config.js";
-import { acquireCwdLock, type AcquiredLock } from "./session/cwd_lock.js";
+} from "./session/global_config.js"
+import { acquireCwdLock, type AcquiredLock } from "./session/cwd_lock.js"
 import {
   installService,
   uninstallService,
   linkCliBinaries,
   unlinkCliBinaries,
-} from "./daemon/install.js";
+} from "./daemon/install.js"
 import {
   defaultAgentName,
   effectiveAutoStartRelay,
@@ -123,11 +123,11 @@ import {
   loadLocalConfig,
   localConfigExists,
   saveLocalConfig,
-} from "./session/local_config.js";
-import { runSetupWizard, type WizardUI } from "./session/setup_wizard.js";
-import { updateFooter, type FooterState } from "./ui/footer.js";
-import { join, dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+} from "./session/local_config.js"
+import { runSetupWizard, type WizardUI } from "./session/setup_wizard.js"
+import { updateFooter, type FooterState } from "./ui/footer.js"
+import { join, dirname, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import {
   chmodSync,
   mkdirSync,
@@ -137,10 +137,10 @@ import {
   readFileSync,
   writeFileSync,
   realpathSync,
-} from "node:fs";
-import { createInterface } from "node:readline";
-import { spawnSync } from "node:child_process";
-import { hostname, tmpdir } from "node:os";
+} from "node:fs"
+import { createInterface } from "node:readline"
+import { spawnSync } from "node:child_process"
+import { hostname, tmpdir } from "node:os"
 import {
   resolveRelayUrl,
   loadConfig,
@@ -148,9 +148,9 @@ import {
   isValidRelayUrl,
   isWebSocketScheme,
   toWebSocketUrl,
-} from "./config.js";
-import { _expandTilde, _launchSession } from "./launch.js";
-import { _enrichToolArgs } from "./enrich_tool_args.js";
+} from "./config.js"
+import { _expandTilde, _launchSession } from "./launch.js"
+import { _enrichToolArgs } from "./enrich_tool_args.js"
 import {
   IMAGE_PREVIEW_MIME,
   _imageCacheRootDir,
@@ -160,14 +160,14 @@ import {
   _cleanupPreviewFile,
   _renderablePngPathFromImage,
   _decodeImagePayload,
-} from "./image_codec.js";
+} from "./image_codec.js"
 import {
   _findKnownPeer,
   _inspectPeerRecord,
   _runtimeOwnerFingerprint,
   type InspectedPeerRecord,
-} from "./pairing/peer_trust.js";
-import { Box, Container, Image, Text } from "@earendil-works/pi-tui";
+} from "./pairing/peer_trust.js"
+import { Box, Container, Image, Text } from "@earendil-works/pi-tui"
 
 // ── State machine ─────────────────────────────────────────────────────────────
 //
@@ -181,28 +181,28 @@ import { Box, Container, Image, Text } from "@earendil-works/pi-tui";
 // broadcast"): pairing a second device no longer disconnects the first, and
 // every connected owner receives the same agent stream in parallel.
 
-export type RemoteState = "idle" | "started";
+export type RemoteState = "idle" | "started"
 
-let _state: RemoteState = "idle";
-let _relay: RelayClient | null = null;
+let _state: RemoteState = "idle"
+let _relay: RelayClient | null = null
 
 /** Relay connectivity as seen by an RPC client (Cockpit). Derived from
  *  `_state` + `_relay`: "disconnected" = relay off (idle); "connected" = live
  *  WS; "reconnecting" = was on, WS dropped, retrying. Surfaced via the
  *  `un-bien:relay-state` custom message (see `_emitRelayState`). */
-export type RelayConnectivity = "connected" | "reconnecting" | "disconnected";
+export type RelayConnectivity = "connected" | "reconnecting" | "disconnected"
 
 /** Last `RelayConnectivity` emitted, for change-dedup. Starts "disconnected"
  *  (the process boots with the relay down). */
-let _lastRelayStatus: RelayConnectivity | null = null;
+let _lastRelayStatus: RelayConnectivity | null = null
 
 /** Sentinel prefix for a transparent control message an RPC client sends on the
  *  `prompt` channel (stdin). The `input` hook intercepts it, runs the action,
  *  and swallows it (`action:"handled"`) so it never becomes an LLM turn or a
  *  transcript entry. Starts with NUL so it can't collide with real user input
  *  and doesn't begin with "/" (which would route to the command parser). */
-export const CTRL_PREFIX = "\x00un-bien-ctrl:";
-let _relayUrl: string | null = null; // URL used by current _relay connection
+export const CTRL_PREFIX = "\x00un-bien-ctrl:"
+let _relayUrl: string | null = null // URL used by current _relay connection
 /**
  * Owners currently connected via the relay. Key = app peer pubkey (Ed25519,
  * base64 standard); value = the dedicated PlainPeerChannel routing messages
@@ -215,35 +215,35 @@ let _relayUrl: string | null = null; // URL used by current _relay connection
  *   - `paired` UX state is `_activePeers.size > 0`. The footer and the
  *     `/unbien status` output both derive from this.
  */
-const _activePeers = new Map<string, PlainPeerChannel>();
-let _peerShort = ""; // shortid of the most recently attached peer (UX hint only)
+const _activePeers = new Map<string, PlainPeerChannel>()
+let _peerShort = "" // shortid of the most recently attached peer (UX hint only)
 
-const UNBIEN_RECEIVED_IMAGE_TYPE = "un-bien:received-image";
+const UNBIEN_RECEIVED_IMAGE_TYPE = "un-bien:received-image"
 
 type ReceivedImageDetails = {
-  messageId: string;
-  index: number;
-  mime: string;
-  size?: number;
-  path?: string;
-  previewPath?: string;
-  text?: string;
-  error?: string;
-  reason?: string;
-};
+  messageId: string
+  index: number
+  mime: string
+  size?: number
+  path?: string
+  previewPath?: string
+  text?: string
+  error?: string
+  reason?: string
+}
 
-type ReceivedImagePreviewDelivery = "immediate" | "defer";
-const _pendingReceivedImagePreviews: ReceivedImageDetails[] = [];
+type ReceivedImagePreviewDelivery = "immediate" | "defer"
+const _pendingReceivedImagePreviews: ReceivedImageDetails[] = []
 
-let _myRoomId: string | null = null; // this Pi's room id (derived from the session id)
+let _myRoomId: string | null = null // this Pi's room id (derived from the session id)
 
 /** THE App<->Pi room id for the current chat session. Prefers the STABLE pi
  *  session id (durable across resume) so the room can't drift when the assigned
  *  name changes on reconnect; falls back to the legacy (cwd, name) derivation
  *  only when no session id is available yet (pre-sessionManager edge). */
 function _deriveRoomId(cwd: string, name: string): string {
-  const sid = _rootState().sessionManager?.getSessionId();
-  return sid ? roomIdForSession(sid) : roomIdFor(cwd, name);
+  const sid = _rootState().sessionManager?.getSessionId()
+  return sid ? roomIdForSession(sid) : roomIdFor(cwd, name)
 }
 
 // Plan/28 Wave D.1: `thinking` published alongside `model` so the app's
@@ -252,55 +252,55 @@ function _deriveRoomId(cwd: string, name: string): string {
 // on every change (initial load + user toggle), mirrored to room_meta
 // the same way model is — apps subscribe to one channel for both.
 let _myRoomMeta: {
-  name: string;
-  cwd: string;
-  model?: string;
-  thinking?: ThinkingLevel;
-  working?: boolean;
-  sessionId?: string;
-} | null = null;
-let _currentModel: string | undefined; // last-known model name
-let _currentThinking: ThinkingLevel | undefined; // last-known thinking level
+  name: string
+  cwd: string
+  model?: string
+  thinking?: ThinkingLevel
+  working?: boolean
+  sessionId?: string
+} | null = null
+let _currentModel: string | undefined // last-known model name
+let _currentThinking: ThinkingLevel | undefined // last-known thinking level
 
 // ── Agent-network session (plano 19) ──────────────────────────────────────────
 // MeshNode owns both the local UDS mesh (SessionPeer) and the optional
 // cross-PC relay bridge (BrokerRemote + PiForwardClient). The bridge is
 // attached via `_meshNode.attachBridge()` once the relay WS is up and this
 // Pi is the leader; MeshNode re-attaches it across UDS failovers.
-let _meshNode: MeshNode | null = null;
-let _sessionName: string | null = null;
-let _sessionPeerCount = 0;
+let _meshNode: MeshNode | null = null
+let _sessionName: string | null = null
+let _sessionPeerCount = 0
 // Invalidates an in-flight MeshNode.connect() before it can publish globally.
-let _meshJoinGeneration = 0;
+let _meshJoinGeneration = 0
 // Set true by `session_shutdown`. Connecting is async, so shutdown can land
 // while `_cmdRoot` has not published either candidate yet. `_disposed` blocks
 // the outgoing continuation until a same-module `session_start` rearms it;
 // relay/mesh generations below permanently distinguish the old candidates from
 // that replacement lifecycle even after `_disposed` becomes false again.
-let _disposed = false;
+let _disposed = false
 // True once the auto-init has run on the first session_start for this
 // process. Prevents re-running on session replacements (those re-init via
 // the _disposed re-arm path above). The session_start handler below auto-starts
 // un-bien for ANY session whose local config has auto_start_relay (default
 // true) — interactive AND daemon — instead of only UNBIEN_DAEMON=1.
-let _autoInited = false;
+let _autoInited = false
 
 // Cached state of global pairings (`peers.json`). Pairing is per-machine, so a
 // device paired in any Pi process is paired everywhere. Refreshed on boot,
 // after addPeer (handle_pair_request), and after removePeer (revoke).
-let _hasGlobalPairings = false;
+let _hasGlobalPairings = false
 
 /** Reads peers.json and updates the global-pairings cache + footer. Fire and
  *  forget; failures keep the previous cached value. */
 function _refreshPairingsCache(): void {
   void listPeers()
     .then((peers) => {
-      _hasGlobalPairings = peers.length > 0;
-      _refreshFooter();
+      _hasGlobalPairings = peers.length > 0
+      _refreshFooter()
     })
     .catch(() => {
       /* keep prior cached value */
-    });
+    })
 }
 
 /** Re-queries the broker for the authoritative peer list. The broker's map is
@@ -314,20 +314,20 @@ function _refreshSessionPeerCount(
   void peer
     .request("broker", { type: "list_peers" }, 2000)
     .then((reply) => {
-      const peers = (reply.body as { peers?: string[] } | null)?.peers;
+      const peers = (reply.body as { peers?: string[] } | null)?.peers
       if (Array.isArray(peers)) {
-        _sessionPeerCount = peers.length;
-        _refreshFooter(ctx);
+        _sessionPeerCount = peers.length
+        _refreshFooter(ctx)
       }
     })
     .catch(() => {
       /* older broker without list_peers — keep prior count */
-    });
+    })
 }
 
 /** Friendly model name for room_meta (plano 18). undefined when SDK has none yet. */
 function _currentModelName(): string | undefined {
-  return _currentModel;
+  return _currentModel
 }
 
 /**
@@ -340,14 +340,14 @@ function _currentModelName(): string | undefined {
  * otherwise never surface their model.
  */
 function _setCurrentModel(name: string): void {
-  _currentModel = name;
-  if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, model: name };
+  _currentModel = name
+  if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, model: name }
   if (_relay && _myRoomId) {
     _relay.sendControl({
       type: "room_meta_update",
       room_id: _myRoomId,
       meta: { model: name },
-    });
+    })
   }
 }
 
@@ -359,32 +359,32 @@ function _setCurrentModel(name: string): void {
  * so room_meta.working must be bracketed manually around compaction.
  */
 function _publishWorking(working: boolean): void {
-  if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working };
+  if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working }
   if (_relay && _myRoomId) {
     _relay.sendControl({
       type: "room_meta_update",
       room_id: _myRoomId,
       meta: { working },
-    });
+    })
   }
 }
 
 function _sendReceivedImagePreviewNow(details: ReceivedImageDetails): void {
-  if (!_pi) return;
+  if (!_pi) return
   try {
     _pi.sendMessage<ReceivedImageDetails>({
       customType: UNBIEN_RECEIVED_IMAGE_TYPE,
       content: "",
       display: true,
       details,
-    });
+    })
   } catch {
     // TUI preview is best-effort; skip on failure.
   }
 }
 
 function _shouldDeferReceivedImagePreview(): boolean {
-  return _rootState().turnId !== null || _myRoomMeta?.working === true;
+  return _rootState().turnId !== null || _myRoomMeta?.working === true
 }
 
 function _sendReceivedImagePreview(
@@ -392,35 +392,33 @@ function _sendReceivedImagePreview(
   delivery: ReceivedImagePreviewDelivery = "immediate",
 ): void {
   if (delivery === "defer" || _shouldDeferReceivedImagePreview()) {
-    _pendingReceivedImagePreviews.push(details);
-    return;
+    _pendingReceivedImagePreviews.push(details)
+    return
   }
-  _sendReceivedImagePreviewNow(details);
+  _sendReceivedImagePreviewNow(details)
 }
 
 function _flushPendingReceivedImagePreviews(): void {
-  if (_pendingReceivedImagePreviews.length === 0) return;
-  const pending = _pendingReceivedImagePreviews.splice(0);
-  for (const details of pending) _sendReceivedImagePreviewNow(details);
+  if (_pendingReceivedImagePreviews.length === 0) return
+  const pending = _pendingReceivedImagePreviews.splice(0)
+  for (const details of pending) _sendReceivedImagePreviewNow(details)
 }
 
 async function _collectReceivedImagePreviews(
   msg: ClientUserMessage,
 ): Promise<ReceivedImageDetails[]> {
-  if (!msg.images || msg.images.length === 0) return [];
+  if (!msg.images || msg.images.length === 0) return []
 
-  const previews: ReceivedImageDetails[] = [];
-  const text = typeof msg.text === "string" ? msg.text : "";
-  const dir = _imageCacheRootDir();
+  const previews: ReceivedImageDetails[] = []
+  const text = typeof msg.text === "string" ? msg.text : ""
+  const dir = _imageCacheRootDir()
 
   for (let i = 0; i < msg.images.length; i += 1) {
-    const image = msg.images[i];
-    const mime = typeof image?.mime === "string" ? image.mime : "unknown";
+    const image = msg.images[i]
+    const mime = typeof image?.mime === "string" ? image.mime : "unknown"
 
     if (!image || typeof image.data !== "string") {
-      console.error(
-        `[un-bien] malformed image in message ${msg.id} index=${i}`,
-      );
+      console.error(`[un-bien] malformed image in message ${msg.id} index=${i}`)
       previews.push({
         messageId: msg.id,
         index: i,
@@ -428,15 +426,15 @@ async function _collectReceivedImagePreviews(
         ...(text ? { text } : {}),
         error: "malformed image payload",
         reason: "missing mime/data payload fields",
-      });
-      continue;
+      })
+      continue
     }
 
-    const decoded = _decodeImagePayload(image.data, image.mime);
+    const decoded = _decodeImagePayload(image.data, image.mime)
     if (!decoded.ok) {
       console.error(
         `[un-bien] skipped image id=${msg.id} index=${i}: ${decoded.reason}`,
-      );
+      )
       previews.push({
         messageId: msg.id,
         index: i,
@@ -444,15 +442,15 @@ async function _collectReceivedImagePreviews(
         ...(text ? { text } : {}),
         error: "invalid image payload",
         reason: decoded.reason,
-      });
-      continue;
+      })
+      continue
     }
 
-    const ext = _imageExtension(image.mime);
+    const ext = _imageExtension(image.mime)
     if (!ext) {
       console.error(
         `[un-bien] unsupported image mime in message ${msg.id} index=${i}: ${image.mime}`,
-      );
+      )
       previews.push({
         messageId: msg.id,
         index: i,
@@ -460,17 +458,17 @@ async function _collectReceivedImagePreviews(
         ...(text ? { text } : {}),
         error: "invalid image payload",
         reason: `unsupported mime: ${image.mime}`,
-      });
-      continue;
+      })
+      continue
     }
 
-    const filename = `${_safeFilenameToken(msg.id)}-${i}.${ext}`;
-    const path = join(dir, filename);
+    const filename = `${_safeFilenameToken(msg.id)}-${i}.${ext}`
+    const path = join(dir, filename)
 
     try {
-      writeFileSync(path, decoded.decoded, { mode: 0o600 });
+      writeFileSync(path, decoded.decoded, { mode: 0o600 })
       try {
-        chmodSync(path, 0o600);
+        chmodSync(path, 0o600)
       } catch {
         /* best-effort permission hardening */
       }
@@ -482,7 +480,7 @@ async function _collectReceivedImagePreviews(
               image.data,
               image.mime,
               _safePreviewPath(dir, msg.id, i),
-            );
+            )
 
       previews.push({
         messageId: msg.id,
@@ -492,12 +490,12 @@ async function _collectReceivedImagePreviews(
         path,
         ...(previewPath ? { previewPath } : {}),
         ...(text ? { text } : {}),
-      });
+      })
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
+      const detail = error instanceof Error ? error.message : String(error)
       console.error(
         `[un-bien] failed saving image id=${msg.id} index=${i}: ${detail}`,
-      );
+      )
       previews.push({
         messageId: msg.id,
         index: i,
@@ -506,89 +504,88 @@ async function _collectReceivedImagePreviews(
         path,
         error: "failed to save image",
         reason: detail,
-      });
+      })
     }
   }
 
-  return previews;
+  return previews
 }
 
 async function _emitReceivedImagePreviews(
   msg: ClientUserMessage,
   delivery: ReceivedImagePreviewDelivery = "immediate",
 ): Promise<void> {
-  const previews = await _collectReceivedImagePreviews(msg);
-  for (const preview of previews) _sendReceivedImagePreview(preview, delivery);
+  const previews = await _collectReceivedImagePreviews(msg)
+  for (const preview of previews) _sendReceivedImagePreview(preview, delivery)
 }
 
 function _registerReceivedImageRenderer(pi: ExtensionAPI): void {
   pi.registerMessageRenderer<ReceivedImageDetails>(
     UNBIEN_RECEIVED_IMAGE_TYPE,
     (message, _options, theme) => {
-      const details = (message.details ?? {}) as Partial<ReceivedImageDetails>;
-      const path = typeof details.path === "string" ? details.path : "";
+      const details = (message.details ?? {}) as Partial<ReceivedImageDetails>
+      const path = typeof details.path === "string" ? details.path : ""
       const previewPath =
-        typeof details.previewPath === "string" ? details.previewPath : "";
+        typeof details.previewPath === "string" ? details.previewPath : ""
       const mime =
         typeof details.mime === "string"
           ? details.mime
-          : "application/octet-stream";
+          : "application/octet-stream"
       const inlineImagePath =
         previewPath.length > 0
           ? previewPath
           : mime === IMAGE_PREVIEW_MIME
             ? path
-            : "";
-      const size = typeof details.size === "number" ? details.size : undefined;
+            : ""
+      const size = typeof details.size === "number" ? details.size : undefined
       const index =
-        typeof details.index === "number" ? details.index : undefined;
-      const text = typeof details.text === "string" ? details.text.trim() : "";
+        typeof details.index === "number" ? details.index : undefined
+      const text = typeof details.text === "string" ? details.text.trim() : ""
       const messageId =
-        typeof details.messageId === "string" ? details.messageId : "unknown";
+        typeof details.messageId === "string" ? details.messageId : "unknown"
       const error =
-        typeof details.error === "string" ? details.error : undefined;
+        typeof details.error === "string" ? details.error : undefined
       const reason =
-        typeof details.reason === "string" ? details.reason : undefined;
+        typeof details.reason === "string" ? details.reason : undefined
 
-      const label = `📷 Photo from Android (${messageId}${index === undefined ? "" : ` #${index}`})`;
+      const label = `📷 Photo from Android (${messageId}${index === undefined ? "" : ` #${index}`})`
       const lines = [
         theme.fg("customMessageLabel", label),
         theme.fg("customMessageText", `Saved: ${path || "(not saved)"}`),
-      ];
+      ]
       if (size !== undefined)
-        lines.push(theme.fg("customMessageText", `Size: ${size} bytes`));
-      if (mime) lines.push(theme.fg("customMessageText", `MIME: ${mime}`));
-      if (error) lines.push(theme.fg("customMessageText", `Error: ${error}`));
-      if (reason)
-        lines.push(theme.fg("customMessageText", `Reason: ${reason}`));
-      if (text) lines.push(theme.fg("customMessageText", `Text: ${text}`));
+        lines.push(theme.fg("customMessageText", `Size: ${size} bytes`))
+      if (mime) lines.push(theme.fg("customMessageText", `MIME: ${mime}`))
+      if (error) lines.push(theme.fg("customMessageText", `Error: ${error}`))
+      if (reason) lines.push(theme.fg("customMessageText", `Reason: ${reason}`))
+      if (text) lines.push(theme.fg("customMessageText", `Text: ${text}`))
 
-      const container = new Container();
+      const container = new Container()
       const metadata = new Box(1, 1, (line) =>
         theme.bg("customMessageBg", line),
-      );
-      metadata.addChild(new Text(lines.join("\n")));
-      container.addChild(metadata);
+      )
+      metadata.addChild(new Text(lines.join("\n")))
+      container.addChild(metadata)
 
       if (inlineImagePath && !error) {
         try {
-          const imageData = readFileSync(inlineImagePath).toString("base64");
+          const imageData = readFileSync(inlineImagePath).toString("base64")
           if (imageData.length > 0) {
             const image = new Image(imageData, IMAGE_PREVIEW_MIME, {
               fallbackColor: (str) => theme.fg("customMessageText", str),
-            });
+            })
             // Keep Kitty image rows out of Box padding/background so pi-tui can
             // preserve the empty reserved rows that make inline images visible.
-            container.addChild(image);
+            container.addChild(image)
           }
         } catch {
           // Keep the metadata-only fallback on any IO/terminal issue.
         }
       }
 
-      return container;
+      return container
     },
-  );
+  )
 }
 
 function _isReceivedImageContextMessage(message: unknown): boolean {
@@ -598,7 +595,7 @@ function _isReceivedImageContextMessage(message: unknown): boolean {
     (message as { role?: unknown }).role === "custom" &&
     (message as { customType?: unknown }).customType ===
       UNBIEN_RECEIVED_IMAGE_TYPE
-  );
+  )
 }
 
 /**
@@ -619,18 +616,18 @@ function _isReceivedImageContextMessage(message: unknown): boolean {
  * `display: true` and pass through untouched.
  */
 function _isPureDataContextMessage(message: unknown): boolean {
-  if (typeof message !== "object" || message === null) return false;
+  if (typeof message !== "object" || message === null) return false
   const m = message as {
-    role?: unknown;
-    customType?: unknown;
-    display?: unknown;
-  };
+    role?: unknown
+    customType?: unknown
+    display?: unknown
+  }
   return (
     m.role === "custom" &&
     typeof m.customType === "string" &&
     m.customType.startsWith("un-bien:") &&
     m.display === false
-  );
+  )
 }
 
 function _filterInternalMessagesFromContext<T>(messages: T[] | undefined): T[] {
@@ -640,7 +637,7 @@ function _filterInternalMessagesFromContext<T>(messages: T[] | undefined): T[] {
           !_isReceivedImageContextMessage(message) &&
           !_isPureDataContextMessage(message),
       )
-    : [];
+    : []
 }
 
 function _contentFromUserMessage(
@@ -655,7 +652,7 @@ function _contentFromUserMessage(
         })),
         { type: "text" as const, text: msg.text },
       ]
-    : msg.text;
+    : msg.text
 }
 
 async function _deliverImageUserMessage(
@@ -666,44 +663,44 @@ async function _deliverImageUserMessage(
   const previewDelivery: ReceivedImagePreviewDelivery =
     shouldSteer || _rootState().turnId !== null || _myRoomMeta?.working === true
       ? "defer"
-      : "immediate";
+      : "immediate"
   const emitPreview = async () => {
     try {
-      await _emitReceivedImagePreviews(msg, previewDelivery);
+      await _emitReceivedImagePreviews(msg, previewDelivery)
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
+      const detail = error instanceof Error ? error.message : String(error)
       console.error(
         `[un-bien] failed emitting image preview id=${msg.id}: ${detail}`,
-      );
+      )
     }
-  };
+  }
   if (previewDelivery === "immediate") {
-    await emitPreview();
+    await emitPreview()
   } else {
     void emitPreview().finally(() => {
       if (!_shouldDeferReceivedImagePreview())
-        _flushPendingReceivedImagePreviews();
-    });
+        _flushPendingReceivedImagePreviews()
+    })
   }
 
-  const previousTurnId = _rootState().turnId;
-  const seededTurnId = !shouldSteer || _rootState().turnId === null;
-  if (seededTurnId) _rootState().turnId = msg.id;
+  const previousTurnId = _rootState().turnId
+  const seededTurnId = !shouldSteer || _rootState().turnId === null
+  if (seededTurnId) _rootState().turnId = msg.id
 
   const wake = _wakeAgent(
     _contentFromUserMessage(msg),
     `app user_message id=${msg.id} (+${msg.images?.length ?? 0} image)`,
     "steer",
-  );
+  )
   if (!wake.ok) {
-    if (seededTurnId) _rootState().turnId = previousTurnId;
+    if (seededTurnId) _rootState().turnId = previousTurnId
     sender.send({
       type: "error",
       code: "internal_error",
       in_reply_to: msg.id,
       message: `Agent rejected incoming message: ${wake.detail}`,
-    });
-    return;
+    })
+    return
   }
 }
 
@@ -717,7 +714,7 @@ async function _deliverImageUserMessage(
  * No-op until the relay WS + cached identity are both present.
  */
 function _attachBridgeIfReady(): void {
-  if (!_meshNode || !_relay || !_relayUrl || !_cachedEd25519) return;
+  if (!_meshNode || !_relay || !_relayUrl || !_cachedEd25519) return
   // A newly-created SelfRevoke producer must publish its own initial verified
   // or fallback snapshot before any retained topology is allowed to attach.
   if (_selfRevoke !== null) {
@@ -725,9 +722,9 @@ function _attachBridgeIfReady(): void {
       _selfRevokeTopologyReadyEpoch !== _selfRevokeEpoch ||
       _selfRevokeTopology === null
     ) {
-      return;
+      return
     }
-    if (!_meshNode.hasTopology()) _meshNode.setTopology(_selfRevokeTopology);
+    if (!_meshNode.hasTopology()) _meshNode.setTopology(_selfRevokeTopology)
   }
   void _meshNode
     .attachBridge({
@@ -737,7 +734,7 @@ function _attachBridgeIfReady(): void {
     })
     .catch(() => {
       /* best-effort — UDS mesh works regardless */
-    });
+    })
 }
 
 /**
@@ -749,7 +746,7 @@ function _attachBridgeIfReady(): void {
 function _liveCtx(
   preferred?: { ui?: unknown } | null,
 ): { ui?: unknown } | null {
-  return preferred ?? _lastEventCtx ?? _lastCtx ?? null;
+  return preferred ?? _lastEventCtx ?? _lastCtx ?? null
 }
 
 /**
@@ -757,26 +754,26 @@ function _liveCtx(
  * Optional chaining does NOT protect against a throwing getter.
  */
 function _ctxUi(preferred?: { ui?: unknown } | null): {
-  setStatus?: (k: string, v: string | undefined) => void;
-  setTitle?: (t: string) => void;
-  notify?: (message: string, level?: string) => void;
+  setStatus?: (k: string, v: string | undefined) => void
+  setTitle?: (t: string) => void
+  notify?: (message: string, level?: string) => void
 } | null {
-  const target = _liveCtx(preferred);
-  if (!target) return null;
+  const target = _liveCtx(preferred)
+  if (!target) return null
   try {
     return (
       (target.ui as
         | {
-            setStatus?: (k: string, v: string | undefined) => void;
-            setTitle?: (t: string) => void;
-            notify?: (message: string, level?: string) => void;
+            setStatus?: (k: string, v: string | undefined) => void
+            setTitle?: (t: string) => void
+            notify?: (message: string, level?: string) => void
           }
         | null
         | undefined) ?? null
-    );
+    )
   } catch {
     // Stale after newSession/fork/switchSession/reload — caller no-ops.
-    return null;
+    return null
   }
 }
 
@@ -790,8 +787,8 @@ function _safeNotify(
     // Prefer the caller's fresh ctx (e.g. a command ctx) over the module's
     // last-event ctx — a session_start ctx can be ui-less/stale and would
     // otherwise shadow it, silently dropping the notify.
-    const ui = _ctxUi(preferred);
-    if (ui && typeof ui.notify === "function") ui.notify(message, level);
+    const ui = _ctxUi(preferred)
+    if (ui && typeof ui.notify === "function") ui.notify(message, level)
   } catch {
     /* never let notify take down the process */
   }
@@ -803,20 +800,20 @@ function _refreshFooter(
 ): void {
   // Prefer live session_start ctx over capturable-stale command ctx (issue #55).
   let ui: {
-    setStatus?: (k: string, v: string | undefined) => void;
-    setTitle?: (t: string) => void;
-  } | null;
+    setStatus?: (k: string, v: string | undefined) => void
+    setTitle?: (t: string) => void
+  } | null
   try {
-    ui = _ctxUi(ctx);
+    ui = _ctxUi(ctx)
   } catch {
-    return;
+    return
   }
   if (
     !ui ||
     typeof ui.setStatus !== "function" ||
     typeof ui.setTitle !== "function"
   )
-    return;
+    return
   try {
     const state: FooterState = {
       session: _sessionName ?? undefined,
@@ -828,7 +825,7 @@ function _refreshFooter(
       devicePaired: _anyPeerActive() ? _peerShort : undefined,
       hasPairings: _hasGlobalPairings,
       agentName: _meshNode?.name(),
-    };
+    }
     updateFooter(
       {
         ui: {
@@ -837,7 +834,7 @@ function _refreshFooter(
         },
       },
       state,
-    );
+    )
   } catch {
     // setStatus/setTitle can also throw if the runner went stale mid-call.
   }
@@ -846,7 +843,7 @@ function _refreshFooter(
 // Epoch ms when the state machine entered 'started' (last /unbien start).
 // Used by session_sync to let the app detect Pi restarts (and force a full
 // replay). Cleared on _goIdle.
-let _sessionStartedAt: number | null = null;
+let _sessionStartedAt: number | null = null
 
 // _sessionManager lives PER-SESSION in _stateFor(sid); the root session's record
 // backs reconstruction — the app reads the transcript via the native get_entries
@@ -854,15 +851,15 @@ let _sessionStartedAt: number | null = null;
 // survives extension restarts via the persisted session log).
 
 type MeshEnvelope = {
-  id: string;
-  from: string;
-  re: string | null;
-  body: unknown;
-};
-let _pendingMeshMessages: MeshEnvelope[] = [];
+  id: string
+  from: string
+  re: string | null
+  body: unknown
+}
+let _pendingMeshMessages: MeshEnvelope[] = []
 // agent-run active/generation now live PER-SESSION in _stateFor(sid).agentRun;
 // mesh delivery targets the ROOT run, so the drain reads _rootState().agentRun.
-let _meshDrainScheduled = false;
+let _meshDrainScheduled = false
 
 /** Test-only override of the message buffer. */
 /**
@@ -876,46 +873,46 @@ let _meshDrainScheduled = false;
  * `ExtensionContext` interface.
  */
 export async function _connectForTest(ctx: unknown): Promise<void> {
-  const real = ctx as Parameters<typeof _cmdJoin>[0];
-  await _cmdJoin(real);
-  await _cmdStart(real);
+  const real = ctx as Parameters<typeof _cmdJoin>[0]
+  await _cmdJoin(real)
+  await _cmdStart(real)
 }
 
 /** Test-only: tear everything down (mirrors `/unbien stop`). */
 export async function _stopForTest(ctx: unknown): Promise<void> {
-  await _cmdStop(ctx as Parameters<typeof _cmdStop>[0]);
+  await _cmdStop(ctx as Parameters<typeof _cmdStop>[0])
 }
 
 /** Test-only: read/reset the `_disposed` flag. Production clears it only when
  *  a host reuses this module for a replacement session; tests share one module
  *  across cases, so they also reset it to avoid cross-test pollution. */
 export function _getDisposedForTest(): boolean {
-  return _disposed;
+  return _disposed
 }
 export function _setDisposedForTest(v: boolean): void {
-  _disposed = v;
+  _disposed = v
 }
 
 /** Test-only: reset the once-per-session auto-init gate so session_start re-runs it. */
 export function _resetAutoInitedForTest(): void {
-  _autoInited = false;
+  _autoInited = false
 }
 
 /** Test-only: clear the globalThis panel/ui bridge ownership so each fresh
  *  `extension(pi)` in a shared test process can (re)claim and rebuild bridges. */
 export function _resetBridgeOwnersForTest(): void {
   const g = globalThis as typeof globalThis & {
-    [_ROOT_SESSION_OWNER_KEY]?: ExtensionAPI;
-  };
-  delete g[_ROOT_SESSION_OWNER_KEY];
-  _panelBridge?.dispose();
-  _panelBridge = null;
-  _rpcEnvelope?.dispose();
-  _rpcEnvelope = null;
-  _subagentRooms?.dispose();
-  _subagentRooms = null;
-  _extensionUiBridge?.dispose();
-  _extensionUiBridge = null;
+    [_ROOT_SESSION_OWNER_KEY]?: ExtensionAPI
+  }
+  delete g[_ROOT_SESSION_OWNER_KEY]
+  _panelBridge?.dispose()
+  _panelBridge = null
+  _rpcEnvelope?.dispose()
+  _rpcEnvelope = null
+  _subagentRooms?.dispose()
+  _subagentRooms = null
+  _extensionUiBridge?.dispose()
+  _extensionUiBridge = null
 }
 
 /** Test-only: reset the keyed per-session state at a TEST BOUNDARY (beforeEach).
@@ -923,39 +920,39 @@ export function _resetBridgeOwnersForTest(): void {
  *  every captureEventHandler call and would wipe state a test seeds across two
  *  captures (e.g. input seeds turnId, message_update reads it). */
 export function _resetSessionsForTest(): void {
-  _sessions.clear();
-  _rootSessionId = null;
+  _sessions.clear()
+  _rootSessionId = null
 }
 
 /** Test-only: set the auto-init gate for lifecycle replacement tests. */
 export function _setAutoInitedForTest(value: boolean): void {
-  _autoInited = value;
+  _autoInited = value
 }
 
 /** Test-only: true when this instance holds a live local-mesh node. */
 export function _hasMeshNodeForTest(): boolean {
-  return _meshNode !== null;
+  return _meshNode !== null
 }
 
 /** Test-only: drive the current real SelfRevoke producer through one sweep. */
 export async function _checkSelfRevokeForTest(): Promise<void> {
-  await _selfRevoke?.checkOnce();
+  await _selfRevoke?.checkOnce()
 }
 
 /** Test-only: the effective (possibly `#N`-suffixed) name the cwd-lock reserved. */
 export function _getLockedNameForTest(): string | null {
-  return _lockedName;
+  return _lockedName
 }
 
 /** Test-only: release + clear the cwd lock (the lock normally survives stop). */
 export function _resetCwdLockForTest(): void {
   try {
-    _cwdLock?.release();
+    _cwdLock?.release()
   } catch {
     /* ignored */
   }
-  _cwdLock = null;
-  _lockedName = null;
+  _cwdLock = null
+  _lockedName = null
 }
 
 /**
@@ -965,35 +962,35 @@ export function _resetCwdLockForTest(): void {
  * agent-network broker).
  */
 export async function _startRelayForTest(ctx: unknown): Promise<void> {
-  await _cmdStart(ctx as Parameters<typeof _cmdStart>[0]);
+  await _cmdStart(ctx as Parameters<typeof _cmdStart>[0])
 }
 
 /** Test-only: public marker for canceled-keypair cache regression checks. */
 export function _getCachedPublicKeyForTest(): string | null {
   return _cachedEd25519
     ? Buffer.from(_cachedEd25519.publicKey).toString("base64")
-    : null;
+    : null
 }
 
 /** Test-only override of session started timestamp. */
 export function _setSessionStartedAtForTest(ts: number | null): void {
-  _sessionStartedAt = ts;
+  _sessionStartedAt = ts
 }
 
 /** Test-only: reset the cached model name (between tests). */
 export function _setCurrentModelForTest(name: string | undefined): void {
-  _currentModel = name;
+  _currentModel = name
 }
 
 /** Test-only: read the active turn id used for plain `cancel` routing. */
 export function _getCurrentTurnIdForTest(): string | null {
-  return _rootState().turnId;
+  return _rootState().turnId
 }
 
 /** Test-only: override the bound AgentSession so a spy can capture the
  *  content handed to `sendUserMessage` (plan/30 multimodal ingest). */
 export function _setPiForTest(pi: unknown): void {
-  _pi = pi as typeof _pi;
+  _pi = pi as typeof _pi
 }
 
 /**
@@ -1012,25 +1009,25 @@ export function _setPiForTest(pi: unknown): void {
  */
 function _persistModelDefault(provider: string, modelId: string): void {
   try {
-    const path = join(process.cwd(), ".pi", "settings.json");
-    let obj: Record<string, unknown> = {};
+    const path = join(process.cwd(), ".pi", "settings.json")
+    let obj: Record<string, unknown> = {}
     try {
-      const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+      const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown
       if (parsed && typeof parsed === "object")
-        obj = parsed as Record<string, unknown>;
+        obj = parsed as Record<string, unknown>
     } catch {
       /* no existing/parseable file → start fresh */
     }
-    obj["defaultProvider"] = provider;
-    obj["defaultModel"] = modelId;
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify(obj, null, 2));
+    obj["defaultProvider"] = provider
+    obj["defaultModel"] = modelId
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, JSON.stringify(obj, null, 2))
   } catch {
     /* best-effort — model change already applied live */
   }
 }
 
-type ClientUserMessage = Extract<ClientMessage, { type: "user_message" }>;
+type ClientUserMessage = Extract<ClientMessage, { type: "user_message" }>
 
 // ── Per-session state, keyed by pi sessionId ──────────────────────────────
 // The extension re-activates IN-PROCESS for every subagent — each is its own pi
@@ -1041,23 +1038,23 @@ type ClientUserMessage = Extract<ClientMessage, { type: "user_message" }>;
 // a root-only broadcast gate keeps app display identical for now. This mirrors
 // pi's own per-AgentSession model rather than a flat extension-authored projection.
 interface SessionState {
-  turnId: string | null;
-  working: boolean;
-  agentRun: { active: boolean; generation: number };
-  sessionManager: ExtensionContext["sessionManager"] | null;
-  model: string | null;
-  thinking: ThinkingLevel | null;
+  turnId: string | null
+  working: boolean
+  agentRun: { active: boolean; generation: number }
+  sessionManager: ExtensionContext["sessionManager"] | null
+  model: string | null
+  thinking: ThinkingLevel | null
 }
-const _sessions = new Map<string, SessionState>();
+const _sessions = new Map<string, SessionState>()
 // The session bound to the app room. null until the ROOT session_start fires;
 // while null, everything is treated as root (single-session / test harness).
-let _rootSessionId: string | null = null;
+let _rootSessionId: string | null = null
 // Stable key for the root record even before _rootSessionId is known.
 function _rootKey(): string {
-  return _rootSessionId ?? "__root__";
+  return _rootSessionId ?? "__root__"
 }
 function _stateFor(sid: string): SessionState {
-  let st = _sessions.get(sid);
+  let st = _sessions.get(sid)
   if (!st) {
     st = {
       turnId: null,
@@ -1066,114 +1063,114 @@ function _stateFor(sid: string): SessionState {
       sessionManager: null,
       model: null,
       thinking: null,
-    };
-    _sessions.set(sid, st);
+    }
+    _sessions.set(sid, st)
   }
-  return st;
+  return st
 }
 /** The root session's record (always defined; lazily created). */
 function _rootState(): SessionState {
-  return _stateFor(_rootKey());
+  return _stateFor(_rootKey())
 }
 /** sessionId of the firing handler's ctx, defaulting to the root key. */
 function _sidOf(
   ctx: { sessionManager?: { getSessionId(): string } } | undefined,
 ): string {
-  return ctx?.sessionManager?.getSessionId() ?? _rootKey();
+  return ctx?.sessionManager?.getSessionId() ?? _rootKey()
 }
 /** True only when the firing session is NOT the app-room root (subagent). */
 function _isNonRootSid(sid: string): boolean {
-  return _rootSessionId !== null && sid !== _rootSessionId;
+  return _rootSessionId !== null && sid !== _rootSessionId
 }
 
 // Module-level pi reference
-let _pi: ExtensionAPI | null = null;
+let _pi: ExtensionAPI | null = null
 
 // Minimal structural views of pi SDK internals the extension reaches for but the
 // public ExtensionAPI type does not surface. Each names exactly the member(s)
 // known to exist on the concrete AgentSession at runtime.
 interface PiEventBusInternals {
-  events?: { emit(channel: string, data: unknown): void };
+  events?: { emit(channel: string, data: unknown): void }
 }
 interface PiStreamingInternals {
-  isStreaming?: boolean;
+  isStreaming?: boolean
 }
 interface PiQueueControl {
-  clearQueue(): { steering: string[]; followUp: string[] };
+  clearQueue(): { steering: string[]; followUp: string[] }
 }
 
 // Plan/57 — Bridge to pi-ask's clarification-flow events. null until the
 // extension factory wires it (and null if the SDK exposes no events bus).
-let _extensionUiBridge: ExtensionUiBridge | null = null;
+let _extensionUiBridge: ExtensionUiBridge | null = null
 // Mirror the in-process plan + subagents buses to the app as `panel_update`
 // frames. null until the factory wires it (and null if the SDK has no events
 // bus). Inert when no plan/subagents source is emitting.
-let _panelBridge: PanelBridge | null = null;
+let _panelBridge: PanelBridge | null = null
 // rpc-envelope producer (docs/rpc-on-event-map.md): reconstructs pi's --mode rpc
 // event plane from pi.on() and fans {rpc} frames to attached peers. THE route
 // (always on, advertised as the `rpc_envelope` capability); runs alongside the
 // stock ServerMessage path only until M4 parity retirement.
-let _rpcEnvelope: { dispose(): void } | null = null;
+let _rpcEnvelope: { dispose(): void } | null = null
 
 // Per-child subagent relay rooms — each subagent surfaced to the app as its own
 // session, opt-in via the `subagents.rooms` un-bien setting (a no-op controller
 // otherwise). Owned by the ROOT session; a child session_start calls
 // onChildSession on this same instance.
-let _subagentRooms: SubagentRoomsController | null = null;
+let _subagentRooms: SubagentRoomsController | null = null
 
-let _stopAutoListener: (() => void) | null = null;
+let _stopAutoListener: (() => void) | null = null
 
 // Cached keypair (loaded once, reused across start/pair cycles)
-let _cachedEd25519: Ed25519Keypair | null = null;
+let _cachedEd25519: Ed25519Keypair | null = null
 
 // Mesh-membership poller (plan/24 Wave 3). Lives across the relay
 // connection lifecycle: started in _cmdStart after the WS is up, stopped
 // in _goIdle when the relay is torn down.
-let _selfRevoke: SelfRevoke | null = null;
-let _selfRevokeEpoch = 0;
-let _selfRevokeTopologyReadyEpoch = -1;
-let _selfRevokeTopology: MeshTopologySnapshot | null = null;
+let _selfRevoke: SelfRevoke | null = null
+let _selfRevokeEpoch = 0
+let _selfRevokeTopologyReadyEpoch = -1
+let _selfRevokeTopology: MeshTopologySnapshot | null = null
 
 // Per-cwd lock acquired by the first `/unbien` invocation in this
 // process. Holds the UDS socket open until the process exits (OS auto-
 // releases on crash too). Stays held across `/unbien stop` cycles —
 // only released when the Node process itself dies.
-let _cwdLock: AcquiredLock | null = null;
+let _cwdLock: AcquiredLock | null = null
 // Effective mesh name this instance locked. Equals the configured/derived name,
 // OR a `#N`-suffixed variant when another agent already holds that (cwd, name)
 // in this folder (same-name agents coexist instead of being refused). `_cmdJoin`
 // registers under this name; the broker confirms it (and may bump it again under
 // a live race). Null until the lock is acquired.
-let _lockedName: string | null = null;
+let _lockedName: string | null = null
 
 // ── Relay reconnect state ─────────────────────────────────────────────────────
 // Backoffs in ms: 1s, 2s, 5s, 10s, 30s, then stays at 30s.
-const RECONNECT_BACKOFFS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
-let _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-let _reconnectAttempt = 0;
+const RECONNECT_BACKOFFS_MS = [1_000, 2_000, 5_000, 10_000, 30_000]
+let _reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let _reconnectAttempt = 0
 // Every initial connect/reconnect candidate captures this generation. Stop,
 // relay-off, and an unexpected close invalidate older async continuations.
-let _relayLifecycleGeneration = 0;
+let _relayLifecycleGeneration = 0
 // Root startup has pre-candidate awaits (cwd lock, wizard) that relay/mesh
 // generations cannot safely represent: child startup intentionally advances
 // those generations. Stop/off/session replacement advance this separate epoch
 // so a queued root can never regain authority by creating a newer child.
-let _rootLifecycleGeneration = 0;
+let _rootLifecycleGeneration = 0
 // Coalesces concurrent `/unbien` startup paths inside ONE extension instance.
 // Separate Pi processes still keep the existing #N behavior via the cwd lock.
-let _cmdRootInFlight: Promise<void> | null = null;
+let _cmdRootInFlight: Promise<void> | null = null
 
 type RootRestartAuthority = Readonly<{
-  rootLifecycleGeneration: number;
-}>;
+  rootLifecycleGeneration: number
+}>
 
 function _isCurrentRootLifecycle(generation: number): boolean {
-  return !_disposed && generation === _rootLifecycleGeneration;
+  return !_disposed && generation === _rootLifecycleGeneration
 }
 
 /** Test-only: exposes pending reconnect timer state. */
 export function _hasPendingReconnect(): boolean {
-  return _reconnectTimer !== null;
+  return _reconnectTimer !== null
 }
 
 /**
@@ -1184,25 +1181,25 @@ export function _hasPendingReconnect(): boolean {
  * mental model via this getter.
  */
 export function _getState(): "idle" | "started" | "paired" {
-  if (_state === "idle") return "idle";
-  return _activePeers.size > 0 ? "paired" : "started";
+  if (_state === "idle") return "idle"
+  return _activePeers.size > 0 ? "paired" : "started"
 }
 
 /** Test-only: number of owners currently attached via PlainPeerChannel. */
 export function _getActivePeerCountForTest(): number {
-  return _activePeers.size;
+  return _activePeers.size
 }
 
 /** Test-only: true if a specific peer (base64 std) has an attached channel. */
 export function _hasActivePeerForTest(appPeerIdStd: string): boolean {
-  return _activePeers.has(appPeerIdStd);
+  return _activePeers.has(appPeerIdStd)
 }
 
 // ── Multi-channel helpers ─────────────────────────────────────────────────────
 
 /** Returns true when at least one owner is attached. Derived `paired` UX. */
 function _anyPeerActive(): boolean {
-  return _activePeers.size > 0;
+  return _activePeers.size > 0
 }
 
 // ── Hidden e2e UI test harness (dev-only, undocumented) ───────────────────
@@ -1216,11 +1213,11 @@ const _TEST_SVG_B64 = Buffer.from(
     '<rect width="120" height="60" rx="8" fill="#4c8bf5"/>' +
     '<text x="60" y="37" font-size="16" fill="white" text-anchor="middle"' +
     ' font-family="sans-serif">un-bien</text></svg>',
-).toString("base64");
+).toString("base64")
 
 function _emitTestBus(channel: string, data: unknown): void {
   try {
-    (_pi as PiEventBusInternals | null)?.events?.emit(channel, data);
+    ;(_pi as PiEventBusInternals | null)?.events?.emit(channel, data)
   } catch {
     /* bus absent — best effort */
   }
@@ -1228,8 +1225,8 @@ function _emitTestBus(channel: string, data: unknown): void {
 
 /** Run one canned UI-test scenario. Returns a short status for the notify. */
 function _runTestScenario(scenario: string): string {
-  const s = (scenario.trim().split(/\s+/)[0] || "help").toLowerCase();
-  const id = `test-${Date.now()}`;
+  const s = (scenario.trim().split(/\s+/)[0] || "help").toLowerCase()
+  const id = `test-${Date.now()}`
   switch (s) {
     case "ask-select":
       _broadcastEnvelope({
@@ -1240,8 +1237,8 @@ function _runTestScenario(scenario: string): string {
           title: "Pick one (test)",
           options: ["Alpha", "Beta", "Gamma"],
         },
-      });
-      return "sent ask-select";
+      })
+      return "sent ask-select"
     case "ask-confirm":
       _broadcastEnvelope({
         rpc: {
@@ -1251,8 +1248,8 @@ function _runTestScenario(scenario: string): string {
           title: "Confirm (test)",
           message: "Proceed with the test action?",
         },
-      });
-      return "sent ask-confirm";
+      })
+      return "sent ask-confirm"
     case "ask-input":
       _broadcastEnvelope({
         rpc: {
@@ -1262,8 +1259,8 @@ function _runTestScenario(scenario: string): string {
           title: "Input (test)",
           placeholder: "Type something…",
         },
-      });
-      return "sent ask-input";
+      })
+      return "sent ask-input"
     case "ask-editor":
       _broadcastEnvelope({
         rpc: {
@@ -1273,8 +1270,8 @@ function _runTestScenario(scenario: string): string {
           title: "Editor (test)",
           prefill: "edit me",
         },
-      });
-      return "sent ask-editor";
+      })
+      return "sent ask-editor"
     case "ask-notify":
       _broadcastEnvelope({
         rpc: {
@@ -1284,8 +1281,8 @@ function _runTestScenario(scenario: string): string {
           message: "This is a test notice.",
           notify_type: "info",
         },
-      });
-      return "sent ask-notify";
+      })
+      return "sent ask-notify"
     case "ask-rich":
       _emitTestBus("@eko24ive/pi-ask:started", {
         version: 1,
@@ -1309,8 +1306,8 @@ function _runTestScenario(scenario: string): string {
             options: [{ value: "ok", label: "Looks good", freeform: true }],
           },
         ],
-      });
-      return "emitted pi-ask:started (rich)";
+      })
+      return "emitted pi-ask:started (rich)"
     case "plan":
       _emitTestBus("plan:snapshot", {
         ns: "test",
@@ -1338,29 +1335,29 @@ function _runTestScenario(scenario: string): string {
             deps: ["t2"],
           },
         ],
-      });
-      return "emitted plan:snapshot";
+      })
+      return "emitted plan:snapshot"
     case "subagents":
       _emitTestBus("subagents:created", {
         id: "sa1",
         type: "explore",
         description: "Explore the codebase",
-      });
-      _emitTestBus("subagents:started", { id: "sa1" });
+      })
+      _emitTestBus("subagents:started", { id: "sa1" })
       _emitTestBus("subagents:created", {
         id: "sa2",
         type: "plan",
         description: "Draft an implementation plan",
-      });
-      _emitTestBus("subagents:completed", { id: "sa2" });
-      return "emitted subagents lifecycle";
+      })
+      _emitTestBus("subagents:completed", { id: "sa2" })
+      return "emitted subagents lifecycle"
     case "svg": {
       // A TOOL card renders standalone; the app pulls tool-emitted images from
       // INSIDE the tool_execution_end `result` (imagesFromToolResult unwraps
       // `{content:[{type:"image",data,mimeType}]}`) and renders them below the
       // card (WireImageView -> SVGImageView). Deliver the SVG that way.
-      const tc = `tc-svg-${Date.now()}`;
-      _broadcastEnvelope({ rpc: { type: "turn_start" } });
+      const tc = `tc-svg-${Date.now()}`
+      _broadcastEnvelope({ rpc: { type: "turn_start" } })
       _broadcastEnvelope({
         rpc: {
           type: "tool_execution_start",
@@ -1368,7 +1365,7 @@ function _runTestScenario(scenario: string): string {
           toolName: "render_svg",
           args: { note: "test svg" },
         },
-      });
+      })
       _broadcastEnvelope({
         rpc: {
           type: "tool_execution_end",
@@ -1385,13 +1382,13 @@ function _runTestScenario(scenario: string): string {
           },
           isError: false,
         },
-      });
-      _broadcastEnvelope({ rpc: { type: "agent_settled" } });
-      return "sent svg (envelope tool_execution_end + image)";
+      })
+      _broadcastEnvelope({ rpc: { type: "agent_settled" } })
+      return "sent svg (envelope tool_execution_end + image)"
     }
     case "tool": {
-      const tc = `tc-${Date.now()}`;
-      _broadcastEnvelope({ rpc: { type: "turn_start" } });
+      const tc = `tc-${Date.now()}`
+      _broadcastEnvelope({ rpc: { type: "turn_start" } })
       _broadcastEnvelope({
         rpc: {
           type: "tool_execution_start",
@@ -1399,7 +1396,7 @@ function _runTestScenario(scenario: string): string {
           toolName: "bash",
           args: { command: "echo hello" },
         },
-      });
+      })
       _broadcastEnvelope({
         rpc: {
           type: "tool_execution_end",
@@ -1407,15 +1404,15 @@ function _runTestScenario(scenario: string): string {
           result: "hello\n",
           isError: false,
         },
-      });
-      _broadcastEnvelope({ rpc: { type: "agent_settled" } });
-      return "sent tool pair (envelope)";
+      })
+      _broadcastEnvelope({ rpc: { type: "agent_settled" } })
+      return "sent tool pair (envelope)"
     }
     case "diff": {
       // Exercise the rich diff rendering: aux `{hunks}` (input Edit diff) rides
       // ALONGSIDE the raw edit `tool_execution_start`. OUTPUT is classified
       // app-side from the result, so no aux.output rides the end frame.
-      const tc = `tc-diff-${Date.now()}`;
+      const tc = `tc-diff-${Date.now()}`
       const hunks = [
         {
           lines: [
@@ -1425,8 +1422,8 @@ function _runTestScenario(scenario: string): string {
             { kind: "context", oldLine: 3, newLine: 3, text: "const c = 4;" },
           ],
         },
-      ];
-      _broadcastEnvelope({ rpc: { type: "turn_start" } });
+      ]
+      _broadcastEnvelope({ rpc: { type: "turn_start" } })
       _broadcastEnvelope({
         rpc: {
           type: "tool_execution_start",
@@ -1439,7 +1436,7 @@ function _runTestScenario(scenario: string): string {
           },
         },
         aux: { hunks },
-      });
+      })
       _broadcastEnvelope({
         rpc: {
           type: "tool_execution_end",
@@ -1447,15 +1444,15 @@ function _runTestScenario(scenario: string): string {
           result: "edited demo.ts",
           isError: false,
         },
-      });
-      _broadcastEnvelope({ rpc: { type: "agent_settled" } });
-      return "sent diff (edit + aux hunks — shows the Diff⇄Content toggle)";
+      })
+      _broadcastEnvelope({ rpc: { type: "agent_settled" } })
+      return "sent diff (edit + aux hunks — shows the Diff⇄Content toggle)"
     }
     case "code-shell": {
       // bash-family result → the app classifies it into a `code` block (lang
       // shell), syntax-highlighted. OUTPUT is app-side now — no aux stamped.
-      const tc = `tc-sh-${Date.now()}`;
-      _broadcastEnvelope({ rpc: { type: "turn_start" } });
+      const tc = `tc-sh-${Date.now()}`
+      _broadcastEnvelope({ rpc: { type: "turn_start" } })
       _broadcastEnvelope({
         rpc: {
           type: "tool_execution_start",
@@ -1463,7 +1460,7 @@ function _runTestScenario(scenario: string): string {
           toolName: "bash",
           args: { command: "ls -la" },
         },
-      });
+      })
       _broadcastEnvelope({
         rpc: {
           type: "tool_execution_end",
@@ -1472,15 +1469,15 @@ function _runTestScenario(scenario: string): string {
             "total 24\ndrwxr-xr-x  5 geo staff  160 Aug 29 10:00 .\n-rw-r--r--  1 geo staff 1024 index.ts\n-rw-r--r--  1 geo staff  512 README.md",
           isError: false,
         },
-      });
-      _broadcastEnvelope({ rpc: { type: "agent_settled" } });
-      return "sent code-shell (bash output → code block, lang shell)";
+      })
+      _broadcastEnvelope({ rpc: { type: "agent_settled" } })
+      return "sent code-shell (bash output → code block, lang shell)"
     }
     case "code-file": {
       // read-family with a *.swift path → `code` block, lang inferred from the
       // extension (swift) and highlighted.
-      const tc = `tc-rd-${Date.now()}`;
-      _broadcastEnvelope({ rpc: { type: "turn_start" } });
+      const tc = `tc-rd-${Date.now()}`
+      _broadcastEnvelope({ rpc: { type: "turn_start" } })
       _broadcastEnvelope({
         rpc: {
           type: "tool_execution_start",
@@ -1488,7 +1485,7 @@ function _runTestScenario(scenario: string): string {
           toolName: "read",
           args: { path: "/src/Greeter.swift" },
         },
-      });
+      })
       _broadcastEnvelope({
         rpc: {
           type: "tool_execution_end",
@@ -1497,15 +1494,15 @@ function _runTestScenario(scenario: string): string {
             'struct Greeter {\n    let name: String\n    func greet() -> String {\n        return "Hello, \\(name)!"\n    }\n}',
           isError: false,
         },
-      });
-      _broadcastEnvelope({ rpc: { type: "agent_settled" } });
-      return "sent code-file (read .swift → highlighted code block)";
+      })
+      _broadcastEnvelope({ rpc: { type: "agent_settled" } })
+      return "sent code-file (read .swift → highlighted code block)"
     }
     case "diff-output": {
       // A tool whose RESULT already embeds a unified diff → the app parses it
       // into a `diff` block (re-reading persisted text; replay-safe).
-      const tc = `tc-do-${Date.now()}`;
-      _broadcastEnvelope({ rpc: { type: "turn_start" } });
+      const tc = `tc-do-${Date.now()}`
+      _broadcastEnvelope({ rpc: { type: "turn_start" } })
       _broadcastEnvelope({
         rpc: {
           type: "tool_execution_start",
@@ -1513,7 +1510,7 @@ function _runTestScenario(scenario: string): string {
           toolName: "bash",
           args: { command: "git diff" },
         },
-      });
+      })
       _broadcastEnvelope({
         rpc: {
           type: "tool_execution_end",
@@ -1522,17 +1519,17 @@ function _runTestScenario(scenario: string): string {
             'diff --git a/app.ts b/app.ts\n--- a/app.ts\n+++ b/app.ts\n@@ -1,3 +1,3 @@\n const port = 3000;\n-const host = "127.0.0.1";\n+const host = "0.0.0.0";\n start(host, port);',
           isError: false,
         },
-      });
-      _broadcastEnvelope({ rpc: { type: "agent_settled" } });
-      return "sent diff-output (result embeds a unified diff → diff block)";
+      })
+      _broadcastEnvelope({ rpc: { type: "agent_settled" } })
+      return "sent diff-output (result embeds a unified diff → diff block)"
     }
     case "write": {
       // write carries the new file text in args.content; no live diff → the
       // card shows the Content view (new text as a code block, replay-safe).
-      const tc = `tc-wr-${Date.now()}`;
+      const tc = `tc-wr-${Date.now()}`
       const content =
-        "export function add(a: number, b: number): number {\n  return a + b;\n}";
-      _broadcastEnvelope({ rpc: { type: "turn_start" } });
+        "export function add(a: number, b: number): number {\n  return a + b;\n}"
+      _broadcastEnvelope({ rpc: { type: "turn_start" } })
       _broadcastEnvelope({
         rpc: {
           type: "tool_execution_start",
@@ -1540,7 +1537,7 @@ function _runTestScenario(scenario: string): string {
           toolName: "write",
           args: { path: "/src/math.ts", content },
         },
-      });
+      })
       _broadcastEnvelope({
         rpc: {
           type: "tool_execution_end",
@@ -1548,12 +1545,12 @@ function _runTestScenario(scenario: string): string {
           result: "wrote /src/math.ts",
           isError: false,
         },
-      });
-      _broadcastEnvelope({ rpc: { type: "agent_settled" } });
-      return "sent write (args.content → content-as-code block)";
+      })
+      _broadcastEnvelope({ rpc: { type: "agent_settled" } })
+      return "sent write (args.content → content-as-code block)"
     }
     case "agent": {
-      _broadcastEnvelope({ rpc: { type: "turn_start" } });
+      _broadcastEnvelope({ rpc: { type: "turn_start" } })
       _broadcastEnvelope({
         rpc: {
           type: "message_update",
@@ -1562,7 +1559,7 @@ function _runTestScenario(scenario: string): string {
             delta: "This is a ",
           },
         },
-      });
+      })
       _broadcastEnvelope({
         rpc: {
           type: "message_update",
@@ -1571,7 +1568,7 @@ function _runTestScenario(scenario: string): string {
             delta: "test agent message.",
           },
         },
-      });
+      })
       _broadcastEnvelope({
         rpc: {
           type: "message_end",
@@ -1580,9 +1577,9 @@ function _runTestScenario(scenario: string): string {
             content: [{ type: "text", text: "This is a test agent message." }],
           },
         },
-      });
-      _broadcastEnvelope({ rpc: { type: "agent_settled" } });
-      return "sent agent message (envelope)";
+      })
+      _broadcastEnvelope({ rpc: { type: "agent_settled" } })
+      return "sent agent message (envelope)"
     }
     case "error":
       _broadcastEnvelope({
@@ -1594,9 +1591,9 @@ function _runTestScenario(scenario: string): string {
             errorMessage: "This is a test error.",
           },
         },
-      });
-      _broadcastEnvelope({ rpc: { type: "agent_settled" } });
-      return "sent error (envelope message_end/error)";
+      })
+      _broadcastEnvelope({ rpc: { type: "agent_settled" } })
+      return "sent error (envelope message_end/error)"
     case "all":
       for (const sc of [
         "ask-notify",
@@ -1612,10 +1609,10 @@ function _runTestScenario(scenario: string): string {
         "agent",
         "error",
       ])
-        _runTestScenario(sc);
-      return "sent all (ask-notify, plan, subagents, svg, tool, diff, code-shell, code-file, diff-output, write, agent, error)";
+        _runTestScenario(sc)
+      return "sent all (ask-notify, plan, subagents, svg, tool, diff, code-shell, code-file, diff-output, write, agent, error)"
     default:
-      return "usage: /unbien test <ask-select|ask-confirm|ask-input|ask-editor|ask-notify|ask-rich|plan|subagents|svg|tool|diff|code-shell|code-file|diff-output|write|agent|error|all>";
+      return "usage: /unbien test <ask-select|ask-confirm|ask-input|ask-editor|ask-notify|ask-rich|plan|subagents|svg|tool|diff|code-shell|code-file|diff-output|write|agent|error|all>"
   }
 }
 
@@ -1629,16 +1626,16 @@ function _routeRpcCommandFrom(
   sender: PlainPeerChannel,
   env: EnvelopeMessage,
 ): void {
-  const frame = env.rpc;
-  if (!frame || typeof frame !== "object") return; // no {evt} inbound today
-  envLog(`rpc inbound: ${String((frame as Record<string, unknown>).type)}`);
+  const frame = env.rpc
+  if (!frame || typeof frame !== "object") return // no {evt} inbound today
+  envLog(`rpc inbound: ${String((frame as Record<string, unknown>).type)}`)
   // extension_ui_response is a reply to an extension-issued dialog, not a command —
   // route it straight to the ui bridge (same target as the stock path).
   if ((frame as Record<string, unknown>).type === "extension_ui_response") {
     // SAFETY: the type-discriminator check directly above proves this frame is
     // an extension_ui_response envelope, which is the ExtensionUiResponseWire shape.
-    _extensionUiBridge?.respond(frame as unknown as ExtensionUiResponseWire);
-    return;
+    _extensionUiBridge?.respond(frame as unknown as ExtensionUiResponseWire)
+    return
   }
   // session_sync (reconstruction) is un-bien's OWN protocol — dispatched on the
   // un plane by _routeUnBienPlaneFrom, NOT here. Only byte-faithful pi rpc
@@ -1657,27 +1654,27 @@ function _routeRpcCommandFrom(
       // pass its chosen streamingBehavior straight through to pi. The extension does
       // NOT force steer over a followUp anymore. `shouldSteer` below is now only
       // BOOKKEEPING (turn-seeding + image-preview defer), not the delivery verb.
-      const requestedSteer = opts.streamingBehavior === "steer";
+      const requestedSteer = opts.streamingBehavior === "steer"
       // Authoritative busy signal from pi's OWN state (AgentSession.isStreaming),
       // correct across subagent lifecycles (turnId/working stick busy after a
       // subagent run).
       const streaming =
-        (_pi as PiStreamingInternals | null)?.isStreaming === true;
-      const shouldSteer = requestedSteer || streaming;
+        (_pi as PiStreamingInternals | null)?.isStreaming === true
+      const shouldSteer = requestedSteer || streaming
       const msg: ClientUserMessage = {
         type: "user_message",
         id: opts.id ?? _rootState().turnId ?? String(Date.now()),
         text: message,
         images: opts.images as ClientUserMessage["images"],
-      };
+      }
       // Image path mirrors the stock handler (SDK handoff WITH images + echo).
       if (msg.images && msg.images.length > 0) {
-        await _deliverImageUserMessage(sender, msg, shouldSteer);
-        return;
+        await _deliverImageUserMessage(sender, msg, shouldSteer)
+        return
       }
-      const previousTurnId = _rootState().turnId;
-      const seededTurnId = !shouldSteer || _rootState().turnId === null;
-      if (seededTurnId) _rootState().turnId = msg.id;
+      const previousTurnId = _rootState().turnId
+      const seededTurnId = !shouldSteer || _rootState().turnId === null
+      if (seededTurnId) _rootState().turnId = msg.id
       // PASS-THROUGH the app's verb (design 01M14T6J5W). pi's prompt(): idle
       // ignores streamingBehavior (fresh run); streaming+"steer" -> _queueSteer;
       // streaming+"followUp" -> _queueFollowUp; streaming+none -> throws. The
@@ -1692,79 +1689,77 @@ function _routeRpcCommandFrom(
           : opts.streamingBehavior === "steer" || streaming
             ? "steer"
             : undefined,
-      );
+      )
       if (!wake.ok) {
-        if (seededTurnId) _rootState().turnId = previousTurnId;
-        throw new Error(wake.detail);
+        if (seededTurnId) _rootState().turnId = previousTurnId
+        throw new Error(wake.detail)
       }
     },
     steer: async (message) => {
-      const wake = _wakeAgent(message, "app rpc steer", "steer");
-      if (!wake.ok) throw new Error(wake.detail);
+      const wake = _wakeAgent(message, "app rpc steer", "steer")
+      if (!wake.ok) throw new Error(wake.detail)
     },
     followUp: async (message) => {
-      const wake = _wakeAgent(message, "app rpc follow_up", "followUp");
-      if (!wake.ok) throw new Error(wake.detail);
+      const wake = _wakeAgent(message, "app rpc follow_up", "followUp")
+      if (!wake.ok) throw new Error(wake.detail)
     },
     abort: async () => {
-      if (!_abortCurrentTurn()) throw new Error("no active turn to abort");
+      if (!_abortCurrentTurn()) throw new Error("no active turn to abort")
     },
     setModel: async (provider, modelId) => {
-      if (!_pi) throw new Error("agent session not bound");
-      const actionCtx = (_lastEventCtx ?? _lastCtx) as ActionCtx | null;
-      const reg = actionCtx?.modelRegistry ?? ensureModelRegistry(actionCtx);
-      reg.refresh();
-      const model = reg.find(provider, modelId);
+      if (!_pi) throw new Error("agent session not bound")
+      const actionCtx = (_lastEventCtx ?? _lastCtx) as ActionCtx | null
+      const reg = actionCtx?.modelRegistry ?? ensureModelRegistry(actionCtx)
+      reg.refresh()
+      const model = reg.find(provider, modelId)
       if (!model)
-        throw new Error(`model "${provider}/${modelId}" not in registry`);
+        throw new Error(`model "${provider}/${modelId}" not in registry`)
       // Route via the minimal ActionPi view (matches handleModelSet): the
       // registry's `find` returns the minimal SdkModelLike, structurally fine
       // for setModel at runtime.
       // SAFETY: _pi (checked non-null above) is the concrete AgentSession; its
       // setModel accepts the minimal SdkModelLike the registry's find() returns,
       // matching handleModelSet's ActionPi view.
-      const ok = await (_pi as unknown as ActionPi).setModel(model);
-      if (!ok) throw new Error("no auth configured for this model");
-      _persistModelDefault(model.provider, model.id); // survive restart, mirrors stock model_set
-      return wireFromModel(model);
+      const ok = await (_pi as unknown as ActionPi).setModel(model)
+      if (!ok) throw new Error("no auth configured for this model")
+      _persistModelDefault(model.provider, model.id) // survive restart, mirrors stock model_set
+      return wireFromModel(model)
     },
     setThinkingLevel: async (level) => {
-      if (!_pi) throw new Error("agent session not bound");
-      _pi.setThinkingLevel(level as ThinkingLevel);
+      if (!_pi) throw new Error("agent session not bound")
+      _pi.setThinkingLevel(level as ThinkingLevel)
     },
     getAvailableModels: async () => {
-      const actionCtx = (_lastEventCtx ?? _lastCtx) as ActionCtx | null;
-      const reg = actionCtx?.modelRegistry ?? ensureModelRegistry(actionCtx);
-      reg.refresh();
-      const models = reg.getAvailable().map(wireFromModel);
-      const current = actionCtx?.getModel?.();
-      return { models, current: current ? wireFromModel(current) : undefined };
+      const actionCtx = (_lastEventCtx ?? _lastCtx) as ActionCtx | null
+      const reg = actionCtx?.modelRegistry ?? ensureModelRegistry(actionCtx)
+      reg.refresh()
+      const models = reg.getAvailable().map(wireFromModel)
+      const current = actionCtx?.getModel?.()
+      return { models, current: current ? wireFromModel(current) : undefined }
     },
     compact: async (customInstructions) => {
-      const actionCtx = (_lastEventCtx ?? _lastCtx) as ActionCtx | null;
+      const actionCtx = (_lastEventCtx ?? _lastCtx) as ActionCtx | null
       if (!actionCtx?.compact)
-        throw new Error("compact unavailable (no active session ctx)");
-      actionCtx.compact(
-        customInstructions ? { customInstructions } : undefined,
-      );
-      return {};
+        throw new Error("compact unavailable (no active session ctx)")
+      actionCtx.compact(customInstructions ? { customInstructions } : undefined)
+      return {}
     },
     newSession: async () => {
-      const actionCtx = (_lastEventCtx ?? _lastCtx) as ActionCtx | null;
+      const actionCtx = (_lastEventCtx ?? _lastCtx) as ActionCtx | null
       if (!actionCtx?.newSession) {
-        throw new Error("new_session unavailable (no command ctx)");
+        throw new Error("new_session unavailable (no command ctx)")
       }
-      await actionCtx.newSession({ withSession: async () => {} });
+      await actionCtx.newSession({ withSession: async () => {} })
       // Restamp the session clock (parity with the retired stock session_new):
       // session_sync_end carries it so the app can detect the pi restart.
-      _resetSessionForNew();
-      return { cancelled: false };
+      _resetSessionForNew()
+      return { cancelled: false }
     },
     clearQueue: async () => {
-      if (!_pi) throw new Error("agent session not bound");
+      if (!_pi) throw new Error("agent session not bound")
       // SAFETY: _pi (checked non-null above) is the concrete AgentSession,
       // which implements clearQueue(); the public ExtensionAPI type omits it.
-      return (_pi as unknown as PiQueueControl).clearQueue();
+      return (_pi as unknown as PiQueueControl).clearQueue()
     },
     getEntries: async (since?: string) => {
       // Native pi get_entries, PAGED (design: get_entries backfill paging): the
@@ -1776,31 +1771,31 @@ function _routeRpcCommandFrom(
       // the app loops `since: leafId` until an empty page. The extension does
       // NOT replay these — see the app's SessionState.applyEntries (design
       // 01M15FMQ).
-      const sm = _rootState().sessionManager;
+      const sm = _rootState().sessionManager
       // Unbound → ERROR (pi always has a session here; a silent empty page on
       // the fork side reads as "no history" — make the failure visible).
-      if (!sm) throw new Error("get_entries unavailable (no session bound)");
-      const all = sm.getEntries();
+      if (!sm) throw new Error("get_entries unavailable (no session bound)")
+      const all = sm.getEntries()
       // pi-faithful `since` semantics (rpc-mode.js): unknown id → error, not a
       // silent restart from the beginning.
       if (
         typeof since === "string" &&
         all.findIndex((e) => e.id === since) === -1
       )
-        throw new Error(`Entry not found: ${since}`);
-      return pageEntries(all, since, sm.getLeafId());
+        throw new Error(`Entry not found: ${since}`)
+      return pageEntries(all, since, sm.getLeafId())
     },
-  };
+  }
   void dispatchRpcCommand(frame as Record<string, unknown>, handlers)
     .then((resp) => {
       // Envelope-native ONLY: no stock fallback. An unhandled rpc type is
       // ignored (forward-compat). un-bien's own commands (session_sync,
       // session_launch) ride the un plane via _routeUnBienPlaneFrom.
-      if (resp) sender.sendEnvelope(resp);
+      if (resp) sender.sendEnvelope(resp)
     })
     .catch((err) => {
-      console.error(`[un-bien] rpc inbound dispatch failed: ${String(err)}`);
-    });
+      console.error(`[un-bien] rpc inbound dispatch failed: ${String(err)}`)
+    })
 }
 
 /**
@@ -1815,26 +1810,26 @@ function _routeUnBienPlaneFrom(
   sender: PlainPeerChannel,
   env: EnvelopeMessage,
 ): void {
-  const frame = env.ub;
-  if (!frame || typeof frame !== "object") return;
-  const type = (frame as Record<string, unknown>).type;
-  envLog(`ub inbound: ${String(type)}`);
+  const frame = env.ub
+  if (!frame || typeof frame !== "object") return
+  const type = (frame as Record<string, unknown>).type
+  envLog(`ub inbound: ${String(type)}`)
 
   if (type === "session_sync") {
-    const f = frame as Record<string, unknown>;
+    const f = frame as Record<string, unknown>
     // session_sync now carries ONLY un-bien's NON-rpc display state: panels +
     // pending extension_ui. The TRANSCRIPT is the app's OWN native get_entries
     // rpc (reduced by SessionState.applyEntries) — NOT replayed here. Design
     // 01M15FMQ: separate the rpc transcript (get_entries) from un-bien panel/ui
     // state, each an independent app-driven request issued on open + reconnect.
     for (const req of _extensionUiBridge?.pendingRequests() ?? [])
-      sender.send(req);
-    const panels = _panelBridge?.pendingPanels() ?? [];
+      sender.send(req)
+    const panels = _panelBridge?.pendingPanels() ?? []
     for (const panel of panels)
-      sender.sendEnvelope({ evt: { channel: "panel", data: panel } });
+      sender.sendEnvelope({ evt: { channel: "panel", data: panel } })
     envLog(
       `session_sync(ub): panels=${panels.length} + ui (transcript is the app's get_entries rpc)`,
-    );
+    )
     // Terminator/ack on the ub plane; carries the session clock so the app can
     // detect a pi restart. `truncated`/`limit` are gone (a replay concern;
     // get_entries is unbounded / since-delta).
@@ -1844,29 +1839,29 @@ function _routeUnBienPlaneFrom(
         ...(typeof f.id === "string" ? { in_reply_to: f.id } : {}),
         session_started_at: _sessionStartedAt ?? 0,
       } as EnvelopeMessage["ub"],
-    });
-    return;
+    })
+    return
   }
 
   if (type === "session_launch") {
-    const f = frame as Record<string, unknown>;
+    const f = frame as Record<string, unknown>
     const cwd = _expandTilde(
       typeof f.cwd === "string" && f.cwd.length > 0 ? f.cwd : process.cwd(),
-    );
+    )
     if (!effectiveAllowRemoteLaunch(loadLocalConfig(cwd))) {
-      envLog("session_launch(ub): remote launch disabled on this machine");
-      return;
+      envLog("session_launch(ub): remote launch disabled on this machine")
+      return
     }
     // Backend is a MACHINE config choice (pick-one via launch.backend), not
     // app-chosen; rpc is a fast-follow so only tmux|herdr resolve here.
-    const backend = loadConfig().launch?.backend === "herdr" ? "herdr" : "tmux";
+    const backend = loadConfig().launch?.backend === "herdr" ? "herdr" : "tmux"
     const launchError = _launchSession(
       backend,
       cwd,
       typeof f.name === "string" ? f.name : undefined,
-    );
-    if (launchError) envLog(`session_launch(ub) error: ${launchError}`);
-    return;
+    )
+    if (launchError) envLog(`session_launch(ub) error: ${launchError}`)
+    return
   }
 }
 
@@ -1874,7 +1869,7 @@ function _routeUnBienPlaneFrom(
  *  `extension_ui_request`, sent ENVELOPE-ONLY as a `{rpc}` frame (the wire
  *  shape mirrors the SDK rpc contract 1:1). No stock fallback. */
 function _uiBroadcast(msg: ServerMessage): void {
-  if (msg.type === "extension_ui_request") _broadcastEnvelope({ rpc: msg });
+  if (msg.type === "extension_ui_request") _broadcastEnvelope({ rpc: msg })
 }
 
 /** Broadcast for the panel bridge. The bridge only ever emits `panel_update`,
@@ -1882,7 +1877,7 @@ function _uiBroadcast(msg: ServerMessage): void {
  *  the app folds it into its panel store. No stock fallback. */
 function _panelBroadcast(msg: ServerMessage): void {
   if (msg.type === "panel_update")
-    _broadcastEnvelope({ evt: { channel: "panel", data: msg } });
+    _broadcastEnvelope({ evt: { channel: "panel", data: msg } })
 }
 
 /** Fan an rpc-envelope frame out to every attached peer (base64 ct via each
@@ -1893,12 +1888,12 @@ function _broadcastEnvelope(env: EnvelopeMessage): void {
     // e2e bring-up. Frame type only — payloads can be large / carry images.
     const kind = env.rpc
       ? `rpc:${(env.rpc as { type?: string }).type ?? "?"}`
-      : `evt:${env.evt?.channel ?? "?"}`;
-    envLog(`envelope -> ${_activePeers.size} peer(s): ${kind}`);
+      : `evt:${env.evt?.channel ?? "?"}`
+    envLog(`envelope -> ${_activePeers.size} peer(s): ${kind}`)
   }
   for (const ch of _activePeers.values()) {
     try {
-      ch.sendEnvelope(env);
+      ch.sendEnvelope(env)
     } catch {
       /* best-effort per channel */
     }
@@ -1914,25 +1909,25 @@ function _attachPeerChannel(
   appPeerId: string,
   channel: PlainPeerChannel,
 ): void {
-  _activePeers.set(appPeerId, channel);
-  _peerShort = appPeerId.slice(0, 8);
+  _activePeers.set(appPeerId, channel)
+  _peerShort = appPeerId.slice(0, 8)
 }
 
 /** Detaches a single owner's channel + removes it from the map. Used by
  *  `_onPeerDisconnect`, `_cmdRevoke`, and the SelfRevoke callback. */
 function _detachPeerChannel(appPeerId: string): void {
-  const ch = _activePeers.get(appPeerId);
-  if (!ch) return;
+  const ch = _activePeers.get(appPeerId)
+  if (!ch) return
   try {
-    ch.detach();
+    ch.detach()
   } catch {
     /* best-effort */
   }
-  _activePeers.delete(appPeerId);
+  _activePeers.delete(appPeerId)
   if (_peerShort === appPeerId.slice(0, 8)) {
     // Pick a different remaining peer for the UX hint, or clear when none.
-    const next = _activePeers.keys().next().value;
-    _peerShort = next ? next.slice(0, 8) : "";
+    const next = _activePeers.keys().next().value
+    _peerShort = next ? next.slice(0, 8) : ""
   }
 }
 
@@ -1958,13 +1953,13 @@ function _detachPeerChannel(appPeerId: string): void {
  * the raw cwd path.
  */
 function _displayName(cwd: string): string {
-  if (_meshNode) return _meshNode.name();
-  const local = loadLocalConfig(cwd);
-  return local.agent_name || defaultAgentName(cwd);
+  if (_meshNode) return _meshNode.name()
+  const local = loadLocalConfig(cwd)
+  return local.agent_name || defaultAgentName(cwd)
 }
 
 function _reportRevocationByFingerprint(canonicalOwnerPubkey: string): void {
-  const fingerprint = _runtimeOwnerFingerprint(canonicalOwnerPubkey);
+  const fingerprint = _runtimeOwnerFingerprint(canonicalOwnerPubkey)
   _pi?.sendMessage({
     customType: "un-bien:mesh-revoked",
     content:
@@ -1972,15 +1967,15 @@ function _reportRevocationByFingerprint(canonicalOwnerPubkey: string): void {
       `The mobile app for this Owner removed this PC from the mesh. ` +
       `Re-pair via /unbien pair if this was unexpected.`,
     display: true,
-  });
+  })
 }
 
 function _revokeActiveOwnerRuntime(canonicalOwnerPubkey: string): void {
-  if (!_activePeers.has(canonicalOwnerPubkey)) return;
-  _refreshPairingsCache();
-  _detachPeerChannel(canonicalOwnerPubkey);
-  _refreshFooter();
-  _reportRevocationByFingerprint(canonicalOwnerPubkey);
+  if (!_activePeers.has(canonicalOwnerPubkey)) return
+  _refreshPairingsCache()
+  _detachPeerChannel(canonicalOwnerPubkey)
+  _refreshFooter()
+  _reportRevocationByFingerprint(canonicalOwnerPubkey)
 }
 
 // ── Transition helpers ────────────────────────────────────────────────────────
@@ -1989,48 +1984,48 @@ function _revokeActiveOwnerRuntime(canonicalOwnerPubkey: string): void {
  * Full teardown: stop listener, detach channel, close relay → idle.
  */
 function _goIdle(): void {
-  _rootLifecycleGeneration += 1;
-  _relayLifecycleGeneration += 1;
+  _rootLifecycleGeneration += 1
+  _relayLifecycleGeneration += 1
 
   // Cancel any pending reconnect attempt. Critical: /unbien stop must
   // win the race against a scheduled reconnect.
   if (_reconnectTimer !== null) {
-    clearTimeout(_reconnectTimer);
-    _reconnectTimer = null;
+    clearTimeout(_reconnectTimer)
+    _reconnectTimer = null
   }
-  _reconnectAttempt = 0;
+  _reconnectAttempt = 0
 
-  _stopAutoListener?.();
-  _stopAutoListener = null;
+  _stopAutoListener?.()
+  _stopAutoListener = null
 
   // Tear down every per-owner channel and clear the map.
   for (const ch of _activePeers.values()) {
     try {
-      ch.detach();
+      ch.detach()
     } catch {
       /* best-effort */
     }
   }
-  _activePeers.clear();
-  _peerShort = "";
-  _rootState().turnId = null;
-  _pendingReceivedImagePreviews.length = 0;
+  _activePeers.clear()
+  _peerShort = ""
+  _rootState().turnId = null
+  _pendingReceivedImagePreviews.length = 0
 
   // Invalidate async producers and bridge ownership before closing the host
   // Relay. A synchronous/delayed close callback must observe stale identity.
-  const producer = _selfRevoke;
-  _selfRevoke = null;
-  _selfRevokeEpoch += 1;
-  _selfRevokeTopologyReadyEpoch = -1;
-  _selfRevokeTopology = null;
-  producer?.stop();
+  const producer = _selfRevoke
+  _selfRevoke = null
+  _selfRevokeEpoch += 1
+  _selfRevokeTopologyReadyEpoch = -1
+  _selfRevokeTopology = null
+  producer?.stop()
 
-  _meshNode?.detachBridge();
+  _meshNode?.detachBridge()
 
-  const relay = _relay;
-  _relay = null;
-  _relayUrl = null;
-  relay?.close();
+  const relay = _relay
+  _relay = null
+  _relayUrl = null
+  relay?.close()
 
   // Preserve _sessionStartedAt + _messageBuffer across stop/start cycles.
   // The Pi agent session outlives the relay connection — `message_end` keeps
@@ -2038,9 +2033,9 @@ function _goIdle(): void {
   // so those turns appear in the next session_sync. Only a Pi process
   // restart resets these (init-time values).
 
-  _state = "idle";
-  _refreshFooter();
-  _emitRelayState(); // → disconnected
+  _state = "idle"
+  _refreshFooter()
+  _emitRelayState() // → disconnected
 }
 
 /**
@@ -2054,40 +2049,40 @@ function _goIdle(): void {
  * the prior peer here; we just go back to `started` and wait.
  */
 function _onRelayClose(closedRelay: RelayClient): void {
-  if (_relay !== closedRelay) return; // delayed close from a replaced Relay
-  if (_state === "idle") return; // already torn down (e.g. /unbien stop)
+  if (_relay !== closedRelay) return // delayed close from a replaced Relay
+  if (_state === "idle") return // already torn down (e.g. /unbien stop)
 
-  _relayLifecycleGeneration += 1;
-  _stopAutoListener?.();
-  _stopAutoListener = null;
+  _relayLifecycleGeneration += 1
+  _stopAutoListener?.()
+  _stopAutoListener = null
 
   // Detach every per-owner channel — relay is gone, none can route. The
   // auto-listener re-attaches owners after `_attemptReconnect` succeeds
   // (via the same known-peer + pair_request paths used on first connect).
   for (const ch of _activePeers.values()) {
     try {
-      ch.detach();
+      ch.detach()
     } catch {
       /* best-effort */
     }
   }
-  _activePeers.clear();
-  _peerShort = "";
-  _rootState().turnId = null;
+  _activePeers.clear()
+  _peerShort = ""
+  _rootState().turnId = null
 
-  _relay = null; // _relayUrl preserved for retry
+  _relay = null // _relayUrl preserved for retry
 
   // Cross-PC routing relies on _relay; bring it down. Will be re-instated
   // by _attemptReconnect on success.
-  _meshNode?.detachBridge();
+  _meshNode?.detachBridge()
 
-  _state = "started";
-  _refreshFooter();
-  _emitRelayState(); // → reconnecting
+  _state = "started"
+  _refreshFooter()
+  _emitRelayState() // → reconnecting
 
-  const reconnectUrl = _relayUrl;
+  const reconnectUrl = _relayUrl
   if (reconnectUrl) {
-    _scheduleReconnect(_relayLifecycleGeneration, reconnectUrl);
+    _scheduleReconnect(_relayLifecycleGeneration, reconnectUrl)
   }
 }
 
@@ -2100,39 +2095,39 @@ function _isCurrentReconnect(
     _state === "started" &&
     _relay === null &&
     _relayUrl === url
-  );
+  )
 }
 
 function _scheduleReconnect(lifecycleGeneration: number, url: string): void {
-  if (_reconnectTimer !== null) return; // already scheduled
-  if (!_cachedEd25519) return; // can't reconnect without the cached identity
-  if (!_isCurrentReconnect(lifecycleGeneration, url)) return;
+  if (_reconnectTimer !== null) return // already scheduled
+  if (!_cachedEd25519) return // can't reconnect without the cached identity
+  if (!_isCurrentReconnect(lifecycleGeneration, url)) return
 
-  const idx = Math.min(_reconnectAttempt, RECONNECT_BACKOFFS_MS.length - 1);
-  const delay = RECONNECT_BACKOFFS_MS[idx]!;
-  _reconnectAttempt += 1;
+  const idx = Math.min(_reconnectAttempt, RECONNECT_BACKOFFS_MS.length - 1)
+  const delay = RECONNECT_BACKOFFS_MS[idx]!
+  _reconnectAttempt += 1
 
   // The timer belongs to the lifecycle that scheduled it. Re-check that exact
   // generation + URL before constructing a candidate so a dequeued old timer
   // cannot act on a newer stop/start lifecycle.
   _reconnectTimer = setTimeout(() => {
-    _reconnectTimer = null;
-    if (!_isCurrentReconnect(lifecycleGeneration, url)) return;
-    void _attemptReconnect(lifecycleGeneration, url);
-  }, delay);
+    _reconnectTimer = null
+    if (!_isCurrentReconnect(lifecycleGeneration, url)) return
+    void _attemptReconnect(lifecycleGeneration, url)
+  }, delay)
 }
 
 async function _attemptReconnect(
   lifecycleGeneration: number,
   url: string,
 ): Promise<void> {
-  if (!_cachedEd25519) return;
-  if (!_isCurrentReconnect(lifecycleGeneration, url)) return;
+  if (!_cachedEd25519) return
+  if (!_isCurrentReconnect(lifecycleGeneration, url)) return
 
-  const edKp = _cachedEd25519;
+  const edKp = _cachedEd25519
   // _relayUrl is stored in canonical http(s):// form — convert at the
   // WS boundary, same as _cmdStart.
-  const relay = new RelayClient(toWebSocketUrl(url), edKp);
+  const relay = new RelayClient(toWebSocketUrl(url), edKp)
 
   try {
     // Replay the same room identity from _cmdStart. Without this the relay
@@ -2141,50 +2136,50 @@ async function _attemptReconnect(
     await relay.connect({
       ...(_myRoomId ? { roomId: _myRoomId } : {}),
       ...(_myRoomMeta ? { roomMeta: _myRoomMeta } : {}),
-    });
+    })
   } catch {
     // A reconnect candidate stays local until publication; every rejected
     // candidate is deterministically closed before stale-return or retry.
     try {
-      relay.close();
+      relay.close()
     } catch {
       /* best-effort rejected candidate cleanup */
     }
-    if (!_isCurrentReconnect(lifecycleGeneration, url)) return;
-    _scheduleReconnect(lifecycleGeneration, url);
-    return;
+    if (!_isCurrentReconnect(lifecycleGeneration, url)) return
+    _scheduleReconnect(lifecycleGeneration, url)
+    return
   }
 
   if (!_isCurrentReconnect(lifecycleGeneration, url)) {
     try {
-      relay.close();
+      relay.close()
     } catch {
       /* best-effort stale candidate cleanup */
     }
-    return;
+    return
   }
 
-  _relay = relay;
-  _reconnectAttempt = 0;
+  _relay = relay
+  _reconnectAttempt = 0
 
-  relay.on("close", () => _onRelayClose(relay));
-  _stopAutoListener = _installAutoListener(relay);
+  relay.on("close", () => _onRelayClose(relay))
+  _stopAutoListener = _installAutoListener(relay)
 
   // Plan/25 Wave B/C: relay is back; bring cross-PC routing back online.
-  _attachBridgeIfReady();
+  _attachBridgeIfReady()
 
   // _state stays "started"; peer reconnect (if previously paired) flows
   // through _installAutoListener → _findKnownPeer → _promoteToPaired
   // automatically when the app sends any inner.
-  _emitRelayState();
+  _emitRelayState()
 }
 
 // ── Relay state event + transparent control channel (Cockpit toggle) ─────────
 
 /** Current relay connectivity, derived from `_state` + `_relay`. */
 function _relayStatus(): RelayConnectivity {
-  if (_getState() === "idle") return "disconnected";
-  return _relay ? "connected" : "reconnecting";
+  if (_getState() === "idle") return "disconnected"
+  return _relay ? "connected" : "reconnecting"
 }
 
 /**
@@ -2194,9 +2189,9 @@ function _relayStatus(): RelayConnectivity {
  * `force=true` to answer an explicit `relay:status` query regardless.
  */
 function _emitRelayState(force = false): void {
-  const status = _relayStatus();
-  if (!force && status === _lastRelayStatus) return;
-  _lastRelayStatus = status;
+  const status = _relayStatus()
+  if (!force && status === _lastRelayStatus) return
+  _lastRelayStatus = status
   // This can run inside a WebSocket 'close' callback (via _onRelayClose). After a
   // session replacement (newSession/fork/switchSession/reload) the module-level
   // `_pi` is stale, and `assertActive` throws synchronously inside `sendMessage`.
@@ -2214,7 +2209,7 @@ function _emitRelayState(force = false): void {
         ...(_myRoomId ? { room: _myRoomId } : {}),
       },
       display: false,
-    });
+    })
   } catch {
     // _pi stale (session replaced) or extension runtime not yet bound.
   }
@@ -2230,7 +2225,7 @@ function _controlCtx(): Pick<ExtensionContext, "ui" | "cwd"> {
   return {
     ui: _headlessUi(),
     cwd: process.cwd(),
-  } as unknown as Pick<ExtensionContext, "ui" | "cwd">;
+  } as unknown as Pick<ExtensionContext, "ui" | "cwd">
 }
 
 /**
@@ -2243,14 +2238,14 @@ function _controlCtx(): Pick<ExtensionContext, "ui" | "cwd"> {
  * footer/notify path — this only affects headless ctxs.
  */
 function _headlessUi(): {
-  notify: (msg: string, type?: "info" | "warning" | "error") => void;
+  notify: (msg: string, type?: "info" | "warning" | "error") => void
 } {
   return {
     notify: (msg: string, type?: "info" | "warning" | "error") => {
       if (type === "warning" || type === "error")
-        process.stderr.write(`${msg}\n`);
+        process.stderr.write(`${msg}\n`)
     },
-  };
+  }
 }
 
 /**
@@ -2265,33 +2260,33 @@ export async function _handleControl(cmd: string): Promise<void> {
   // fixed-verb switch. Renames the agent live (broker re-register + relay room
   // swap) WITHOUT restarting the process or losing the SDK session.
   if (cmd.startsWith("rename:")) {
-    await _renameAgent(cmd.slice("rename:".length).trim());
-    return;
+    await _renameAgent(cmd.slice("rename:".length).trim())
+    return
   }
   switch (cmd) {
     case "relay:on":
-      if (_getState() === "idle") await _cmdStart(_controlCtx());
-      _emitRelayState(true);
-      return;
+      if (_getState() === "idle") await _cmdStart(_controlCtx())
+      _emitRelayState(true)
+      return
     case "relay:off":
       if (_getState() === "idle") {
-        _rootLifecycleGeneration += 1;
-        _relayLifecycleGeneration += 1;
-      } else _goIdle();
-      _emitRelayState(true);
-      return;
+        _rootLifecycleGeneration += 1
+        _relayLifecycleGeneration += 1
+      } else _goIdle()
+      _emitRelayState(true)
+      return
     case "relay:toggle":
-      if (_getState() === "idle") await _cmdStart(_controlCtx());
-      else _goIdle();
-      _emitRelayState(true);
-      return;
+      if (_getState() === "idle") await _cmdStart(_controlCtx())
+      else _goIdle()
+      _emitRelayState(true)
+      return
     case "relay:status":
-      _emitRelayState(true);
-      return;
+      _emitRelayState(true)
+      return
     default:
       // Unknown control verb — ignore (forward-compat: a newer client may send
       // verbs an older extension doesn't know).
-      return;
+      return
   }
 }
 
@@ -2310,30 +2305,30 @@ export async function _handleControl(cmd: string): Promise<void> {
  * The explicit name IS persisted (decision E only skips the runtime `#N`).
  */
 async function _renameAgent(newName: string): Promise<void> {
-  if (!newName) return; // empty rename → no-op
-  const ctx = _controlCtx();
-  const cwd = process.cwd();
-  saveLocalConfig(cwd, { agent_name: newName });
+  if (!newName) return // empty rename → no-op
+  const ctx = _controlCtx()
+  const cwd = process.cwd()
+  saveLocalConfig(cwd, { agent_name: newName })
 
   if (!_meshNode) {
     // Not on the mesh yet — config persisted; applies on the next join.
-    return;
+    return
   }
 
   // Relay room is derived from the name → cycle it so it follows. Tear down
   // first (also detaches the bridge) so the broker re-register below starts
   // clean; bring it back up after with the new name.
-  const wasStarted = _getState() !== "idle";
-  if (wasStarted) _goIdle();
+  const wasStarted = _getState() !== "idle"
+  if (wasStarted) _goIdle()
 
-  let assigned = newName;
+  let assigned = newName
   try {
-    assigned = await _meshNode.rename(newName); // broker soft rejoin
+    assigned = await _meshNode.rename(newName) // broker soft rejoin
   } catch (err) {
-    ctx.ui.notify(`[un-bien] rename failed: ${String(err)}`, "error");
+    ctx.ui.notify(`[un-bien] rename failed: ${String(err)}`, "error")
   }
 
-  if (wasStarted && !_disposed) await _cmdStart(ctx); // relay back up → roomIdFor(cwd, assigned)
+  if (wasStarted && !_disposed) await _cmdStart(ctx) // relay back up → roomIdFor(cwd, assigned)
 
   _pi?.sendMessage({
     customType: "un-bien:name-assigned",
@@ -2343,7 +2338,7 @@ async function _renameAgent(newName: string): Promise<void> {
         : `Mesh name reassigned: "${newName}" → "${assigned}" (collision)`,
     details: { requested: newName, assigned, changed: assigned !== newName },
     display: false,
-  });
+  })
 }
 
 /**
@@ -2358,27 +2353,27 @@ async function _renameAgent(newName: string): Promise<void> {
  * singleton semantics.
  */
 export function _onPeerDisconnect(appPeerId?: string): void {
-  if (_state === "idle") return;
-  const target = appPeerId ?? [..._activePeers.keys()].pop();
-  if (!target) return;
-  if (!_activePeers.has(target)) return;
+  if (_state === "idle") return
+  const target = appPeerId ?? [..._activePeers.keys()].pop()
+  if (!target) return
+  if (!_activePeers.has(target)) return
 
-  _detachPeerChannel(target);
+  _detachPeerChannel(target)
   if (_anyPeerActive()) {
     // Other owners still attached — keep _rootState().turnId so they continue
     // seeing the in-flight agent stream.
-    _refreshFooter();
-    return;
+    _refreshFooter()
+    return
   }
 
   // No owner left. Conservatively clear the turn so the next pair_request
   // starts cleanly.
-  _rootState().turnId = null;
-  _refreshFooter();
+  _rootState().turnId = null
+  _refreshFooter()
   _safeNotify(
     "[un-bien] All app peers disconnected, listening for reconnect",
     "info",
-  );
+  )
   // Auto-listener stays up — same listener catches the reconnect on any peer.
 }
 
@@ -2398,10 +2393,10 @@ function _attachOwner(
   peerName: string,
   firstInner?: ClientMessage,
 ): PlainPeerChannel {
-  const peerShort = appPeerId.slice(0, 8);
+  const peerShort = appPeerId.slice(0, 8)
 
   // Drop any stale channel for this owner before re-attaching.
-  if (_activePeers.has(appPeerId)) _detachPeerChannel(appPeerId);
+  if (_activePeers.has(appPeerId)) _detachPeerChannel(appPeerId)
 
   // Prefer always-fresh session_start ctx for async relay routing — `_lastCtx`
   // is a captured command ctx that goes stale after session replacement (#55).
@@ -2424,37 +2419,37 @@ function _attachOwner(
       _rootState().sessionManager?.getSessionId() ??
       _rootSessionId ??
       undefined,
-  );
+  )
 
-  _attachPeerChannel(appPeerId, channel);
+  _attachPeerChannel(appPeerId, channel)
   // Envelope-native capability handshake: advertise caps up front so the app can
   // enable the {rpc|evt} route + suppress stock before any session content
   // arrives. Additive to the stock session_history caps (parity transition).
-  const _sid = _rootState().sessionManager?.getSessionId();
-  channel.sendEnvelope(helloEnvelope(_capabilities(), _sid));
+  const _sid = _rootState().sessionManager?.getSessionId()
+  channel.sendEnvelope(helloEnvelope(_capabilities(), _sid))
   envLog(
     `attach: peer=${appPeerId.slice(0, 8)} hello sent (caps + sessionId=${_sid ?? "?"}); active=${_activePeers.size}`,
-  );
+  )
   // Reconstruction (transcript + panels + extension_ui) is request-driven: the
   // app issues session_sync — on fresh open AND on relay reconnect — and the
   // handler in _routeUnBienPlaneFrom replays all of it. Re-sync is idempotent
   // (stable identify ids + ns/id panel merge), so nothing is replayed
   // proactively here.
-  _refreshFooter();
+  _refreshFooter()
 
   _safeNotify(
     `[un-bien] Owner attached: peer=${peerShort}, name=${peerName} ` +
       `(${_activePeers.size} active)`,
     "info",
-  );
+  )
 
   if (firstInner) {
     // The PlainPeerChannel listener fired on the same line that triggered
     // attachment in some flows; we route explicitly here too to ensure the
     // inner reaches the handler exactly once.
-    void firstInner;
+    void firstInner
   }
-  return channel;
+  return channel
 }
 
 // ── Auto-listener ─────────────────────────────────────────────────────────────
@@ -2471,56 +2466,56 @@ function _attachOwner(
 //   • Anything else (unknown peer + non-pair) → emit `error: unknown_peer`
 
 function _installAutoListener(relay: RelayClient): () => void {
-  const listenerGeneration = _relayLifecycleGeneration;
+  const listenerGeneration = _relayLifecycleGeneration
   const hasListenerAuthority = (): boolean =>
     !_disposed &&
     _state === "started" &&
     _relay === relay &&
-    _relayLifecycleGeneration === listenerGeneration;
+    _relayLifecycleGeneration === listenerGeneration
   const onMsg = async (line: string) => {
-    let outer: { peer?: string; ct?: string };
+    let outer: { peer?: string; ct?: string }
     try {
-      outer = JSON.parse(line) as { peer?: string; ct?: string };
+      outer = JSON.parse(line) as { peer?: string; ct?: string }
     } catch {
-      return;
+      return
     }
 
-    if (!outer.peer || !outer.ct) return;
+    if (!outer.peer || !outer.ct) return
 
-    if (!hasListenerAuthority()) return;
+    if (!hasListenerAuthority()) return
     // Already-attached owners: their PlainPeerChannel handles routing.
-    if (_activePeers.has(outer.peer)) return;
+    if (_activePeers.has(outer.peer)) return
 
     // Decode inner envelope (base64 JSON)
-    let inner: ClientMessage;
+    let inner: ClientMessage
     try {
-      const plaintext = Buffer.from(outer.ct, "base64").toString("utf8");
-      const parsed = JSON.parse(plaintext) as unknown;
+      const plaintext = Buffer.from(outer.ct, "base64").toString("utf8")
+      const parsed = JSON.parse(plaintext) as unknown
       if (
         !parsed ||
         typeof parsed !== "object" ||
         typeof (parsed as Record<string, unknown>).type !== "string"
       )
-        return;
-      inner = parsed as ClientMessage;
+        return
+      inner = parsed as ClientMessage
     } catch {
-      return;
+      return
     }
 
-    const appPeerId = outer.peer;
+    const appPeerId = outer.peer
 
     if (inner.type === "pair_request") {
-      await _handlePairRequest(relay, appPeerId, inner, hasListenerAuthority);
-      return;
+      await _handlePairRequest(relay, appPeerId, inner, hasListenerAuthority)
+      return
     }
 
     // Reconnect path: known peer (peers.json) without an active channel
     // sends a non-pair message → attach + route through the new channel.
     // See pairing.md §Reconexão.
-    const known = await _findKnownPeer(appPeerId);
-    if (!hasListenerAuthority()) return;
+    const known = await _findKnownPeer(appPeerId)
+    if (!hasListenerAuthority()) return
     if (known) {
-      const channel = _attachOwner(relay, appPeerId, known.name);
+      const channel = _attachOwner(relay, appPeerId, known.name)
       // The channel listener didn't see the line that triggered the attach, so
       // route it explicitly — MIRRORING the channel's own dispatch (peer_channel
       // _onLine): a real-typed envelope ("rpc"/"evt"/"ub", legacy "env") or a
@@ -2529,24 +2524,23 @@ function _installAutoListener(relay: RelayClient): () => void {
       // now, so the first message is normally the ub session_sync (or the rpc
       // get_entries) — routing that through the stock switch dropped it. Use
       // _liveCtx (session_start-fresh), not #55.
-      const innerObj = inner as Record<string, unknown>;
+      const innerObj = inner as Record<string, unknown>
       if (isEnvelopeFrame(innerObj)) {
         {
           // SAFETY: isEnvelopeFrame confirmed rpc/evt/ub envelope keys are
           // present, so this ClientMessage is byte-compatible with EnvelopeMessage.
-          const innerEnv = inner as unknown as EnvelopeMessage;
-          if (innerEnv.ub === undefined)
-            _routeRpcCommandFrom(channel, innerEnv);
-          else _routeUnBienPlaneFrom(channel, innerEnv);
+          const innerEnv = inner as unknown as EnvelopeMessage
+          if (innerEnv.ub === undefined) _routeRpcCommandFrom(channel, innerEnv)
+          else _routeUnBienPlaneFrom(channel, innerEnv)
         }
       } else {
         _routeClientMessageFrom(
           channel,
           inner,
           (_liveCtx() as typeof _noopCtx) ?? _noopCtx,
-        );
+        )
       }
-      return;
+      return
     }
 
     // Unknown peer with non-pair_request inner — signal so the app can react
@@ -2557,13 +2551,13 @@ function _installAutoListener(relay: RelayClient): () => void {
       type: "error",
       code: "unknown_peer",
       message: "Peer not paired — re-scan QR",
-    };
-    const errCt = Buffer.from(JSON.stringify(errReply)).toString("base64");
-    relay.send(JSON.stringify({ peer: appPeerId, ct: errCt }));
-  };
+    }
+    const errCt = Buffer.from(JSON.stringify(errReply)).toString("base64")
+    relay.send(JSON.stringify({ peer: appPeerId, ct: errCt }))
+  }
 
-  relay.on("message", onMsg);
-  return () => relay.off("message", onMsg);
+  relay.on("message", onMsg)
+  return () => relay.off("message", onMsg)
 }
 
 /**
@@ -2575,26 +2569,26 @@ function _installAutoListener(relay: RelayClient): () => void {
  */
 function _readExtensionVersion(): string {
   try {
-    const here = fileURLToPath(import.meta.url);
+    const here = fileURLToPath(import.meta.url)
     // dist/index.js → ../package.json. src/index.ts under tsx → also one level up.
-    const pkgPath = join(here, "..", "..", "package.json");
+    const pkgPath = join(here, "..", "..", "package.json")
     const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as {
-      version?: string;
-    };
-    return typeof pkg.version === "string" ? pkg.version : "0.0.0";
+      version?: string
+    }
+    return typeof pkg.version === "string" ? pkg.version : "0.0.0"
   } catch {
-    return "0.0.0";
+    return "0.0.0"
   }
 }
 const _HARNESS = {
   name: "Pi coding agent",
   version: _readExtensionVersion(),
-} as const;
-const _HOSTNAME = hostname();
+} as const
+const _HOSTNAME = hostname()
 
 // un-bien capability handshake. PROTOCOL_VERSION bumps on a HARD (breaking)
 // wire change; the app gates UI on capability PRESENCE, not this number.
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 1
 // Features this extension supports, advertised on attach (session_history) + pair_ok.
 // `remote_launch` is conditional (added only when local config opts in) — see
 // `_capabilities()`. Passive server->app extras (images/panels) are listed so
@@ -2608,18 +2602,18 @@ const _BASE_CAPABILITIES = [
   "tool_result_images",
   "panels",
   "rpc_envelope",
-] as const;
+] as const
 
 /** The capability set to advertise right now (config-dependent bits included). */
 function _capabilities(): string[] {
-  const caps: string[] = [..._BASE_CAPABILITIES];
+  const caps: string[] = [..._BASE_CAPABILITIES]
   // `remote_launch` is advertised ONLY when the machine opts in via local
   // config — single choke point so the advertised set and honored behavior
   // can't drift. Read the session cwd's config (pi runs in the session cwd).
   if (effectiveAllowRemoteLaunch(loadLocalConfig(process.cwd()))) {
-    caps.push("remote_launch");
+    caps.push("remote_launch")
   }
-  return caps;
+  return caps
 }
 
 async function _handlePairRequest(
@@ -2629,46 +2623,46 @@ async function _handlePairRequest(
   hasListenerAuthority: () => boolean,
 ): Promise<void> {
   const sendInner = (msg: ServerMessage) => {
-    const ct = Buffer.from(JSON.stringify(msg)).toString("base64");
-    relay.send(JSON.stringify({ peer: appPeerId, ct }));
-  };
+    const ct = Buffer.from(JSON.stringify(msg)).toString("base64")
+    relay.send(JSON.stringify({ peer: appPeerId, ct }))
+  }
 
   const sendError = (code: PairErrorCode, message: string) => {
-    sendInner({ type: "pair_error", in_reply_to: inner.id, code, message });
-  };
+    sendInner({ type: "pair_error", in_reply_to: inner.id, code, message })
+  }
 
-  const status = qrSession.consumeToken(inner.token);
+  const status = qrSession.consumeToken(inner.token)
   if (status !== "ok") {
     const code: PairErrorCode =
       status === "expired"
         ? "token_expired"
         : status === "consumed"
           ? "token_consumed"
-          : "token_unknown";
+          : "token_unknown"
     const msg =
       code === "token_expired"
         ? "Ephemeral token expired. Generate a new QR with /unbien pair."
         : code === "token_consumed"
           ? "Token already consumed by another pair_request."
-          : "Token was not issued by this Pi.";
-    sendError(code, msg);
-    return;
+          : "Token was not issued by this Pi."
+    sendError(code, msg)
+    return
   }
 
   // A delayed signed revoke must lose authority before the same-process
   // re-pair enters storage; the replacement owns a fresh token snapshot.
-  const producer = _selfRevoke;
-  const producerEpoch = _selfRevokeEpoch;
-  producer?.invalidateStorageAuthority();
-  const pairedAt = new Date().toISOString();
+  const producer = _selfRevoke
+  const producerEpoch = _selfRevokeEpoch
+  producer?.invalidateStorageAuthority()
+  const pairedAt = new Date().toISOString()
   try {
     await addPeer({
       name: inner.device_name,
       remote_epk: appPeerId,
       paired_at: pairedAt,
-    });
-    if (!hasListenerAuthority()) return;
-    _refreshPairingsCache();
+    })
+    if (!hasListenerAuthority()) return
+    _refreshPairingsCache()
     if (
       producer &&
       _selfRevoke === producer &&
@@ -2676,24 +2670,24 @@ async function _handlePairRequest(
     ) {
       void producer.requestFreshCheck().catch(() => {
         // The regular cadence retries; pairing itself already succeeded.
-      });
+      })
     }
   } catch (err) {
-    if (!hasListenerAuthority()) return;
-    sendError("internal_error", `Failed to persist peer: ${String(err)}`);
-    return;
+    if (!hasListenerAuthority()) return
+    sendError("internal_error", `Failed to persist peer: ${String(err)}`)
+    return
   }
 
   const cwd =
     _lastCtx && "cwd" in _lastCtx
       ? (_lastCtx as ExtensionCommandContext).cwd
-      : process.cwd();
+      : process.cwd()
   // Prefer the user-configured agent_name (with broker suffix when on the
   // mesh) over the legacy parent/folder path — matches what the user sees
   // in the terminal title and in /unbien status.
-  const sessionName = _displayName(cwd);
+  const sessionName = _displayName(cwd)
 
-  _attachOwner(relay, appPeerId, inner.device_name);
+  _attachOwner(relay, appPeerId, inner.device_name)
 
   sendInner({
     type: "pair_ok",
@@ -2713,7 +2707,7 @@ async function _handlePairRequest(
     hostname: _HOSTNAME,
     protocol_version: PROTOCOL_VERSION,
     capabilities: _capabilities(),
-  });
+  })
 
   // Notify local RPC clients (e.g. Cockpit) that pairing completed, so they can
   // close the QR screen and show the new device. Pure data event (display:false)
@@ -2723,7 +2717,7 @@ async function _handlePairRequest(
     content: `Paired with ${inner.device_name}`,
     details: { name: inner.device_name, peerId: appPeerId, pairedAt },
     display: false,
-  });
+  })
 }
 
 // ── Extension factory (default export) ───────────────────────────────────────
@@ -2732,7 +2726,7 @@ async function _handlePairRequest(
 // NOTE: this is a CAPTURED command ctx — the SDK marks it stale after a
 // session replacement (newSession/fork/switch/reload). We re-capture it via
 // `withSession` when WE drive a newSession (see the session_new dispatch).
-let _lastCtx: Pick<ExtensionContext, "ui" | "abort" | "cwd"> | null = null;
+let _lastCtx: Pick<ExtensionContext, "ui" | "abort" | "cwd"> | null = null
 // Freshest base ExtensionContext, re-captured on EVERY `session_start`
 // (startup/new/fork/reload/resume). The session_start ctx is always bound to
 // the CURRENT session, so compact + cancel (base-ctx methods) routed through
@@ -2741,8 +2735,8 @@ let _lastCtx: Pick<ExtensionContext, "ui" | "abort" | "cwd"> | null = null;
 // base-ctx methods (no newSession — that's command-ctx only), so command ops
 // keep using `_lastCtx`.
 let _lastEventCtx: Pick<ExtensionContext, "compact" | "abort" | "ui"> | null =
-  null;
-const _noopCtx = { ui: { notify: () => undefined }, abort: () => undefined };
+  null
+const _noopCtx = { ui: { notify: () => undefined }, abort: () => undefined }
 
 // A single Pi process can load this extension TWICE in the SAME session:
 // when it is launched as `pi -e <dist>/index.js` AND un-bien is ALSO installed
@@ -2764,12 +2758,12 @@ const _noopCtx = { ui: { notify: () => undefined }, abort: () => undefined };
 // both module instances resolve the SAME set. Keying weakly by `pi` records the
 // fact without adding a foreign property to the API object and lets each `pi`
 // be GC'd when its session ends (no leak).
-const _APPLIED_REGISTRY_KEY = Symbol.for("un-bien.extension.appliedRegistry");
+const _APPLIED_REGISTRY_KEY = Symbol.for("un-bien.extension.appliedRegistry")
 function _appliedRegistry(): WeakSet<object> {
   const g = globalThis as typeof globalThis & {
-    [_APPLIED_REGISTRY_KEY]?: WeakSet<object>;
-  };
-  return (g[_APPLIED_REGISTRY_KEY] ??= new WeakSet<object>());
+    [_APPLIED_REGISTRY_KEY]?: WeakSet<object>
+  }
+  return (g[_APPLIED_REGISTRY_KEY] ??= new WeakSet<object>())
 }
 
 // The panel bridge must bind to the ROOT session and never follow a subagent.
@@ -2786,33 +2780,33 @@ function _appliedRegistry(): WeakSet<object> {
 // pi-subagents uses for its manager: the root claims it, children see it owned
 // and skip, and the root RELEASES it on its own shutdown so a replacement root
 // session can re-claim. One owner gates all bridges (no per-bridge slots).
-const _ROOT_SESSION_OWNER_KEY = Symbol.for("un-bien.rootSession.owner");
+const _ROOT_SESSION_OWNER_KEY = Symbol.for("un-bien.rootSession.owner")
 /** True if `pi` owns the root slot (or just claimed a free one); false if another pi owns it. */
 function _claimRootSession(pi: ExtensionAPI): boolean {
   const g = globalThis as typeof globalThis & {
-    [_ROOT_SESSION_OWNER_KEY]?: ExtensionAPI;
-  };
-  if (g[_ROOT_SESSION_OWNER_KEY]) return g[_ROOT_SESSION_OWNER_KEY] === pi;
-  g[_ROOT_SESSION_OWNER_KEY] = pi;
-  return true;
+    [_ROOT_SESSION_OWNER_KEY]?: ExtensionAPI
+  }
+  if (g[_ROOT_SESSION_OWNER_KEY]) return g[_ROOT_SESSION_OWNER_KEY] === pi
+  g[_ROOT_SESSION_OWNER_KEY] = pi
+  return true
 }
 function _isRootSession(pi: ExtensionAPI): boolean {
   const g = globalThis as typeof globalThis & {
-    [_ROOT_SESSION_OWNER_KEY]?: ExtensionAPI;
-  };
-  return g[_ROOT_SESSION_OWNER_KEY] === pi;
+    [_ROOT_SESSION_OWNER_KEY]?: ExtensionAPI
+  }
+  return g[_ROOT_SESSION_OWNER_KEY] === pi
 }
 function _releaseRootSession(pi: ExtensionAPI): void {
   const g = globalThis as typeof globalThis & {
-    [_ROOT_SESSION_OWNER_KEY]?: ExtensionAPI;
-  };
-  if (g[_ROOT_SESSION_OWNER_KEY] === pi) delete g[_ROOT_SESSION_OWNER_KEY];
+    [_ROOT_SESSION_OWNER_KEY]?: ExtensionAPI
+  }
+  if (g[_ROOT_SESSION_OWNER_KEY] === pi) delete g[_ROOT_SESSION_OWNER_KEY]
 }
 
 const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
-  const applied = _appliedRegistry();
-  if (applied.has(pi)) return; // this session's pi was already wired
-  applied.add(pi);
+  const applied = _appliedRegistry()
+  if (applied.has(pi)) return // this session's pi was already wired
+  applied.add(pi)
 
   // Plan/57 — bridge @eko24ive/pi-ask clarification flows to the paired app.
   // Inert when pi-ask isn't installed (no events fire) or the SDK exposes no
@@ -2831,50 +2825,50 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // firing session's id via ctx.sessionManager.getSessionId(); see _sidOf /
   // _isNonRootSid.)
   if (_claimRootSession(pi)) {
-    _pi = pi;
-    _extensionUiBridge?.dispose();
-    _extensionUiBridge = createExtensionUiBridge(pi, _uiBroadcast);
-    _panelBridge?.dispose();
+    _pi = pi
+    _extensionUiBridge?.dispose()
+    _extensionUiBridge = createExtensionUiBridge(pi, _uiBroadcast)
+    _panelBridge?.dispose()
     _panelBridge = createPanelBridge(pi, _panelBroadcast, {
       suppressAgents: subagentRoomsEnabled(),
-    });
-    _rpcEnvelope?.dispose();
+    })
+    _rpcEnvelope?.dispose()
     _rpcEnvelope = createRpcEnvelope(pi, _broadcastEnvelope, {
       enrichArgs: (tool, args) => {
         const e = _enrichToolArgs(tool, args, _resolveToolCwd()) as {
-          hunks?: unknown[];
-        };
-        return Array.isArray(e.hunks) ? { hunks: e.hunks } : null;
+          hunks?: unknown[]
+        }
+        return Array.isArray(e.hunks) ? { hunks: e.hunks } : null
       },
-    });
-    _subagentRooms?.dispose();
+    })
+    _subagentRooms?.dispose()
     _subagentRooms = initSubagentRooms(pi, {
       getParentRoomId: () => _myRoomId,
       getParentSessionId: () => _rootSessionId,
       broadcastPanel: _panelBroadcast,
-    });
+    })
   }
 
   // Plano 19: ensure ~/.pi/un-bien/{sessions,skills}/ exist and deploy the
   // agent-network skill on first load. resources_discover lets Pi find it.
   try {
-    ensureGlobalDirs();
-    _deployAgentNetworkSkill();
+    ensureGlobalDirs()
+    _deployAgentNetworkSkill()
   } catch {
     /* best-effort init */
   }
 
   // Seed the global-pairings cache from peers.json so the footer can show
   // 🟢/🟡 correctly the moment the relay is up (no race with first refresh).
-  _refreshPairingsCache();
+  _refreshPairingsCache()
 
-  pi.on("resources_discover", () => ({ skillPaths: [skillsDir()] }));
+  pi.on("resources_discover", () => ({ skillPaths: [skillsDir()] }))
 
   // Plano 20: agent_send + agent_request tools so the LLM can drive the
   // session network natively. Getter captures `_meshNode` live so the
   // tool always sees the current state.
-  registerAgentTools(pi, () => _meshNode?.peer() ?? null);
-  _registerReceivedImageRenderer(pi);
+  registerAgentTools(pi, () => _meshNode?.peer() ?? null)
+  _registerReceivedImageRenderer(pi)
 
   // Received-image preview entries are for local TUI display only. Pi's custom
   // messages normally become user-role LLM context, so strip this type before
@@ -2882,7 +2876,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // the paired sendUserMessage call.
   pi.on("context", (event) => ({
     messages: _filterInternalMessagesFromContext(event.messages),
-  }));
+  }))
 
   // Tool calls execute without prompting the remote user. The Pi SDK has no
   // native `requiresApproval` per tool, and a hardcoded gate (Bash/Edit/Write)
@@ -2900,32 +2894,32 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // (`action:"handled"`) so it never reaches the LLM or the transcript.
     // Checked first, before the peer-broadcast path, and regardless of source.
     if (event.text.startsWith(CTRL_PREFIX)) {
-      void _handleControl(event.text.slice(CTRL_PREFIX.length).trim());
-      return { action: "handled" } as const;
+      void _handleControl(event.text.slice(CTRL_PREFIX.length).trim())
+      return { action: "handled" } as const
     }
-    if (!_anyPeerActive()) return;
-    if (event.source === "extension") return;
+    if (!_anyPeerActive()) return
+    if (event.source === "extension") return
     // Turn id still stamped for queue/turn correlation; the app renders the
     // user bubble from the envelope message_end (role:user), not a stock frame.
-    _rootState().turnId = `local_${randomUUID()}`;
-    return undefined;
-  });
+    _rootState().turnId = `local_${randomUUID()}`
+    return undefined
+  })
 
   // Track active model so the app can show it in the SessionTile (plano 18).
   // SDK fires model_select on settings load + every user switch. We cache the
   // friendly name and broadcast a room_meta_update so the relay can fan it
   // out to subscribed apps without needing a new pair.
   pi.on("model_select", (event, ctx) => {
-    const m = event?.model as { name?: string; id?: string } | undefined;
-    const modelName = m?.name ?? m?.id;
-    if (!modelName) return;
+    const m = event?.model as { name?: string; id?: string } | undefined
+    const modelName = m?.name ?? m?.id
+    if (!modelName) return
     // Cache per-sid for THIS session (root + subagent) so a subagent's model is
     // queryable and never clobbers the root's. Only the ROOT projects to
     // _currentModel + room_meta (the app-room's model hello/update).
-    const sid = _sidOf(ctx);
-    _stateFor(sid).model = modelName;
-    if (!_isNonRootSid(sid)) _setCurrentModel(modelName);
-  });
+    const sid = _sidOf(ctx)
+    _stateFor(sid).model = modelName
+    if (!_isNonRootSid(sid)) _setCurrentModel(modelName)
+  })
 
   // Plan/28 Wave D.1: mirror model's room_meta_update path for thinking
   // level so the app hydrates the segmented control on first open instead
@@ -2933,66 +2927,66 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // AND on every user toggle (matching `model_select`'s behavior), so
   // late-pairing apps see the current level via `room_meta_updated`.
   pi.on("thinking_level_select", (event, ctx) => {
-    const level = event?.level as ThinkingLevel | undefined;
-    if (!level) return;
+    const level = event?.level as ThinkingLevel | undefined
+    if (!level) return
     // Cache per-sid; only the ROOT projects to _currentThinking + room_meta.
-    const sid = _sidOf(ctx);
-    _stateFor(sid).thinking = level;
-    if (_isNonRootSid(sid)) return;
-    _currentThinking = level;
-    if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, thinking: level };
-    if (!_relay || !_myRoomId) return;
+    const sid = _sidOf(ctx)
+    _stateFor(sid).thinking = level
+    if (_isNonRootSid(sid)) return
+    _currentThinking = level
+    if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, thinking: level }
+    if (!_relay || !_myRoomId) return
     _relay.sendControl({
       type: "room_meta_update",
       room_id: _myRoomId,
       meta: { thinking: level },
-    });
-  });
+    })
+  })
 
   pi.on("agent_start", (_event, ctx) => {
-    const st = _stateFor(_sidOf(ctx));
-    st.agentRun.active = true;
-    st.agentRun.generation += 1;
-  });
+    const st = _stateFor(_sidOf(ctx))
+    st.agentRun.active = true
+    st.agentRun.generation += 1
+  })
 
   // Live transcript (assistant text/thinking deltas + tool_request/tool_result)
   // is produced by the rpc-envelope producer (createRpcEnvelope) from the same
   // pi.on(message_update / tool_execution_*) events — no stock broadcast here.
 
   pi.on("agent_end", (_event, ctx) => {
-    const sid = _sidOf(ctx);
-    const st = _stateFor(sid);
+    const sid = _sidOf(ctx)
+    const st = _stateFor(sid)
     // Clear THIS session's run flag on the next tick (generation guards a
     // queued continuation that started first).
-    const endedGeneration = st.agentRun.generation;
+    const endedGeneration = st.agentRun.generation
     const settleRun = () =>
       setTimeout(() => {
-        if (st.agentRun.generation !== endedGeneration) return;
-        st.agentRun.active = false;
-        if (!_isNonRootSid(sid)) _scheduleMeshMessageDrain();
-      }, 0);
+        if (st.agentRun.generation !== endedGeneration) return
+        st.agentRun.active = false
+        if (!_isNonRootSid(sid)) _scheduleMeshMessageDrain()
+      }, 0)
     if (_isNonRootSid(sid)) {
-      settleRun();
-      return; // subagent end has no app-facing effect
+      settleRun()
+      return // subagent end has no app-facing effect
     }
     // Root: close the outbound turn. The app renders turn completion from the
     // envelope (turn_end / agent_settled), so no stock agent_done is sent; we
     // only clear the turn id used for queue/turn correlation.
-    if (st.turnId) st.turnId = null;
-    _flushPendingReceivedImagePreviews();
-    settleRun();
-  });
+    if (st.turnId) st.turnId = null
+    _flushPendingReceivedImagePreviews()
+    settleRun()
+  })
 
   // plan/34: the broker no longer gates delivery on busy state, so we no
   // longer notify it of turn lifecycle. Working state is still published as
   // room_meta over the relay (plan/32) below — that's independent of the
   // broker and drives the app's working indicator.
   pi.on("turn_start", (_event, ctx) => {
-    const sid = _sidOf(ctx);
-    const st = _stateFor(sid);
+    const sid = _sidOf(ctx)
+    const st = _stateFor(sid)
     // Each session records its OWN sessionManager (no cross-session clobber).
-    if (ctx?.sessionManager) st.sessionManager = ctx.sessionManager;
-    st.working = true;
+    if (ctx?.sessionManager) st.sessionManager = ctx.sessionManager
+    st.working = true
     // Late model hydration for THIS session: if the model was unknown at
     // connect (SDK resolves it lazily), grab it on the first turn and cache
     // per-sid — root AND subagent, so a subagent's model is queryable and the
@@ -3001,45 +2995,45 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       try {
         const m = (
           ctx as Partial<ExtensionContext> & {
-            getModel?: () => { name?: string; id?: string } | undefined;
+            getModel?: () => { name?: string; id?: string } | undefined
           }
-        ).getModel?.();
-        const name = m?.name ?? m?.id;
-        if (name) st.model = name;
+        ).getModel?.()
+        const name = m?.name ?? m?.id
+        if (name) st.model = name
       } catch {
         /* defensive — never block a turn on a model lookup */
       }
     }
-    if (_isNonRootSid(sid)) return; // room_meta projection is root-only
+    if (_isNonRootSid(sid)) return // room_meta projection is root-only
     // Root projection: seed the global model + room_meta hello from the root's
     // cached model, once.
-    if (!_currentModel && st.model) _setCurrentModel(st.model);
+    if (!_currentModel && st.model) _setCurrentModel(st.model)
     // Plan/32 Part B: publish working=true as room_meta (raw, no debounce —
     // the debounce lives in the app). Same shape as the model/thinking updates.
     // _myRoomMeta is the ROOM projection (driven only by the root session).
-    if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working: true };
+    if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working: true }
     if (_relay && _myRoomId) {
       _relay.sendControl({
         type: "room_meta_update",
         room_id: _myRoomId,
         meta: { working: true },
-      });
+      })
     }
-  });
+  })
   pi.on("turn_end", (_event, ctx) => {
-    const sid = _sidOf(ctx);
-    _stateFor(sid).working = false;
-    if (_isNonRootSid(sid)) return; // room_meta is root-only
+    const sid = _sidOf(ctx)
+    _stateFor(sid).working = false
+    if (_isNonRootSid(sid)) return // room_meta is root-only
     // Plan/32 Part B: publish working=false as room_meta (raw, no debounce).
-    if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working: false };
+    if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working: false }
     if (_relay && _myRoomId) {
       _relay.sendControl({
         type: "room_meta_update",
         room_id: _myRoomId,
         meta: { working: false },
-      });
+      })
     }
-  });
+  })
 
   // Plan/32: compaction feedback. compact() doesn't run a turn, so bracket it
   // with working=true/false here. Returning void = no veto → default
@@ -3049,22 +3043,22 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       event.preparation.messagesToSummarize =
         _filterInternalMessagesFromContext(
           event.preparation.messagesToSummarize,
-        );
+        )
       event.preparation.turnPrefixMessages = _filterInternalMessagesFromContext(
         event.preparation.turnPrefixMessages,
-      );
+      )
     }
     // working=true brackets the ROOT room's compaction; the per-session message
     // filtering above always runs, but a subagent that compacts must not
     // flicker the root's working indicator.
-    if (!_isNonRootSid(_sidOf(ctx))) _publishWorking(true);
-  });
+    if (!_isNonRootSid(_sidOf(ctx))) _publishWorking(true)
+  })
   pi.on("session_compact", (_event, ctx) => {
     // Live compaction result rides the rpc-envelope compaction_end (app applyRPC),
     // and the persisted CompactionEntry surfaces natively via get_entries. Only
     // the working=false bracket remains here — the ROOT room's, so guard it.
-    if (!_isNonRootSid(_sidOf(ctx))) _publishWorking(false);
-  });
+    if (!_isNonRootSid(_sidOf(ctx))) _publishWorking(false)
+  })
 
   // Re-capture the freshest base ctx on every session replacement so compact
   // never operates on a stale captured ctx — this is the fix for the
@@ -3075,13 +3069,13 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // Register THIS session's record (root + every subagent get their own
     // session_start with their own ctx). Each records its OWN sessionManager —
     // no cross-session clobber (was the unguarded `_sessionManager = ...` bug).
-    const sid = _sidOf(ctx);
+    const sid = _sidOf(ctx)
     // The module BASE ctx (compact/notify fallback when no fresh ctx is passed)
     // is the ROOT's — a subagent child's ctx must NOT clobber it, same
     // no-cross-session-clobber rule as the per-sid sessionManager. Otherwise a
     // subagent steals the base ctx and root-scoped notifies silently drop.
-    if (!_isNonRootSid(sid)) _lastEventCtx = ctx;
-    if (ctx?.sessionManager) _stateFor(sid).sessionManager = ctx.sessionManager;
+    if (!_isNonRootSid(sid)) _lastEventCtx = ctx
+    if (ctx?.sessionManager) _stateFor(sid).sessionManager = ctx.sessionManager
     // session_shutdown disposes per-session pi-ask subscriptions. A host that
     // reuses this module instance does NOT re-run the factory, so rebind the
     // bridge here; fresh-module hosts already created theirs in the factory.
@@ -3091,32 +3085,32 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // only when a real sessionManager is present (ctx-less test events stay in
     // null-root mode where every event is treated as root).
     if (_claimRootSession(pi)) {
-      if (ctx?.sessionManager) _rootSessionId = sid;
+      if (ctx?.sessionManager) _rootSessionId = sid
       if (!_extensionUiBridge)
-        _extensionUiBridge = createExtensionUiBridge(pi, _uiBroadcast);
+        _extensionUiBridge = createExtensionUiBridge(pi, _uiBroadcast)
       if (!_panelBridge)
         _panelBridge = createPanelBridge(pi, _panelBroadcast, {
           suppressAgents: subagentRoomsEnabled(),
-        });
+        })
       if (!_rpcEnvelope)
         _rpcEnvelope = createRpcEnvelope(pi, _broadcastEnvelope, {
           enrichArgs: (tool, args) => {
             const e = _enrichToolArgs(tool, args, _resolveToolCwd()) as {
-              hunks?: unknown[];
-            };
-            return Array.isArray(e.hunks) ? { hunks: e.hunks } : null;
+              hunks?: unknown[]
+            }
+            return Array.isArray(e.hunks) ? { hunks: e.hunks } : null
           },
-        });
+        })
       if (!_subagentRooms)
         _subagentRooms = initSubagentRooms(pi, {
           getParentRoomId: () => _myRoomId,
           getParentSessionId: () => _rootSessionId,
           broadcastPanel: _panelBroadcast,
-        });
+        })
     } else if (_isNonRootSid(sid)) {
       // A subagent child session (non-root) — surface it as its own relay room.
       // `pi` here is the CHILD's ExtensionAPI (per-activation).
-      _subagentRooms?.onChildSession(pi, ctx);
+      _subagentRooms?.onChildSession(pi, ctx)
     }
     // Rearm a reused-but-disposed instance. The session_shutdown teardown (below)
     // sets _disposed=true assuming the host re-evaluates THIS module fresh for the
@@ -3127,11 +3121,11 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // one fresh lifecycle only if no later stop/shutdown superseded this session.
     // No-op when a fresh instance IS created and at first boot.
     if (_disposed) {
-      _disposed = false;
+      _disposed = false
       const restartAuthority: RootRestartAuthority = {
         rootLifecycleGeneration: _rootLifecycleGeneration,
-      };
-      void _cmdRoot(ctx, restartAuthority);
+      }
+      void _cmdRoot(ctx, restartAuthority)
     }
     // Auto-start un-bien on a fresh boot when the cwd's local config has
     // auto_start_relay enabled (default true). Covers BOTH interactive
@@ -3155,7 +3149,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       // with no config stays idle until the user runs /unbien once). The
       // cwd guard also keeps tests with a minimal ctx (no cwd) from triggering
       // the wizard path.
-      const isDaemon = process.env["UNBIEN_DAEMON"] === "1";
+      const isDaemon = process.env["UNBIEN_DAEMON"] === "1"
       // One-shot / non-interactive Pi (`pi -p` / `pi --print`) is documented as
       // "process the prompt and exit". Auto-starting the relay there opens a WS
       // that is never `.unref()`'d, so the idle Node event loop never drains and
@@ -3163,25 +3157,25 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       // mode (UNBIEN_DAEMON=1) and normal interactive sessions never pass
       // `-p`/`--print`, so they still auto-start the relay exactly as before.
       const isPrintMode =
-        process.argv.includes("-p") || process.argv.includes("--print");
-      const cwd = isDaemon ? process.cwd() : "cwd" in ctx ? ctx.cwd : undefined;
+        process.argv.includes("-p") || process.argv.includes("--print")
+      const cwd = isDaemon ? process.cwd() : "cwd" in ctx ? ctx.cwd : undefined
       if (
         !isPrintMode &&
         cwd &&
         localConfigExists(cwd) &&
         effectiveAutoStartRelay(loadLocalConfig(cwd))
       ) {
-        _autoInited = true;
+        _autoInited = true
         const initCtx = isDaemon
           ? ({ ui: _headlessUi(), cwd: process.cwd() } as Pick<
               ExtensionContext,
               "ui" | "cwd"
             >)
-          : ctx;
-        void _cmdRoot(initCtx);
+          : ctx
+        void _cmdRoot(initCtx)
       }
     }
-  });
+  })
 
   // Tear down THIS instance's live handles when the SDK replaces the session
   // (switch_session / new / fork / reload / quit). This is the fix for the
@@ -3219,15 +3213,15 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // the root room — the "parent disappears while still running" flap. This is
     // root-lifecycle authority (Tier 2), NOT the per-sid data path, so an
     // early return is correct here — there is no session-local state to cache.
-    if (!_isRootSession(pi)) return;
+    if (!_isRootSession(pi)) return
     // Revoke async authority synchronously, before any teardown await. `_disposed`
     // blocks the outgoing continuation immediately; the root and candidate
     // generations keep queued work stale even if a same-module session_start
     // clears `_disposed` before its promises settle.
-    _disposed = true;
-    _rootLifecycleGeneration += 1;
-    _relayLifecycleGeneration += 1;
-    _meshJoinGeneration += 1;
+    _disposed = true
+    _rootLifecycleGeneration += 1
+    _relayLifecycleGeneration += 1
+    _meshJoinGeneration += 1
     // The bridge owns live pi.events subscriptions + flow TTLs. Dispose before
     // the outgoing session is replaced so stale listeners cannot leak or
     // double-broadcast. session_start rebinds it on module-reuse hosts; fresh
@@ -3242,60 +3236,60 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       // producer dispose below: `_rpcEnvelope` gates on its `disposed` flag,
       // so once disposed it can no longer build/broadcast this frame.
       if (_anyPeerActive()) {
-        _broadcastEnvelope({ rpc: { type: "session_shutdown" } });
+        _broadcastEnvelope({ rpc: { type: "session_shutdown" } })
       }
-      _extensionUiBridge?.dispose();
-      _extensionUiBridge = null;
-      _panelBridge?.dispose();
-      _panelBridge = null;
-      _rpcEnvelope?.dispose();
-      _rpcEnvelope = null;
-      _subagentRooms?.dispose();
-      _subagentRooms = null;
-      _releaseRootSession(pi);
+      _extensionUiBridge?.dispose()
+      _extensionUiBridge = null
+      _panelBridge?.dispose()
+      _panelBridge = null
+      _rpcEnvelope?.dispose()
+      _rpcEnvelope = null
+      _subagentRooms?.dispose()
+      _subagentRooms = null
+      _releaseRootSession(pi)
     }
     // Drop captured ctxs immediately. On module-reuse hosts the same instance
     // survives session replacement; leaving `_lastCtx` pointing at the now-
     // stale command ctx is what crashed pi in _refreshFooter on peer reconnect
     // (issue #55). session_start re-binds `_lastEventCtx` for the new session.
-    _lastCtx = null;
-    _lastEventCtx = null;
+    _lastCtx = null
+    _lastEventCtx = null
     // No bye reason: the process keeps running and the fresh instance re-joins
     // the SAME relay room, so an explicit offline→online flap would be wrong.
     // Revoke producer/Relay/bridge authority while the global node is still
     // visible, before close() can begin its asynchronous UDS leave.
     if (_state === "idle") {
-      _meshNode?.detachBridge();
+      _meshNode?.detachBridge()
     } else {
-      _goIdle();
+      _goIdle()
     }
 
-    const meshNode = _meshNode;
-    _meshNode = null;
-    _sessionName = null;
-    _sessionPeerCount = 0;
-    let meshClose: Promise<void> | null = null;
+    const meshNode = _meshNode
+    _meshNode = null
+    _sessionName = null
+    _sessionPeerCount = 0
+    let meshClose: Promise<void> | null = null
     try {
-      meshClose = meshNode?.close() ?? null;
+      meshClose = meshNode?.close() ?? null
     } catch {
       /* best-effort */
     }
 
     if (_cwdLock) {
       try {
-        _cwdLock.release();
+        _cwdLock.release()
       } catch {
         /* best-effort */
       }
-      _cwdLock = null;
-      _lockedName = null;
+      _cwdLock = null
+      _lockedName = null
     }
     try {
-      await meshClose;
+      await meshClose
     } catch {
       /* best-effort */
     }
-  });
+  })
 
   // ── Commands ──────────────────────────────────────────────────────────────
   //
@@ -3311,8 +3305,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     getArgumentCompletions: async (prefix) => {
       if (prefix.startsWith("revoke ") || prefix === "revoke") {
         const shortPrefix =
-          prefix === "revoke" ? "" : prefix.slice("revoke ".length);
-        return _shortidCompletions(shortPrefix, "revoke ");
+          prefix === "revoke" ? "" : prefix.slice("revoke ".length)
+        return _shortidCompletions(shortPrefix, "revoke ")
       }
       return [
         "setup",
@@ -3355,53 +3349,53 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         "uninstall", // service install (plan/26 W3)
       ]
         .filter((o) => o.startsWith(prefix))
-        .map((o) => ({ value: o, label: o }));
+        .map((o) => ({ value: o, label: o }))
     },
     handler: async (args, ctx) => {
-      _lastCtx = ctx;
-      const sub = args.trim();
+      _lastCtx = ctx
+      const sub = args.trim()
       if (sub === "") {
-        await _cmdRoot(ctx);
+        await _cmdRoot(ctx)
       } else if (sub === "setup") {
-        await _cmdSetup(ctx);
+        await _cmdSetup(ctx)
       } else if (sub === "status") {
-        _cmdStatus(ctx);
+        _cmdStatus(ctx)
       } else if (sub === "stop") {
-        await _cmdStop(ctx);
+        await _cmdStop(ctx)
       } else if (sub === "pair" || sub.startsWith("pair ")) {
-        await _cmdPair(ctx, sub.slice("pair".length).trim());
+        await _cmdPair(ctx, sub.slice("pair".length).trim())
       } else if (sub === "devices") {
-        await _cmdList(ctx);
+        await _cmdList(ctx)
       } else if (sub.startsWith("revoke")) {
-        await _cmdRevoke(sub.slice("revoke".length).trim(), ctx);
+        await _cmdRevoke(sub.slice("revoke".length).trim(), ctx)
       } else if (sub.startsWith("set-relay")) {
-        _cmdSetRelay(sub.slice("set-relay".length).trim(), ctx);
+        _cmdSetRelay(sub.slice("set-relay".length).trim(), ctx)
       } else if (sub === "relay" || sub.startsWith("relay ")) {
-        await _cmdRelay(sub.slice("relay".length).trim(), ctx);
+        await _cmdRelay(sub.slice("relay".length).trim(), ctx)
       } else if (sub === "config") {
-        _cmdConfig(ctx);
+        _cmdConfig(ctx)
       } else if (sub === "identity" || sub.startsWith("identity ")) {
-        await _cmdIdentity(ctx);
+        await _cmdIdentity(ctx)
       } else if (sub === "test" || sub.startsWith("test ")) {
         // Hidden dev-only e2e UI harness: broadcast canned frames to paired apps.
         _safeNotify(
           `[un-bien test] ${_runTestScenario(sub.slice("test".length).trim())}`,
           "info",
           ctx,
-        );
+        )
       } else if (sub === "rename" || sub.startsWith("rename ")) {
-        await _renameAgent(sub.slice("rename".length).trim());
+        await _renameAgent(sub.slice("rename".length).trim())
       } else if (sub === "peers") {
-        await _cmdPeers(ctx);
+        await _cmdPeers(ctx)
       } else if (sub === "install") {
-        _cmdInstall(ctx, { linkCli: true });
+        _cmdInstall(ctx, { linkCli: true })
       } else if (sub === "uninstall") {
-        _cmdUninstall(ctx, { linkCli: true });
+        _cmdUninstall(ctx, { linkCli: true })
       } else {
-        await _cmdRoot(ctx);
+        await _cmdRoot(ctx)
       }
     },
-  });
+  })
 
   // Nested registrations (one entry per public action). The flat handler
   // above already routes `/unbien <sub>` — these exist for the SDK's
@@ -3409,120 +3403,120 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   pi.registerCommand("unbien setup", {
     description: "Run the setup wizard and update local config",
     handler: async (_, ctx) => {
-      _lastCtx = ctx;
-      await _cmdSetup(ctx);
+      _lastCtx = ctx
+      await _cmdSetup(ctx)
     },
-  });
+  })
   pi.registerCommand("unbien status", {
     description: "Show local mesh + relay status",
     handler: async (_, ctx) => {
-      _lastCtx = ctx;
-      _cmdStatus(ctx);
+      _lastCtx = ctx
+      _cmdStatus(ctx)
     },
-  });
+  })
   pi.registerCommand("unbien stop", {
     description: "Stop everything (leave local mesh + disconnect relay)",
     handler: async (_, ctx) => {
-      _lastCtx = ctx;
-      await _cmdStop(ctx);
+      _lastCtx = ctx
+      await _cmdStop(ctx)
     },
-  });
+  })
   pi.registerCommand("unbien pair", {
     description:
       "Show a QR code to pair a new mobile device (optional: --ttl <seconds>)",
     handler: async (args, ctx) => {
-      _lastCtx = ctx;
-      await _cmdPair(ctx, args.trim());
+      _lastCtx = ctx
+      await _cmdPair(ctx, args.trim())
     },
-  });
+  })
   pi.registerCommand("unbien devices", {
     description: "List paired mobile devices",
     handler: async (_, ctx) => {
-      _lastCtx = ctx;
-      await _cmdList(ctx);
+      _lastCtx = ctx
+      await _cmdList(ctx)
     },
-  });
+  })
   pi.registerCommand("unbien rename", {
     description:
       "Rename this agent in the current session (updates mesh + relay room)",
     handler: async (args, ctx) => {
-      _lastCtx = ctx;
-      await _renameAgent(args.trim());
+      _lastCtx = ctx
+      await _renameAgent(args.trim())
     },
-  });
+  })
   pi.registerCommand("unbien revoke", {
     description: "Revoke a paired device by its shortid",
     getArgumentCompletions: async (prefix) => _shortidCompletions(prefix),
     handler: async (args, ctx) => {
-      _lastCtx = ctx;
-      await _cmdRevoke(args.trim(), ctx);
+      _lastCtx = ctx
+      await _cmdRevoke(args.trim(), ctx)
     },
-  });
+  })
   pi.registerCommand("unbien set-relay", {
     description: "Persist a new relay URL to user config",
     handler: async (args, ctx) => {
-      _lastCtx = ctx;
-      _cmdSetRelay(args.trim(), ctx);
+      _lastCtx = ctx
+      _cmdSetRelay(args.trim(), ctx)
     },
-  });
+  })
   pi.registerCommand("unbien config", {
     description: "Show the effective relay URL and where it came from",
     handler: async (_, ctx) => {
-      _lastCtx = ctx;
-      _cmdConfig(ctx);
+      _lastCtx = ctx
+      _cmdConfig(ctx)
     },
-  });
+  })
   pi.registerCommand("unbien identity", {
     description:
       "Show this machine's identity: active EPK (public), backend, and source",
     handler: async (_, ctx) => {
-      _lastCtx = ctx;
-      await _cmdIdentity(ctx);
+      _lastCtx = ctx
+      await _cmdIdentity(ctx)
     },
-  });
+  })
   pi.registerCommand("unbien identity show", {
     description:
       "Show this machine's identity (EPK/backend/source) — alias of `identity`",
     handler: async (_, ctx) => {
-      _lastCtx = ctx;
-      await _cmdIdentity(ctx);
+      _lastCtx = ctx
+      await _cmdIdentity(ctx)
     },
-  });
+  })
   pi.registerCommand("unbien relay", {
     description:
       "Relay control: start | stop | status | url <http(s) url> (no arg toggles)",
     handler: async (args, ctx) => {
-      _lastCtx = ctx;
-      await _cmdRelay(args.trim(), ctx);
+      _lastCtx = ctx
+      await _cmdRelay(args.trim(), ctx)
     },
-  });
+  })
 
   // Plan/25 Wave D
   pi.registerCommand("unbien peers", {
     description: "List local + cross-PC mesh peers, grouped by PC label",
     handler: async (_, ctx) => {
-      _lastCtx = ctx;
-      await _cmdPeers(ctx);
+      _lastCtx = ctx
+      await _cmdPeers(ctx)
     },
-  });
+  })
 
   // Service install / uninstall — the launcher daemon as a system service.
   pi.registerCommand("unbien install", {
     description:
       "Install the un-bien launcher daemon as a system service + link the un-bien CLI (systemd/launchd/Task Scheduler; Windows prompts for admin)",
     handler: async (_, ctx) => {
-      _lastCtx = ctx;
-      _cmdInstall(ctx, { linkCli: true });
+      _lastCtx = ctx
+      _cmdInstall(ctx, { linkCli: true })
     },
-  });
+  })
   pi.registerCommand("unbien uninstall", {
     description:
       "Remove the un-bien launcher daemon system service + the CLI shims (Windows prompts for admin)",
     handler: async (_, ctx) => {
-      _lastCtx = ctx;
-      _cmdUninstall(ctx, { linkCli: true });
+      _lastCtx = ctx
+      _cmdUninstall(ctx, { linkCli: true })
     },
-  });
+  })
 
   // Auto-init now runs from the session_start handler (above), AFTER the
   // SDK calls bindCore(). The original setTimeout(0) here fired before bindCore
@@ -3531,9 +3525,9 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // initialized" in a 5s supervisor crash-loop. The session_start handler now
   // auto-starts for ANY session with auto_start_relay (default true), so new
   // interactive pi sessions are on remote automatically — no /unbien needed.
-};
+}
 
-export default extension;
+export default extension
 
 // ── Command implementations ───────────────────────────────────────────────────
 
@@ -3545,34 +3539,34 @@ export default extension;
  * visually consistent.
  */
 function _cmdStatus(ctx: Pick<ExtensionContext, "ui">): void {
-  const relayUrl = _relayUrl ?? resolveRelayUrl().url ?? "not configured";
+  const relayUrl = _relayUrl ?? resolveRelayUrl().url ?? "not configured"
 
   // Mesh line
-  let meshLine: string;
+  let meshLine: string
   if (_meshNode) {
-    const name = _meshNode.name();
-    meshLine = `🟢 Local mesh: connected as "${name}" (${_sessionPeerCount} peer${_sessionPeerCount === 1 ? "" : "s"})`;
+    const name = _meshNode.name()
+    meshLine = `🟢 Local mesh: connected as "${name}" (${_sessionPeerCount} peer${_sessionPeerCount === 1 ? "" : "s"})`
   } else {
-    meshLine = "⚪ Local mesh: not connected";
+    meshLine = "⚪ Local mesh: not connected"
   }
 
   // Relay line — paired state is derived from _activePeers.size now.
-  let relayLine: string;
+  let relayLine: string
   if (_state === "idle") {
-    relayLine = `⚪ Relay: off (${relayUrl}) — run /unbien to start`;
+    relayLine = `⚪ Relay: off (${relayUrl}) — run /unbien to start`
   } else if (_activePeers.size > 0) {
-    const count = _activePeers.size;
+    const count = _activePeers.size
     const shortids = [..._activePeers.keys()]
       .map((peerId) => peerId.slice(0, 8))
-      .join(", ");
-    relayLine = `🟢 Relay: ${count} owner${count === 1 ? "" : "s"} online (${shortids}) (${relayUrl})`;
+      .join(", ")
+    relayLine = `🟢 Relay: ${count} owner${count === 1 ? "" : "s"} online (${shortids}) (${relayUrl})`
   } else {
     relayLine = _hasGlobalPairings
       ? `🟢 Relay: on, waiting for an app to connect (${relayUrl})`
-      : `🟡 Relay: on, waiting for first pairing (${relayUrl})`;
+      : `🟡 Relay: on, waiting for first pairing (${relayUrl})`
   }
 
-  ctx.ui.notify(`[un-bien]\n  ${meshLine}\n  ${relayLine}`, "info");
+  ctx.ui.notify(`[un-bien]\n  ${meshLine}\n  ${relayLine}`, "info")
 }
 
 /**
@@ -3588,28 +3582,28 @@ async function _cmdPeers(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
     ctx.ui.notify(
       "[un-bien] Not on the local mesh. Run /unbien to join.",
       "warning",
-    );
-    return;
+    )
+    return
   }
-  let peers: string[];
+  let peers: string[]
   try {
     const reply = await _meshNode.request(
       "broker",
       { type: "list_peers" },
       2000,
-    );
-    peers = (reply.body as { peers?: string[] } | null)?.peers ?? [];
+    )
+    peers = (reply.body as { peers?: string[] } | null)?.peers ?? []
   } catch (err) {
-    ctx.ui.notify(`[un-bien] peers list failed: ${String(err)}`, "error");
-    return;
+    ctx.ui.notify(`[un-bien] peers list failed: ${String(err)}`, "error")
+    return
   }
   // Exclude self from the printed list — `list_peers` returns every peer
   // registered with the broker including the caller, which is noise here.
-  const selfName = _meshNode.name();
+  const selfName = _meshNode.name()
   ctx.ui.notify(
     `[un-bien] peers:\n${formatPeerInventory(peers, selfName)}`,
     "info",
-  );
+  )
 }
 
 /**
@@ -3625,33 +3619,33 @@ async function _cmdRoot(
   restartAuthority?: RootRestartAuthority,
 ): Promise<void> {
   const rootLifecycleGeneration =
-    restartAuthority?.rootLifecycleGeneration ?? _rootLifecycleGeneration;
+    restartAuthority?.rootLifecycleGeneration ?? _rootLifecycleGeneration
 
   if (_cmdRootInFlight) {
     try {
-      await _cmdRootInFlight;
+      await _cmdRootInFlight
     } catch (err) {
       // Stale authority stops here. A current normal duplicate preserves the
       // outgoing error, while a current replacement suppresses that old-session
       // failure and falls through to start one fresh root below.
-      if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) return;
-      if (!restartAuthority) throw err;
+      if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) return
+      if (!restartAuthority) throw err
     }
-    if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) return;
+    if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) return
     if (!restartAuthority) {
-      _cmdStatus(ctx);
-      return;
+      _cmdStatus(ctx)
+      return
     }
   }
 
-  if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) return;
+  if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) return
 
-  const run = _cmdRootInner(ctx, rootLifecycleGeneration);
-  _cmdRootInFlight = run;
+  const run = _cmdRootInner(ctx, rootLifecycleGeneration)
+  _cmdRootInFlight = run
   try {
-    await run;
+    await run
   } finally {
-    if (_cmdRootInFlight === run) _cmdRootInFlight = null;
+    if (_cmdRootInFlight === run) _cmdRootInFlight = null
   }
 }
 
@@ -3662,51 +3656,50 @@ async function _cmdRootInner(
   // A root retains its startup epoch through every pre-candidate await. This is
   // stronger than `_disposed`, which a same-module session_start intentionally
   // clears while an outgoing continuation may still be pending.
-  if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) return;
+  if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) return
 
   const cwd =
-    "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd();
+    "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd()
   // Lock identity is (cwd, name). Several agents may run in the SAME folder; the
   // requested name just has to be made unique. Derive the name the same way
   // `_cmdJoin` does so the lock and the mesh registration agree on identity.
-  const requestedName =
-    loadLocalConfig(cwd).agent_name || defaultAgentName(cwd);
+  const requestedName = loadLocalConfig(cwd).agent_name || defaultAgentName(cwd)
 
   // Per-(cwd,name) lock. Interactive agents may coexist by auto-suffixing
   // (`name#2`, `name#3`, …), but supervised daemons must be singletons for their
   // registered cwd/name. If a daemon silently came up as `#2`, the supervisor
   // would report "running" while the mesh had duplicate peers for one repo.
   if (_cwdLock === null) {
-    const isDaemon = process.env["UNBIEN_DAEMON"] === "1";
-    const maxAttempts = isDaemon ? 1 : 1000;
+    const isDaemon = process.env["UNBIEN_DAEMON"] === "1"
+    const maxAttempts = isDaemon ? 1 : 1000
     for (let n = 1; n <= maxAttempts; n++) {
-      const candidate = n === 1 ? requestedName : `${requestedName}#${n}`;
-      const result = await acquireCwdLock(cwd, candidate);
+      const candidate = n === 1 ? requestedName : `${requestedName}#${n}`
+      const result = await acquireCwdLock(cwd, candidate)
       if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) {
         if (result.ok) {
           try {
-            result.release();
+            result.release()
           } catch {
             /* best-effort stale lock cleanup */
           }
         }
-        return;
+        return
       }
       if (result.ok) {
-        _cwdLock = result;
-        _lockedName = candidate;
-        break;
+        _cwdLock = result
+        _lockedName = candidate
+        break
       }
     }
     if (_cwdLock === null) {
-      if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) return;
+      if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) return
       ctx.ui.notify(
         process.env["UNBIEN_DAEMON"] === "1"
           ? `[un-bien] Daemon not started: another live agent already owns "${requestedName}" in this folder. Stop the old Pi process, then restart the daemon.`
           : `[un-bien] Could not start: too many agents named "${requestedName}" already running in this folder.`,
         "warning",
-      );
-      return;
+      )
+      return
     }
   }
 
@@ -3715,33 +3708,33 @@ async function _cmdRootInner(
     // SAFETY: ctx.ui MIGHT carry the wizard's select/input methods (interactive
     // Pi) or not (headless); the `typeof ui.select !== "function"` guard on the
     // next line validates the structural assumption before any method call.
-    const ui = ctx.ui as unknown as WizardUI;
+    const ui = ctx.ui as unknown as WizardUI
     if (typeof ui.select !== "function") {
-      _cmdStatus(ctx);
-      return;
+      _cmdStatus(ctx)
+      return
     }
-    const baseDefault = defaultAgentName(cwd);
+    const baseDefault = defaultAgentName(cwd)
     const newConfig = await runSetupWizard(ui, {
       agent_name: baseDefault,
       use_relay: true,
-    });
-    if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) return;
+    })
+    if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) return
     if (!newConfig) {
-      ctx.ui.notify("[un-bien] Setup cancelled.", "info");
-      return;
+      ctx.ui.notify("[un-bien] Setup cancelled.", "info")
+      return
     }
-    saveLocalConfig(cwd, newConfig);
+    saveLocalConfig(cwd, newConfig)
     ctx.ui.notify(
       `[un-bien] Config saved to ${cwd}/.pi/un-bien/config.json`,
       "info",
-    );
-    if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) return;
-    await _cmdJoin(ctx);
-    if (!_isCurrentRootLifecycle(rootLifecycleGeneration) || !_meshNode) return;
-    if (effectiveAutoStartRelay(newConfig)) await _cmdStart(ctx);
-    if (!_isCurrentRootLifecycle(rootLifecycleGeneration) || !_meshNode) return;
-    _cmdStatus(ctx);
-    return;
+    )
+    if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) return
+    await _cmdJoin(ctx)
+    if (!_isCurrentRootLifecycle(rootLifecycleGeneration) || !_meshNode) return
+    if (effectiveAutoStartRelay(newConfig)) await _cmdStart(ctx)
+    if (!_isCurrentRootLifecycle(rootLifecycleGeneration) || !_meshNode) return
+    _cmdStatus(ctx)
+    return
   }
 
   // Returning user with config: ALWAYS join the local UDS mesh on connect; the
@@ -3749,16 +3742,15 @@ async function _cmdRootInner(
   // now means "local mesh, no relay" (matching the first-time/wizard path and
   // the field's documented intent) — previously a false flag skipped the mesh
   // join entirely, leaving the agent (incl. daemons) fully idle.
-  const config = loadLocalConfig(cwd);
-  if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) return;
-  if (!_meshNode) await _cmdJoin(ctx);
+  const config = loadLocalConfig(cwd)
+  if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) return
+  if (!_meshNode) await _cmdJoin(ctx)
   // `_cmdJoin` returns void on a canceled/failed join, so recheck both the
   // root lifecycle and publication before bringing the Relay up.
-  if (!_isCurrentRootLifecycle(rootLifecycleGeneration) || !_meshNode) return;
-  if (effectiveAutoStartRelay(config) && _state === "idle")
-    await _cmdStart(ctx);
-  if (!_isCurrentRootLifecycle(rootLifecycleGeneration) || !_meshNode) return;
-  _cmdStatus(ctx);
+  if (!_isCurrentRootLifecycle(rootLifecycleGeneration) || !_meshNode) return
+  if (effectiveAutoStartRelay(config) && _state === "idle") await _cmdStart(ctx)
+  if (!_isCurrentRootLifecycle(rootLifecycleGeneration) || !_meshNode) return
+  _cmdStatus(ctx)
 }
 
 /**
@@ -3769,51 +3761,51 @@ async function _cmdSetup(
   ctx: Pick<ExtensionContext, "ui" | "cwd">,
 ): Promise<void> {
   const cwd =
-    "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd();
+    "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd()
   // SAFETY: ctx.ui MIGHT carry the wizard's select/input methods (interactive
   // Pi) or not (headless); the `typeof ui.select !== "function"` guard on the
   // next line validates the structural assumption before any method call.
-  const ui = ctx.ui as unknown as WizardUI;
+  const ui = ctx.ui as unknown as WizardUI
   if (typeof ui.select !== "function") {
-    ctx.ui.notify("[un-bien] Setup requires an interactive UI.", "warning");
-    return;
+    ctx.ui.notify("[un-bien] Setup requires an interactive UI.", "warning")
+    return
   }
-  const current = loadLocalConfig(cwd);
-  const baseDefault = defaultAgentName(cwd);
+  const current = loadLocalConfig(cwd)
+  const baseDefault = defaultAgentName(cwd)
   const newConfig = await runSetupWizard(ui, {
     agent_name: current.agent_name ?? baseDefault,
     use_relay: effectiveAutoStartRelay(current),
-  });
+  })
   if (!newConfig) {
-    ctx.ui.notify("[un-bien] Setup cancelled.", "info");
-    return;
+    ctx.ui.notify("[un-bien] Setup cancelled.", "info")
+    return
   }
-  saveLocalConfig(cwd, newConfig);
-  ctx.ui.notify("[un-bien] Config updated. Run /unbien to apply now.", "info");
+  saveLocalConfig(cwd, newConfig)
+  ctx.ui.notify("[un-bien] Config updated. Run /unbien to apply now.", "info")
 }
 
 async function _cmdStart(
   ctx: Pick<ExtensionContext, "ui" | "cwd">,
 ): Promise<void> {
   if (_state !== "idle") {
-    ctx.ui.notify("[un-bien] Already started.", "warning");
-    return;
+    ctx.ui.notify("[un-bien] Already started.", "warning")
+    return
   }
-  const lifecycleGeneration = ++_relayLifecycleGeneration;
+  const lifecycleGeneration = ++_relayLifecycleGeneration
   const isCurrentCandidate = (): boolean =>
     !_disposed &&
     lifecycleGeneration === _relayLifecycleGeneration &&
     _state === "idle" &&
-    _relay === null;
+    _relay === null
 
-  let edKp: Awaited<ReturnType<typeof getOrCreateEd25519Keypair>>;
+  let edKp: Awaited<ReturnType<typeof getOrCreateEd25519Keypair>>
   try {
-    edKp = await getOrCreateEd25519Keypair();
+    edKp = await getOrCreateEd25519Keypair()
   } catch (err) {
     // Identity lookup is part of the candidate lifecycle. A later stop/off or
     // session replacement must silence its stale rejection before any UI or
     // error propagation touches the superseded context.
-    if (!isCurrentCandidate()) return;
+    if (!isCurrentCandidate()) return
     if (err instanceof KeyringUnavailableError) {
       // The platform keyring (macOS Keychain / Windows Credential Manager) is
       // locked/denied and there's no file identity to fall back to. We refuse
@@ -3826,8 +3818,8 @@ async function _cmdStart(
           "log in) and run /unbien again. Your pairing is NOT lost. " +
           '(For a headless host, set "identity": { "storage": "file" } in un-bien.json.)',
         "error",
-      );
-      return;
+      )
+      return
     }
     if (err instanceof PairedIdentityMissingError) {
       // Issues #95/#69: this process can't reach the keyring that holds the
@@ -3843,40 +3835,40 @@ async function _cmdStart(
           "keyring access, or copy the paired keypair to ~/.pi/un-bien/identity.json " +
           "(0600) so both contexts read the same identity.",
         "error",
-      );
-      return;
+      )
+      return
     }
-    throw err;
+    throw err
   }
   // Re-check immediately after the first await, before cache/config/model/UI
   // mutation or Relay construction. `_disposed` alone is insufficient because
   // same-module session_start intentionally clears it for the replacement.
-  if (!isCurrentCandidate()) return;
-  _cachedEd25519 = edKp;
+  if (!isCurrentCandidate()) return
+  _cachedEd25519 = edKp
 
-  const { url: relayUrl, source } = resolveRelayUrl();
+  const { url: relayUrl, source } = resolveRelayUrl()
   if (relayUrl === null) {
     ctx.ui.notify(
       "[un-bien] No relay configured — staying on the local mesh only. Set one " +
         "with `/unbien set-relay <url>` (or the UNBIEN_RELAY env var) to connect " +
         "the phone app.",
       "warning",
-    );
-    return;
+    )
+    return
   }
-  const myShort = Buffer.from(edKp.publicKey).toString("base64").slice(0, 8);
+  const myShort = Buffer.from(edKp.publicKey).toString("base64").slice(0, 8)
 
   const cwd =
-    "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd();
+    "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd()
   // Same name we send in pair_ok — keeps room_meta.name and the per-pair
   // session_name aligned so the app shows consistent labels.
-  const sessionName = _displayName(cwd);
+  const sessionName = _displayName(cwd)
   // plan/41: derive the App↔Pi room from (cwd, name) so several agents in the
   // SAME folder get distinct rooms (the app renders one tile per agent). The
   // default/unnamed case preserves the legacy cwd-only id (no re-keying). Uses
   // the SAME name as room_meta.name / pair_ok below — the invariant that the
   // app pairs on the room the Pi actually announces.
-  const roomId = _deriveRoomId(cwd, sessionName);
+  const roomId = _deriveRoomId(cwd, sessionName)
 
   // Seed the current model from the SDK's resolved selection so room_meta
   // carries it on connect. `model_select` only fires on an explicit set/cycle
@@ -3888,9 +3880,9 @@ async function _cmdStart(
   if (!_currentModel) {
     try {
       const c = ctx as Partial<ExtensionContext> & {
-        model?: { name?: string; id?: string };
-        getModel?: () => { name?: string; id?: string } | undefined;
-      };
+        model?: { name?: string; id?: string }
+        getModel?: () => { name?: string; id?: string } | undefined
+      }
       // Prefer the live getModel() / ctx.model — populated for an interactive
       // Pi. For a HEADLESS DAEMON both are undefined at connect: the SDK only
       // resolves `this.model` lazily at the first turn, and `model_select`
@@ -3899,24 +3891,24 @@ async function _cmdStart(
       // model the daemon will actually use. Without this an idle daemon (never
       // prompted → no turn) would never report its model and the app shows
       // "unknown". turn_start still hydrates a later override.
-      const live = c.getModel?.() ?? c.model;
+      const live = c.getModel?.() ?? c.model
       if (live) {
-        _currentModel = live.name ?? live.id ?? undefined;
+        _currentModel = live.name ?? live.id ?? undefined
       } else {
-        const sm = SettingsManager.create(cwd);
-        const provider = sm.getDefaultProvider();
-        const modelId = sm.getDefaultModel();
+        const sm = SettingsManager.create(cwd)
+        const provider = sm.getDefaultProvider()
+        const modelId = sm.getDefaultModel()
         if (modelId) {
           // SAFETY: ensureModelRegistry only reads modelRegistry/getModel off
           // the ctx; c (and the _lastEventCtx/_lastCtx fallbacks) carry those
           // when present, and it tolerates null.
           const regCtx = (c ??
             _lastEventCtx ??
-            _lastCtx) as unknown as ActionCtx | null;
+            _lastCtx) as unknown as ActionCtx | null
           const found = provider
             ? ensureModelRegistry(regCtx).find(provider, modelId)
-            : undefined;
-          _currentModel = found?.name ?? modelId;
+            : undefined
+          _currentModel = found?.name ?? modelId
         }
       }
     } catch {
@@ -3930,64 +3922,64 @@ async function _cmdStart(
   // before any command handler fires. Future toggles go through the
   // `thinking_level_select` event handler above.
   try {
-    _currentThinking = _pi?.getThinkingLevel() as ThinkingLevel | undefined;
+    _currentThinking = _pi?.getThinkingLevel() as ThinkingLevel | undefined
   } catch {
     /* defensive — never block /unbien start on this */
   }
 
   const roomMeta: {
-    name: string;
-    cwd: string;
-    model?: string;
-    thinking?: ThinkingLevel;
-    sessionId?: string;
-  } = { name: sessionName, cwd };
-  const modelName = _currentModelName();
-  if (modelName) roomMeta.model = modelName;
-  if (_currentThinking) roomMeta.thinking = _currentThinking;
+    name: string
+    cwd: string
+    model?: string
+    thinking?: ThinkingLevel
+    sessionId?: string
+  } = { name: sessionName, cwd }
+  const modelName = _currentModelName()
+  if (modelName) roomMeta.model = modelName
+  if (_currentThinking) roomMeta.thinking = _currentThinking
   // The room's OWN pi sessionId on the announce — so the app keys per-session
   // state by the pi id (wire identity), not the routing roomId. roomId stays
   // relay-routing only.
   const rootSid =
-    _rootState().sessionManager?.getSessionId() ?? _rootSessionId ?? undefined;
-  if (rootSid) roomMeta.sessionId = rootSid;
+    _rootState().sessionManager?.getSessionId() ?? _rootSessionId ?? undefined
+  if (rootSid) roomMeta.sessionId = rootSid
   // Persist so _attemptReconnect can replay the same hello payload — without
   // this, reconnect issues a bare hello and the relay creates a "default room"
   // entry that surfaces in the app as a phantom legacy session.
-  _myRoomMeta = roomMeta;
+  _myRoomMeta = roomMeta
 
   ctx.ui.notify(
     `[un-bien] Connecting to relay ${relayUrl} (source: ${source}, room: ${roomId})…`,
     "info",
-  );
+  )
 
   // Transport opens WebSocket; convert the canonical http(s):// stored
   // form to ws(s):// at this boundary. The relayUrl variable keeps the
   // http(s):// form for logging + mesh client construction below.
-  const relay = new RelayClient(toWebSocketUrl(relayUrl), edKp);
+  const relay = new RelayClient(toWebSocketUrl(relayUrl), edKp)
   try {
-    await relay.connect({ roomId, roomMeta });
+    await relay.connect({ roomId, roomMeta })
   } catch (err) {
     // A rejected local candidate is never published and must always be closed,
     // regardless of whether this lifecycle is still authoritative.
     try {
-      relay.close();
+      relay.close()
     } catch {
       /* best-effort rejected candidate cleanup */
     }
     // A stop, shutdown/replacement, relay-off, or newer start may supersede a
     // candidate before its rejection arrives. Keep the outgoing context silent;
     // only the authoritative attempt may report an error.
-    if (!isCurrentCandidate()) return;
+    if (!isCurrentCandidate()) return
     if (err instanceof RoomAlreadyOpenError) {
       ctx.ui.notify(
         "[un-bien] Already running in this cwd. Stop the other terminal first.",
         "error",
-      );
-      return;
+      )
+      return
     }
-    ctx.ui.notify(`[un-bien] relay connect failed: ${String(err)}`, "error");
-    return;
+    ctx.ui.notify(`[un-bien] relay connect failed: ${String(err)}`, "error")
+    return
   }
 
   // The candidate is local until this publication point. Session shutdown,
@@ -3995,107 +3987,106 @@ async function _cmdStart(
   // was pending; never let that stale continuation resurrect the Relay.
   if (!isCurrentCandidate()) {
     try {
-      relay.close();
+      relay.close()
     } catch {
       /* best-effort stale candidate cleanup */
     }
-    return;
+    return
   }
 
-  _relay = relay;
-  _relayUrl = relayUrl;
-  _peerShort = myShort;
-  _myRoomId = roomId;
-  _state = "started";
+  _relay = relay
+  _relayUrl = relayUrl
+  _peerShort = myShort
+  _myRoomId = roomId
+  _state = "started"
   // Set _sessionStartedAt ONLY on first /unbien start since process boot.
   // Subsequent start cycles (after stop) preserve the original epoch so the
   // app keeps treating it as the same session (and merges new events from
   // the terminal turns that happened during the idle window). Pi process
   // restart is the only thing that produces a fresh session_started_at.
-  if (_sessionStartedAt === null) _sessionStartedAt = Date.now();
+  if (_sessionStartedAt === null) _sessionStartedAt = Date.now()
   // _messageBuffer intentionally preserved across stop/start — it accumulates
   // message_end events for the lifetime of the Pi process, including turns
   // initiated from the terminal while the relay was disconnected.
 
-  relay.on("close", () => _onRelayClose(relay));
+  relay.on("close", () => _onRelayClose(relay))
 
-  _stopAutoListener = _installAutoListener(relay);
-  _refreshFooter(ctx);
+  _stopAutoListener = _installAutoListener(relay)
+  _refreshFooter(ctx)
 
   // SelfRevoke is the Pi path's single initial topology producer. Its first
   // coalesced sweep always publishes verified membership or a safe fallback
   // before the bridge may attach.
-  let createdProducer = false;
+  let createdProducer = false
   if (_selfRevoke === null) {
-    createdProducer = true;
-    const producerEpoch = ++_selfRevokeEpoch;
-    _selfRevokeTopologyReadyEpoch = -1;
-    _selfRevokeTopology = null;
-    let producer!: SelfRevoke;
+    createdProducer = true
+    const producerEpoch = ++_selfRevokeEpoch
+    _selfRevokeTopologyReadyEpoch = -1
+    _selfRevokeTopology = null
+    let producer!: SelfRevoke
     producer = new SelfRevoke({
       client: new MeshClient(relayUrl),
       storage: { snapshotOwnerPubkeys, conditionalRemovePeer },
       myPubkey: edKp.publicKey,
       onRevoke: (rawOwnerPubkey, canonicalOwnerPubkey) => {
         if (_selfRevoke !== producer || producerEpoch !== _selfRevokeEpoch) {
-          return;
+          return
         }
-        _revokeActiveOwnerRuntime(canonicalOwnerPubkey);
-        void rawOwnerPubkey; // exact storage removal already happened upstream
+        _revokeActiveOwnerRuntime(canonicalOwnerPubkey)
+        void rawOwnerPubkey // exact storage removal already happened upstream
       },
       onAuthoritativeOwners: (canonicalOwnerPubkeys) => {
         if (_selfRevoke !== producer || producerEpoch !== _selfRevokeEpoch) {
-          return;
+          return
         }
-        const presentOwners = new Set(canonicalOwnerPubkeys);
-        let effectFailed = false;
+        const presentOwners = new Set(canonicalOwnerPubkeys)
+        let effectFailed = false
         for (const canonicalOwnerPubkey of [..._activePeers.keys()]) {
           if (_selfRevoke !== producer || producerEpoch !== _selfRevokeEpoch) {
-            return;
+            return
           }
-          if (presentOwners.has(canonicalOwnerPubkey)) continue;
+          if (presentOwners.has(canonicalOwnerPubkey)) continue
           try {
-            _revokeActiveOwnerRuntime(canonicalOwnerPubkey);
+            _revokeActiveOwnerRuntime(canonicalOwnerPubkey)
           } catch {
-            effectFailed = true;
+            effectFailed = true
           }
         }
-        if (effectFailed)
-          throw new Error("Owner runtime reconciliation failed");
+        if (effectFailed) throw new Error("Owner runtime reconciliation failed")
       },
       onTopologyChanged: (snapshot) => {
         if (_selfRevoke !== producer || producerEpoch !== _selfRevokeEpoch) {
-          return;
+          return
         }
-        _selfRevokeTopology = snapshot;
-        _meshNode?.setTopology(snapshot);
-        _selfRevokeTopologyReadyEpoch = producerEpoch;
-        _attachBridgeIfReady();
+        _selfRevokeTopology = snapshot
+        _meshNode?.setTopology(snapshot)
+        _selfRevokeTopologyReadyEpoch = producerEpoch
+        _attachBridgeIfReady()
       },
       log: { info: () => {}, warn: () => {}, error: () => {} },
-    });
-    _selfRevoke = producer;
-    producer.start();
-    await producer.checkOnce();
+    })
+    _selfRevoke = producer
+    producer.start()
+    await producer.checkOnce()
     if (
       _disposed ||
       _selfRevoke !== producer ||
       producerEpoch !== _selfRevokeEpoch ||
       _relay !== relay
     ) {
-      return;
+      return
     }
   }
 
   // Relay reconnect reuses the current producer's retained snapshot. Initial
   // startup is callback-driven above, so it must not issue a second attach.
-  if (!createdProducer) _attachBridgeIfReady();
+  if (!createdProducer) _attachBridgeIfReady()
 
-  _emitRelayState(); // → connected
+  _emitRelayState() // → connected
   ctx.ui.notify(
     `[un-bien] state: started (peer=${myShort}) — Connected to relay ${relayUrl}`,
     "info",
-  );
+  )
 }
 
 /**
@@ -4111,7 +4102,7 @@ async function _cmdPair(
   ctx: Pick<ExtensionContext, "ui" | "cwd">,
   args = "",
 ): Promise<void> {
-  const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : "";
+  const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : ""
 
   // Auto-bootstrap when services are down. Before this, `/unbien pair`
   // on a fresh terminal forced the user to call `/unbien` first — every
@@ -4127,12 +4118,12 @@ async function _cmdPair(
       ctx.ui.notify(
         "[un-bien] First-time setup needed. Run /unbien to configure, then /unbien pair.",
         "warning",
-      );
-      return;
+      )
+      return
     }
-    ctx.ui.notify("[un-bien] Starting mesh + relay before pairing…", "info");
-    if (!_meshNode) await _cmdJoin(ctx);
-    if (_state === "idle") await _cmdStart(ctx);
+    ctx.ui.notify("[un-bien] Starting mesh + relay before pairing…", "info")
+    if (!_meshNode) await _cmdJoin(ctx)
+    if (_state === "idle") await _cmdStart(ctx)
   }
 
   // Relay must be up — the QR carries a token the app exchanges through
@@ -4142,30 +4133,30 @@ async function _cmdPair(
       "[un-bien] Pair requires the relay to be connected. " +
         "Run /unbien to start it (or fix your relay URL via /unbien set-relay).",
       "warning",
-    );
-    return;
+    )
+    return
   }
 
-  const edKp = _cachedEd25519!;
+  const edKp = _cachedEd25519!
   // Embed the user-configured name in the QR so the app shows it on the
   // pairing screen before pair_ok lands (better UX than "remote" or a
   // raw path snippet).
-  const sessionName = _displayName(cwd);
+  const sessionName = _displayName(cwd)
 
   // Optional `--ttl <seconds>` — RPC clients (e.g. Cockpit) pass a caller-
   // defined expiry. Defaults to TOKEN_TTL_MS, clamped to the safe window.
-  const ttlMatch = /--ttl\s+(\d+)/.exec(args);
+  const ttlMatch = /--ttl\s+(\d+)/.exec(args)
   const ttlMs = ttlMatch
     ? clampPairTtlMs(Number(ttlMatch[1]) * 1000)
-    : TOKEN_TTL_MS;
-  const { token, expiresAt } = qrSession.issueToken(ttlMs);
+    : TOKEN_TTL_MS
+  const { token, expiresAt } = qrSession.issueToken(ttlMs)
   // The QR room is the ISSUING session's room (session-id-derived `_myRoomId`).
   // Pairing is room-scoped to this session (it owns the QR token), so only this
   // session answers the pair_request — no fan-out race. Trust still lands on the
   // MACHINE: pair_ok persists a PairedMachine keyed by epk, and the app then
   // discovers all the machine's sessions via room_announced.
-  const roomId = _myRoomId ?? _deriveRoomId(cwd, sessionName);
-  const qrUri = buildQRUri(token, edKp.publicKey, sessionName, roomId);
+  const roomId = _myRoomId ?? _deriveRoomId(cwd, sessionName)
+  const qrUri = buildQRUri(token, edKp.publicKey, sessionName, roomId)
   // Render both the QR ASCII and the copy-paste URI inside the Pi TUI's
   // chat panel via `pi.sendMessage` — the same channel the SDK uses for
   // agent responses + tool results. `process.stderr.write` (the old QR
@@ -4175,7 +4166,7 @@ async function _cmdPair(
   // `lib/main.js:48-53`), so embedding the ASCII inside a sendMessage
   // content string renders correctly without raw escape bytes.
   if (_pi) {
-    const qrAscii = renderQRAscii(qrUri);
+    const qrAscii = renderQRAscii(qrUri)
     _pi.sendMessage({
       customType: "un-bien:pair-code",
       content:
@@ -4185,14 +4176,14 @@ async function _cmdPair(
       // from `uri` + show the expiry, without scraping the display string.
       details: { uri: qrUri, token, expiresAt, roomId, name: sessionName },
       display: true,
-    });
+    })
   }
 
   ctx.ui.notify(
     `[un-bien] QR ready — valid until ${new Date(expiresAt).toLocaleTimeString()}. ` +
       `Scan with the app, or copy the pairing code printed above.`,
     "info",
-  );
+  )
   // Returns immediately; the auto-listener transitions to 'paired' on pair_request.
 }
 
@@ -4204,145 +4195,145 @@ async function _cmdPair(
 async function _cmdStop(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
   // Invalidate queued root work and local async candidates even when none has
   // published yet.
-  _rootLifecycleGeneration += 1;
-  _meshJoinGeneration += 1;
-  const meshUp = _meshNode !== null;
-  const relayUp = _state !== "idle";
+  _rootLifecycleGeneration += 1
+  _meshJoinGeneration += 1
+  const meshUp = _meshNode !== null
+  const relayUp = _state !== "idle"
   if (!meshUp && !relayUp) {
-    _relayLifecycleGeneration += 1;
-    ctx.ui.notify("[un-bien] Already stopped — nothing to do.", "info");
-    return;
+    _relayLifecycleGeneration += 1
+    ctx.ui.notify("[un-bien] Already stopped — nothing to do.", "info")
+    return
   }
 
   // Revoke Relay/SelfRevoke/bridge authority while the global node is still
   // visible and before close() begins UDS leave.
   if (relayUp) {
-    _goIdle();
+    _goIdle()
   } else {
-    _relayLifecycleGeneration += 1;
-    _meshNode?.detachBridge();
+    _relayLifecycleGeneration += 1
+    _meshNode?.detachBridge()
   }
 
-  const meshNode = _meshNode;
-  _meshNode = null;
-  _sessionName = null;
-  _sessionPeerCount = 0;
-  let meshClose: Promise<void> | null = null;
+  const meshNode = _meshNode
+  _meshNode = null
+  _sessionName = null
+  _sessionPeerCount = 0
+  let meshClose: Promise<void> | null = null
   try {
-    meshClose = meshNode?.close() ?? null;
+    meshClose = meshNode?.close() ?? null
   } catch {
     /* best-effort */
   }
   try {
-    await meshClose;
+    await meshClose
   } catch {
     /* best-effort */
   }
 
-  ctx.ui.notify("[un-bien] Stopped (mesh + relay disconnected).", "info");
-  _refreshFooter(ctx);
+  ctx.ui.notify("[un-bien] Stopped (mesh + relay disconnected).", "info")
+  _refreshFooter(ctx)
 }
 
 async function _cmdList(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
-  const peers = await listPeers();
+  const peers = await listPeers()
   if (peers.length === 0) {
-    ctx.ui.notify("[un-bien] No paired devices.", "info");
-    return;
+    ctx.ui.notify("[un-bien] No paired devices.", "info")
+    return
   }
   // Multi-channel (W2D): each peer is either `online` (channel attached
   // right now) or `offline` (in peers.json but not connected). Replaces
   // the singleton " (active)" marker that only ever marked one peer.
   const lines = peers
     .flatMap((record) => {
-      const inspected = _inspectPeerRecord(record);
-      if (!inspected) return [];
+      const inspected = _inspectPeerRecord(record)
+      if (!inspected) return []
       const tag =
         inspected.runtimeKey !== null && _activePeers.has(inspected.runtimeKey)
           ? " 🟢 online"
-          : " ⚪ offline";
-      return `• ${inspected.rawHandle.slice(0, 8)} — ${inspected.record.name}${tag}`;
+          : " ⚪ offline"
+      return `• ${inspected.rawHandle.slice(0, 8)} — ${inspected.record.name}${tag}`
     })
-    .join("\n");
-  ctx.ui.notify(`[un-bien] Paired devices:\n${lines}`, "info");
+    .join("\n")
+  ctx.ui.notify(`[un-bien] Paired devices:\n${lines}`, "info")
 }
 
 async function _cmdRevoke(
   arg: string,
   ctx: Pick<ExtensionContext, "ui" | "cwd">,
 ): Promise<void> {
-  const shortid = arg.trim();
+  const shortid = arg.trim()
   if (!shortid) {
     ctx.ui.notify(
       "[un-bien] Usage: /unbien revoke <shortid>. Run /unbien list to see shortids.",
       "warning",
-    );
-    return;
+    )
+    return
   }
 
   // Revoke needs the relay so the revoked device's live channel is torn down
   // — not just a silent peers.json edit. Auto-bootstrap the mesh + relay when
   // down, mirroring `_cmdPair`.
-  const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : "";
+  const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : ""
   if (_state === "idle") {
     if (!localConfigExists(cwd)) {
       ctx.ui.notify(
         "[un-bien] First-time setup needed. Run /unbien to configure, then /unbien revoke.",
         "warning",
-      );
-      return;
+      )
+      return
     }
-    ctx.ui.notify("[un-bien] Starting mesh + relay before revoking…", "info");
-    if (!_meshNode) await _cmdJoin(ctx);
-    if (_state === "idle") await _cmdStart(ctx);
+    ctx.ui.notify("[un-bien] Starting mesh + relay before revoking…", "info")
+    if (!_meshNode) await _cmdJoin(ctx)
+    if (_state === "idle") await _cmdStart(ctx)
   }
   if (_state === "idle" || !_relay) {
     ctx.ui.notify(
       "[un-bien] Revoke requires the relay to be connected. " +
         "Run /unbien to start it (or fix your relay URL via /unbien set-relay).",
       "warning",
-    );
-    return;
+    )
+    return
   }
 
   const matches = (await listPeers())
     .map(_inspectPeerRecord)
     .filter((peer): peer is InspectedPeerRecord => peer !== null)
-    .filter((peer) => peer.rawHandle.startsWith(shortid));
+    .filter((peer) => peer.rawHandle.startsWith(shortid))
 
   if (matches.length === 0) {
     ctx.ui.notify(
       "[un-bien] No peer matching that shortid. Run /unbien devices to see shortids.",
       "warning",
-    );
-    return;
+    )
+    return
   }
 
   if (matches.length > 1) {
     const collisions = matches
       .map((peer) => peer.rawHandle.slice(0, 8))
-      .join(", ");
+      .join(", ")
     ctx.ui.notify(
       `[un-bien] Ambiguous shortid — ${matches.length} matches: ${collisions}. Use mais chars.`,
       "warning",
-    );
-    return;
+    )
+    return
   }
 
-  const peer = matches[0]!;
-  await removePeer(peer.rawHandle);
-  _refreshPairingsCache();
+  const peer = matches[0]!
+  await removePeer(peer.rawHandle)
+  _refreshPairingsCache()
 
   // Storage removal uses the exact saved representation; the active channel
   // is indexed by its canonical identity.
   if (peer.runtimeKey !== null && _activePeers.has(peer.runtimeKey)) {
-    _detachPeerChannel(peer.runtimeKey);
-    _refreshFooter();
+    _detachPeerChannel(peer.runtimeKey)
+    _refreshFooter()
   }
 
   ctx.ui.notify(
     `[un-bien] Revoked: ${peer.record.name} (${peer.rawHandle.slice(0, 8)}…)`,
     "info",
-  );
+  )
 }
 
 async function _shortidCompletions(
@@ -4351,7 +4342,7 @@ async function _shortidCompletions(
 ): Promise<Array<{ value: string; label: string }>> {
   const peers = (await listPeers())
     .map(_inspectPeerRecord)
-    .filter((peer): peer is InspectedPeerRecord => peer !== null);
+    .filter((peer): peer is InspectedPeerRecord => peer !== null)
   return peers
     .map((peer) => ({
       shortid: peer.rawHandle.slice(0, 8),
@@ -4361,37 +4352,37 @@ async function _shortidCompletions(
     .map((entry) => ({
       value: `${valuePrefix}${entry.shortid}`,
       label: `${entry.shortid} (${entry.name})`,
-    }));
+    }))
 }
 
 function _cmdSetRelay(arg: string, ctx: Pick<ExtensionContext, "ui">): void {
-  const raw = arg.trim();
+  const raw = arg.trim()
   if (!raw) {
     ctx.ui.notify(
       "[un-bien] Usage: /unbien set-relay <http:// or https:// url>",
       "warning",
-    );
-    return;
+    )
+    return
   }
   if (isWebSocketScheme(raw)) {
     ctx.ui.notify(
       `[un-bien] Use http:// or https://. The extension converts to WebSocket automatically.`,
       "error",
-    );
-    return;
+    )
+    return
   }
   if (!isValidRelayUrl(raw)) {
     ctx.ui.notify(
       `[un-bien] Invalid URL: ${raw}. Must start with http:// or https://`,
       "error",
-    );
-    return;
+    )
+    return
   }
-  saveConfig({ relay: raw });
+  saveConfig({ relay: raw })
   ctx.ui.notify(
     `[un-bien] Relay set to ${raw}. Run /unbien relay stop then /unbien relay start to apply.`,
     "info",
-  );
+  )
 }
 
 /**
@@ -4403,21 +4394,21 @@ function _cmdSetRelay(arg: string, ctx: Pick<ExtensionContext, "ui">): void {
  * so `env` vs `config` vs `default` was unverifiable without a restart.
  */
 function _cmdConfig(ctx: Pick<ExtensionContext, "ui">): void {
-  const { url, source } = resolveRelayUrl();
+  const { url, source } = resolveRelayUrl()
   const origin =
     source === "env"
       ? "UNBIEN_RELAY environment variable"
       : source === "config"
         ? "extensions/un-bien.json (set via /unbien set-relay)"
-        : "not set — run /unbien set-relay <url> or set UNBIEN_RELAY";
+        : "not set — run /unbien set-relay <url> or set UNBIEN_RELAY"
   const live =
     _relayUrl && _relayUrl !== url
       ? `\n  ⚠ Live connection still on ${_relayUrl} — run /unbien relay stop then /unbien relay start to apply.`
-      : "";
+      : ""
   ctx.ui.notify(
     `[un-bien]\n  Relay URL: ${url ?? "(none)"}\n  Source: ${source} — ${origin}${live}`,
     "info",
-  );
+  )
 }
 
 /**
@@ -4427,17 +4418,17 @@ function _cmdConfig(ctx: Pick<ExtensionContext, "ui">): void {
  * (never mints).
  */
 async function _cmdIdentity(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
-  const info = await describeIdentity();
+  const info = await describeIdentity()
   const backendLine =
-    info.backend === "file" ? `file (${info.filePath})` : "keychain";
-  const epkLine = info.epk ?? "(none yet — minted on first use)";
+    info.backend === "file" ? `file (${info.filePath})` : "keychain"
+  const epkLine = info.epk ?? "(none yet — minted on first use)"
   const sourceLine = info.detail
     ? `${info.source} — ${info.detail}`
-    : info.source;
+    : info.source
   ctx.ui.notify(
     `[un-bien] identity\n  Backend: ${backendLine}\n  EPK (public): ${epkLine}\n  Source: ${sourceLine}`,
     info.source === "error" ? "error" : "info",
-  );
+  )
 }
 
 /**
@@ -4456,52 +4447,52 @@ async function _cmdIdentity(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
  * local-mesh membership — that stays `/unbien stop`'s job.
  */
 async function _cmdRelay(arg: string, ctx: ExtensionContext): Promise<void> {
-  const raw = arg.trim();
-  const [verb, ...rest] = raw.split(/\s+/);
-  const value = rest.join(" ").trim();
+  const raw = arg.trim()
+  const [verb, ...rest] = raw.split(/\s+/)
+  const value = rest.join(" ").trim()
 
   switch (verb) {
     case "":
     case "toggle":
-      await _handleControl("relay:toggle");
-      ctx.ui.notify(`[un-bien] Relay ${_relayStatus()}.`, "info");
-      _refreshFooter(ctx);
-      return;
+      await _handleControl("relay:toggle")
+      ctx.ui.notify(`[un-bien] Relay ${_relayStatus()}.`, "info")
+      _refreshFooter(ctx)
+      return
     case "start":
     case "on":
-      if (_getState() === "idle") await _cmdStart(ctx);
-      else ctx.ui.notify(`[un-bien] Relay already ${_relayStatus()}.`, "info");
-      _emitRelayState(true);
-      return;
+      if (_getState() === "idle") await _cmdStart(ctx)
+      else ctx.ui.notify(`[un-bien] Relay already ${_relayStatus()}.`, "info")
+      _emitRelayState(true)
+      return
     case "stop":
     case "off":
       if (_getState() === "idle") {
-        ctx.ui.notify("[un-bien] Relay already disconnected.", "info");
+        ctx.ui.notify("[un-bien] Relay already disconnected.", "info")
       } else {
-        _goIdle();
+        _goIdle()
         ctx.ui.notify(
           "[un-bien] Relay disconnected (local mesh untouched).",
           "info",
-        );
+        )
       }
-      _emitRelayState(true);
-      _refreshFooter(ctx);
-      return;
+      _emitRelayState(true)
+      _refreshFooter(ctx)
+      return
     case "status":
-      _cmdStatus(ctx);
-      _emitRelayState(true);
-      return;
+      _cmdStatus(ctx)
+      _emitRelayState(true)
+      return
     case "url":
       // Same writer as `set-relay` — one code path, so validation and the
       // "restart to apply" hint can never diverge between the two spellings.
-      _cmdSetRelay(value, ctx);
-      return;
+      _cmdSetRelay(value, ctx)
+      return
     default:
       ctx.ui.notify(
         "[un-bien] Usage: /unbien relay [start|stop|status|url <http(s) url>]",
         "warning",
-      );
-      return;
+      )
+      return
   }
 }
 
@@ -4528,41 +4519,41 @@ function _cmdInstall(
   ctx: Pick<ExtensionContext, "ui">,
   opts: { linkCli?: boolean } = {},
 ): boolean {
-  const linkCli = opts.linkCli ?? false;
+  const linkCli = opts.linkCli ?? false
   try {
-    const result = installService();
+    const result = installService()
     const sections = [
       `[un-bien] Launcher daemon service installed (${result.platform}).`,
       `  Unit: ${result.unitPath}`,
       `  Steps:\n${result.log.map((l) => "    " + l).join("\n")}`,
-    ];
+    ]
     if (linkCli) {
-      const link = linkCliBinaries();
+      const link = linkCliBinaries()
       sections.push(
         `  CLI bins linked into ${link.binDir}:`,
         link.links.map((l) => `    ${l.name} → ${l.target}`).join("\n"),
         `  Steps:\n${link.log.map((l) => "    " + l).join("\n")}`,
-      );
+      )
       if (!link.onPath) {
         if (process.platform === "win32") {
           sections.push(
             `  ⚠ ${link.binDir} was just added to your user PATH (it wasn't there yet).`,
             `    Open a NEW terminal and run \`unbien status\` to verify.`,
-          );
+          )
         } else {
           sections.push(
             `  ⚠ ${link.binDir} is not on $PATH yet. Add this line to ~/.zshrc / ~/.bashrc:`,
             `      export PATH="$HOME/.local/bin:$PATH"`,
             `    Then open a new terminal and run \`unbien status\` to verify.`,
-          );
+          )
         }
       }
     }
-    ctx.ui.notify(sections.join("\n"), "info");
-    return true;
+    ctx.ui.notify(sections.join("\n"), "info")
+    return true
   } catch (err) {
-    ctx.ui.notify(`[un-bien] install failed: ${String(err)}`, "error");
-    return false;
+    ctx.ui.notify(`[un-bien] install failed: ${String(err)}`, "error")
+    return false
   }
 }
 
@@ -4570,16 +4561,16 @@ function _cmdUninstall(
   ctx: Pick<ExtensionContext, "ui">,
   opts: { linkCli?: boolean } = {},
 ): void {
-  const linkCli = opts.linkCli ?? false;
+  const linkCli = opts.linkCli ?? false
   try {
-    const result = uninstallService();
+    const result = uninstallService()
     const sections = [
       `[un-bien] Launcher daemon service uninstalled (${result.platform}).`,
       `  Unit: ${result.unitPath} (${result.removed ? "removed" : "not present"})`,
       `  Steps:\n${result.log.map((l) => "    " + l).join("\n")}`,
-    ];
+    ]
     if (linkCli) {
-      const unlink = unlinkCliBinaries();
+      const unlink = unlinkCliBinaries()
       sections.push(
         `  CLI bins cleanup (${unlink.binDir}):`,
         unlink.removed
@@ -4587,11 +4578,11 @@ function _cmdUninstall(
             (r) => `    ${r.name} (${r.existed ? "removed" : "not present"})`,
           )
           .join("\n"),
-      );
+      )
     }
-    ctx.ui.notify(sections.join("\n"), "info");
+    ctx.ui.notify(sections.join("\n"), "info")
   } catch (err) {
-    ctx.ui.notify(`[un-bien] uninstall failed: ${String(err)}`, "error");
+    ctx.ui.notify(`[un-bien] uninstall failed: ${String(err)}`, "error")
   }
 }
 
@@ -4601,14 +4592,14 @@ function _resolveExtensionDir(): string {
   // dist/index.js → dist; skills sit at <extensionRoot>/skills/. When we run
   // from src/ via tsx (dev), index.ts is in src/ and skills/ is sibling. We
   // detect by checking both locations.
-  const here = fileURLToPath(import.meta.url);
+  const here = fileURLToPath(import.meta.url)
   // dist/index.js or src/index.ts → parent = <dist or src>; sibling = ../skills
-  const parent = here.replace(/\/[^/]+$/, "");
-  const candidateA = join(parent, "..", "skills"); // dist → ../skills
-  const candidateB = join(parent, "skills"); // src → skills
-  if (existsSync(candidateA)) return parent.replace(/\/dist$/, "");
-  if (existsSync(candidateB)) return parent;
-  return parent;
+  const parent = here.replace(/\/[^/]+$/, "")
+  const candidateA = join(parent, "..", "skills") // dist → ../skills
+  const candidateB = join(parent, "skills") // src → skills
+  if (existsSync(candidateA)) return parent.replace(/\/dist$/, "")
+  if (existsSync(candidateB)) return parent
+  return parent
 }
 
 function _deployAgentNetworkSkill(): void {
@@ -4617,22 +4608,22 @@ function _deployAgentNetworkSkill(): void {
   // The skill `name:` frontmatter must equal the parent directory name. We
   // ship the source pre-arranged that way so deploy is a straight copy into
   // ~/.pi/un-bien/skills/agent-network/SKILL.md.
-  const root = _resolveExtensionDir();
-  const src1 = join(root, "skills", "agent-network", "SKILL.md");
-  const src2 = join(root, "..", "skills", "agent-network", "SKILL.md");
-  const src = existsSync(src1) ? src1 : existsSync(src2) ? src2 : null;
-  if (!src) return;
-  const dstDir = join(skillsDir(), "agent-network");
-  const dst = join(dstDir, "SKILL.md");
+  const root = _resolveExtensionDir()
+  const src1 = join(root, "skills", "agent-network", "SKILL.md")
+  const src2 = join(root, "..", "skills", "agent-network", "SKILL.md")
+  const src = existsSync(src1) ? src1 : existsSync(src2) ? src2 : null
+  if (!src) return
+  const dstDir = join(skillsDir(), "agent-network")
+  const dst = join(dstDir, "SKILL.md")
   try {
-    mkdirSync(dstDir, { recursive: true });
-    copyFileSync(src, dst);
+    mkdirSync(dstDir, { recursive: true })
+    copyFileSync(src, dst)
     // Cleanup legacy deploy at ~/.pi/un-bien/skills/agent-network.md (flat
     // layout, fails the Pi SDK's name-vs-parent-dir validation).
-    const legacy = join(skillsDir(), "agent-network.md");
+    const legacy = join(skillsDir(), "agent-network.md")
     if (existsSync(legacy)) {
       try {
-        unlinkSync(legacy);
+        unlinkSync(legacy)
       } catch {
         /* ignored */
       }
@@ -4665,9 +4656,9 @@ function _deployAgentNetworkSkill(): void {
  */
 type SendUserMessageOptions = NonNullable<
   Parameters<ExtensionAPI["sendUserMessage"]>[1]
->;
+>
 
-type WakeAgentResult = { ok: true } | { ok: false; detail: string };
+type WakeAgentResult = { ok: true } | { ok: false; detail: string }
 
 function _wakeAgent(
   content: Parameters<ExtensionAPI["sendUserMessage"]>[0],
@@ -4675,26 +4666,26 @@ function _wakeAgent(
   steeringBehavior?: SendUserMessageOptions["deliverAs"],
 ): WakeAgentResult {
   if (!_pi) {
-    const detail = "agent session not bound yet";
-    console.error(`[un-bien] ${label}: ${detail} — message dropped`);
-    return { ok: false, detail };
+    const detail = "agent session not bound yet"
+    console.error(`[un-bien] ${label}: ${detail} — message dropped`)
+    return { ok: false, detail }
   }
   try {
     const options = steeringBehavior
       ? { deliverAs: steeringBehavior }
-      : undefined;
-    _pi.sendUserMessage(content, options);
-    return { ok: true };
+      : undefined
+    _pi.sendUserMessage(content, options)
+    return { ok: true }
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
+    const detail = err instanceof Error ? err.message : String(err)
     console.error(
       `[un-bien] ${label}: agent rejected incoming message: ${detail}`,
-    );
+    )
     _safeNotify(
       `[un-bien] failed to process incoming message: ${detail}`,
       "error",
-    );
-    return { ok: false, detail };
+    )
+    return { ok: false, detail }
   }
 }
 
@@ -4717,59 +4708,59 @@ function _wakeAgent(
  */
 function _meshMessageForAgent(env: MeshEnvelope) {
   const bodyText =
-    typeof env.body === "string" ? env.body : JSON.stringify(env.body);
-  const header = `[agent-network] message from "${env.from}" (id=${env.id}${env.re ? `, re=${env.re}` : ""}):`;
+    typeof env.body === "string" ? env.body : JSON.stringify(env.body)
+  const header = `[agent-network] message from "${env.from}" (id=${env.id}${env.re ? `, re=${env.re}` : ""}):`
   const footer = env.re
     ? "(This is a reply to a previous message of yours.)"
-    : `(If a reply is expected, call agent_send with to="${env.from}" and re="${env.id}".)`;
+    : `(If a reply is expected, call agent_send with to="${env.from}" and re="${env.id}".)`
   return {
     customType: "un-bien:mesh-message",
     content: `${header}\n${bodyText}\n\n${footer}`,
     display: true,
-  };
+  }
 }
 
 function _scheduleMeshMessageDrain(): void {
-  if (_meshDrainScheduled || _pendingMeshMessages.length === 0) return;
-  _meshDrainScheduled = true;
+  if (_meshDrainScheduled || _pendingMeshMessages.length === 0) return
+  _meshDrainScheduled = true
   queueMicrotask(() => {
-    _meshDrainScheduled = false;
-    const pi = _pi;
+    _meshDrainScheduled = false
+    const pi = _pi
     if (
       _rootState().agentRun.active ||
       !pi ||
       _pendingMeshMessages.length === 0
     )
-      return;
+      return
 
-    const batch = _pendingMeshMessages.splice(0);
-    let delivered = 0;
-    _rootState().agentRun.active = true;
+    const batch = _pendingMeshMessages.splice(0)
+    let delivered = 0
+    _rootState().agentRun.active = true
     try {
       batch.forEach((env, index) => {
-        const isLast = index === batch.length - 1;
+        const isLast = index === batch.length - 1
         pi.sendMessage(
           _meshMessageForAgent(env),
           isLast
             ? { triggerTurn: true, deliverAs: "followUp" }
             : { triggerTurn: false },
-        );
-        delivered += 1;
-      });
+        )
+        delivered += 1
+      })
     } catch (err) {
-      _rootState().agentRun.active = false;
+      _rootState().agentRun.active = false
       _pendingMeshMessages = [
         ...batch.slice(delivered),
         ..._pendingMeshMessages,
-      ];
-      const detail = err instanceof Error ? err.message : String(err);
-      console.error(`[un-bien] queued mesh delivery failed: ${detail}`);
+      ]
+      const detail = err instanceof Error ? err.message : String(err)
+      console.error(`[un-bien] queued mesh delivery failed: ${detail}`)
       _safeNotify(
         `[un-bien] failed to process queued mesh messages: ${detail}`,
         "error",
-      );
+      )
     }
-  });
+  })
 }
 
 function _deliverMeshMessageToAgent(env: MeshEnvelope): void {
@@ -4781,16 +4772,16 @@ function _deliverMeshMessageToAgent(env: MeshEnvelope): void {
   if (!_pi) {
     console.error(
       `[un-bien] agent-network message from "${env.from}": agent session not bound yet — message dropped`,
-    );
-    return;
+    )
+    return
   }
-  _pendingMeshMessages.push(env);
-  _scheduleMeshMessageDrain();
+  _pendingMeshMessages.push(env)
+  _scheduleMeshMessageDrain()
 }
 
 /** Test-only entry point for verifying mesh-to-agent delivery semantics. */
 export function _deliverMeshMessageToAgentForTest(env: MeshEnvelope): void {
-  _deliverMeshMessageToAgent(env);
+  _deliverMeshMessageToAgent(env)
 }
 
 /**
@@ -4804,37 +4795,37 @@ async function _cmdJoin(
   ctx: Pick<ExtensionContext, "ui" | "cwd">,
 ): Promise<void> {
   const cwd =
-    "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd();
-  const local = loadLocalConfig(cwd);
-  const sessionName = LOCAL_SESSION_NAME;
+    "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd()
+  const local = loadLocalConfig(cwd)
+  const sessionName = LOCAL_SESSION_NAME
   // What the user configured for this agent…
-  const requestedName = local.agent_name || defaultAgentName(cwd);
+  const requestedName = local.agent_name || defaultAgentName(cwd)
   // …and what we actually register: the name the cwd-lock reserved, which is
   // `requestedName` or a `#N` variant when same-named agents share this folder.
   // Falls back to requestedName when join runs without a prior `_cmdRoot` lock
   // (e.g. legacy/test paths).
-  const agentName = _lockedName ?? requestedName;
+  const agentName = _lockedName ?? requestedName
 
   if (_meshNode) {
-    ctx.ui.notify("[un-bien] Already on the local mesh.", "warning");
-    return;
+    ctx.ui.notify("[un-bien] Already on the local mesh.", "warning")
+    return
   }
-  const joinGeneration = ++_meshJoinGeneration;
+  const joinGeneration = ++_meshJoinGeneration
 
-  ensureGlobalDirs();
+  ensureGlobalDirs()
   mkdirSync(join(skillsDir(), "..", "sessions", sessionName), {
     recursive: true,
-  });
+  })
 
-  const sock = sessionSockPath(sessionName);
-  const audit = sessionAuditPath(sessionName);
+  const sock = sessionSockPath(sessionName)
+  const audit = sessionAuditPath(sessionName)
   // Forward the cwd so the broker keys this peer by (cwd, name): a same-folder
   // same-name reincarnation (switch_session re-eval, app restart) takes over the
   // name instead of registering behind a mute `name#N` ghost. Canonicalize via
   // realpath so symlinked cwds map to one identity (matches roomIdForCwd).
-  let canonCwd = cwd;
+  let canonCwd = cwd
   try {
-    canonCwd = realpathSync(cwd);
+    canonCwd = realpathSync(cwd)
   } catch {
     /* cwd missing — use raw path */
   }
@@ -4844,54 +4835,54 @@ async function _cmdJoin(
     cwd: canonCwd,
     auditPath: audit,
     takeoverExisting: process.env["UNBIEN_DAEMON"] === "1",
-  });
+  })
 
   peer.onMessage((env) => {
-    const body = env.body as { type?: string } | null;
+    const body = env.body as { type?: string } | null
     // Broker system events: re-query broker for authoritative count.
     // Incremental ±1 drifts when peer_left is missed (leader leaves cleanly,
     // failover, etc.) — querying list_peers makes the count self-healing.
     if (body && (body.type === "peer_joined" || body.type === "peer_left")) {
-      _refreshSessionPeerCount(peer, ctx);
+      _refreshSessionPeerCount(peer, ctx)
       // Plan/25 Wave B: push fresh peer list to all siblings so their
       // remotePeers cache stays current without polling.
       void peer
         .request("broker", { type: "list_peers" }, 2000)
         .then((reply) => {
           const body = reply.body as {
-            peers?: string[];
-            peers_detailed?: Array<{ pc?: string; address?: string }>;
-          } | null;
+            peers?: string[]
+            peers_detailed?: Array<{ pc?: string; address?: string }>
+          } | null
           // onLocalPeersChanged wants LOCAL-only addresses (list_peers returns
           // the aggregated local + cross-PC roster). Prefer the structured
           // roster (plan/38): a local peer has no `pc`. This is drive-letter
           // safe — a Windows local address `C:\…@app` contains ':' but is NOT
           // remote, so the old naive `!p.includes(":")` misclassified it.
-          let local: string[] | null = null;
-          const detailed = body?.peers_detailed;
+          let local: string[] | null = null
+          const detailed = body?.peers_detailed
           if (Array.isArray(detailed)) {
             local = detailed
               .filter((p) => !p.pc && typeof p.address === "string")
-              .map((p) => p.address as string);
+              .map((p) => p.address as string)
           } else if (Array.isArray(body?.peers)) {
             // Fallback for a legacy broker without `peers_detailed`.
-            local = body!.peers!.filter((p) => !p.includes(":"));
+            local = body!.peers!.filter((p) => !p.includes(":"))
           }
           // No-op when the bridge isn't up (follower / relay down).
-          if (local) peer.onLocalPeersChanged(local);
+          if (local) peer.onLocalPeersChanged(local)
         })
         .catch(() => {
           /* bridge not bound yet, or list_peers failed */
-        });
-      return;
+        })
+      return
     }
-    if (env.from === "broker") return; // other broker control messages — ignore
+    if (env.from === "broker") return // other broker control messages — ignore
 
     // Real agent-to-agent message (SessionPeer already correlated replies via
     // env.re before this point). Show it in the app's TOOL timeline and wake
     // the agent as a CUSTOM message — never as the user's own message.
-    _deliverMeshMessageToAgent(env);
-  });
+    _deliverMeshMessageToAgent(env)
+  })
 
   // After failover (leader died, we re-elected): the new broker's peers map
   // starts fresh, but our cached `_sessionPeerCount` is stale. Re-seed it so
@@ -4901,32 +4892,32 @@ async function _cmdJoin(
   // re-wire against the fresh `localBroker()` if we were promoted to leader)
   // is handled INSIDE MeshNode — no manual teardown/ensure needed here.
   peer.onReconnect(() => {
-    _refreshSessionPeerCount(peer, ctx);
-  });
+    _refreshSessionPeerCount(peer, ctx)
+  })
 
   const isCurrentCandidate = (): boolean =>
-    !_disposed && joinGeneration === _meshJoinGeneration && _meshNode === null;
+    !_disposed && joinGeneration === _meshJoinGeneration && _meshNode === null
 
   try {
-    const assigned = await peer.connect();
+    const assigned = await peer.connect()
     // The candidate stays local until connect resolves. Shutdown, stop, or a
     // newer join invalidates its generation; close it instead of publishing a
     // ghost peer or allowing _cmdRoot to continue into Relay startup.
     if (!isCurrentCandidate()) {
       try {
-        await peer.close();
+        await peer.close()
       } catch {
         /* best-effort */
       }
-      return;
+      return
     }
-    _meshNode = peer;
-    _sessionName = sessionName;
-    _sessionPeerCount = 1; // optimistic — overwritten by list_peers below
+    _meshNode = peer
+    _sessionName = sessionName
+    _sessionPeerCount = 1 // optimistic — overwritten by list_peers below
     // Broker broadcasts `peer_joined` only to existing peers when a new one
     // arrives — the newcomer doesn't get retroactive joined events. Ask the
     // broker for the live peer list to seed the count correctly on join.
-    _refreshSessionPeerCount(peer, ctx);
+    _refreshSessionPeerCount(peer, ctx)
     // Tell RPC clients (e.g. Cockpit) the EFFECTIVE mesh name. The broker
     // appends a `#N` suffix only on a same-(cwd,name) collision, so the name we
     // requested and the one actually assigned can differ. Emit a pure-data event
@@ -4952,28 +4943,28 @@ async function _cmdJoin(
         changed: assigned !== requestedName,
       },
       display: false,
-    });
+    })
     ctx.ui.notify(
       `[un-bien] Joined local mesh as "${assigned}" (${peer.currentRole()})`,
       "info",
-    );
-    _refreshFooter(ctx);
+    )
+    _refreshFooter(ctx)
     // Plan/25 Wave B/C: try to bring up cross-PC routing now that the
     // local broker exists. No-op if the relay isn't up yet (will fire
     // again from `_cmdStart`).
-    _attachBridgeIfReady();
+    _attachBridgeIfReady()
   } catch (err) {
     // A replacement/stop/newer join can invalidate this candidate before its
     // failure arrives. Clean it up and never notify the outgoing session ctx.
     if (!isCurrentCandidate()) {
       try {
-        await peer.close();
+        await peer.close()
       } catch {
         /* best-effort */
       }
-      return;
+      return
     }
-    ctx.ui.notify(`[un-bien] join failed: ${String(err)}`, "error");
+    ctx.ui.notify(`[un-bien] join failed: ${String(err)}`, "error")
   }
 }
 
@@ -4994,24 +4985,24 @@ function _abortCurrentTurn(
   fallbackCtx?: Pick<ExtensionContext, "abort">,
 ): boolean {
   const candidates: Array<Pick<ExtensionContext, "abort"> | null | undefined> =
-    [_lastEventCtx, _lastCtx, fallbackCtx];
+    [_lastEventCtx, _lastCtx, fallbackCtx]
 
   for (const candidate of candidates) {
-    if (!candidate || candidate === _noopCtx) continue;
-    if (typeof candidate.abort !== "function") continue;
+    if (!candidate || candidate === _noopCtx) continue
+    if (typeof candidate.abort !== "function") continue
     try {
-      candidate.abort();
-      return true;
+      candidate.abort()
+      return true
     } catch (err) {
       // Only skip SDK stale-ctx throws and try the next candidate. Real abort
       // failures rethrow so the cancel handler can report action_error.
-      const msg = err instanceof Error ? err.message : String(err);
-      if (/stale|session replacement or reload/i.test(msg)) continue;
-      throw err;
+      const msg = err instanceof Error ? err.message : String(err)
+      if (/stale|session replacement or reload/i.test(msg)) continue
+      throw err
     }
   }
 
-  return false;
+  return false
 }
 
 export function _routeClientMessageFrom(
@@ -5021,15 +5012,15 @@ export function _routeClientMessageFrom(
 ): void {
   if (msg.type === "cancel") {
     try {
-      const aborted = _abortCurrentTurn(ctx);
+      const aborted = _abortCurrentTurn(ctx)
       if (!aborted) {
         sender.send({
           type: "error",
           code: "internal_error",
           in_reply_to: msg.id,
           message: "No active Pi context to abort",
-        });
-        return;
+        })
+        return
       }
       // The cancel took effect (pi abort). No stock `cancelled` frame is
       // emitted — the app already sees the turn wind down via the envelope
@@ -5040,12 +5031,12 @@ export function _routeClientMessageFrom(
         code: "internal_error",
         in_reply_to: msg.id,
         message: `Abort failed: ${String(err)}`,
-      });
+      })
     }
-    return;
+    return
   }
   // extension_ui_response is envelope-only now — handled in _routeRpcCommandFrom.
-  if (!_pi) return;
+  if (!_pi) return
   // Pre-attach / transport-control only. Every stock ACTION case (model_set,
   // thinking_set, list_models, session_compact, session_new → rpc plane;
   // session_launch → un plane; approve_tool → removed feature) is MIGRATED off
@@ -5053,12 +5044,12 @@ export function _routeClientMessageFrom(
   // an attached rpc peer.
   switch (msg.type) {
     case "ping":
-      sender.send({ type: "pong", in_reply_to: msg.id });
-      break;
+      sender.send({ type: "pong", in_reply_to: msg.id })
+      break
     case "pair_request":
       // Already paired — ignore subsequent pair_request to maintain idempotency.
       // (Token is already consumed and peer is in peers.json.)
-      break;
+      break
   }
 }
 
@@ -5071,9 +5062,9 @@ export function routeClientMessage(
   msg: ClientMessage,
   ctx: Pick<ExtensionContext, "abort">,
 ): void {
-  const fallback = [..._activePeers.values()].pop();
-  if (!fallback) return;
-  _routeClientMessageFrom(fallback, msg, ctx);
+  const fallback = [..._activePeers.values()].pop()
+  if (!fallback) return
+  _routeClientMessageFrom(fallback, msg, ctx)
 }
 
 // ── session_sync handler + helpers ────────────────────────────────────────────
@@ -5098,12 +5089,12 @@ function _resetSessionForNew(): void {
   // Restamp the session clock so the app detects the pi restart (session_sync_end
   // carries it). The transcript resets naturally: the app re-fetches via
   // get_entries against the fresh session and drops the old one on the new hello.
-  _sessionStartedAt = Date.now();
+  _sessionStartedAt = Date.now()
 }
 
 /** Resolve the base dir for tool-arg file lookups from the last command ctx. */
 function _resolveToolCwd(): string {
-  return _lastCtx && "cwd" in _lastCtx ? _lastCtx.cwd : process.cwd();
+  return _lastCtx && "cwd" in _lastCtx ? _lastCtx.cwd : process.cwd()
 }
 
 // ── Standalone CLI ────────────────────────────────────────────────────────────
@@ -5112,9 +5103,9 @@ function _isDirectRun(): boolean {
   try {
     return (
       fileURLToPath(import.meta.url) === realpathSync(process.argv[1] ?? "")
-    );
+    )
   } catch {
-    return false;
+    return false
   }
 }
 
@@ -5138,57 +5129,57 @@ export async function probeListPeers(
   sockPath: string,
   timeoutMs = 2000,
 ): Promise<string[] | null> {
-  const { createConnection } = await import("node:net");
+  const { createConnection } = await import("node:net")
   return new Promise<string[] | null>((resolve) => {
-    const sock = createConnection({ path: sockPath });
-    let buf = "";
-    let settled = false;
+    const sock = createConnection({ path: sockPath })
+    let buf = ""
+    let settled = false
     const done = (result: string[] | null): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
       try {
-        sock.destroy();
+        sock.destroy()
       } catch {
         /* already gone */
       }
-      resolve(result);
-    };
-    const timer = setTimeout(() => done(null), timeoutMs);
-    sock.setEncoding("utf8");
+      resolve(result)
+    }
+    const timer = setTimeout(() => done(null), timeoutMs)
+    sock.setEncoding("utf8")
     sock.on("connect", () => {
       try {
-        sock.write(JSON.stringify({ type: "list_peers" }) + "\n");
+        sock.write(JSON.stringify({ type: "list_peers" }) + "\n")
       } catch {
-        done(null);
+        done(null)
       }
-    });
+    })
     sock.on("data", (chunk: string) => {
-      buf += chunk;
-      const nl = buf.indexOf("\n");
-      if (nl < 0) return; // wait for a full line
-      const line = buf.slice(0, nl);
+      buf += chunk
+      const nl = buf.indexOf("\n")
+      if (nl < 0) return // wait for a full line
+      const line = buf.slice(0, nl)
       try {
         const env = JSON.parse(line) as {
-          body?: { type?: string; peers?: unknown };
-        };
-        const body = env.body;
+          body?: { type?: string; peers?: unknown }
+        }
+        const body = env.body
         if (
           body &&
           body.type === "list_peers_reply" &&
           Array.isArray(body.peers)
         ) {
-          done(body.peers.filter((p): p is string => typeof p === "string"));
-          return;
+          done(body.peers.filter((p): p is string => typeof p === "string"))
+          return
         }
       } catch {
         /* fall through */
       }
-      done(null); // a line arrived but it wasn't the reply we expected
-    });
-    sock.on("error", () => done(null)); // ECONNREFUSED / ENOENT → mesh offline
-    sock.on("close", () => done(null));
-  });
+      done(null) // a line arrived but it wasn't the reply we expected
+    })
+    sock.on("error", () => done(null)) // ECONNREFUSED / ENOENT → mesh offline
+    sock.on("close", () => done(null))
+  })
 }
 
 function _cliStubUi(): ExtensionContext["ui"] {
@@ -5197,58 +5188,58 @@ function _cliStubUi(): ExtensionContext["ui"] {
   // reached on the direct-run path, so a notify-only console shim is safe.
   return {
     notify: (msg: string) => console.log(msg),
-  } as unknown as ExtensionContext["ui"];
+  } as unknown as ExtensionContext["ui"]
 }
 
 if (_isDirectRun()) {
-  const [, , subcmd, ...cliArgs] = process.argv;
+  const [, , subcmd, ...cliArgs] = process.argv
   if (subcmd === "devices" || subcmd === "list") {
     const peers = (await listPeers())
       .map(_inspectPeerRecord)
-      .filter((peer): peer is InspectedPeerRecord => peer !== null);
+      .filter((peer): peer is InspectedPeerRecord => peer !== null)
     if (peers.length === 0) {
-      console.log("[un-bien] No peers");
+      console.log("[un-bien] No peers")
     } else {
       for (const peer of peers) {
-        console.log(`• ${peer.rawHandle.slice(0, 8)} — ${peer.record.name}`);
+        console.log(`• ${peer.rawHandle.slice(0, 8)} — ${peer.record.name}`)
       }
     }
   } else if (subcmd === "revoke") {
-    const shortid = (cliArgs[0] ?? "").trim();
+    const shortid = (cliArgs[0] ?? "").trim()
     if (shortid) {
       const matches = (await listPeers())
         .map(_inspectPeerRecord)
         .filter((peer): peer is InspectedPeerRecord => peer !== null)
-        .filter((peer) => peer.rawHandle.startsWith(shortid));
-      if (matches.length === 0) console.log("No peer matching that shortid");
+        .filter((peer) => peer.rawHandle.startsWith(shortid))
+      if (matches.length === 0) console.log("No peer matching that shortid")
       else if (matches.length > 1)
         console.log(
           `Ambiguous: ${matches.map((peer) => peer.rawHandle.slice(0, 8)).join(", ")}`,
-        );
+        )
       else {
-        const peer = matches[0]!;
-        const { removePeer } = await import("./pairing/storage.js");
-        await removePeer(peer.rawHandle);
+        const peer = matches[0]!
+        const { removePeer } = await import("./pairing/storage.js")
+        await removePeer(peer.rawHandle)
         console.log(
           `Revoked: ${peer.record.name} (${peer.rawHandle.slice(0, 8)}…)`,
-        );
+        )
       }
     } else {
-      console.log("Usage: revoke <shortid>");
+      console.log("Usage: revoke <shortid>")
     }
   } else if (subcmd === "set-relay") {
-    const raw = (cliArgs[0] ?? "").trim();
+    const raw = (cliArgs[0] ?? "").trim()
     if (!raw) {
-      console.log(`Usage: set-relay <url>`);
+      console.log(`Usage: set-relay <url>`)
     } else if (isWebSocketScheme(raw)) {
       console.log(
         `Use http:// or https://. The extension converts to WebSocket automatically.`,
-      );
+      )
     } else if (isValidRelayUrl(raw)) {
-      saveConfig({ relay: raw });
-      console.log(`Relay set to ${raw}`);
+      saveConfig({ relay: raw })
+      console.log(`Relay set to ${raw}`)
     } else {
-      console.log(`Invalid URL: ${raw}. Must start with http:// or https://`);
+      console.log(`Invalid URL: ${raw}. Must start with http:// or https://`)
     }
   } else if (subcmd === "peers") {
     // Read-only roster of the local + cross-PC mesh. Unlike `devices` (which
@@ -5256,27 +5247,27 @@ if (_isDirectRun()) {
     // running broker's memory, so we probe the UDS broker. The probe never
     // registers as a peer — it leaves no trace on the mesh (see
     // Broker._tryObserverProbe). Null = no broker reachable on this machine.
-    const peers = await probeListPeers(sessionSockPath(LOCAL_SESSION_NAME));
+    const peers = await probeListPeers(sessionSockPath(LOCAL_SESSION_NAME))
     if (peers === null) {
       console.log(
         "[un-bien] Mesh offline — no agent is running on this machine.",
-      );
+      )
     } else {
-      console.log(`[un-bien] peers:\n${formatPeerInventory(peers)}`);
+      console.log(`[un-bien] peers:\n${formatPeerInventory(peers)}`)
     }
   } else if (subcmd === "claude") {
-    await _cmdClaudeCli(cliArgs);
+    await _cmdClaudeCli(cliArgs)
   } else if (subcmd === "install") {
     // CLI mode = user installed via `npm install -g un-bien`, so the
     // `un-bien` bin is already on $PATH via npm's global prefix. Explicit
     // `linkCli: false` so we never stomp those with symlinks pointing at a
     // parallel Pi-extension install.
-    const stubCtx = { ui: _cliStubUi() };
+    const stubCtx = { ui: _cliStubUi() }
     // Propagate failure as a non-zero exit so callers (Cockpit / CI) detect it
     // — installService throws on a failed schtasks/launchctl/systemctl step.
-    if (!_cmdInstall(stubCtx, { linkCli: false })) process.exit(1);
+    if (!_cmdInstall(stubCtx, { linkCli: false })) process.exit(1)
   } else if (subcmd === "uninstall") {
-    const stubCtx = { ui: _cliStubUi() };
+    const stubCtx = { ui: _cliStubUi() }
     // `linkCli: true` even from the CLI: unlinking is ALWAYS safe and must run
     // regardless of how install ran. `unlinkCliBinaries` only removes OUR
     // reserved `un-bien` symlink under `~/.local/bin`; npm-global bins live in
@@ -5284,7 +5275,7 @@ if (_isDirectRun()) {
     // TUI (`/unbien install`, which links) and uninstalls from a shell still
     // gets the link cleaned up — the asymmetry that left an orphaned
     // `~/.local/bin/unbien` behind.
-    _cmdUninstall(stubCtx, { linkCli: true });
+    _cmdUninstall(stubCtx, { linkCli: true })
   } else {
     console.log(
       [
@@ -5305,7 +5296,7 @@ if (_isDirectRun()) {
         "  peers                           List agents on the local + cross-PC mesh",
         "  claude [cwd]                    Start Claude Code connected to the agent mesh",
       ].join("\n"),
-    );
+    )
   }
 }
 
@@ -5319,10 +5310,10 @@ if (_isDirectRun()) {
  * if the file is missing (e.g. running before `pnpm build`).
  */
 function _agentNetworkSkillPath(): string | null {
-  const here = fileURLToPath(import.meta.url); // dist/index.js (or src/index.ts via tsx)
-  const pkgRoot = dirname(dirname(here)); // package root (dist → ..; src → ..)
-  const skill = join(pkgRoot, "skills", "agent-network", "SKILL.md");
-  return existsSync(skill) ? skill : null;
+  const here = fileURLToPath(import.meta.url) // dist/index.js (or src/index.ts via tsx)
+  const pkgRoot = dirname(dirname(here)) // package root (dist → ..; src → ..)
+  const skill = join(pkgRoot, "skills", "agent-network", "SKILL.md")
+  return existsSync(skill) ? skill : null
 }
 
 async function _cmdClaudeCli(args: string[]): Promise<void> {
@@ -5331,48 +5322,48 @@ async function _cmdClaudeCli(args: string[]): Promise<void> {
   // is forwarded verbatim to the `claude` binary (e.g. `--resume`, `-c`,
   // `-p "prompt"`). Restricting cwd to the leading token avoids mistaking a
   // flag's value (e.g. the id in `--resume <id>`) for the cwd.
-  const hasCwdArg = args.length > 0 && !args[0]!.startsWith("-");
-  const targetCwd = hasCwdArg ? args[0]! : process.cwd();
-  const passthroughArgs = hasCwdArg ? args.slice(1) : args;
+  const hasCwdArg = args.length > 0 && !args[0]!.startsWith("-")
+  const targetCwd = hasCwdArg ? args[0]! : process.cwd()
+  const passthroughArgs = hasCwdArg ? args.slice(1) : args
 
   // Wizard when no local config exists
   if (!localConfigExists(targetCwd)) {
-    const suggested = defaultAgentName(targetCwd);
-    process.stdout.write(`\n[un-bien] No config found for ${targetCwd}\n`);
-    process.stdout.write("Let's set up this agent.\n\n");
+    const suggested = defaultAgentName(targetCwd)
+    process.stdout.write(`\n[un-bien] No config found for ${targetCwd}\n`)
+    process.stdout.write("Let's set up this agent.\n\n")
 
     const rl = createInterface({
       input: process.stdin,
       output: process.stdout,
-    });
+    })
     const agentName: string = await new Promise((res) =>
       rl.question(`Agent name [${suggested}]: `, (ans) => {
-        rl.close();
-        res(ans.trim() || suggested);
+        rl.close()
+        res(ans.trim() || suggested)
       }),
-    );
+    )
 
     saveLocalConfig(targetCwd, {
       agent_name: agentName,
       auto_start_relay: true,
-    });
-    process.stdout.write(`[un-bien] Config saved: agent="${agentName}"\n\n`);
+    })
+    process.stdout.write(`[un-bien] Config saved: agent="${agentName}"\n\n`)
   }
 
   // Resolve mesh server script path (dist/mcp/mesh_server.js)
-  const here = fileURLToPath(import.meta.url);
-  const distRoot = dirname(here);
-  const meshServerPath = resolve(distRoot, "mcp/mesh_server.js");
+  const here = fileURLToPath(import.meta.url)
+  const distRoot = dirname(here)
+  const meshServerPath = resolve(distRoot, "mcp/mesh_server.js")
 
   if (!existsSync(meshServerPath)) {
     console.log(
       `[un-bien] mesh server not found at ${meshServerPath}. Run pnpm build first.`,
-    );
-    process.exit(1);
+    )
+    process.exit(1)
   }
 
-  const absCwd = resolve(targetCwd);
-  const SERVER_NAME = "un-bien-mesh";
+  const absCwd = resolve(targetCwd)
+  const SERVER_NAME = "un-bien-mesh"
 
   // The mesh MCP must be visible ONLY inside a `unbien claude` session — a
   // plain `claude` in the same repo must NOT inherit it (otherwise every
@@ -5394,7 +5385,7 @@ async function _cmdClaudeCli(args: string[]): Promise<void> {
     cwd: absCwd,
     stdio: "ignore",
     shell: false,
-  });
+  })
 
   // Ephemeral MCP config consumed by `--mcp-config` below. We do NOT bake a
   // `cwd` into it: the server resolves its folder from its own `process.cwd()`,
@@ -5403,7 +5394,7 @@ async function _cmdClaudeCli(args: string[]): Promise<void> {
   // with `cwd: absCwd`, the MCP child inherits it, so the server self-identifies
   // as the right agent without leaking that path to any other session.
   // Unique per pid so concurrent `unbien claude` launches don't collide.
-  const mcpConfigPath = join(tmpdir(), `un-bien-mesh-mcp-${process.pid}.json`);
+  const mcpConfigPath = join(tmpdir(), `un-bien-mesh-mcp-${process.pid}.json`)
   writeFileSync(
     mcpConfigPath,
     JSON.stringify({
@@ -5411,14 +5402,14 @@ async function _cmdClaudeCli(args: string[]): Promise<void> {
         [SERVER_NAME]: { command: process.execPath, args: [meshServerPath] },
       },
     }),
-  );
+  )
 
   // Inject the agent-network protocol as a system prompt instead of deploying a
   // skill file into ~/.claude. Anyone running `unbien claude` is here to use
   // the mesh, so load the protocol unconditionally — no lazy skill gating, no
   // global skills-dir pollution, and the packaged file is the single source of
   // truth shared with the Pi runtime. Skipped only if the file is missing.
-  const skillPath = _agentNetworkSkillPath();
+  const skillPath = _agentNetworkSkillPath()
 
   // Launch flags:
   //   --mcp-config <tmpfile>                       — load the mesh server for
@@ -5464,13 +5455,13 @@ async function _cmdClaudeCli(args: string[]): Promise<void> {
         stdio: "inherit",
         shell: false,
       },
-    );
+    )
   } finally {
     // Session over — drop the ephemeral config so it never lingers as a stray
     // file. spawnSync blocks until claude exits, so claude has long since read
     // it. Best-effort: ignore if already gone.
     try {
-      unlinkSync(mcpConfigPath);
+      unlinkSync(mcpConfigPath)
     } catch {
       /* already removed */
     }

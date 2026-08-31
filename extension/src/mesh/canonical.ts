@@ -27,40 +27,38 @@
  */
 
 export function canonicalize(value: unknown): string {
-  if (value === null) return "null";
-  if (typeof value === "boolean") return value ? "true" : "false";
+  if (value === null) return "null"
+  if (typeof value === "boolean") return value ? "true" : "false"
   if (typeof value === "number") {
     if (!Number.isFinite(value)) {
-      throw new Error("canonical: non-finite number cannot be JSON-encoded");
+      throw new Error("canonical: non-finite number cannot be JSON-encoded")
     }
-    return JSON.stringify(value);
+    return JSON.stringify(value)
   }
-  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "string") return JSON.stringify(value)
   if (Array.isArray(value)) {
     // Inside arrays, undefined → null (mirrors JSON.stringify).
-    const items = value.map((v) =>
-      v === undefined ? "null" : canonicalize(v),
-    );
-    return "[" + items.join(",") + "]";
+    const items = value.map((v) => (v === undefined ? "null" : canonicalize(v)))
+    return "[" + items.join(",") + "]"
   }
   if (typeof value === "object") {
-    const obj = value as Record<string, unknown>;
+    const obj = value as Record<string, unknown>
     const keys = Object.keys(obj)
       .filter((k) => obj[k] !== undefined)
-      .sort();
+      .sort()
     const pairs = keys.map(
       (k) => JSON.stringify(k) + ":" + canonicalize(obj[k]),
-    );
-    return "{" + pairs.join(",") + "}";
+    )
+    return "{" + pairs.join(",") + "}"
   }
   // undefined / functions / symbols at the root → JSON.stringify returns
   // undefined; we surface as "null" for callers that wrap us.
-  return "null";
+  return "null"
 }
 
-const TEXT_ENCODER = new TextEncoder();
+const TEXT_ENCODER = new TextEncoder()
 
 /** Canonical JSON string as UTF-8 bytes. The exact bytes that get signed. */
 export function canonicalBytes(value: unknown): Uint8Array {
-  return TEXT_ENCODER.encode(canonicalize(value));
+  return TEXT_ENCODER.encode(canonicalize(value))
 }

@@ -1,14 +1,14 @@
 export type PairErrorCode =
-  "token_expired" | "token_consumed" | "token_unknown" | "internal_error";
+  "token_expired" | "token_consumed" | "token_unknown" | "internal_error"
 
-export type StreamingBehavior = "steer";
+export type StreamingBehavior = "steer"
 
 export type QueuedMessageItem = {
-  id: string;
-  text: string;
-  editable: boolean;
-  created_at: number;
-};
+  id: string
+  text: string
+  editable: boolean
+  created_at: number
+}
 
 // ── Plan/57 — extension_ui_request bridge (mirror SDK RPC contract) ───────
 // The paired app renders interactive extension prompts (ask_user today, via
@@ -21,31 +21,31 @@ export type QueuedMessageItem = {
 // `ask` envelope; strict clients ignore it. Inert when pi-ask is absent.
 
 export type ExtensionUiMethod =
-  "select" | "confirm" | "input" | "editor" | "notify";
+  "select" | "confirm" | "input" | "editor" | "notify"
 
-export type AskQuestionWireType = "single" | "multi" | "preview";
+export type AskQuestionWireType = "single" | "multi" | "preview"
 
 export interface AskOptionWire {
-  value: string;
-  label: string;
-  description?: string;
+  value: string
+  label: string
+  description?: string
   /** Preview-pane content (preview questions only). */
-  preview?: string;
+  preview?: string
   /** pi-ask addition: option allows freeform custom entry. */
-  freeform?: boolean;
+  freeform?: boolean
 }
 
 export interface AskQuestionWire {
-  id: string;
-  label: string;
-  prompt: string;
-  type: AskQuestionWireType;
-  required: boolean;
+  id: string
+  label: string
+  prompt: string
+  type: AskQuestionWireType
+  required: boolean
   /** pi-ask addition: type actually presented after live toggle / policy. */
-  presentedType?: AskQuestionWireType;
+  presentedType?: AskQuestionWireType
   /** pi-ask addition: type originally requested by the model. */
-  requestedType?: AskQuestionWireType;
-  options: AskOptionWire[];
+  requestedType?: AskQuestionWireType
+  options: AskOptionWire[]
 }
 
 /** Optional pi-ask enrichment on an extension_ui_request — lets the app render
@@ -55,12 +55,12 @@ export interface AskQuestionWire {
  *  a flow in a single submit). When `ask` is absent the SDK method/options
  *  drive rendering (future generic prompts). */
 export interface AskEnrichmentWire {
-  flow_id: string;
-  tool_call_id: string | null;
+  flow_id: string
+  tool_call_id: string | null
   /** pi-ask RemoteAskSource: "tool" | "answer" | "answer:again" | "ask:replay". */
-  source: string;
-  title: string | null;
-  questions: AskQuestionWire[];
+  source: string
+  title: string | null
+  questions: AskQuestionWire[]
 }
 
 /** pi-ask RemoteAskAnswer — one question's answered parts.
@@ -71,88 +71,88 @@ export interface AskEnrichmentWire {
  *  event without a remap pass. The snake_case convention of this protocol
  *  applies at the frame level (`flow_id`, `tool_call_id`, `notify_type`). */
 export interface AskAnswerWire {
-  values?: string[];
-  customText?: string;
-  note?: string;
-  optionNotes?: Record<string, string>;
+  values?: string[]
+  customText?: string
+  note?: string
+  optionNotes?: Record<string, string>
 }
 
 /** Optional pi-ask enrichment on an extension_ui_response — carries the
  *  structured answer so multi/preview/notes survive the round-trip. */
 export type AskResponseEnrichmentWire =
   | {
-      flow_id: string;
-      kind: "answer";
-      mode?: "submit" | "elaborate";
-      answers: Record<string, AskAnswerWire>;
+      flow_id: string
+      kind: "answer"
+      mode?: "submit" | "elaborate"
+      answers: Record<string, AskAnswerWire>
     }
-  | { flow_id: string; kind: "cancel" };
+  | { flow_id: string; kind: "cancel" }
 
 /** ServerMessage: interactive extension prompt. Mirrors RpcExtensionUIRequest
  *  (select/confirm/input/editor/notify). The `ask` envelope is present when the
  *  prompt originates from a pi-ask flow, carrying the full question schema. */
 export type ExtensionUiRequestWire =
   | {
-      type: "extension_ui_request";
-      id: string;
-      method: "select";
-      title: string;
-      options: string[];
-      ask?: AskEnrichmentWire;
+      type: "extension_ui_request"
+      id: string
+      method: "select"
+      title: string
+      options: string[]
+      ask?: AskEnrichmentWire
     }
   | {
-      type: "extension_ui_request";
-      id: string;
-      method: "confirm";
-      title: string;
-      message: string;
-      ask?: AskEnrichmentWire;
+      type: "extension_ui_request"
+      id: string
+      method: "confirm"
+      title: string
+      message: string
+      ask?: AskEnrichmentWire
     }
   | {
-      type: "extension_ui_request";
-      id: string;
-      method: "input";
-      title: string;
-      placeholder?: string;
-      ask?: AskEnrichmentWire;
+      type: "extension_ui_request"
+      id: string
+      method: "input"
+      title: string
+      placeholder?: string
+      ask?: AskEnrichmentWire
     }
   | {
-      type: "extension_ui_request";
-      id: string;
-      method: "editor";
-      title: string;
-      prefill?: string;
-      ask?: AskEnrichmentWire;
+      type: "extension_ui_request"
+      id: string
+      method: "editor"
+      title: string
+      prefill?: string
+      ask?: AskEnrichmentWire
     }
   | {
-      type: "extension_ui_request";
-      id: string;
-      method: "notify";
-      message: string;
-      notify_type?: "info" | "warning" | "error";
-    };
+      type: "extension_ui_request"
+      id: string
+      method: "notify"
+      message: string
+      notify_type?: "info" | "warning" | "error"
+    }
 
 /** ClientMessage: response to an extension_ui_request. Mirrors
  *  RpcExtensionUIResponse (value / confirmed / cancelled). The `ask` envelope
  *  carries pi-ask's structured answer when the app rendered the rich flow. */
 export type ExtensionUiResponseWire =
   | {
-      type: "extension_ui_response";
-      id: string;
-      value: string;
-      ask?: AskResponseEnrichmentWire;
+      type: "extension_ui_response"
+      id: string
+      value: string
+      ask?: AskResponseEnrichmentWire
     }
   | {
-      type: "extension_ui_response";
-      id: string;
-      confirmed: boolean;
-      ask?: AskResponseEnrichmentWire;
+      type: "extension_ui_response"
+      id: string
+      confirmed: boolean
+      ask?: AskResponseEnrichmentWire
     }
   | {
-      type: "extension_ui_response";
-      id: string;
-      cancelled: true;
-      ask?: AskResponseEnrichmentWire;
+      type: "extension_ui_response"
+      id: string
+      cancelled: true
+      ask?: AskResponseEnrichmentWire
     }
   // Rich pi-ask answer: a client that rendered the full flow from the `ask`
   // envelope submits ONLY the envelope — no value/confirmed/cancelled
@@ -160,29 +160,29 @@ export type ExtensionUiResponseWire =
   // shape the app actually sends for rich submits; routing keys off
   // `ask.kind` before any discriminator is read.
   | {
-      type: "extension_ui_response";
-      id: string;
-      ask: AskResponseEnrichmentWire;
-    };
+      type: "extension_ui_response"
+      id: string
+      ask: AskResponseEnrichmentWire
+    }
 
 export type ClientMessage =
   | { type: "pair_request"; id: string; token: string; device_name: string }
   // Plan/30: optional `images` carry inline base64 attachments (one today).
   // Omitted entirely on text-only messages — the no-image path is unchanged.
   | {
-      type: "user_message";
-      id: string;
-      text: string;
-      images?: WireImage[];
-      streaming_behavior?: StreamingBehavior;
+      type: "user_message"
+      id: string
+      text: string
+      images?: WireImage[]
+      streaming_behavior?: StreamingBehavior
     }
   | { type: "queued_message_set"; id: string; text: string }
   | { type: "queued_message_clear"; id: string; target_id?: string }
   | {
-      type: "approve_tool";
-      id: string;
-      tool_call_id: string;
-      decision: "allow" | "deny";
+      type: "approve_tool"
+      id: string
+      tool_call_id: string
+      decision: "allow" | "deny"
     }
   | { type: "cancel"; id: string; target_id: string }
   | { type: "ping"; id: string }
@@ -201,16 +201,16 @@ export type ClientMessage =
   // authenticated owner) + config opt-in (allow_remote_launch). `mode` picks the
   // launch strategy; `cwd`/`name` are optional (default: session cwd / derived).
   | {
-      type: "session_launch";
-      id: string;
-      mode: "tmux" | "rpc";
-      cwd?: string;
-      name?: string;
+      type: "session_launch"
+      id: string
+      mode: "tmux" | "rpc"
+      cwd?: string
+      name?: string
     }
   // Plan/57 — interactive extension prompt response (ask_user via pi-ask).
   // Mirrors RpcExtensionUIResponse; the optional `ask` envelope carries
   // pi-ask's structured answer so multi/preview/notes survive the round-trip.
-  | ExtensionUiResponseWire;
+  | ExtensionUiResponseWire
 
 /**
  * Plan/30 — one inline image attachment on a `user_message`. Mirrors the
@@ -221,12 +221,12 @@ export type ClientMessage =
  */
 export interface WireImage {
   /** Base64-encoded image bytes (compressed app-side). */
-  data: string;
+  data: string
   /** MIME type, e.g. `"image/jpeg"`. Maps to the SDK's `mimeType`. */
-  mime: string;
+  mime: string
 }
 
-export type Usage = { input_tokens: number; output_tokens: number };
+export type Usage = { input_tokens: number; output_tokens: number }
 
 export type KnownErrorCode =
   | "tool_approval_required"
@@ -235,63 +235,63 @@ export type KnownErrorCode =
   | "too_large"
   | "rate_limited"
   | "timeout"
-  | "internal_error";
+  | "internal_error"
 
 // aberto para forward-compat — receivers toleram codes desconhecidos
-export type ErrorCode = KnownErrorCode | (string & {});
+export type ErrorCode = KnownErrorCode | (string & {})
 
 export type SessionHistoryEvent =
   // Plan/30: `images` replayed in history so a re-sync rebuilds the image
   // bubble (the bytes live in `_messageBuffer`). Omitted on text-only inputs.
   | {
-      ts: number;
-      type: "user_input";
-      id: string;
-      text: string;
-      images?: WireImage[];
+      ts: number
+      type: "user_input"
+      id: string
+      text: string
+      images?: WireImage[]
     }
   | {
-      ts: number;
-      type: "tool_request";
-      tool_call_id: string;
-      tool: string;
-      args: Record<string, unknown>;
+      ts: number
+      type: "tool_request"
+      tool_call_id: string
+      tool: string
+      args: Record<string, unknown>
     }
   | {
-      ts: number;
-      type: "tool_result";
-      tool_call_id: string;
-      result?: unknown;
-      error?: string;
+      ts: number
+      type: "tool_result"
+      tool_call_id: string
+      result?: unknown
+      error?: string
       // un-bien: image blocks from the tool result, replayed on re-sync.
-      images?: WireImage[];
+      images?: WireImage[]
     }
   | {
-      ts: number;
-      type: "agent_message";
-      in_reply_to: string;
-      text: string;
-      usage?: Usage;
+      ts: number
+      type: "agent_message"
+      in_reply_to: string
+      text: string
+      usage?: Usage
       // un-bien: agent-emitted inline images, replayed so a re-sync rebuilds the
       // bubble with its graphics (same channel as the live agent_message).
-      images?: WireImage[];
+      images?: WireImage[]
     }
   // Plan/32: a context-compaction marker, replayed in history (survives
   // re-sync like images) so the app re-renders the "context compacted" notice.
   | {
-      ts: number;
-      type: "compaction";
-      summary: string;
-      tokens_before: number;
-    };
+      ts: number
+      type: "compaction"
+      summary: string
+      tokens_before: number
+    }
 
 export type ServerMessage =
   | {
-      type: "pair_ok";
-      in_reply_to: string;
-      session_name: string;
-      session_started_at: number;
-      room_id: string;
+      type: "pair_ok"
+      in_reply_to: string
+      session_name: string
+      session_started_at: number
+      room_id: string
       /**
        * Plan/27 Wave A: identifies the host coding agent driving this
        * pi-extension instance. `name` is hardcoded to "Pi coding agent"
@@ -300,30 +300,30 @@ export type ServerMessage =
        * Optional in the wire schema so app-side parsing tolerates older
        * Pi builds that predate this field — every new pairing emits both.
        */
-      harness?: { name: string; version: string };
+      harness?: { name: string; version: string }
       /**
        * Plan/27 Wave A: `os.hostname()` of the machine the Pi runs on.
        * App displays it in the device list so the user can distinguish
        * two paired PCs that happen to share a nickname or sit in the
        * same project folder.
        */
-      hostname?: string;
+      hostname?: string
       // un-bien capability handshake, mirrored from session_history so the app
       // learns caps at first contact too.
-      protocol_version?: number;
-      capabilities?: string[];
+      protocol_version?: number
+      capabilities?: string[]
     }
   | {
-      type: "pair_error";
-      in_reply_to: string;
-      code: PairErrorCode;
-      message: string;
+      type: "pair_error"
+      in_reply_to: string
+      code: PairErrorCode
+      message: string
     }
   | {
-      type: "user_input";
-      id: string;
-      text: string;
-      streaming_behavior?: StreamingBehavior;
+      type: "user_input"
+      id: string
+      text: string
+      streaming_behavior?: StreamingBehavior
     }
   // Echo of an app-originated user_message, broadcast by the Pi to every
   // connected owner (including the sender). Source-of-truth model: each
@@ -334,17 +334,17 @@ export type ServerMessage =
   // future dedup logic use id as a stable key). See plan/24 W2D fix.
   // Plan/30: `images` echoed back so every owner renders the same image bubble.
   | {
-      type: "user_message";
-      id: string;
-      text: string;
-      images?: WireImage[];
-      streaming_behavior?: StreamingBehavior;
+      type: "user_message"
+      id: string
+      text: string
+      images?: WireImage[]
+      streaming_behavior?: StreamingBehavior
     }
   | {
-      type: "queued_message_state";
-      id?: string;
-      text?: string;
-      items?: QueuedMessageItem[];
+      type: "queued_message_state"
+      id?: string
+      text?: string
+      items?: QueuedMessageItem[]
     }
   | { type: "steer_consumed"; id: string }
   | { type: "agent_chunk"; in_reply_to: string; delta: string }
@@ -357,41 +357,41 @@ export type ServerMessage =
   // assistant message content) so they render in the conversation flow. Present
   // only when the assistant message included image blocks.
   | {
-      type: "agent_message";
-      in_reply_to: string;
-      text: string;
-      usage?: Usage;
-      images?: WireImage[];
+      type: "agent_message"
+      in_reply_to: string
+      text: string
+      usage?: Usage
+      images?: WireImage[]
     }
   // Plan/32: pushed after a context compaction (live, and replayed on history
   // re-sync). `tokens_before` is the pre-compaction token count.
   | {
-      type: "compaction";
-      summary: string;
-      tokens_before: number;
-      ts?: number;
+      type: "compaction"
+      summary: string
+      tokens_before: number
+      ts?: number
     }
   | {
-      type: "tool_request";
-      tool_call_id: string;
-      tool: string;
-      args: Record<string, unknown>;
+      type: "tool_request"
+      tool_call_id: string
+      tool: string
+      args: Record<string, unknown>
     }
   // un-bien: `images` carry image blocks returned in a tool result (screenshots,
   // plots) so they render on the tool card. The result text is still sent for
   // stock clients; images are additive.
   | {
-      type: "tool_result";
-      tool_call_id: string;
-      result?: unknown;
-      error?: string;
-      images?: WireImage[];
+      type: "tool_result"
+      tool_call_id: string
+      result?: unknown
+      error?: string
+      images?: WireImage[]
     }
   | {
-      type: "error";
-      in_reply_to?: string;
-      code: ErrorCode;
-      message: string;
+      type: "error"
+      in_reply_to?: string
+      code: ErrorCode
+      message: string
     }
   | { type: "cancelled"; in_reply_to: string; target_id: string }
   | { type: "pong"; in_reply_to: string }
@@ -404,16 +404,16 @@ export type ServerMessage =
   // highlight the selected row without a second round-trip.
   | { type: "action_ok"; in_reply_to: string; action: ActionName }
   | {
-      type: "action_error";
-      in_reply_to: string;
-      action: ActionName;
-      error: string;
+      type: "action_error"
+      in_reply_to: string
+      action: ActionName
+      error: string
     }
   | {
-      type: "models_list";
-      in_reply_to: string;
-      models: WireModel[];
-      current?: WireModel;
+      type: "models_list"
+      in_reply_to: string
+      models: WireModel[]
+      current?: WireModel
     }
   // un-bien extension: a named side-panel's state snapshot (plan, subagents, …),
   // forwarded from a cooperating in-process event source (pi-plan's `plan:*`
@@ -422,16 +422,16 @@ export type ServerMessage =
   // opaque per-panel payload (e.g. `{ items: [...] }`). Additive + optional —
   // stock clients ignore it.
   | {
-      type: "panel_update";
-      key: string;
-      title: string;
-      icon?: string;
-      data: unknown;
+      type: "panel_update"
+      key: string
+      title: string
+      icon?: string
+      data: unknown
     }
   // Plan/57 — interactive extension prompt (ask_user via pi-ask). Mirrors
   // RpcExtensionUIRequest (select/confirm/input/editor/notify); the optional
   // `ask` envelope carries pi-ask's full question so the app renders richly.
-  | ExtensionUiRequestWire;
+  | ExtensionUiRequestWire
 
 /**
  * Plan/28 — Stable names for the typed actions the app can request. Kept
@@ -443,7 +443,7 @@ export type ActionName =
   | "session_compact"
   | "model_set"
   | "thinking_set"
-  | "session_launch";
+  | "session_launch"
 
 /**
  * Plan/28 — Mirror of the SDK's `ThinkingLevel` (defined in
@@ -458,7 +458,7 @@ export type ActionName =
  * model's metadata if the picker fetches it later.
  */
 export type ThinkingLevel =
-  "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  "off" | "minimal" | "low" | "medium" | "high" | "xhigh"
 
 /**
  * Plan/28 — Wire shape for one model entry in the app's model picker.
@@ -470,19 +470,19 @@ export type ThinkingLevel =
  */
 export interface WireModel {
   /** Stable identifier inside the provider's catalog. E.g. `"claude-opus-4-7"`. */
-  id: string;
+  id: string
   /** Display name for the picker row. E.g. `"Claude Opus 4.7"`. */
-  name: string;
+  name: string
   /** Provider slug. E.g. `"anthropic"`, `"openai"`. */
-  provider: string;
+  provider: string
   /** Whether the model supports the thinking surface (`reasoning: true`
    *  in the SDK). Useful so the app can decide whether the thinking
    *  segmented control should be enabled when this model is selected. */
-  reasoning: boolean;
+  reasoning: boolean
   /** Context window in tokens, for display in the picker subtitle. */
-  context_window: number;
+  context_window: number
   /** Plan/30: true when the model accepts image input (SDK `Model.input`
    *  includes `"image"`). The app uses it to enable/disable the attach
    *  button — a text-only model greys out image attachments. */
-  vision: boolean;
+  vision: boolean
 }

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash } from "node:crypto"
 
 /**
  * Base64 + byte-array helpers shared by the mesh module.
@@ -16,15 +16,15 @@ import { createHash } from "node:crypto";
  * and compare bytes through the strict Ed25519 boundary helper.
  */
 
-const ED25519_PUBLIC_KEY_BYTES = 32;
+const ED25519_PUBLIC_KEY_BYTES = 32
 
 export class MeshPublicKeyError extends Error {
   constructor(
     readonly field: string,
     message: string,
   ) {
-    super(`${field}: ${message}`);
-    this.name = "MeshPublicKeyError";
+    super(`${field}: ${message}`)
+    this.name = "MeshPublicKeyError"
   }
 }
 
@@ -37,57 +37,57 @@ export function decodeEd25519PublicKey(
   field = "public key",
 ): Uint8Array {
   if (typeof raw !== "string" || raw.length === 0) {
-    throw new MeshPublicKeyError(field, "invalid base64 encoding");
+    throw new MeshPublicKeyError(field, "invalid base64 encoding")
   }
 
-  const hasStandardOnlyCharacters = /[+/]/.test(raw);
-  const hasUrlSafeOnlyCharacters = /[-_]/.test(raw);
+  const hasStandardOnlyCharacters = /[+/]/.test(raw)
+  const hasUrlSafeOnlyCharacters = /[-_]/.test(raw)
   if (hasStandardOnlyCharacters && hasUrlSafeOnlyCharacters) {
-    throw new MeshPublicKeyError(field, "mixed base64 alphabets");
+    throw new MeshPublicKeyError(field, "mixed base64 alphabets")
   }
 
-  const firstPaddingIndex = raw.indexOf("=");
-  const body = firstPaddingIndex === -1 ? raw : raw.slice(0, firstPaddingIndex);
-  const padding = firstPaddingIndex === -1 ? "" : raw.slice(firstPaddingIndex);
+  const firstPaddingIndex = raw.indexOf("=")
+  const body = firstPaddingIndex === -1 ? raw : raw.slice(0, firstPaddingIndex)
+  const padding = firstPaddingIndex === -1 ? "" : raw.slice(firstPaddingIndex)
   const bodyPattern = hasUrlSafeOnlyCharacters
     ? /^[A-Za-z0-9_-]+$/
-    : /^[A-Za-z0-9+/]+$/;
+    : /^[A-Za-z0-9+/]+$/
   if (
     !bodyPattern.test(body) ||
     (padding !== "" && !/^={1,2}$/.test(padding))
   ) {
-    throw new MeshPublicKeyError(field, "invalid base64 encoding");
+    throw new MeshPublicKeyError(field, "invalid base64 encoding")
   }
 
-  const requiredPaddingLength = (4 - (body.length % 4)) % 4;
+  const requiredPaddingLength = (4 - (body.length % 4)) % 4
   if (
     requiredPaddingLength === 3 ||
     (padding.length > 0 && padding.length !== requiredPaddingLength)
   ) {
-    throw new MeshPublicKeyError(field, "invalid base64 padding");
+    throw new MeshPublicKeyError(field, "invalid base64 padding")
   }
 
-  const normalizedBody = body.replaceAll("-", "+").replaceAll("_", "/");
-  const normalizedPadded = normalizedBody + "=".repeat(requiredPaddingLength);
-  const bytes = new Uint8Array(Buffer.from(normalizedPadded, "base64"));
+  const normalizedBody = body.replaceAll("-", "+").replaceAll("_", "/")
+  const normalizedPadded = normalizedBody + "=".repeat(requiredPaddingLength)
+  const bytes = new Uint8Array(Buffer.from(normalizedPadded, "base64"))
   if (bytes.length !== ED25519_PUBLIC_KEY_BYTES) {
     throw new MeshPublicKeyError(
       field,
       `wrong length (${bytes.length}, expected ${ED25519_PUBLIC_KEY_BYTES})`,
-    );
+    )
   }
 
-  const canonicalPadded = Buffer.from(bytes).toString("base64");
-  const canonicalUnpadded = canonicalPadded.replace(/=+$/, "");
-  const normalizedInput = normalizedBody + padding;
+  const canonicalPadded = Buffer.from(bytes).toString("base64")
+  const canonicalUnpadded = canonicalPadded.replace(/=+$/, "")
+  const normalizedInput = normalizedBody + padding
   if (
     normalizedInput !== canonicalPadded &&
     normalizedInput !== canonicalUnpadded
   ) {
-    throw new MeshPublicKeyError(field, "non-canonical base64 trailing bits");
+    throw new MeshPublicKeyError(field, "non-canonical base64 trailing bits")
   }
 
-  return bytes;
+  return bytes
 }
 
 /** Returns an Ed25519 public key in RFC 4648 standard padded base64. */
@@ -99,13 +99,13 @@ export function encodeEd25519PublicKey(
     !(bytes instanceof Uint8Array) ||
     bytes.length !== ED25519_PUBLIC_KEY_BYTES
   ) {
-    const length = bytes instanceof Uint8Array ? bytes.length : 0;
+    const length = bytes instanceof Uint8Array ? bytes.length : 0
     throw new MeshPublicKeyError(
       field,
       `wrong length (${length}, expected ${ED25519_PUBLIC_KEY_BYTES})`,
-    );
+    )
   }
-  return Buffer.from(bytes).toString("base64");
+  return Buffer.from(bytes).toString("base64")
 }
 
 /** Decodes then returns an Ed25519 public key in canonical standard base64. */
@@ -113,7 +113,7 @@ export function canonicalizeEd25519PublicKey(
   raw: string,
   field = "public key",
 ): string {
-  return encodeEd25519PublicKey(decodeEd25519PublicKey(raw, field), field);
+  return encodeEd25519PublicKey(decodeEd25519PublicKey(raw, field), field)
 }
 
 /** RFC 4648 URL-safe base64 without padding. */
@@ -122,17 +122,17 @@ export function toBase64UrlNoPad(bytes: Uint8Array): string {
     .toString("base64")
     .replaceAll("+", "-")
     .replaceAll("/", "_")
-    .replace(/=+$/, "");
+    .replace(/=+$/, "")
 }
 
 /** Stable metadata-only fingerprint for a validated public key. */
 export function publicKeyFingerprint(bytes: Uint8Array): string {
-  return createHash("sha256").update(bytes).digest("hex").slice(0, 8);
+  return createHash("sha256").update(bytes).digest("hex").slice(0, 8)
 }
 
 export interface RoutingAliasInput {
-  readonly pcPubkey: string;
-  readonly nickname?: string;
+  readonly pcPubkey: string
+  readonly nickname?: string
 }
 
 function isRoutingAliasSafeByte(byte: number): boolean {
@@ -143,46 +143,46 @@ function isRoutingAliasSafeByte(byte: number): boolean {
     byte === 0x2e ||
     byte === 0x5f ||
     byte === 0x2d
-  );
+  )
 }
 
 /** Percent-encodes a nickname into the receiver-local routing grammar. */
 export function encodeRoutingAlias(rawNickname: string): string {
-  let encoded = "";
+  let encoded = ""
   for (const byte of Buffer.from(rawNickname, "utf8")) {
     encoded += isRoutingAliasSafeByte(byte)
       ? String.fromCharCode(byte)
-      : `%${byte.toString(16).toUpperCase().padStart(2, "0")}`;
+      : `%${byte.toString(16).toUpperCase().padStart(2, "0")}`
   }
-  return encoded;
+  return encoded
 }
 
 /** Selects a raw nickname by encoded ASCII order, then raw UTF-8 bytes. */
 export function selectRoutingNickname(
   candidates: readonly string[],
 ): string | undefined {
-  let selected: string | undefined;
-  let selectedEncoded: string | undefined;
+  let selected: string | undefined
+  let selectedEncoded: string | undefined
   for (const candidate of candidates) {
-    if (candidate.length === 0) continue;
-    const encoded = encodeRoutingAlias(candidate);
+    if (candidate.length === 0) continue
+    const encoded = encodeRoutingAlias(candidate)
     if (
       selected === undefined ||
       encoded < selectedEncoded! ||
       (encoded === selectedEncoded &&
         Buffer.compare(Buffer.from(candidate), Buffer.from(selected)) < 0)
     ) {
-      selected = candidate;
-      selectedEncoded = encoded;
+      selected = candidate
+      selectedEncoded = encoded
     }
   }
-  return selected;
+  return selected
 }
 
 interface PreparedRoutingAlias {
-  readonly pcPubkey: string;
-  readonly keyUrl: string;
-  readonly base: string;
+  readonly pcPubkey: string
+  readonly keyUrl: string
+  readonly base: string
 }
 
 /**
@@ -192,21 +192,21 @@ interface PreparedRoutingAlias {
 export function allocateRoutingAliases(
   inputs: readonly RoutingAliasInput[],
 ): ReadonlyMap<string, string> {
-  const preparedByKey = new Map<string, PreparedRoutingAlias>();
+  const preparedByKey = new Map<string, PreparedRoutingAlias>()
   for (const [index, input] of inputs.entries()) {
     const keyBytes = decodeEd25519PublicKey(
       input.pcPubkey,
       `routingAliases[${index}].pcPubkey`,
-    );
-    const pcPubkey = encodeEd25519PublicKey(keyBytes);
+    )
+    const pcPubkey = encodeEd25519PublicKey(keyBytes)
     if (preparedByKey.has(pcPubkey)) {
-      throw new Error("mesh: duplicate routing identity");
+      throw new Error("mesh: duplicate routing identity")
     }
-    const keyUrl = toBase64UrlNoPad(keyBytes);
+    const keyUrl = toBase64UrlNoPad(keyBytes)
     const base = input.nickname
       ? encodeRoutingAlias(input.nickname)
-      : `pc-${keyUrl.slice(0, 8)}`;
-    preparedByKey.set(pcPubkey, { pcPubkey, keyUrl, base });
+      : `pc-${keyUrl.slice(0, 8)}`
+    preparedByKey.set(pcPubkey, { pcPubkey, keyUrl, base })
   }
 
   const prepared = [...preparedByKey.values()].sort((left, right) =>
@@ -215,30 +215,30 @@ export function allocateRoutingAliases(
       : left.pcPubkey > right.pcPubkey
         ? 1
         : 0,
-  );
-  const groupsByBase = new Map<string, PreparedRoutingAlias[]>();
+  )
+  const groupsByBase = new Map<string, PreparedRoutingAlias[]>()
   for (const identity of prepared) {
-    const group = groupsByBase.get(identity.base);
-    if (group) group.push(identity);
-    else groupsByBase.set(identity.base, [identity]);
+    const group = groupsByBase.get(identity.base)
+    if (group) group.push(identity)
+    else groupsByBase.set(identity.base, [identity])
   }
 
-  const reservedBases = new Set(groupsByBase.keys());
-  const aliasByKey = new Map<string, string>();
-  const allocatedAliases = new Set<string>();
+  const reservedBases = new Set(groupsByBase.keys())
+  const aliasByKey = new Map<string, string>()
+  const allocatedAliases = new Set<string>()
   for (const group of groupsByBase.values()) {
-    if (group.length !== 1) continue;
-    const identity = group[0]!;
-    aliasByKey.set(identity.pcPubkey, identity.base);
-    allocatedAliases.add(identity.base);
+    if (group.length !== 1) continue
+    const identity = group[0]!
+    aliasByKey.set(identity.pcPubkey, identity.base)
+    allocatedAliases.add(identity.base)
   }
 
   const collidingGroups = [...groupsByBase.entries()]
     .filter(([, group]) => group.length > 1)
-    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
   for (const [base, group] of collidingGroups) {
-    const fullPrefixLength = group[0]!.keyUrl.length;
-    let allocated = false;
+    const fullPrefixLength = group[0]!.keyUrl.length
+    let allocated = false
     for (
       let prefixLength = 8;
       prefixLength <= fullPrefixLength;
@@ -246,25 +246,25 @@ export function allocateRoutingAliases(
     ) {
       const candidates = group.map(
         (identity) => `${base}~${identity.keyUrl.slice(0, prefixLength)}`,
-      );
-      const uniqueCandidates = new Set(candidates);
+      )
+      const uniqueCandidates = new Set(candidates)
       const conflicts = candidates.some(
         (candidate) =>
           reservedBases.has(candidate) || allocatedAliases.has(candidate),
-      );
-      if (uniqueCandidates.size !== group.length || conflicts) continue;
+      )
+      if (uniqueCandidates.size !== group.length || conflicts) continue
 
       for (let index = 0; index < group.length; index++) {
-        const identity = group[index]!;
-        const alias = candidates[index]!;
-        aliasByKey.set(identity.pcPubkey, alias);
-        allocatedAliases.add(alias);
+        const identity = group[index]!
+        const alias = candidates[index]!
+        aliasByKey.set(identity.pcPubkey, alias)
+        allocatedAliases.add(alias)
       }
-      allocated = true;
-      break;
+      allocated = true
+      break
     }
     if (!allocated) {
-      throw new Error("mesh: routing alias collision invariant failed");
+      throw new Error("mesh: routing alias collision invariant failed")
     }
   }
 
@@ -273,7 +273,7 @@ export function allocateRoutingAliases(
       identity.pcPubkey,
       aliasByKey.get(identity.pcPubkey)!,
     ]),
-  );
+  )
 }
 
 /**
@@ -284,9 +284,9 @@ export function allocateRoutingAliases(
  * short-circuit on length and the byte-by-byte compare are acceptable.
  */
 export function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false;
+  if (a.length !== b.length) return false
   for (let i = 0; i < a.length; i++) {
-    if (a[i] !== b[i]) return false;
+    if (a[i] !== b[i]) return false
   }
-  return true;
+  return true
 }

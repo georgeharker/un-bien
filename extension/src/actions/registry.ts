@@ -25,14 +25,14 @@
  *    never throw and report an empty catalog.
  */
 
-import type { ActionModelRegistry } from "./handlers.js";
+import type { ActionModelRegistry } from "./handlers.js"
 
 /** Anything carrying the host registry — `ExtensionContext` and friends. */
 interface RegistryBearingCtx {
-  modelRegistry?: ActionModelRegistry;
+  modelRegistry?: ActionModelRegistry
 }
 
-let _lastGoodRegistry: ActionModelRegistry | null = null;
+let _lastGoodRegistry: ActionModelRegistry | null = null
 
 /**
  * Never-throwing empty catalog. Used only when no ctx has ever been seen —
@@ -41,12 +41,12 @@ let _lastGoodRegistry: ActionModelRegistry | null = null;
 const _stubRegistry: ActionModelRegistry = {
   refresh() {},
   getAvailable() {
-    return [];
+    return []
   },
   find() {
-    return undefined;
+    return undefined
   },
-};
+}
 
 /**
  * Resolve the live host `ModelRegistry` from the most recent extension ctx.
@@ -56,18 +56,18 @@ export function ensureModelRegistry(
   ctx?: RegistryBearingCtx | null,
 ): ActionModelRegistry {
   try {
-    const live = ctx?.modelRegistry;
+    const live = ctx?.modelRegistry
     if (live) {
-      _lastGoodRegistry = live;
-      return live;
+      _lastGoodRegistry = live
+      return live
     }
   } catch {
     // stale ctx after session replacement — reading the property throws.
   }
-  return _lastGoodRegistry ?? _stubRegistry;
+  return _lastGoodRegistry ?? _stubRegistry
 }
 
 /** Test seam — drop the cached registry so tests can rebuild with fakes. */
 export function _resetModelRegistryForTests(): void {
-  _lastGoodRegistry = null;
+  _lastGoodRegistry = null
 }

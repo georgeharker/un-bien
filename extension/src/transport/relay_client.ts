@@ -1,10 +1,10 @@
-import { EventEmitter } from "node:events";
-import WebSocket from "ws";
-import { ed25519Sign } from "../pairing/crypto.js";
-import type { Ed25519Keypair } from "../pairing/crypto.js";
-import type { ThinkingLevel } from "../protocol/types.js";
+import { EventEmitter } from "node:events"
+import WebSocket from "ws"
+import { ed25519Sign } from "../pairing/crypto.js"
+import type { Ed25519Keypair } from "../pairing/crypto.js"
+import type { ThinkingLevel } from "../protocol/types.js"
 
-const AUTH_TIMEOUT_MS = 5_000;
+const AUTH_TIMEOUT_MS = 5_000
 
 /**
  * Liveness watchdog. The relay sends a WS Ping every ~25s (relay `peer.rs`),
@@ -15,70 +15,70 @@ const AUTH_TIMEOUT_MS = 5_000;
  * triggers and a background daemon sits "online" but dead after a few idle
  * hours. We force-close on timeout so `close` drives the caller's reconnect.
  */
-const LIVENESS_TIMEOUT_MS = 70_000; // ~2.8 missed relay pings → confidently dead
-const LIVENESS_CHECK_MS = 20_000;
+const LIVENESS_TIMEOUT_MS = 70_000 // ~2.8 missed relay pings → confidently dead
+const LIVENESS_CHECK_MS = 20_000
 
 /** Relay control messages (sent/received during auth). */
 interface HelloMsg {
-  type: "hello";
-  pubkey: string;
-  room_id?: string;
-  room_meta?: RoomMeta;
+  type: "hello"
+  pubkey: string
+  room_id?: string
+  room_meta?: RoomMeta
 }
 interface ChallengeMsg {
-  type: "challenge";
-  nonce: string;
+  type: "challenge"
+  nonce: string
 }
 interface AuthMsg {
-  type: "auth";
-  sig: string;
+  type: "auth"
+  sig: string
 }
 
 export interface RoomMeta {
-  name: string;
-  cwd: string;
+  name: string
+  cwd: string
   /** Friendly model name (e.g. "claude-sonnet-4.5"). Optional — pi-ext sends
    *  when `ExtensionContext.model` is available; relay/app tolerate absence. */
-  model?: string;
+  model?: string
   /** Parent room id, when this room is a SUBAGENT child session:
    *  the roomId of the spawning (root) session. Absent for normal top-level
    *  sessions. Lets the app NEST the child under its parent in the home list
    *  from `room_announced` alone, without attaching. */
-  parent?: string;
+  parent?: string
   /** Subagent record id, when this room is a subagent child session. Lets a
    *  consumer map a subagents-panel row to this room. Rides the relay's
    *  room_meta passthrough alongside `parent`. */
-  subagentId?: string;
+  subagentId?: string
   /** This room's OWN pi sessionId, and its PARENT's pi sessionId when it is a
    *  subagent child. Pi ids (NOT roomIds) — the app nests + maps panel rows by
    *  these, at list time, from room_announced. roomId stays relay-routing only. */
-  sessionId?: string;
-  parentSessionId?: string;
+  sessionId?: string
+  parentSessionId?: string
   /** Caps the room advertises about itself; the launcher daemon stamps
    *  `is_daemon` so the app filters its control room. */
-  caps?: string[];
+  caps?: string[]
 }
 
 /** Control frame sent to relay (not routed to app peer). Each publish carries
  *  ONE changed field (model / working / thinking); the relay merges them into
  *  the room's meta and fans a `room_meta_updated` to the app. */
 export interface RoomMetaUpdateFrame {
-  type: "room_meta_update";
-  room_id: string;
+  type: "room_meta_update"
+  room_id: string
   meta: {
-    model?: string;
-    working?: boolean;
-    thinking?: ThinkingLevel;
+    model?: string
+    working?: boolean
+    thinking?: ThinkingLevel
     // Subagent parentage re-advertised after the child attaches (set-once on
     // the relay — never overrides an already-set parent).
-    parent?: string;
-    parentSessionId?: string;
-  };
+    parent?: string
+    parentSessionId?: string
+  }
 }
 
 export interface ConnectOptions {
-  roomId?: string;
-  roomMeta?: RoomMeta;
+  roomId?: string
+  roomMeta?: RoomMeta
 }
 
 /** Relay rejected hello because another peer already holds (pubkey, room_id). */
@@ -88,16 +88,16 @@ export class RoomAlreadyOpenError extends Error {
       roomId
         ? `relay rejected hello: room ${roomId} already open for this peer`
         : "relay rejected hello: peer already connected",
-    );
-    this.name = "RoomAlreadyOpenError";
+    )
+    this.name = "RoomAlreadyOpenError"
   }
 }
 
 export interface RelayClientEvents {
   /** A single JSONL line delivered by the relay (outer envelope). */
-  message: [line: string];
-  close: [];
-  error: [err: Error];
+  message: [line: string]
+  close: []
+  error: [err: Error]
 }
 
 /**
@@ -116,16 +116,16 @@ export interface RelayClientEvents {
  *   → { type:"auth",      sig:    "<Ed25519 sig base64>" }
  */
 export class RelayClient extends EventEmitter {
-  private ws: WebSocket | null = null;
+  private ws: WebSocket | null = null
   /** Epoch ms of the last inbound frame (message / relay ping / pong). */
-  private lastActivityAt = 0;
-  private livenessTimer: ReturnType<typeof setInterval> | null = null;
+  private lastActivityAt = 0
+  private livenessTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(
     private readonly url: string,
     private readonly keypair: Ed25519Keypair,
   ) {
-    super();
+    super()
   }
 
   // ── Public API ──────────────────────────────────────────────────────────────
@@ -145,63 +145,63 @@ export class RelayClient extends EventEmitter {
    */
   async connect(options: ConnectOptions = {}): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(this.url);
-      this.ws = ws;
+      const ws = new WebSocket(this.url)
+      this.ws = ws
 
-      ws.on("error", (err) => reject(err));
+      ws.on("error", (err) => reject(err))
 
       ws.on("open", async () => {
         try {
-          await this._authenticate(ws, options);
+          await this._authenticate(ws, options)
 
           // Auth done — wire persistent message handler. Every inbound frame
           // (data, plus the relay's keepalive ping/pong below) refreshes the
           // liveness clock.
-          this.lastActivityAt = Date.now();
+          this.lastActivityAt = Date.now()
           ws.on("message", (raw) => {
-            this.lastActivityAt = Date.now();
-            const text = Buffer.isBuffer(raw) ? raw.toString() : String(raw);
+            this.lastActivityAt = Date.now()
+            const text = Buffer.isBuffer(raw) ? raw.toString() : String(raw)
             for (const line of text.split("\n")) {
-              const trimmed = line.trim();
-              if (trimmed) this.emit("message", trimmed);
+              const trimmed = line.trim()
+              if (trimmed) this.emit("message", trimmed)
             }
-          });
+          })
           // The relay pings every ~25s; `ws` auto-replies Pong (keeping the
           // relay's view of us alive). The relay ignores client pings rather
           // than ponging, so these inbound pings — not a ping/pong we initiate
           // — are our liveness signal.
           ws.on("ping", () => {
-            this.lastActivityAt = Date.now();
-          });
+            this.lastActivityAt = Date.now()
+          })
           ws.on("pong", () => {
-            this.lastActivityAt = Date.now();
-          });
+            this.lastActivityAt = Date.now()
+          })
 
           ws.on("close", () => {
-            this._stopLiveness();
-            this.emit("close");
-          });
-          this._startLiveness(ws);
-          resolve();
+            this._stopLiveness()
+            this.emit("close")
+          })
+          this._startLiveness(ws)
+          resolve()
         } catch (err) {
-          ws.terminate();
-          reject(err);
+          ws.terminate()
+          reject(err)
         }
-      });
-    });
+      })
+    })
   }
 
   /** True only while the authenticated Relay WebSocket is currently open. */
   isOpen(): boolean {
-    return this.ws?.readyState === WebSocket.OPEN;
+    return this.ws?.readyState === WebSocket.OPEN
   }
 
   /** Sends a raw line to the relay (caller is responsible for framing). */
   send(line: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error("relay: not connected");
+      throw new Error("relay: not connected")
     }
-    this.ws.send(line);
+    this.ws.send(line)
   }
 
   /**
@@ -211,14 +211,14 @@ export class RelayClient extends EventEmitter {
    * don't want them throwing inside SDK event callbacks).
    */
   sendControl(frame: RoomMetaUpdateFrame): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify(frame));
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
+    this.ws.send(JSON.stringify(frame))
   }
 
   close(): void {
-    this._stopLiveness();
-    this.ws?.close();
-    this.ws = null;
+    this._stopLiveness()
+    this.ws?.close()
+    this.ws = null
   }
 
   // ── Liveness watchdog ─────────────────────────────────────────────────────
@@ -227,19 +227,19 @@ export class RelayClient extends EventEmitter {
    *  `LIVENESS_TIMEOUT_MS` — see the constant's doc for why. `terminate()`
    *  fires `close`, which the owner turns into a reconnect. */
   private _startLiveness(ws: WebSocket): void {
-    this._stopLiveness();
+    this._stopLiveness()
     this.livenessTimer = setInterval(() => {
       if (Date.now() - this.lastActivityAt > LIVENESS_TIMEOUT_MS) {
-        this._stopLiveness();
-        ws.terminate();
+        this._stopLiveness()
+        ws.terminate()
       }
-    }, LIVENESS_CHECK_MS);
+    }, LIVENESS_CHECK_MS)
   }
 
   private _stopLiveness(): void {
     if (this.livenessTimer) {
-      clearInterval(this.livenessTimer);
-      this.livenessTimer = null;
+      clearInterval(this.livenessTimer)
+      this.livenessTimer = null
     }
   }
 
@@ -249,42 +249,42 @@ export class RelayClient extends EventEmitter {
     ws: WebSocket,
     opts: ConnectOptions,
   ): Promise<void> {
-    const pubkeyB64 = Buffer.from(this.keypair.publicKey).toString("base64");
-    const hello: HelloMsg = { type: "hello", pubkey: pubkeyB64 };
-    if (opts.roomId) hello.room_id = opts.roomId;
-    if (opts.roomMeta) hello.room_meta = opts.roomMeta;
-    this._rawSend(ws, JSON.stringify(hello));
+    const pubkeyB64 = Buffer.from(this.keypair.publicKey).toString("base64")
+    const hello: HelloMsg = { type: "hello", pubkey: pubkeyB64 }
+    if (opts.roomId) hello.room_id = opts.roomId
+    if (opts.roomMeta) hello.room_meta = opts.roomMeta
+    this._rawSend(ws, JSON.stringify(hello))
 
-    const challengeRaw = await this._nextMsg(ws);
+    const challengeRaw = await this._nextMsg(ws)
     let challenge:
-      ChallengeMsg | { type: "error"; code?: string; message?: string };
+      ChallengeMsg | { type: "error"; code?: string; message?: string }
     try {
-      challenge = JSON.parse(challengeRaw) as typeof challenge;
+      challenge = JSON.parse(challengeRaw) as typeof challenge
     } catch {
-      throw new Error(`relay auth_failed: not JSON: ${challengeRaw}`);
+      throw new Error(`relay auth_failed: not JSON: ${challengeRaw}`)
     }
     if (challenge.type === "error") {
-      const code = (challenge as { code?: string }).code ?? "";
+      const code = (challenge as { code?: string }).code ?? ""
       if (code === "room_already_open") {
-        throw new RoomAlreadyOpenError(opts.roomId);
+        throw new RoomAlreadyOpenError(opts.roomId)
       }
       throw new Error(
         `relay rejected hello: ${code || (challenge as { message?: string }).message || "unknown"}`,
-      );
+      )
     }
     if (challenge.type !== "challenge" || !(challenge as ChallengeMsg).nonce) {
       throw new Error(
         `relay auth_failed: expected challenge, got ${challengeRaw}`,
-      );
+      )
     }
 
-    const nonce = Buffer.from((challenge as ChallengeMsg).nonce, "base64");
-    const sig = ed25519Sign(this.keypair.secretKey, nonce);
+    const nonce = Buffer.from((challenge as ChallengeMsg).nonce, "base64")
+    const sig = ed25519Sign(this.keypair.secretKey, nonce)
     const auth: AuthMsg = {
       type: "auth",
       sig: Buffer.from(sig).toString("base64"),
-    };
-    this._rawSend(ws, JSON.stringify(auth));
+    }
+    this._rawSend(ws, JSON.stringify(auth))
 
     // Relay does not send an explicit "ok" — it simply starts routing.
     // Proceed immediately after sending auth.
@@ -296,15 +296,15 @@ export class RelayClient extends EventEmitter {
       const timer = setTimeout(
         () => reject(new Error("relay auth timeout")),
         AUTH_TIMEOUT_MS,
-      );
+      )
       ws.once("message", (raw) => {
-        clearTimeout(timer);
-        resolve(Buffer.isBuffer(raw) ? raw.toString() : String(raw));
-      });
-    });
+        clearTimeout(timer)
+        resolve(Buffer.isBuffer(raw) ? raw.toString() : String(raw))
+      })
+    })
   }
 
   private _rawSend(ws: WebSocket, data: string): void {
-    ws.send(data);
+    ws.send(data)
   }
 }

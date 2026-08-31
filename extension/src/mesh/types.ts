@@ -10,28 +10,28 @@
 
 export interface MeshMember {
   /** Pi Ed25519 pubkey, canonical RFC 4648 standard base64 with padding. */
-  remoteEpk: string;
+  remoteEpk: string
   /** Relay URL where this member registers. */
-  relayUrl: string;
+  relayUrl: string
   /** ISO-8601 timestamp of when the pairing happened. */
-  pairedAt: string;
+  pairedAt: string
   /** Optional Owner-set label. */
-  nickname?: string;
+  nickname?: string
 }
 
 export interface MeshHeader {
   /** Owner-scoped monotonic counter. Higher = newer. */
-  version: number;
+  version: number
   /** Issued-at, ms since epoch. */
-  issuedAt: number;
+  issuedAt: number
   /** Owner's Ed25519 pubkey, raw 32 bytes. */
-  ownerPk: Uint8Array;
-  members: MeshMember[];
+  ownerPk: Uint8Array
+  members: MeshMember[]
 }
 
 export interface MeshEnvelope {
   /** Canonical JSON bytes of the header (snake_case keys, sorted, no whitespace). */
-  blob: Uint8Array;
+  blob: Uint8Array
   /** Ed25519 signature of `blob`, 64 bytes. */
-  sig: Uint8Array;
+  sig: Uint8Array
 }

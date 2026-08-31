@@ -1,9 +1,9 @@
-import { describe, expect, test } from "vitest";
-import type { AckResult } from "../session/peer.js";
-import { formatMeshAckResult } from "./mesh_result.js";
+import { describe, expect, test } from "vitest"
+import type { AckResult } from "../session/peer.js"
+import { formatMeshAckResult } from "./mesh_result.js"
 
 function resultText(result: ReturnType<typeof formatMeshAckResult>): string {
-  return result.content.map((item) => item.text).join("\n");
+  return result.content.map((item) => item.text).join("\n")
 }
 
 describe("formatMeshAckResult", () => {
@@ -43,9 +43,9 @@ describe("formatMeshAckResult", () => {
   ] satisfies readonly [AckResult, boolean, string][])(
     "preserves the public status and error boundary for %#",
     (ack, isError, marker) => {
-      const result = formatMeshAckResult("backend", ack);
-      expect(result.isError === true).toBe(isError);
-      expect(resultText(result)).toContain(marker);
+      const result = formatMeshAckResult("backend", ack)
+      expect(result.isError === true).toBe(isError)
+      expect(resultText(result)).toContain(marker)
     },
-  );
-});
+  )
+})

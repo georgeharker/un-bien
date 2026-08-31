@@ -4,4 +4,4 @@
 // the code stays put in the monorepo while shipping as its own installed
 // binary. Importing the extension's exported launcher entry starts the daemon
 // (control-room connect + signal handling included).
-import "@geohar/un-bien/launcher";
+import "@geohar/un-bien/launcher"

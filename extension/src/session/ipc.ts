@@ -1,4 +1,4 @@
-import { platform as osPlatform, userInfo } from "node:os";
+import { platform as osPlatform, userInfo } from "node:os"
 
 /**
  * Cross-platform local-IPC address resolution (plan/40).
@@ -19,16 +19,16 @@ import { platform as osPlatform, userInfo } from "node:os";
  * tests can exercise the win32 branch on a POSIX dev host.
  */
 
-export type Plat = NodeJS.Platform;
+export type Plat = NodeJS.Platform
 
 /** True when local IPC uses named pipes (no socket files to manage). */
 export function usesNamedPipe(plat: Plat = osPlatform()): boolean {
-  return plat === "win32";
+  return plat === "win32"
 }
 
 /** Keep a name component safe for a Windows pipe path. */
 function safe(s: string): string {
-  return s.replace(/[^A-Za-z0-9_.-]/g, "_");
+  return s.replace(/[^A-Za-z0-9_.-]/g, "_")
 }
 
 /**
@@ -43,8 +43,8 @@ export function ipcAddress(
   user?: string,
 ): string {
   if (plat === "win32") {
-    const u = safe((user ?? userInfo().username) || "user");
-    return `\\\\.\\pipe\\un-bien-${safe(suffix)}-${u}`;
+    const u = safe((user ?? userInfo().username) || "user")
+    return `\\\\.\\pipe\\un-bien-${safe(suffix)}-${u}`
   }
-  return filePath;
+  return filePath
 }

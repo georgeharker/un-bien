@@ -1,23 +1,23 @@
-import { Buffer } from "node:buffer";
-import { hostname, homedir } from "node:os";
-import { RelayClient } from "../transport/relay_client.js";
-import { PlainPeerChannel } from "../transport/peer_channel.js";
-import { getOrCreateEd25519Keypair } from "../pairing/storage.js";
-import { roomIdForControl } from "../rooms.js";
-import { _findKnownPeer } from "../pairing/peer_trust.js";
-import { _launchSession, _expandTilde } from "../launch.js";
+import { Buffer } from "node:buffer"
+import { hostname, homedir } from "node:os"
+import { RelayClient } from "../transport/relay_client.js"
+import { PlainPeerChannel } from "../transport/peer_channel.js"
+import { getOrCreateEd25519Keypair } from "../pairing/storage.js"
+import { roomIdForControl } from "../rooms.js"
+import { _findKnownPeer } from "../pairing/peer_trust.js"
+import { _launchSession, _expandTilde } from "../launch.js"
 import {
   helloEnvelope,
   isEnvelopeFrame,
   type EnvelopeMessage,
-} from "../session/rpc_envelope.js";
-import { loadConfig, resolveRelayUrl } from "../config.js";
+} from "../session/rpc_envelope.js"
+import { loadConfig, resolveRelayUrl } from "../config.js"
 import {
   loadLocalConfig,
   effectiveAllowRemoteLaunch,
-} from "../session/local_config.js";
-import { envLog } from "../session/debug_log.js";
-import type { ClientMessage, ServerMessage } from "../protocol/types.js";
+} from "../session/local_config.js"
+import { envLog } from "../session/debug_log.js"
+import type { ClientMessage, ServerMessage } from "../protocol/types.js"
 
 /**
  * Regime-2 machine-launcher core (pi-INDEPENDENT — no pi SDK). A lightweight
@@ -31,41 +31,41 @@ import type { ClientMessage, ServerMessage } from "../protocol/types.js";
  * via any session extension's QR — the launcher only trusts already-paired owners).
  */
 
-const RECONNECT_DELAY_MS = 3_000;
+const RECONNECT_DELAY_MS = 3_000
 
 /** Caps the launcher daemon advertises: `remote_launch` gates the app's launch
  *  control; `is_daemon` marks the control room so the app filters it. */
-const DAEMON_CAPS = ["remote_launch", "is_daemon"] as const;
+const DAEMON_CAPS = ["remote_launch", "is_daemon"] as const
 
 export interface LauncherHandle {
-  readonly roomId: string;
-  readonly epk: string;
-  stop(): void;
+  readonly roomId: string
+  readonly epk: string
+  stop(): void
 }
 
 export async function startLauncher(): Promise<LauncherHandle> {
-  const kp = await getOrCreateEd25519Keypair();
-  const epk = Buffer.from(kp.publicKey).toString("base64url");
-  const roomId = roomIdForControl(epk);
+  const kp = await getOrCreateEd25519Keypair()
+  const epk = Buffer.from(kp.publicKey).toString("base64url")
+  const roomId = roomIdForControl(epk)
 
-  const resolution = resolveRelayUrl();
+  const resolution = resolveRelayUrl()
   if (!resolution.url) {
     throw new Error(
       "un-bien launcher: no relay configured (set UNBIEN_RELAY or the `relay` config key)",
-    );
+    )
   }
-  const relayUrl = resolution.url;
+  const relayUrl = resolution.url
 
-  let stopped = false;
-  let relay: RelayClient | null = null;
+  let stopped = false
+  let relay: RelayClient | null = null
   // One in-flight reconnect chain, not N: `close` on the CURRENT relay and a
   // failed connectOnce can both schedule; without the guard they multiply.
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  const channels = new Map<string, PlainPeerChannel>();
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  const channels = new Map<string, PlainPeerChannel>()
 
   /** The machine's configured launch backend (rpc is a fast-follow). */
   function configuredBackend(): "tmux" | "herdr" {
-    return loadConfig().launch?.backend === "herdr" ? "herdr" : "tmux";
+    return loadConfig().launch?.backend === "herdr" ? "herdr" : "tmux"
   }
 
   /** Liveness: answer a stock `ping` with `pong`, mirroring the extension's
@@ -80,7 +80,7 @@ export async function startLauncher(): Promise<LauncherHandle> {
       sender.send({
         type: "pong",
         in_reply_to: (msg as { id?: string }).id,
-      } as ServerMessage);
+      } as ServerMessage)
     }
   }
 
@@ -89,8 +89,8 @@ export async function startLauncher(): Promise<LauncherHandle> {
    *  backend. `session_launch` mirrors the extension's _routeUnBienPlaneFrom handler:
    *  per-cwd opt-in, machine-config backend, clean exec (no keystrokes). */
   function handleUbFrame(env: EnvelopeMessage, sender: PlainPeerChannel): void {
-    if (env.ub === undefined) return;
-    const frame = env.ub as Record<string, unknown>;
+    if (env.ub === undefined) return
+    const frame = env.ub as Record<string, unknown>
 
     if (frame.type === "presence_status") {
       sender.sendEnvelope({
@@ -101,26 +101,26 @@ export async function startLauncher(): Promise<LauncherHandle> {
           backend: configuredBackend(),
           ...(typeof frame.id === "string" ? { in_reply_to: frame.id } : {}),
         },
-      });
-      return;
+      })
+      return
     }
 
-    if (frame.type !== "session_launch") return;
+    if (frame.type !== "session_launch") return
     const cwd = _expandTilde(
       typeof frame.cwd === "string" && frame.cwd.length > 0
         ? frame.cwd
         : process.cwd(),
-    );
+    )
     if (!effectiveAllowRemoteLaunch(loadLocalConfig(cwd))) {
-      envLog("launcher session_launch: remote launch disabled on this machine");
-      return;
+      envLog("launcher session_launch: remote launch disabled on this machine")
+      return
     }
     const launchError = _launchSession(
       configuredBackend(),
       cwd,
       typeof frame.name === "string" ? frame.name : undefined,
-    );
-    if (launchError) envLog(`launcher session_launch error: ${launchError}`);
+    )
+    if (launchError) envLog(`launcher session_launch error: ${launchError}`)
   }
 
   async function gateAndAttach(
@@ -128,7 +128,7 @@ export async function startLauncher(): Promise<LauncherHandle> {
     peer: string,
     firstInner: unknown,
   ): Promise<void> {
-    const known = await _findKnownPeer(peer);
+    const known = await _findKnownPeer(peer)
     if (!known) {
       // Relay-verified but not a paired owner (never paired / revoked). Signal
       // so the app can react, mirroring the extension's unknown-peer reply.
@@ -139,14 +139,14 @@ export async function startLauncher(): Promise<LauncherHandle> {
             code: "unknown_peer",
             message: "Peer not paired — re-scan QR",
           }),
-        ).toString("base64");
-        r.send(JSON.stringify({ peer, ct: errCt }));
+        ).toString("base64")
+        r.send(JSON.stringify({ peer, ct: errCt }))
       } catch {
         /* relay down — nothing to signal */
       }
-      return;
+      return
     }
-    if (channels.has(peer)) return;
+    if (channels.has(peer)) return
 
     const channel = new PlainPeerChannel(
       r,
@@ -155,66 +155,66 @@ export async function startLauncher(): Promise<LauncherHandle> {
       (msg) => handleStockMessage(msg, channel), // liveness ping->pong
       () => channels.delete(peer),
       (env) => handleUbFrame(env, channel),
-    );
-    channels.set(peer, channel);
+    )
+    channels.set(peer, channel)
     // Advertise machine caps up front so the app enables its launch control for
     // this control room. No sessionId — the launcher has no pi session.
-    channel.sendEnvelope(helloEnvelope([...DAEMON_CAPS]));
+    channel.sendEnvelope(helloEnvelope([...DAEMON_CAPS]))
     envLog(
       `launcher: owner ${peer.slice(0, 8)} (${known.name}) attached; caps sent`,
-    );
+    )
     // The channel didn't see the line that triggered the attach — route it.
     if (isEnvelopeFrame(firstInner as Record<string, unknown>)) {
-      handleUbFrame(firstInner as EnvelopeMessage, channel);
+      handleUbFrame(firstInner as EnvelopeMessage, channel)
     }
   }
 
   function onMsg(r: RelayClient, line: string): void {
-    let outer: { peer?: string; ct?: string };
+    let outer: { peer?: string; ct?: string }
     try {
-      outer = JSON.parse(line) as { peer?: string; ct?: string };
+      outer = JSON.parse(line) as { peer?: string; ct?: string }
     } catch {
-      return;
+      return
     }
-    if (!outer.peer || !outer.ct) return;
-    if (channels.has(outer.peer)) return; // its PlainPeerChannel handles routing
+    if (!outer.peer || !outer.ct) return
+    if (channels.has(outer.peer)) return // its PlainPeerChannel handles routing
 
-    let inner: unknown;
+    let inner: unknown
     try {
-      inner = JSON.parse(Buffer.from(outer.ct, "base64").toString("utf8"));
+      inner = JSON.parse(Buffer.from(outer.ct, "base64").toString("utf8"))
     } catch {
-      return;
+      return
     }
-    if (!inner || typeof inner !== "object") return;
-    void gateAndAttach(r, outer.peer, inner);
+    if (!inner || typeof inner !== "object") return
+    void gateAndAttach(r, outer.peer, inner)
   }
 
   function scheduleReconnect(): void {
-    if (stopped) return;
-    if (reconnectTimer) return; // a retry chain is already pending
+    if (stopped) return
+    if (reconnectTimer) return // a retry chain is already pending
     reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      if (stopped) return;
-      connectOnce().catch(() => scheduleReconnect());
-    }, RECONNECT_DELAY_MS);
+      reconnectTimer = null
+      if (stopped) return
+      connectOnce().catch(() => scheduleReconnect())
+    }, RECONNECT_DELAY_MS)
   }
 
   async function connectOnce(): Promise<void> {
-    const r = new RelayClient(relayUrl, kp);
-    relay = r;
-    r.on("message", (line: string) => onMsg(r, line));
+    const r = new RelayClient(relayUrl, kp)
+    relay = r
+    r.on("message", (line: string) => onMsg(r, line))
     r.on("close", () => {
-      channels.clear();
-      if (!stopped) scheduleReconnect();
-    });
+      channels.clear()
+      if (!stopped) scheduleReconnect()
+    })
     await r.connect({
       roomId,
       // caps ride room_meta so the app filters the control room from the announce.
       roomMeta: { name: hostname(), cwd: homedir(), caps: [...DAEMON_CAPS] },
-    });
+    })
     envLog(
       `launcher: connected to control room ${roomId} (epk ${epk.slice(0, 12)}…)`,
-    );
+    )
   }
 
   // A DAEMON must not die on a first-connect race: a profile `up` can start
@@ -223,29 +223,29 @@ export async function startLauncher(): Promise<LauncherHandle> {
   // sharedserver's health check merely WARN (the "tends to just die" symptom).
   // Post-connect drops already retried; the INITIAL connect now does too.
   try {
-    await connectOnce();
+    await connectOnce()
   } catch (err) {
     envLog(
       `launcher: initial connect failed (${err instanceof Error ? err.message : String(err)}) — retrying every ${RECONNECT_DELAY_MS}ms`,
-    );
-    scheduleReconnect();
+    )
+    scheduleReconnect()
   }
 
   return {
     roomId,
     epk,
     stop() {
-      stopped = true;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
+      stopped = true
+      if (reconnectTimer) clearTimeout(reconnectTimer)
       for (const ch of channels.values()) {
         try {
-          ch.detach();
+          ch.detach()
         } catch {
           /* best-effort */
         }
       }
-      channels.clear();
-      relay?.close();
+      channels.clear()
+      relay?.close()
     },
-  };
+  }
 }

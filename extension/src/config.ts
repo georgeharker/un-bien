@@ -1,15 +1,15 @@
-import fs from "node:fs";
-import path from "node:path";
-import { unbienConfigHome } from "./paths.js";
+import fs from "node:fs"
+import path from "node:path"
+import { unbienConfigHome } from "./paths.js"
 
 // Resolved at call time via `unbienConfigHome()` — the global config is a pi
 // extension config at `<PI_CODING_AGENT_DIR|~/.pi>/extensions/un-bien.json`.
 // See paths.ts.
-const configDir = (): string => unbienConfigHome();
-const configFile = (): string => path.join(unbienConfigHome(), "un-bien.json");
+const configDir = (): string => unbienConfigHome()
+const configFile = (): string => path.join(unbienConfigHome(), "un-bien.json")
 
 export type UnBienConfig = {
-  relay?: string;
+  relay?: string
   /**
    * Debug prefs. Fields here gate the file-based diagnostic logs (see
    * `session/debug_log.ts` and `panel_bridge.ts`). Read from config — NOT env —
@@ -17,7 +17,7 @@ export type UnBienConfig = {
    * a persisted config field is the only reliable enable switch. Absent/false by
    * default: no logging.
    */
-  debug?: { envelope?: boolean; panels?: boolean };
+  debug?: { envelope?: boolean; panels?: boolean }
   /**
    * Machine-wide fallback defaults for a session's LOCAL config (the per-cwd
    * `.pi/un-bien/config.json`). A field here applies to every cwd that does
@@ -26,7 +26,7 @@ export type UnBienConfig = {
    * file into every repo. See `session/local_config.ts`. Absent by default, so
    * omitting it preserves the historical per-cwd-only behaviour exactly.
    */
-  defaults?: { auto_start_relay?: boolean; allow_remote_launch?: boolean };
+  defaults?: { auto_start_relay?: boolean; allow_remote_launch?: boolean }
   /**
    * Machine-identity storage. `storage` selects the PRIMARY backend for this
    * Pi's long-term Ed25519 seed — `"keychain"` (OS-secured, the default) or
@@ -36,7 +36,7 @@ export type UnBienConfig = {
    * recover an existing identity) but never written; the resolver mints only on
    * a genuine first run. See `pairing/storage.ts`. Absent ⇒ keychain default.
    */
-  identity?: { storage?: "keychain" | "file"; path?: string };
+  identity?: { storage?: "keychain" | "file"; path?: string }
   /**
    * Remote-launch backend selection (pick-one). Which session backend a
    * honored `session_launch` uses on THIS machine: `tmux` (default) or `herdr`
@@ -49,7 +49,7 @@ export type UnBienConfig = {
    * WINDOWS of (a window per pi, via clean `new-window`; single `tmux attach`
    * point). Absent ⇒ `"un-bien"`.
    */
-  launch?: { backend?: "tmux" | "herdr"; tmux_session?: string };
+  launch?: { backend?: "tmux" | "herdr"; tmux_session?: string }
   /**
    * Subagent surfacing. When `rooms` is true, a
    * Pi SUBAGENT is surfaced to the paired app as its OWN session — a distinct
@@ -57,29 +57,29 @@ export type UnBienConfig = {
    * `room_meta.parent`. Read-only (view-only) for now. Absent/false ⇒ subagents
    * stay hidden from the app (historical behaviour). See `subagent_rooms.ts`.
    */
-  subagents?: { rooms?: boolean };
-};
+  subagents?: { rooms?: boolean }
+}
 
 export function loadConfig(): UnBienConfig {
   try {
-    const raw = fs.readFileSync(configFile(), "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object") return {};
-    return parsed as UnBienConfig;
+    const raw = fs.readFileSync(configFile(), "utf8")
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== "object") return {}
+    return parsed as UnBienConfig
   } catch {
-    return {};
+    return {}
   }
 }
 
 export function saveConfig(patch: Partial<UnBienConfig>): void {
-  fs.mkdirSync(configDir(), { recursive: true });
-  const current = loadConfig();
-  const next = { ...current, ...patch };
-  fs.writeFileSync(configFile(), JSON.stringify(next, null, 2));
+  fs.mkdirSync(configDir(), { recursive: true })
+  const current = loadConfig()
+  const next = { ...current, ...patch }
+  fs.writeFileSync(configFile(), JSON.stringify(next, null, 2))
 }
 
 export type RelayResolution =
-  { url: string; source: "env" | "config" } | { url: null; source: "unset" };
+  { url: string; source: "env" | "config" } | { url: null; source: "unset" }
 
 /**
  * Resolves the effective relay URL in **canonical http(s):// form**.
@@ -99,12 +99,12 @@ export type RelayResolution =
  * http(s)://, and the transport layer converts to ws(s):// at WS-open time.
  */
 export function resolveRelayUrl(): RelayResolution {
-  const env = process.env["UNBIEN_RELAY"];
-  if (env && env.length > 0) return { url: toHttpUrl(env), source: "env" };
-  const cfg = loadConfig();
+  const env = process.env["UNBIEN_RELAY"]
+  if (env && env.length > 0) return { url: toHttpUrl(env), source: "env" }
+  const cfg = loadConfig()
   if (cfg.relay && cfg.relay.length > 0)
-    return { url: toHttpUrl(cfg.relay), source: "config" };
-  return { url: null, source: "unset" };
+    return { url: toHttpUrl(cfg.relay), source: "config" }
+  return { url: null, source: "unset" }
 }
 
 /**
@@ -117,15 +117,15 @@ export function resolveRelayUrl(): RelayResolution {
  * Forcing a single scheme at the user boundary avoids two-form drift.
  */
 export function isValidRelayUrl(url: string): boolean {
-  if (!url) return false;
-  const lower = url.toLowerCase();
+  if (!url) return false
+  const lower = url.toLowerCase()
   if (!lower.startsWith("http://") && !lower.startsWith("https://"))
-    return false;
+    return false
   try {
-    new URL(url);
-    return true;
+    new URL(url)
+    return true
   } catch {
-    return false;
+    return false
   }
 }
 
@@ -134,8 +134,8 @@ export function isValidRelayUrl(url: string): boolean {
  * targeted error message when the user pastes a WebSocket URL by mistake.
  */
 export function isWebSocketScheme(url: string): boolean {
-  const lower = url.toLowerCase();
-  return lower.startsWith("ws://") || lower.startsWith("wss://");
+  const lower = url.toLowerCase()
+  return lower.startsWith("ws://") || lower.startsWith("wss://")
 }
 
 /**
@@ -149,11 +149,11 @@ export function isWebSocketScheme(url: string): boolean {
  *                   configs may still carry ws(s)://)
  */
 export function toWebSocketUrl(url: string): string {
-  const lower = url.toLowerCase();
+  const lower = url.toLowerCase()
   if (lower.startsWith("https://"))
-    return "wss://" + url.slice("https://".length);
-  if (lower.startsWith("http://")) return "ws://" + url.slice("http://".length);
-  return url;
+    return "wss://" + url.slice("https://".length)
+  if (lower.startsWith("http://")) return "ws://" + url.slice("http://".length)
+  return url
 }
 
 /**
@@ -162,9 +162,8 @@ export function toWebSocketUrl(url: string): string {
  * the rest of the codebase.
  */
 export function toHttpUrl(url: string): string {
-  const lower = url.toLowerCase();
-  if (lower.startsWith("wss://"))
-    return "https://" + url.slice("wss://".length);
-  if (lower.startsWith("ws://")) return "http://" + url.slice("ws://".length);
-  return url;
+  const lower = url.toLowerCase()
+  if (lower.startsWith("wss://")) return "https://" + url.slice("wss://".length)
+  if (lower.startsWith("ws://")) return "http://" + url.slice("ws://".length)
+  return url
 }

@@ -15,32 +15,32 @@ export function formatPeerInventory(
   peers: string[],
   selfName?: string,
 ): string {
-  const locals: string[] = [];
-  const remotes = new Map<string, string[]>();
+  const locals: string[] = []
+  const remotes = new Map<string, string[]>()
   for (const p of peers) {
-    if (selfName && p === selfName) continue;
-    const idx = p.indexOf(":");
+    if (selfName && p === selfName) continue
+    const idx = p.indexOf(":")
     if (idx > 0 && idx < p.length - 1) {
-      const label = p.slice(0, idx);
-      const name = p.slice(idx + 1);
-      const bucket = remotes.get(label) ?? [];
-      bucket.push(name);
-      remotes.set(label, bucket);
+      const label = p.slice(0, idx)
+      const name = p.slice(idx + 1)
+      const bucket = remotes.get(label) ?? []
+      bucket.push(name)
+      remotes.set(label, bucket)
     } else {
-      locals.push(p);
+      locals.push(p)
     }
   }
-  const lines: string[] = ["  local:"];
+  const lines: string[] = ["  local:"]
   if (locals.length === 0) {
-    lines.push("    (none)");
+    lines.push("    (none)")
   } else {
-    for (const n of locals.sort()) lines.push(`    ${n}`);
+    for (const n of locals.sort()) lines.push(`    ${n}`)
   }
-  const sortedLabels = [...remotes.keys()].sort();
+  const sortedLabels = [...remotes.keys()].sort()
   for (const label of sortedLabels) {
-    lines.push("");
-    lines.push(`  remote:${label}`);
-    for (const n of (remotes.get(label) ?? []).sort()) lines.push(`    ${n}`);
+    lines.push("")
+    lines.push(`  remote:${label}`)
+    for (const n of (remotes.get(label) ?? []).sort()) lines.push(`    ${n}`)
   }
-  return lines.join("\n");
+  return lines.join("\n")
 }

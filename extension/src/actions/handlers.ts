@@ -9,7 +9,7 @@
  * narrow ctx/pi/registry views the rpc handlers still take remain.
  */
 
-import type { WireModel } from "../protocol/types.js";
+import type { WireModel } from "../protocol/types.js"
 
 /**
  * Structural subset of the SDK's `Model<Api>` interface (defined in
@@ -18,28 +18,28 @@ import type { WireModel } from "../protocol/types.js";
  * touch keeps this decoupled from the SDK's full Model surface.
  */
 export interface SdkModelLike {
-  id: string;
-  name: string;
-  provider: string;
-  reasoning: boolean;
-  contextWindow: number;
+  id: string
+  name: string
+  provider: string
+  reasoning: boolean
+  contextWindow: number
   /** Plan/30: accepted input modalities. The SDK's `Model.input` is
    *  `("text" | "image")[]`; we read `includes("image")` for the `vision`
    *  flag. Optional here so tests can omit it (treated as text-only). */
-  input?: ("text" | "image")[];
+  input?: ("text" | "image")[]
 }
 // `Model` is the alias used throughout the file. Real SDK models structurally
 // satisfy this — `pi.setModel(model)` accepts them because TypeScript validates
 // structurally at the call site.
-type Model<_TApi = unknown> = SdkModelLike;
+type Model<_TApi = unknown> = SdkModelLike
 
 /**
  * Narrow shape of the `ExtensionAPI` surface the rpc dispatch calls (setModel /
  * setThinkingLevel). Lets the test layer stub just these.
  */
 export interface ActionPi {
-  setModel(model: Model<any>): Promise<boolean>;
-  setThinkingLevel(level: import("../protocol/types.js").ThinkingLevel): void;
+  setModel(model: Model<any>): Promise<boolean>
+  setThinkingLevel(level: import("../protocol/types.js").ThinkingLevel): void
 }
 
 /**
@@ -49,7 +49,7 @@ export interface ActionPi {
  * missing method becomes a typed error instead of a runtime TypeError.
  */
 export interface ActionCtx {
-  compact?: (options?: Record<string, unknown>) => void;
+  compact?: (options?: Record<string, unknown>) => void
   /**
    * Starts a new session. `withSession` is the SDK's blessed hook for
    * post-replacement work: it receives a FRESH, command-capable ctx bound to
@@ -57,15 +57,15 @@ export interface ActionCtx {
    * callers must re-capture via `withSession` rather than reuse the old ctx.
    */
   newSession?: (options?: {
-    withSession?: (ctx: ActionCtx) => Promise<void>;
-  }) => Promise<{ cancelled: boolean }>;
-  getModel?: () => Model<any> | undefined;
+    withSession?: (ctx: ActionCtx) => Promise<void>
+  }) => Promise<{ cancelled: boolean }>
+  getModel?: () => Model<any> | undefined
   /**
    * Live session registry from Pi's extension ctx. Includes providers/models
    * registered dynamically via `pi.registerProvider(...)`, unlike the fallback
    * disk-backed registry un-bien can build on its own.
    */
-  modelRegistry?: ActionModelRegistry;
+  modelRegistry?: ActionModelRegistry
 }
 
 /**
@@ -73,9 +73,9 @@ export interface ActionCtx {
  * tests fake catalogs without instantiating the real one.
  */
 export interface ActionModelRegistry {
-  refresh(): void;
-  getAvailable(): Model<any>[];
-  find(provider: string, modelId: string): Model<any> | undefined;
+  refresh(): void
+  getAvailable(): Model<any>[]
+  find(provider: string, modelId: string): Model<any> | undefined
 }
 
 /** Project a SDK `Model<Api>` onto the wire schema. Shared by the rpc
@@ -91,5 +91,5 @@ export function wireFromModel(model: Model<any>): WireModel {
     // `("text" | "image")[]` at runtime (confirmed against pi-ai). `?.` guards
     // a fake/partial model in tests → treated as text-only.
     vision: model.input?.includes("image") ?? false,
-  };
+  }
 }

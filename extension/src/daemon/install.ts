@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync } from "node:child_process"
 import {
   chmodSync,
   existsSync,
@@ -9,12 +9,12 @@ import {
   symlinkSync,
   unlinkSync,
   writeFileSync,
-} from "node:fs";
-import { delimiter } from "node:path";
-import { homedir, platform, tmpdir, userInfo } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { unbienStateHome } from "../paths.js";
+} from "node:fs"
+import { delimiter } from "node:path"
+import { homedir, platform, tmpdir, userInfo } from "node:os"
+import { dirname, join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
+import { unbienStateHome } from "../paths.js"
 
 /**
  * Generates and activates a system service for the un-bien launcher daemon so
@@ -40,18 +40,18 @@ import { unbienStateHome } from "../paths.js";
 
 // ── Platform detection ─────────────────────────────────────────────────────
 
-export type SupervisorPlatform = "macos" | "linux" | "windows" | "unsupported";
+export type SupervisorPlatform = "macos" | "linux" | "windows" | "unsupported"
 
 export function detectPlatform(): SupervisorPlatform {
   switch (platform()) {
     case "darwin":
-      return "macos";
+      return "macos"
     case "linux":
-      return "linux";
+      return "linux"
     case "win32":
-      return "windows";
+      return "windows"
     default:
-      return "unsupported";
+      return "unsupported"
   }
 }
 
@@ -68,10 +68,10 @@ export function detectPlatform(): SupervisorPlatform {
  * isn't directly runnable by `node` — dev install isn't expected.
  */
 export function findLauncherScript(): string {
-  const here = fileURLToPath(import.meta.url); // dist/daemon/install.js
-  const daemonDir = dirname(here); // dist/daemon
-  const distRoot = dirname(daemonDir); // dist
-  return resolve(distRoot, "bin/launcher.js");
+  const here = fileURLToPath(import.meta.url) // dist/daemon/install.js
+  const daemonDir = dirname(here) // dist/daemon
+  const distRoot = dirname(daemonDir) // dist
+  return resolve(distRoot, "bin/launcher.js")
 }
 
 /**
@@ -84,10 +84,10 @@ export function findLauncherScript(): string {
  * `dist/daemon/install.js` → `dist/index.js`.
  */
 export function findRemotePiScript(): string {
-  const here = fileURLToPath(import.meta.url); // dist/daemon/install.js
-  const daemonDir = dirname(here); // dist/daemon
-  const distRoot = dirname(daemonDir); // dist
-  return resolve(distRoot, "index.js");
+  const here = fileURLToPath(import.meta.url) // dist/daemon/install.js
+  const daemonDir = dirname(here) // dist/daemon
+  const distRoot = dirname(daemonDir) // dist
+  return resolve(distRoot, "index.js")
 }
 
 export function findNodeBinary(): string {
@@ -95,7 +95,7 @@ export function findNodeBinary(): string {
   // binary. Embedding it in the service unit means the user gets the
   // exact same Node version they invoked `unbien install` with — no
   // PATH ambiguity at boot time.
-  return process.execPath;
+  return process.execPath
 }
 
 export function findTemplate(
@@ -105,8 +105,8 @@ export function findTemplate(
   // From `dist/daemon/install.js` go up two levels and into
   // `service-templates/`. In the published npm tarball the layout is the
   // same — `service-templates/` is sibling to `dist/`.
-  const here = fileURLToPath(import.meta.url); // dist/daemon/install.js
-  const pkgRoot = resolve(dirname(dirname(dirname(here)))); // package root
+  const here = fileURLToPath(import.meta.url) // dist/daemon/install.js
+  const pkgRoot = resolve(dirname(dirname(dirname(here)))) // package root
   const file =
     name === "systemd"
       ? "systemd.service.template"
@@ -114,8 +114,8 @@ export function findTemplate(
         ? "launchd.plist.template"
         : name === "vbs-launcher"
           ? "task-launcher.vbs.template"
-          : "task-scheduler.xml.template";
-  return resolve(pkgRoot, "service-templates", file);
+          : "task-scheduler.xml.template"
+  return resolve(pkgRoot, "service-templates", file)
 }
 
 // ── Service paths ──────────────────────────────────────────────────────────
@@ -127,27 +127,22 @@ export function systemdUnitPath(): string {
     "systemd",
     "user",
     "unbien-launcher.service",
-  );
+  )
 }
 
 export function launchdPlistPath(): string {
-  return join(
-    homedir(),
-    "Library",
-    "LaunchAgents",
-    "dev.unbien.launcher.plist",
-  );
+  return join(homedir(), "Library", "LaunchAgents", "dev.unbien.launcher.plist")
 }
 
-export const LAUNCHD_LABEL = "dev.unbien.launcher";
+export const LAUNCHD_LABEL = "dev.unbien.launcher"
 /** systemd --user unit name (with `.service`) for the launcher daemon. */
-export const SYSTEMD_UNIT = "unbien-launcher.service";
+export const SYSTEMD_UNIT = "unbien-launcher.service"
 /** Windows Task Scheduler task name. */
-export const WINDOWS_TASK_NAME = "RemotePiLauncher";
+export const WINDOWS_TASK_NAME = "RemotePiLauncher"
 
 /** Path of the rendered Task Scheduler XML (input to `schtasks /Create /XML`). */
 export function taskXmlPath(): string {
-  return join(unbienStateHome(), "RemotePiLauncher.xml");
+  return join(unbienStateHome(), "RemotePiLauncher.xml")
 }
 
 /**
@@ -156,7 +151,7 @@ export function taskXmlPath(): string {
  * what keeps the launcher daemon from flashing a console window.
  */
 export function vbsLauncherPath(): string {
-  return join(unbienStateHome(), "RemotePiLauncherRun.vbs");
+  return join(unbienStateHome(), "RemotePiLauncherRun.vbs")
 }
 
 /**
@@ -166,25 +161,25 @@ export function vbsLauncherPath(): string {
  * `~/.pi/un-bien/launcher.log`.
  */
 export function launcherLogPath(): string {
-  return join(unbienStateHome(), "launcher.log");
+  return join(unbienStateHome(), "launcher.log")
 }
 
 // ── Template rendering ─────────────────────────────────────────────────────
 
 export interface RenderVars {
-  node: string;
-  launcher: string;
-  home: string;
-  user: string;
+  node: string
+  launcher: string
+  home: string
+  user: string
   /** PATH inherited so `pi --mode rpc` resolves the same way it does
    *  interactively. We snapshot `process.env.PATH` at install time. */
-  path: string;
+  path: string
   /** Windows only: absolute path of the VBScript launcher the Task Scheduler
    *  action runs via `wscript.exe`. Empty on POSIX (templates ignore `{VBS}`). */
-  vbs: string;
+  vbs: string
   /** Windows only: combined stdout/stderr log the hidden launcher daemon
    *  appends to. Empty on POSIX (templates ignore `{LOG}`). */
-  logPath: string;
+  logPath: string
 }
 
 export function defaultRenderVars(): RenderVars {
@@ -196,7 +191,7 @@ export function defaultRenderVars(): RenderVars {
     path: process.env["PATH"] ?? "/usr/local/bin:/usr/bin:/bin",
     vbs: vbsLauncherPath(),
     logPath: launcherLogPath(),
-  };
+  }
 }
 
 /** Replace `{NODE}` / `{PRESENCE}` / `{USER}` / `{HOME}` / `{PATH}` / `{VBS}` / `{LOG}`. */
@@ -208,16 +203,16 @@ export function renderTemplate(template: string, vars: RenderVars): string {
     .replace(/\{HOME\}/g, vars.home)
     .replace(/\{PATH\}/g, vars.path)
     .replace(/\{VBS\}/g, vars.vbs)
-    .replace(/\{LOG\}/g, vars.logPath);
+    .replace(/\{LOG\}/g, vars.logPath)
 }
 
 // ── Install / uninstall API ────────────────────────────────────────────────
 
 export interface InstallResult {
-  platform: SupervisorPlatform;
-  unitPath: string;
+  platform: SupervisorPlatform
+  unitPath: string
   /** Lines describing each step taken — surfaced to the user via notify. */
-  log: string[];
+  log: string[]
 }
 
 /**
@@ -230,13 +225,13 @@ export interface InstallResult {
 export function installService(
   vars: RenderVars = defaultRenderVars(),
 ): InstallResult {
-  const plat = detectPlatform();
-  const log: string[] = [];
+  const plat = detectPlatform()
+  const log: string[] = []
 
   if (plat === "unsupported") {
     throw new Error(
       `unsupported platform: ${platform()}. Only macOS, Linux, and Windows.`,
-    );
+    )
   }
 
   // Sanity: launcher script must exist on disk.
@@ -244,7 +239,7 @@ export function installService(
     throw new Error(
       `launcher script not found at ${vars.launcher}. ` +
         "Run `pnpm build` (dev) or `npm install -g un-bien` (prod) first.",
-    );
+    )
   }
 
   const templateName =
@@ -252,58 +247,58 @@ export function installService(
       ? "launchd"
       : plat === "linux"
         ? "systemd"
-        : "taskscheduler";
-  const templatePath = findTemplate(templateName);
+        : "taskscheduler"
+  const templatePath = findTemplate(templateName)
   if (!existsSync(templatePath)) {
-    throw new Error(`service template missing: ${templatePath}`);
+    throw new Error(`service template missing: ${templatePath}`)
   }
-  const tpl = readFileSync(templatePath, "utf8");
-  const rendered = renderTemplate(tpl, vars);
+  const tpl = readFileSync(templatePath, "utf8")
+  const rendered = renderTemplate(tpl, vars)
 
   const unitPath =
     plat === "macos"
       ? launchdPlistPath()
       : plat === "linux"
         ? systemdUnitPath()
-        : taskXmlPath();
-  mkdirSync(dirname(unitPath), { recursive: true });
+        : taskXmlPath()
+  mkdirSync(dirname(unitPath), { recursive: true })
   if (plat === "windows") {
     // `schtasks /Create /XML` requires UTF-16LE + BOM. A UTF-8 file fails with
     // "(1,40)::ERROR: unable to switch the encoding" — the bytes must match the
     // template's `encoding="UTF-16"` declaration. (plan/40 risk #5.)
-    const bom = Buffer.from([0xff, 0xfe]); // UTF-16LE byte-order mark
+    const bom = Buffer.from([0xff, 0xfe]) // UTF-16LE byte-order mark
     writeFileSync(
       unitPath,
       Buffer.concat([bom, Buffer.from(rendered, "utf16le")]),
-    );
+    )
   } else {
-    writeFileSync(unitPath, rendered); // launchd/systemd → UTF-8
+    writeFileSync(unitPath, rendered) // launchd/systemd → UTF-8
   }
-  log.push(`wrote ${unitPath}`);
+  log.push(`wrote ${unitPath}`)
 
   if (plat === "macos") {
     // Unload first in case a stale entry exists from a prior install —
     // `launchctl bootstrap` errors out otherwise. `bootout` is the modern
     // API; `unload` is the legacy fallback. Either may fail silently.
-    const uid = userInfo().uid;
-    _tryExec("launchctl", ["bootout", `gui/${uid}`, unitPath], log);
-    _tryExec("launchctl", ["unload", unitPath], log);
-    _exec("launchctl", ["bootstrap", `gui/${uid}`, unitPath], log);
-    log.push(`activated via launchctl bootstrap gui/${uid}`);
+    const uid = userInfo().uid
+    _tryExec("launchctl", ["bootout", `gui/${uid}`, unitPath], log)
+    _tryExec("launchctl", ["unload", unitPath], log)
+    _exec("launchctl", ["bootstrap", `gui/${uid}`, unitPath], log)
+    log.push(`activated via launchctl bootstrap gui/${uid}`)
   } else if (plat === "linux") {
-    _exec("systemctl", ["--user", "daemon-reload"], log);
-    _exec("systemctl", ["--user", "enable", "--now", SYSTEMD_UNIT], log);
-    log.push("activated via systemctl --user enable --now");
+    _exec("systemctl", ["--user", "daemon-reload"], log)
+    _exec("systemctl", ["--user", "enable", "--now", SYSTEMD_UNIT], log)
+    log.push("activated via systemctl --user enable --now")
   } else {
     // windows — Task Scheduler. The action runs `wscript.exe
     // <launcher.vbs>` (not node directly) so the launcher daemon starts hidden,
     // with no console window. Render + write that launcher first.
-    const vbsTpl = findTemplate("vbs-launcher");
+    const vbsTpl = findTemplate("vbs-launcher")
     if (!existsSync(vbsTpl))
-      throw new Error(`vbs launcher template missing: ${vbsTpl}`);
-    const vbsPath = vars.vbs;
-    writeFileSync(vbsPath, renderTemplate(readFileSync(vbsTpl, "utf8"), vars));
-    log.push(`wrote ${vbsPath}`);
+      throw new Error(`vbs launcher template missing: ${vbsTpl}`)
+    const vbsPath = vars.vbs
+    writeFileSync(vbsPath, renderTemplate(readFileSync(vbsTpl, "utf8"), vars))
+    log.push(`wrote ${vbsPath}`)
 
     // Only `schtasks /Create` modifies the root task store → that single op
     // needs admin (elevate it via UAC). `/End` (stop a prior instance) and
@@ -311,35 +306,35 @@ export function installService(
     // very ops `unbien restart-supervisor` runs without elevation. Keeping
     // them un-elevated narrows the admin surface to the one operation that
     // truly requires it.
-    _tryExec("schtasks", ["/End", "/TN", WINDOWS_TASK_NAME], log);
+    _tryExec("schtasks", ["/End", "/TN", WINDOWS_TASK_NAME], log)
     _execElevatedWindows(
       [`schtasks /Create /XML "${unitPath}" /TN ${WINDOWS_TASK_NAME} /F`],
       log,
-    );
-    _exec("schtasks", ["/Run", "/TN", WINDOWS_TASK_NAME], log);
+    )
+    _exec("schtasks", ["/Run", "/TN", WINDOWS_TASK_NAME], log)
     log.push(
       `activated via schtasks /Create (elevated) + /Run (${WINDOWS_TASK_NAME})`,
-    );
+    )
   }
 
-  return { platform: plat, unitPath, log };
+  return { platform: plat, unitPath, log }
 }
 
 export interface UninstallResult {
-  platform: SupervisorPlatform;
-  unitPath: string;
-  removed: boolean;
-  log: string[];
+  platform: SupervisorPlatform
+  unitPath: string
+  removed: boolean
+  log: string[]
 }
 
 export function uninstallService(): UninstallResult {
-  const plat = detectPlatform();
-  const log: string[] = [];
+  const plat = detectPlatform()
+  const log: string[] = []
 
   if (plat === "unsupported") {
     throw new Error(
       `unsupported platform: ${platform()}. Only macOS, Linux, and Windows.`,
-    );
+    )
   }
 
   const unitPath =
@@ -347,64 +342,62 @@ export function uninstallService(): UninstallResult {
       ? launchdPlistPath()
       : plat === "linux"
         ? systemdUnitPath()
-        : taskXmlPath();
+        : taskXmlPath()
 
   if (plat === "macos") {
-    const uid = userInfo().uid;
-    _tryExec("launchctl", ["bootout", `gui/${uid}`, unitPath], log);
-    _tryExec("launchctl", ["unload", unitPath], log);
-    log.push("deactivated via launchctl bootout");
+    const uid = userInfo().uid
+    _tryExec("launchctl", ["bootout", `gui/${uid}`, unitPath], log)
+    _tryExec("launchctl", ["unload", unitPath], log)
+    log.push("deactivated via launchctl bootout")
   } else if (plat === "linux") {
-    _tryExec("systemctl", ["--user", "disable", "--now", SYSTEMD_UNIT], log);
-    log.push("deactivated via systemctl --user disable --now");
+    _tryExec("systemctl", ["--user", "disable", "--now", SYSTEMD_UNIT], log)
+    log.push("deactivated via systemctl --user disable --now")
   } else {
     // windows — Task Scheduler (plan/40): stop + delete the task. Only
     // `/Delete` modifies the root task store → that's the op that needs admin.
     // `/End` stops the running task and works un-elevated (own task), like
     // restart-supervisor. `exit /b 0` keeps uninstall best-effort: a missing
     // task (already removed) is success, not an error.
-    _tryExec("schtasks", ["/End", "/TN", WINDOWS_TASK_NAME], log);
+    _tryExec("schtasks", ["/End", "/TN", WINDOWS_TASK_NAME], log)
     _execElevatedWindows(
       [`schtasks /Delete /TN ${WINDOWS_TASK_NAME} /F`, `exit /b 0`],
       log,
-    );
-    log.push(
-      `deactivated via elevated schtasks /Delete (${WINDOWS_TASK_NAME})`,
-    );
+    )
+    log.push(`deactivated via elevated schtasks /Delete (${WINDOWS_TASK_NAME})`)
   }
 
-  let removed = false;
+  let removed = false
   if (existsSync(unitPath)) {
     try {
-      unlinkSync(unitPath);
-      removed = true;
-      log.push(`removed ${unitPath}`);
+      unlinkSync(unitPath)
+      removed = true
+      log.push(`removed ${unitPath}`)
     } catch (e) {
-      log.push(`failed to remove ${unitPath}: ${String(e)}`);
+      log.push(`failed to remove ${unitPath}: ${String(e)}`)
     }
   }
 
   // Windows: also drop the hidden VBScript launcher we wrote alongside the XML.
   if (plat === "windows") {
-    const vbsPath = vbsLauncherPath();
+    const vbsPath = vbsLauncherPath()
     if (existsSync(vbsPath)) {
       try {
-        unlinkSync(vbsPath);
-        log.push(`removed ${vbsPath}`);
+        unlinkSync(vbsPath)
+        log.push(`removed ${vbsPath}`)
       } catch (e) {
-        log.push(`failed to remove ${vbsPath}: ${String(e)}`);
+        log.push(`failed to remove ${vbsPath}: ${String(e)}`)
       }
     }
   }
 
   if (plat === "linux") {
-    _tryExec("systemctl", ["--user", "daemon-reload"], log);
+    _tryExec("systemctl", ["--user", "daemon-reload"], log)
   }
 
   // Hint about the label for users that want to verify manually.
-  if (plat === "macos") log.push(`(label: ${LAUNCHD_LABEL})`);
+  if (plat === "macos") log.push(`(label: ${LAUNCHD_LABEL})`)
 
-  return { platform: plat, unitPath, removed, log };
+  return { platform: plat, unitPath, removed, log }
 }
 
 // ── Internals ──────────────────────────────────────────────────────────────
@@ -414,22 +407,22 @@ function _exec(cmd: string, args: string[], log: string[]): void {
     const out = execFileSync(cmd, args, {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
-    });
-    if (out.trim()) log.push(`$ ${cmd} ${args.join(" ")}\n${out.trim()}`);
-    else log.push(`$ ${cmd} ${args.join(" ")}`);
+    })
+    if (out.trim()) log.push(`$ ${cmd} ${args.join(" ")}\n${out.trim()}`)
+    else log.push(`$ ${cmd} ${args.join(" ")}`)
   } catch (e) {
     const err = e as {
-      stderr?: Buffer | string;
-      status?: number;
-      message: string;
-    };
+      stderr?: Buffer | string
+      status?: number
+      message: string
+    }
     const stderr =
       typeof err.stderr === "string"
         ? err.stderr
-        : (err.stderr?.toString() ?? "");
+        : (err.stderr?.toString() ?? "")
     throw new Error(
       `\`${cmd} ${args.join(" ")}\` exited ${err.status ?? "?"}\n${stderr.trim() || err.message}`,
-    );
+    )
   }
 }
 
@@ -437,7 +430,7 @@ function _exec(cmd: string, args: string[], log: string[]): void {
  *  is expected (e.g., "unload" before "load" when nothing was loaded). */
 function _tryExec(cmd: string, args: string[], log: string[]): void {
   try {
-    _exec(cmd, args, log);
+    _exec(cmd, args, log)
   } catch {
     /* expected, suppress */
   }
@@ -459,18 +452,18 @@ function _tryExec(cmd: string, args: string[], log: string[]): void {
  * them would swallow the exit code. Pure + exported for tests.
  */
 export function buildElevatedCmd(lines: string[], logFile: string): string {
-  const redirect = ` >> "${logFile}" 2>&1`;
+  const redirect = ` >> "${logFile}" 2>&1`
   const body = lines.map((ln) =>
     /^\s*(if|exit|rem|@)/i.test(ln) ? ln : ln + redirect,
-  );
-  return ["@echo off", ...body].join("\r\n") + "\r\n";
+  )
+  return ["@echo off", ...body].join("\r\n") + "\r\n"
 }
 
 function _readIfExists(p: string): string {
   try {
-    return readFileSync(p, "utf8");
+    return readFileSync(p, "utf8")
   } catch {
-    return "";
+    return ""
   }
 }
 
@@ -481,17 +474,17 @@ function _readIfExists(p: string): string {
  * output is appended to `log` either way.
  */
 function _execElevatedWindows(lines: string[], log: string[]): void {
-  const base = join(tmpdir(), `un-bien-elevate-${process.pid}`);
-  const cmdPath = `${base}.cmd`;
-  const logFile = `${base}.log`;
-  writeFileSync(cmdPath, buildElevatedCmd(lines, logFile));
+  const base = join(tmpdir(), `un-bien-elevate-${process.pid}`)
+  const cmdPath = `${base}.cmd`
+  const logFile = `${base}.log`
+  writeFileSync(cmdPath, buildElevatedCmd(lines, logFile))
   try {
-    unlinkSync(logFile);
+    unlinkSync(logFile)
   } catch {
     /* none yet */
   }
 
-  let thrown: unknown = null;
+  let thrown: unknown = null
   try {
     execFileSync(
       "powershell",
@@ -503,20 +496,20 @@ function _execElevatedWindows(lines: string[], log: string[]): void {
           "-Verb RunAs -Wait -PassThru -WindowStyle Hidden; exit $p.ExitCode",
       ],
       { stdio: ["ignore", "pipe", "pipe"] },
-    );
+    )
   } catch (e) {
-    thrown = e;
+    thrown = e
   }
 
-  const out = _readIfExists(logFile).trim();
-  if (out) log.push(out);
+  const out = _readIfExists(logFile).trim()
+  if (out) log.push(out)
   try {
-    unlinkSync(cmdPath);
+    unlinkSync(cmdPath)
   } catch {
     /* best-effort */
   }
   try {
-    unlinkSync(logFile);
+    unlinkSync(logFile)
   } catch {
     /* best-effort */
   }
@@ -526,7 +519,7 @@ function _execElevatedWindows(lines: string[], log: string[]): void {
       "administrator privileges required — the UAC prompt was declined or the " +
         "schtasks operation failed. Run the command again and accept the Windows " +
         `elevation prompt.${out ? `\n${out}` : ""}`,
-    );
+    )
   }
 }
 
@@ -556,17 +549,17 @@ function _execElevatedWindows(lines: string[], log: string[]): void {
 
 export interface LinkBinariesResult {
   /** `~/.local/bin/`. The symlink lands here. */
-  binDir: string;
+  binDir: string
   /** Paths of the symlink(s) we created/refreshed. */
-  links: Array<{ name: string; path: string; target: string }>;
+  links: Array<{ name: string; path: string; target: string }>
   /** True when `binDir` is already on `$PATH`. False → caller surfaces the
    *  "add this line to your shell rc" hint to the user. */
-  onPath: boolean;
-  log: string[];
+  onPath: boolean
+  log: string[]
 }
 
 export function userLocalBinDir(home: string = homedir()): string {
-  return join(home, ".local", "bin");
+  return join(home, ".local", "bin")
 }
 
 /**
@@ -578,10 +571,10 @@ export function isOnPath(
   dir: string,
   envPath: string = process.env["PATH"] ?? "",
 ): boolean {
-  const target = dir.replace(/\/+$/, "");
+  const target = dir.replace(/\/+$/, "")
   return envPath
     .split(delimiter)
-    .some((entry) => entry.replace(/\/+$/, "") === target);
+    .some((entry) => entry.replace(/\/+$/, "") === target)
 }
 
 /**
@@ -598,54 +591,54 @@ export function linkCliBinaries(
   paths: { remotePi?: string } = {},
   opts: { node?: string; mutatePath?: boolean } = {},
 ): LinkBinariesResult {
-  const binDir = userLocalBinDir(home);
+  const binDir = userLocalBinDir(home)
 
   // Windows (plan/40): no POSIX symlinks. Installing via Pi (`pi install
   // npm:un-bien`) never reaches PATH, so write real `.cmd` shims into
   // `~/.local/bin` and add that dir to the user's PATH (HKCU — no admin).
   if (platform() === "win32") {
-    return _linkCliBinariesWindows(home, binDir, paths, opts);
+    return _linkCliBinariesWindows(home, binDir, paths, opts)
   }
 
-  const log: string[] = [];
+  const log: string[] = []
 
-  mkdirSync(binDir, { recursive: true });
-  log.push(`ensured ${binDir}`);
+  mkdirSync(binDir, { recursive: true })
+  log.push(`ensured ${binDir}`)
 
-  const remotePi = paths.remotePi ?? findRemotePiScript();
+  const remotePi = paths.remotePi ?? findRemotePiScript()
   if (!existsSync(remotePi)) {
     throw new Error(
       `unbien script not found at ${remotePi}. ` +
         "Run `pnpm build` (dev) or reinstall the extension.",
-    );
+    )
   }
 
   // tsc strips the executable bit on its outputs; the shebang at the top
   // of dist/index.js means the file IS a valid interpreter target once
   // chmod +x is applied.
   try {
-    chmodSync(remotePi, 0o755);
+    chmodSync(remotePi, 0o755)
   } catch {
     /* best-effort */
   }
 
   const links: LinkBinariesResult["links"] = [
     { name: "unbien", path: join(binDir, "unbien"), target: remotePi },
-  ];
+  ]
   for (const link of links) {
-    _replaceSymlink(link.path, link.target, log);
+    _replaceSymlink(link.path, link.target, log)
   }
 
-  const onPath = isOnPath(binDir);
+  const onPath = isOnPath(binDir)
   if (!onPath) {
     log.push(
       `WARNING: ${binDir} is not on $PATH. ` +
         `Add this line to your shell rc (~/.zshrc, ~/.bashrc, etc.): ` +
         `export PATH="$HOME/.local/bin:$PATH"`,
-    );
+    )
   }
 
-  return { binDir, links, onPath, log };
+  return { binDir, links, onPath, log }
 }
 
 /**
@@ -660,18 +653,18 @@ function _linkCliBinariesWindows(
   paths: { remotePi?: string },
   opts: { node?: string; mutatePath?: boolean },
 ): LinkBinariesResult {
-  void home;
-  const log: string[] = [];
-  mkdirSync(binDir, { recursive: true });
-  log.push(`ensured ${binDir}`);
+  void home
+  const log: string[] = []
+  mkdirSync(binDir, { recursive: true })
+  log.push(`ensured ${binDir}`)
 
-  const node = opts.node ?? findNodeBinary();
-  const remotePi = paths.remotePi ?? findRemotePiScript();
+  const node = opts.node ?? findNodeBinary()
+  const remotePi = paths.remotePi ?? findRemotePiScript()
   if (!existsSync(remotePi)) {
     throw new Error(
       `unbien script not found at ${remotePi}. ` +
         "Run `pnpm build` (dev) or reinstall the extension.",
-    );
+    )
   }
 
   const links: LinkBinariesResult["links"] = [
@@ -680,33 +673,33 @@ function _linkCliBinariesWindows(
       path: join(binDir, "un-bien.cmd"),
       target: remotePi,
     },
-  ];
+  ]
   for (const link of links) {
-    writeFileSync(link.path, buildCmdShim(node, link.target));
-    log.push(`wrote ${link.path}`);
+    writeFileSync(link.path, buildCmdShim(node, link.target))
+    log.push(`wrote ${link.path}`)
   }
 
-  const onPath = isOnPath(binDir);
+  const onPath = isOnPath(binDir)
   if (!onPath && opts.mutatePath !== false) {
     try {
-      _addUserPath(binDir);
+      _addUserPath(binDir)
       log.push(
         `added ${binDir} to your user PATH — open a NEW terminal for \`un-bien\` to resolve.`,
-      );
+      )
     } catch (e) {
       log.push(
         `WARNING: ${binDir} is not on PATH and auto-add failed (${String(e)}). ` +
           `Add it manually: setx PATH "%PATH%;${binDir}"`,
-      );
+      )
     }
   }
 
-  return { binDir, links, onPath, log };
+  return { binDir, links, onPath, log }
 }
 
 /** A Windows `.cmd` shim that forwards all args to `node "<target>"`. Pure. */
 export function buildCmdShim(node: string, target: string): string {
-  return `@echo off\r\n"${node}" "${target}" %*\r\n`;
+  return `@echo off\r\n"${node}" "${target}" %*\r\n`
 }
 
 /**
@@ -716,7 +709,7 @@ export function buildCmdShim(node: string, target: string): string {
  * `'` doubled.
  */
 function _addUserPath(dir: string): void {
-  const lit = `'${dir.replace(/'/g, "''")}'`;
+  const lit = `'${dir.replace(/'/g, "''")}'`
   execFileSync(
     "powershell",
     [
@@ -731,7 +724,7 @@ function _addUserPath(dir: string): void {
         "[Environment]::SetEnvironmentVariable('Path', (($parts + $d) -join ';'), 'User') }",
     ],
     { stdio: ["ignore", "pipe", "pipe"] },
-  );
+  )
 }
 
 /**
@@ -741,45 +734,45 @@ function _addUserPath(dir: string): void {
  * are NOT touched here — they live outside this dir and belong to Pi.
  */
 export interface UnlinkBinariesResult {
-  binDir: string;
-  removed: Array<{ name: string; path: string; existed: boolean }>;
-  log: string[];
+  binDir: string
+  removed: Array<{ name: string; path: string; existed: boolean }>
+  log: string[]
 }
 
 export function unlinkCliBinaries(
   home: string = homedir(),
 ): UnlinkBinariesResult {
-  const binDir = userLocalBinDir(home);
-  const log: string[] = [];
+  const binDir = userLocalBinDir(home)
+  const log: string[] = []
   // Windows shims are `.cmd` files (linkCliBinaries writes those); POSIX uses
   // extensionless symlinks. Match what was actually created on this platform.
-  const names = platform() === "win32" ? ["un-bien.cmd"] : ["unbien"];
-  const removed: UnlinkBinariesResult["removed"] = [];
+  const names = platform() === "win32" ? ["un-bien.cmd"] : ["unbien"]
+  const removed: UnlinkBinariesResult["removed"] = []
 
   for (const name of names) {
-    const path = join(binDir, name);
-    let existed = false;
+    const path = join(binDir, name)
+    let existed = false
     try {
       // lstatSync (not stat) so a symlink targeting a deleted file still
       // resolves — we want to remove the LINK itself, not chase it.
-      lstatSync(path);
-      existed = true;
+      lstatSync(path)
+      existed = true
     } catch {
       /* not present */
     }
     if (existed) {
       try {
-        unlinkSync(path);
-        log.push(`removed ${path}`);
+        unlinkSync(path)
+        log.push(`removed ${path}`)
       } catch (e) {
-        log.push(`failed to remove ${path}: ${String(e)}`);
-        existed = false;
+        log.push(`failed to remove ${path}: ${String(e)}`)
+        existed = false
       }
     }
-    removed.push({ name, path, existed });
+    removed.push({ name, path, existed })
   }
 
-  return { binDir, removed, log };
+  return { binDir, removed, log }
 }
 
 /**
@@ -793,24 +786,24 @@ function _replaceSymlink(
   target: string,
   log: string[],
 ): void {
-  let existing: string | null = null;
+  let existing: string | null = null
   try {
-    existing = readlinkSync(linkPath);
+    existing = readlinkSync(linkPath)
   } catch {
     /* not a symlink, or doesn't exist */
   }
 
   if (existing === target) {
-    log.push(`symlink ${linkPath} → ${target} (unchanged)`);
-    return;
+    log.push(`symlink ${linkPath} → ${target} (unchanged)`)
+    return
   }
 
   // Either it doesn't exist, or it points elsewhere. Remove + recreate.
   try {
-    unlinkSync(linkPath);
+    unlinkSync(linkPath)
   } catch {
     /* fine if absent */
   }
-  symlinkSync(target, linkPath);
-  log.push(`symlink ${linkPath} → ${target}`);
+  symlinkSync(target, linkPath)
+  log.push(`symlink ${linkPath} → ${target}`)
 }

@@ -1,14 +1,14 @@
-import { writeFileSync } from "node:fs";
-import { mkdir, readFile, writeFile, chmod, unlink } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { writeFileSync } from "node:fs"
+import { mkdir, readFile, writeFile, chmod, unlink } from "node:fs/promises"
+import { dirname, join } from "node:path"
 import {
   generateEd25519Keypair,
   ed25519KeypairFromSeed,
   type Ed25519Keypair,
-} from "./crypto.js";
-import { canonicalizeEd25519PublicKey } from "../mesh/encoding.js";
-import { unbienStateHome } from "../paths.js";
-import { loadConfig } from "../config.js";
+} from "./crypto.js"
+import { canonicalizeEd25519PublicKey } from "../mesh/encoding.js"
+import { unbienStateHome } from "../paths.js"
+import { loadConfig } from "../config.js"
 
 /**
  * Pi-secret storage (plan/27 Wave E1).
@@ -29,9 +29,9 @@ import { loadConfig } from "../config.js";
  * succeeds without keeping the deprecated `keytar` dependency.
  */
 
-const NEW_SERVICE = "dev.unbien.pi"; // platform-neutral
-const OLD_SERVICE = "dev.unbien.mac"; // legacy keytar service (pre-2026-05-25)
-const ACCOUNT = "longterm-ed25519";
+const NEW_SERVICE = "dev.unbien.pi" // platform-neutral
+const OLD_SERVICE = "dev.unbien.mac" // legacy keytar service (pre-2026-05-25)
+const ACCOUNT = "longterm-ed25519"
 
 /**
  * The keyring read can THROW transiently rather than permanently — most
@@ -41,8 +41,8 @@ const ACCOUNT = "longterm-ed25519";
  * "lost pairing after a week idle" failure). So we retry the read a few times
  * before ever concluding the keyring is truly unavailable. Overridable for
  * tests via `_setKeyringRetryForTest`. */
-let _keyringReadAttempts = 3;
-let _keyringRetryDelayMs = 300;
+let _keyringReadAttempts = 3
+let _keyringRetryDelayMs = 300
 
 /** Raised when the keyring is unreadable on a platform where it's a core OS
  *  service (macOS Keychain, Windows Credential Manager) AND no prior file
@@ -58,8 +58,8 @@ export class KeyringUnavailableError extends Error {
         'or select the file backend with `"identity": { "storage": "file" }` ' +
         "in un-bien.json for a headless host. " +
         `Cause: ${String(cause)}`,
-    );
-    this.name = "KeyringUnavailableError";
+    )
+    this.name = "KeyringUnavailableError"
   }
 }
 
@@ -77,8 +77,8 @@ export class PairedIdentityMissingError extends Error {
         "identity by copying the paired keypair to ~/.pi/un-bien/identity.json " +
         "(0600), which both contexts read first. " +
         `Cause: ${String(cause)}`,
-    );
-    this.name = "PairedIdentityMissingError";
+    )
+    this.name = "PairedIdentityMissingError"
   }
 }
 
@@ -94,14 +94,14 @@ export class FileIdentityUnreadableError extends Error {
         "pairing). Fix the file's permissions/contents and retry, or point " +
         "`identity.path` at the correct file. " +
         `Cause: ${String(cause)}`,
-    );
-    this.name = "FileIdentityUnreadableError";
+    )
+    this.name = "FileIdentityUnreadableError"
   }
 }
 
-const PI_DIR = unbienStateHome();
-const IDENTITY_FILE = join(PI_DIR, "identity.json");
-const PEERS_PATH = join(PI_DIR, "peers.json");
+const PI_DIR = unbienStateHome()
+const IDENTITY_FILE = join(PI_DIR, "identity.json")
+const PEERS_PATH = join(PI_DIR, "peers.json")
 
 // ── KeyStore abstraction ─────────────────────────────────────────────────────
 
@@ -116,9 +116,9 @@ const PEERS_PATH = join(PI_DIR, "peers.json");
  * non-error condition).
  */
 export interface KeyStoreBackend {
-  read(service: string, account: string): Promise<string | undefined>;
-  write(service: string, account: string, value: string): Promise<void>;
-  delete(service: string, account: string): Promise<boolean>;
+  read(service: string, account: string): Promise<string | undefined>
+  write(service: string, account: string, value: string): Promise<void>
+  delete(service: string, account: string): Promise<boolean>
 }
 
 /**
@@ -133,7 +133,7 @@ export interface KeyStoreBackend {
  * /unbien pair bootstrap. Raising a real error here lets that fallback
  * chain run as designed.
  */
-const KEYRING_OP_TIMEOUT_MS = 3_000;
+const KEYRING_OP_TIMEOUT_MS = 3_000
 
 function _withTimeout<T>(
   p: Promise<T>,
@@ -148,7 +148,7 @@ function _withTimeout<T>(
         ms,
       ),
     ),
-  ]);
+  ])
 }
 
 /**
@@ -167,21 +167,21 @@ function _withTimeout<T>(
  * Loading on first use turns that fatal load error into an ordinary backend
  * failure, which the existing retry + file-identity fallback already handles.
  */
-let _asyncEntryCtor: typeof import("@napi-rs/keyring").AsyncEntry | null = null;
-let _nativeBindingError: unknown = null;
+let _asyncEntryCtor: typeof import("@napi-rs/keyring").AsyncEntry | null = null
+let _nativeBindingError: unknown = null
 
 async function _loadAsyncEntry(): Promise<
   typeof import("@napi-rs/keyring").AsyncEntry
 > {
-  if (_asyncEntryCtor) return _asyncEntryCtor;
-  if (_nativeBindingError) throw _nativeBindingError;
+  if (_asyncEntryCtor) return _asyncEntryCtor
+  if (_nativeBindingError) throw _nativeBindingError
   try {
-    const mod = await import("@napi-rs/keyring");
-    _asyncEntryCtor = mod.AsyncEntry;
-    return _asyncEntryCtor;
+    const mod = await import("@napi-rs/keyring")
+    _asyncEntryCtor = mod.AsyncEntry
+    return _asyncEntryCtor
   } catch (err) {
-    _nativeBindingError = err;
-    throw err;
+    _nativeBindingError = err
+    throw err
   }
 }
 
@@ -196,55 +196,55 @@ async function _loadAsyncEntry(): Promise<
  * route here, exactly as on headless Linux.
  */
 function _nativeBindingUnavailable(): boolean {
-  return _nativeBindingError !== null;
+  return _nativeBindingError !== null
 }
 
 /** Test-only: force (or clear with `null`) a memoized binding-load failure, so
  *  the Bun/no-native-binding branch is reachable without a Bun host. */
 export function _setNativeBindingErrorForTest(err: unknown): void {
-  _asyncEntryCtor = null;
-  _nativeBindingError = err;
+  _asyncEntryCtor = null
+  _nativeBindingError = err
 }
 
 class NapiKeyringBackend implements KeyStoreBackend {
   async read(service: string, account: string): Promise<string | undefined> {
-    const AsyncEntry = await _loadAsyncEntry();
-    const entry = new AsyncEntry(service, account);
-    return _withTimeout(entry.getPassword(), `read(${service})`); // undefined on no-entry
+    const AsyncEntry = await _loadAsyncEntry()
+    const entry = new AsyncEntry(service, account)
+    return _withTimeout(entry.getPassword(), `read(${service})`) // undefined on no-entry
   }
   async write(service: string, account: string, value: string): Promise<void> {
-    const AsyncEntry = await _loadAsyncEntry();
-    const entry = new AsyncEntry(service, account);
-    await _withTimeout(entry.setPassword(value), `write(${service})`);
+    const AsyncEntry = await _loadAsyncEntry()
+    const entry = new AsyncEntry(service, account)
+    await _withTimeout(entry.setPassword(value), `write(${service})`)
   }
   async delete(service: string, account: string): Promise<boolean> {
-    let entry: InstanceType<typeof import("@napi-rs/keyring").AsyncEntry>;
+    let entry: InstanceType<typeof import("@napi-rs/keyring").AsyncEntry>
     try {
-      const AsyncEntry = await _loadAsyncEntry();
-      entry = new AsyncEntry(service, account);
+      const AsyncEntry = await _loadAsyncEntry()
+      entry = new AsyncEntry(service, account)
     } catch {
-      return false;
+      return false
     }
     try {
-      return await _withTimeout(entry.deleteCredential(), `delete(${service})`);
+      return await _withTimeout(entry.deleteCredential(), `delete(${service})`)
     } catch {
-      return false;
+      return false
     }
   }
 }
 
-let _backend: KeyStoreBackend | null = null;
+let _backend: KeyStoreBackend | null = null
 
 function _getBackend(): KeyStoreBackend {
-  if (!_backend) _backend = new NapiKeyringBackend();
-  return _backend;
+  if (!_backend) _backend = new NapiKeyringBackend()
+  return _backend
 }
 
 /** Test-only: swap (or clear with `null`) the keyring backend. */
 export function _setKeyStoreBackendForTest(
   backend: KeyStoreBackend | null,
 ): void {
-  _backend = backend;
+  _backend = backend
 }
 
 /**
@@ -254,20 +254,20 @@ export function _setKeyStoreBackendForTest(
  * new identity. On Linux/other the secret service may be genuinely absent
  * (headless, no D-Bus), so the documented file fallback applies. Overridable
  * for tests via `_setKeyringExpectedForTest`. */
-let _keyringExpectedOverride: boolean | null = null;
+let _keyringExpectedOverride: boolean | null = null
 function _keyringExpectedAvailable(): boolean {
-  if (_keyringExpectedOverride !== null) return _keyringExpectedOverride;
+  if (_keyringExpectedOverride !== null) return _keyringExpectedOverride
   // Binding never loaded (Bun-built pi, issue #113) → there is no keyring on
   // this platform *for this process*, whatever the OS normally offers.
-  if (_nativeBindingUnavailable()) return false;
-  return process.platform === "darwin" || process.platform === "win32";
+  if (_nativeBindingUnavailable()) return false
+  return process.platform === "darwin" || process.platform === "win32"
 }
 
 /** Test-only: force `_keyringExpectedAvailable()` (so a darwin test host can
  *  exercise the Linux/headless branch and vice-versa). `null` restores the
  *  real platform check. */
 export function _setKeyringExpectedForTest(value: boolean | null): void {
-  _keyringExpectedOverride = value;
+  _keyringExpectedOverride = value
 }
 
 /** Test-only: shrink retry attempts/delay so the persistent-failure path is
@@ -276,37 +276,37 @@ export function _setKeyringRetryForTest(
   attempts: number | null,
   delayMs?: number,
 ): void {
-  _keyringReadAttempts = attempts ?? 3;
-  _keyringRetryDelayMs = delayMs ?? 300;
+  _keyringReadAttempts = attempts ?? 3
+  _keyringRetryDelayMs = delayMs ?? 300
 }
 
 function _sleep(ms: number): Promise<void> {
-  return ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve();
+  return ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve()
 }
 
 // ── Keypair serialization ────────────────────────────────────────────────────
 
 interface SerializedKeypair {
-  pk: string;
-  sk: string;
+  pk: string
+  sk: string
 }
 
 function _serialize(kp: Ed25519Keypair): string {
   const payload: SerializedKeypair = {
     pk: Buffer.from(kp.publicKey).toString("base64"),
     sk: Buffer.from(kp.secretKey).toString("base64"),
-  };
-  return JSON.stringify(payload);
+  }
+  return JSON.stringify(payload)
 }
 
 function _deserialize(stored: string): Ed25519Keypair {
-  let parsed: unknown;
+  let parsed: unknown
   try {
-    parsed = JSON.parse(stored);
+    parsed = JSON.parse(stored)
   } catch (err) {
     throw new Error(
       `identity is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    )
   }
   if (
     typeof parsed !== "object" ||
@@ -316,22 +316,22 @@ function _deserialize(stored: string): Ed25519Keypair {
   ) {
     throw new Error(
       "identity JSON must be an object with base64 `pk` and `sk` strings",
-    );
+    )
   }
-  const { pk, sk } = parsed as SerializedKeypair;
-  const publicKey = Buffer.from(pk, "base64");
-  const secretKey = Buffer.from(sk, "base64");
+  const { pk, sk } = parsed as SerializedKeypair
+  const publicKey = Buffer.from(pk, "base64")
+  const secretKey = Buffer.from(sk, "base64")
   if (publicKey.length !== 32) {
     throw new Error(
       `identity public key must decode to 32 bytes (got ${publicKey.length})`,
-    );
+    )
   }
-  return { publicKey, secretKey };
+  return { publicKey, secretKey }
 }
 
 // ── Storage-backend selection (un-bien.json `identity`) ─────────────────────
 
-export type IdentityStorageBackend = "keychain" | "file";
+export type IdentityStorageBackend = "keychain" | "file"
 
 /**
  * The operator-selected PRIMARY store (`identity.storage` in un-bien.json),
@@ -342,15 +342,15 @@ export type IdentityStorageBackend = "keychain" | "file";
  * identity exactly as before.
  */
 function _selectedStorageBackend(): IdentityStorageBackend {
-  if (_nativeBindingUnavailable()) return "file";
-  return loadConfig().identity?.storage === "file" ? "file" : "keychain";
+  if (_nativeBindingUnavailable()) return "file"
+  return loadConfig().identity?.storage === "file" ? "file" : "keychain"
 }
 
 /** Resolved file-backend path (`identity.path` in un-bien.json), default
  *  `~/.pi/un-bien/identity.json`. */
 function _identityFilePath(): string {
-  const p = loadConfig().identity?.path;
-  return p && p.length > 0 ? p : IDENTITY_FILE;
+  const p = loadConfig().identity?.path
+  return p && p.length > 0 ? p : IDENTITY_FILE
 }
 
 function _isENOENT(err: unknown): boolean {
@@ -359,7 +359,7 @@ function _isENOENT(err: unknown): boolean {
     err !== null &&
     "code" in err &&
     (err as { code?: unknown }).code === "ENOENT"
-  );
+  )
 }
 
 // ── env override ────────────────────────────────────────────────────────────
@@ -373,19 +373,19 @@ function _isENOENT(err: unknown): boolean {
  * supplied-but-broken override is an operator error worth surfacing.
  */
 function _keypairFromEnvOverride(): Ed25519Keypair | null {
-  const raw = process.env["UNBIEN_IDENTITY_SEED"];
-  if (!raw) return null;
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) return null;
-  if (trimmed.startsWith("{")) return _deserialize(trimmed);
-  const seed = Buffer.from(trimmed, "base64");
+  const raw = process.env["UNBIEN_IDENTITY_SEED"]
+  if (!raw) return null
+  const trimmed = raw.trim()
+  if (trimmed.length === 0) return null
+  if (trimmed.startsWith("{")) return _deserialize(trimmed)
+  const seed = Buffer.from(trimmed, "base64")
   if (seed.length !== 32) {
     throw new Error(
       "UNBIEN_IDENTITY_SEED must be the identity JSON ({pk,sk}) or a base64 " +
         `32-byte Ed25519 seed (decoded to ${seed.length} bytes).`,
-    );
+    )
   }
-  return ed25519KeypairFromSeed(seed);
+  return ed25519KeypairFromSeed(seed)
 }
 
 // ── File backend ────────────────────────────────────────────────────────────
@@ -400,17 +400,17 @@ function _keypairFromEnvOverride(): Ed25519Keypair | null {
 async function _readKeypairFromFile(
   path: string,
 ): Promise<Ed25519Keypair | null> {
-  let raw: string;
+  let raw: string
   try {
-    raw = await readFile(path, "utf8");
+    raw = await readFile(path, "utf8")
   } catch (err) {
-    if (_isENOENT(err)) return null;
-    throw new FileIdentityUnreadableError(path, err);
+    if (_isENOENT(err)) return null
+    throw new FileIdentityUnreadableError(path, err)
   }
   try {
-    return _deserialize(raw);
+    return _deserialize(raw)
   } catch (err) {
-    throw new FileIdentityUnreadableError(path, err);
+    throw new FileIdentityUnreadableError(path, err)
   }
 }
 
@@ -418,18 +418,18 @@ async function _writeKeypairToFile(
   kp: Ed25519Keypair,
   path: string,
 ): Promise<void> {
-  const dir = dirname(path);
-  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const dir = dirname(path)
+  await mkdir(dir, { recursive: true, mode: 0o700 })
   // Best-effort tighten in case the dir pre-existed with looser permissions
   // (mkdir's mode is only applied to NEW dirs).
   try {
-    await chmod(dir, 0o700);
+    await chmod(dir, 0o700)
   } catch {
     /* not fatal */
   }
-  await writeFile(path, _serialize(kp), { mode: 0o600 });
+  await writeFile(path, _serialize(kp), { mode: 0o600 })
   try {
-    await chmod(path, 0o600);
+    await chmod(path, 0o600)
   } catch {
     /* not fatal */
   }
@@ -438,7 +438,7 @@ async function _writeKeypairToFile(
 // ── Keychain backend ────────────────────────────────────────────────────────
 
 type KeychainReadResult =
-  { ok: true; kp: Ed25519Keypair | null } | { ok: false; error: unknown };
+  { ok: true; kp: Ed25519Keypair | null } | { ok: false; error: unknown }
 
 /**
  * Retried read of the keychain: the new service, then the legacy service
@@ -452,33 +452,33 @@ async function _readKeychain(
   backend: KeyStoreBackend,
   promote = true,
 ): Promise<KeychainReadResult> {
-  let lastError: unknown;
+  let lastError: unknown
   for (let attempt = 0; attempt < _keyringReadAttempts; attempt++) {
     try {
-      const existing = await backend.read(NEW_SERVICE, ACCOUNT);
-      if (existing) return { ok: true, kp: _deserialize(existing) };
+      const existing = await backend.read(NEW_SERVICE, ACCOUNT)
+      if (existing) return { ok: true, kp: _deserialize(existing) }
 
-      const legacy = await backend.read(OLD_SERVICE, ACCOUNT);
+      const legacy = await backend.read(OLD_SERVICE, ACCOUNT)
       if (legacy) {
-        const kp = _deserialize(legacy);
+        const kp = _deserialize(legacy)
         // `promote=false` keeps the read side-effect-free (e.g. describeIdentity
         // for `show`); the resolver promotes the legacy entry once.
         if (promote) {
-          await backend.write(NEW_SERVICE, ACCOUNT, legacy);
-          await backend.delete(OLD_SERVICE, ACCOUNT);
+          await backend.write(NEW_SERVICE, ACCOUNT, legacy)
+          await backend.delete(OLD_SERVICE, ACCOUNT)
         }
-        return { ok: true, kp };
+        return { ok: true, kp }
       }
-      return { ok: true, kp: null };
+      return { ok: true, kp: null }
     } catch (err) {
-      lastError = err;
+      lastError = err
       if (attempt < _keyringReadAttempts - 1) {
         // Linear backoff — a locked Keychain usually frees within seconds.
-        await _sleep(_keyringRetryDelayMs * (attempt + 1));
+        await _sleep(_keyringRetryDelayMs * (attempt + 1))
       }
     }
   }
-  return { ok: false, error: lastError };
+  return { ok: false, error: lastError }
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────
@@ -510,58 +510,58 @@ async function _readKeychain(
  */
 export async function getOrCreateEd25519Keypair(): Promise<Ed25519Keypair> {
   // ── Override: an env-supplied seed always wins (read-only) ──────────────
-  const override = _keypairFromEnvOverride();
-  if (override) return override;
+  const override = _keypairFromEnvOverride()
+  if (override) return override
 
-  const backend = _getBackend();
-  const selected = _selectedStorageBackend();
-  const filePath = _identityFilePath();
+  const backend = _getBackend()
+  const selected = _selectedStorageBackend()
+  const filePath = _identityFilePath()
 
-  let keychain: KeychainReadResult | null = null;
+  let keychain: KeychainReadResult | null = null
 
   if (selected === "keychain") {
-    keychain = await _readKeychain(backend);
-    if (keychain.ok && keychain.kp) return keychain.kp;
+    keychain = await _readKeychain(backend)
+    if (keychain.ok && keychain.kp) return keychain.kp
     // Migration read-in-place of the file backend (never written through).
-    const fromFile = await _readKeypairFromFile(filePath);
-    if (fromFile) return fromFile;
+    const fromFile = await _readKeypairFromFile(filePath)
+    if (fromFile) return fromFile
   } else {
-    const fromFile = await _readKeypairFromFile(filePath);
-    if (fromFile) return fromFile;
+    const fromFile = await _readKeypairFromFile(filePath)
+    if (fromFile) return fromFile
     // Migration read-in-place of the keychain — only where one could exist.
     if (_keyringExpectedAvailable()) {
-      keychain = await _readKeychain(backend);
-      if (keychain.ok && keychain.kp) return keychain.kp;
+      keychain = await _readKeychain(backend)
+      if (keychain.ok && keychain.kp) return keychain.kp
     }
   }
 
   // ── Nothing found. Mint — but only when it is SAFE to. ──────────────────
-  const keychainThrew = keychain !== null && keychain.ok === false;
+  const keychainThrew = keychain !== null && keychain.ok === false
   const keychainError =
-    keychain !== null && keychain.ok === false ? keychain.error : null;
+    keychain !== null && keychain.ok === false ? keychain.error : null
 
   // A keychain that THREW on a platform where it's a core OS service isn't
   // "empty" — it's locked/denied and may hold the real identity. Minting now
   // is exactly the flop. Fail loud so the operator unlocks and retries.
   if (keychainThrew && _keyringExpectedAvailable()) {
-    throw new KeyringUnavailableError(keychainError);
+    throw new KeyringUnavailableError(keychainError)
   }
 
   // Devices already paired ⇒ an identity provably existed; "not found" here is
   // a broken environment (classically a systemd --user daemon that can't reach
   // the desktop keyring), not a first run. Minting would let SelfRevoke wipe
   // the pairings (issues #95/#69). Fail loud on every platform.
-  const paired = await listPeers();
+  const paired = await listPeers()
   if (paired.length > 0) {
-    throw new PairedIdentityMissingError(paired.length, keychainError);
+    throw new PairedIdentityMissingError(paired.length, keychainError)
   }
 
   // ── Genuine first run: mint once into the selected backend ──────────────
-  const fresh = generateEd25519Keypair();
-  const keychainUsable = !_nativeBindingUnavailable() && !keychainThrew;
+  const fresh = generateEd25519Keypair()
+  const keychainUsable = !_nativeBindingUnavailable() && !keychainThrew
   if (selected === "keychain" && keychainUsable) {
-    await backend.write(NEW_SERVICE, ACCOUNT, _serialize(fresh));
-    return fresh;
+    await backend.write(NEW_SERVICE, ACCOUNT, _serialize(fresh))
+    return fresh
   }
   // File backend — either selected, or keychain selected but unusable in this
   // process (headless Linux / Bun-built pi), which degrades to a file identity.
@@ -574,10 +574,10 @@ export async function getOrCreateEd25519Keypair(): Promise<Ed25519Keypair> {
             `previous keyring identity must be re-paired. ${String(keychainError)}`
         : "[un-bien] keyring unavailable; using file-backed identity at " +
             `${filePath}. ${String(keychainError)}`,
-    );
+    )
   }
-  await _writeKeypairToFile(fresh, filePath);
-  return fresh;
+  await _writeKeypairToFile(fresh, filePath)
+  return fresh
 }
 
 // ── Read-only identity inspection (for `unbien identity show`) ──────────────
@@ -585,15 +585,15 @@ export async function getOrCreateEd25519Keypair(): Promise<Ed25519Keypair> {
 export interface IdentityInfo {
   /** Base64 Ed25519 public key (epk) — PUBLIC, safe to display. `null` when no
    *  identity exists yet (one is minted on first real use). */
-  readonly epk: string | null;
+  readonly epk: string | null
   /** The selected/effective storage backend. */
-  readonly backend: IdentityStorageBackend;
+  readonly backend: IdentityStorageBackend
   /** Where the identity resolved from (or would come from). */
-  readonly source: "env-override" | "keychain" | "file" | "none" | "error";
+  readonly source: "env-override" | "keychain" | "file" | "none" | "error"
   /** Resolved file-backend path. */
-  readonly filePath: string;
+  readonly filePath: string
   /** Human note (migration recovery, error cause, first-run hint). */
-  readonly detail?: string;
+  readonly detail?: string
 }
 
 /**
@@ -604,20 +604,20 @@ export interface IdentityInfo {
  * not thrown — this is a diagnostic.
  */
 export async function describeIdentity(): Promise<IdentityInfo> {
-  const backend = _selectedStorageBackend();
-  const filePath = _identityFilePath();
+  const backend = _selectedStorageBackend()
+  const filePath = _identityFilePath()
   const epkOf = (kp: Ed25519Keypair): string =>
-    Buffer.from(kp.publicKey).toString("base64");
+    Buffer.from(kp.publicKey).toString("base64")
 
   try {
-    const override = _keypairFromEnvOverride();
+    const override = _keypairFromEnvOverride()
     if (override)
       return {
         epk: epkOf(override),
         backend,
         source: "env-override",
         filePath,
-      };
+      }
   } catch (err) {
     return {
       epk: null,
@@ -625,34 +625,34 @@ export async function describeIdentity(): Promise<IdentityInfo> {
       source: "error",
       filePath,
       detail: `env override invalid: ${String(err)}`,
-    };
+    }
   }
 
-  const store = _getBackend();
+  const store = _getBackend()
   const readFileSafe = async (): Promise<{
-    kp?: Ed25519Keypair;
-    err?: unknown;
+    kp?: Ed25519Keypair
+    err?: unknown
   }> => {
     try {
-      const kp = await _readKeypairFromFile(filePath);
-      return kp ? { kp } : {};
+      const kp = await _readKeypairFromFile(filePath)
+      return kp ? { kp } : {}
     } catch (err) {
-      return { err };
+      return { err }
     }
-  };
+  }
   const readKcSafe = async (): Promise<{
-    kp?: Ed25519Keypair;
-    err?: unknown;
+    kp?: Ed25519Keypair
+    err?: unknown
   }> => {
-    const r = await _readKeychain(store, false);
-    return r.ok ? (r.kp ? { kp: r.kp } : {}) : { err: r.error };
-  };
+    const r = await _readKeychain(store, false)
+    return r.ok ? (r.kp ? { kp: r.kp } : {}) : { err: r.error }
+  }
 
   if (backend === "keychain") {
-    const kc = await readKcSafe();
+    const kc = await readKcSafe()
     if (kc.kp)
-      return { epk: epkOf(kc.kp), backend, source: "keychain", filePath };
-    const f = await readFileSafe();
+      return { epk: epkOf(kc.kp), backend, source: "keychain", filePath }
+    const f = await readFileSafe()
     if (f.kp)
       return {
         epk: epkOf(f.kp),
@@ -660,7 +660,7 @@ export async function describeIdentity(): Promise<IdentityInfo> {
         source: "file",
         filePath,
         detail: "recovered from the file backend (migration read)",
-      };
+      }
     if (kc.err)
       return {
         epk: null,
@@ -668,7 +668,7 @@ export async function describeIdentity(): Promise<IdentityInfo> {
         source: "error",
         filePath,
         detail: `keychain unreadable: ${String(kc.err)}`,
-      };
+      }
     if (f.err)
       return {
         epk: null,
@@ -676,10 +676,10 @@ export async function describeIdentity(): Promise<IdentityInfo> {
         source: "error",
         filePath,
         detail: `file unreadable: ${String(f.err)}`,
-      };
+      }
   } else {
-    const f = await readFileSafe();
-    if (f.kp) return { epk: epkOf(f.kp), backend, source: "file", filePath };
+    const f = await readFileSafe()
+    if (f.kp) return { epk: epkOf(f.kp), backend, source: "file", filePath }
     if (f.err)
       return {
         epk: null,
@@ -687,9 +687,9 @@ export async function describeIdentity(): Promise<IdentityInfo> {
         source: "error",
         filePath,
         detail: `file unreadable: ${String(f.err)}`,
-      };
+      }
     if (_keyringExpectedAvailable()) {
-      const kc = await readKcSafe();
+      const kc = await readKcSafe()
       if (kc.kp)
         return {
           epk: epkOf(kc.kp),
@@ -697,7 +697,7 @@ export async function describeIdentity(): Promise<IdentityInfo> {
           source: "keychain",
           filePath,
           detail: "recovered from the keychain (migration read)",
-        };
+        }
       if (kc.err)
         return {
           epk: null,
@@ -705,7 +705,7 @@ export async function describeIdentity(): Promise<IdentityInfo> {
           source: "error",
           filePath,
           detail: `keychain unreadable: ${String(kc.err)}`,
-        };
+        }
     }
   }
 
@@ -715,24 +715,24 @@ export async function describeIdentity(): Promise<IdentityInfo> {
     source: "none",
     filePath,
     detail: "no identity yet — one is minted on first use",
-  };
+  }
 }
 
 // ── peers.json ────────────────────────────────────────────────────────────────
 
 export interface PeerRecord {
-  name: string;
-  remote_epk: string; // raw standard/base64url 32B Ed25519 Owner handle; preserved exactly
-  paired_at: string; // ISO-8601
+  name: string
+  remote_epk: string // raw standard/base64url 32B Ed25519 Owner handle; preserved exactly
+  paired_at: string // ISO-8601
 }
 
 export async function listPeers(): Promise<PeerRecord[]> {
   try {
-    const raw = await readFile(PEERS_PATH, "utf8");
-    const parsed = JSON.parse(raw) as { peers?: unknown };
-    return Array.isArray(parsed.peers) ? (parsed.peers as PeerRecord[]) : [];
+    const raw = await readFile(PEERS_PATH, "utf8")
+    const parsed = JSON.parse(raw) as { peers?: unknown }
+    return Array.isArray(parsed.peers) ? (parsed.peers as PeerRecord[]) : []
   } catch {
-    return [];
+    return []
   }
 }
 
@@ -742,9 +742,9 @@ export async function listPeers(): Promise<PeerRecord[]> {
  * here. Valid array elements are returned verbatim for corruption isolation.
  */
 async function _readPeerContainerStrict(): Promise<unknown[]> {
-  let raw: string;
+  let raw: string
   try {
-    raw = await readFile(PEERS_PATH, "utf8");
+    raw = await readFile(PEERS_PATH, "utf8")
   } catch (error) {
     if (
       typeof error === "object" &&
@@ -752,104 +752,104 @@ async function _readPeerContainerStrict(): Promise<unknown[]> {
       "code" in error &&
       (error as { code?: unknown }).code === "ENOENT"
     ) {
-      return [];
+      return []
     }
-    throw error;
+    throw error
   }
-  let parsed: { peers?: unknown };
+  let parsed: { peers?: unknown }
   try {
-    parsed = JSON.parse(raw) as { peers?: unknown };
+    parsed = JSON.parse(raw) as { peers?: unknown }
   } catch (err) {
     throw new Error(
       `peers.json is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    )
   }
   if (!Array.isArray(parsed.peers)) {
-    throw new Error("Invalid peers.json container");
+    throw new Error("Invalid peers.json container")
   }
-  return parsed.peers;
+  return parsed.peers
 }
 
-let _peerMutationQueue: Promise<void> = Promise.resolve();
-const _ownerSlotTokens = new Map<string, OwnerStorageToken>();
-const _ownerStorageTokenBrand: unique symbol = Symbol("owner-storage-token");
+let _peerMutationQueue: Promise<void> = Promise.resolve()
+const _ownerSlotTokens = new Map<string, OwnerStorageToken>()
+const _ownerStorageTokenBrand: unique symbol = Symbol("owner-storage-token")
 
 /** Opaque, process-local provenance for one canonical Owner storage slot. */
 export type OwnerStorageToken = {
-  readonly [_ownerStorageTokenBrand]: true;
-};
+  readonly [_ownerStorageTokenBrand]: true
+}
 
 export interface OwnerStorageSnapshotRecord {
-  readonly rawOwnerPubkey: unknown;
-  readonly token: OwnerStorageToken;
+  readonly rawOwnerPubkey: unknown
+  readonly token: OwnerStorageToken
 }
 
 export type ConditionalPeerRemoval =
   | { readonly outcome: "removed"; readonly nextToken: OwnerStorageToken }
-  | { readonly outcome: "stale" | "not_found" | "no_authority" };
+  | { readonly outcome: "stale" | "not_found" | "no_authority" }
 
 function _ownerSlotKey(rawOwnerPubkey: unknown): string {
   if (typeof rawOwnerPubkey !== "string") {
     // Invalid non-string records remain in snapshots, but SelfRevoke skips
     // them before conditional removal; quarantine-key collisions cannot
     // authorize a removal.
-    return `raw:quarantine:${typeof rawOwnerPubkey}`;
+    return `raw:quarantine:${typeof rawOwnerPubkey}`
   }
   try {
-    return `owner:${canonicalizeEd25519PublicKey(rawOwnerPubkey, "Owner record")}`;
+    return `owner:${canonicalizeEd25519PublicKey(rawOwnerPubkey, "Owner record")}`
   } catch {
-    return `raw:string:${rawOwnerPubkey}`;
+    return `raw:string:${rawOwnerPubkey}`
   }
 }
 
 function _tokenForSlot(slot: string): OwnerStorageToken {
-  const existing = _ownerSlotTokens.get(slot);
-  if (existing) return existing;
+  const existing = _ownerSlotTokens.get(slot)
+  if (existing) return existing
   const token = Object.freeze({
     [_ownerStorageTokenBrand]: true,
-  }) as OwnerStorageToken;
-  _ownerSlotTokens.set(slot, token);
-  return token;
+  }) as OwnerStorageToken
+  _ownerSlotTokens.set(slot, token)
+  return token
 }
 
 function _invalidateOwnerSlot(rawOwnerPubkey: unknown): OwnerStorageToken {
-  const slot = _ownerSlotKey(rawOwnerPubkey);
+  const slot = _ownerSlotKey(rawOwnerPubkey)
   const token = Object.freeze({
     [_ownerStorageTokenBrand]: true,
-  }) as OwnerStorageToken;
-  _ownerSlotTokens.set(slot, token);
-  return token;
+  }) as OwnerStorageToken
+  _ownerSlotTokens.set(slot, token)
+  return token
 }
 
 function _serializePeerMutation<T>(mutation: () => Promise<T>): Promise<T> {
-  const result = _peerMutationQueue.then(mutation, mutation);
+  const result = _peerMutationQueue.then(mutation, mutation)
   _peerMutationQueue = result.then(
     () => undefined,
     () => undefined,
-  );
-  return result;
+  )
+  return result
 }
 
 export function addPeer(record: PeerRecord): Promise<void> {
   return _serializePeerMutation(async () => {
-    const peers = (await listPeers()) as unknown[];
+    const peers = (await listPeers()) as unknown[]
     const idx = peers.findIndex(
       (peer) =>
         !!peer &&
         typeof peer === "object" &&
         (peer as { remote_epk?: unknown }).remote_epk === record.remote_epk,
-    );
+    )
     if (idx >= 0) {
-      peers[idx] = record; // idempotent re-pair
+      peers[idx] = record // idempotent re-pair
     } else {
-      peers.push(record);
+      peers.push(record)
     }
-    await mkdir(dirname(PEERS_PATH), { recursive: true });
-    await writeFile(PEERS_PATH, JSON.stringify({ peers }, null, 2));
+    await mkdir(dirname(PEERS_PATH), { recursive: true })
+    await writeFile(PEERS_PATH, JSON.stringify({ peers }, null, 2))
     // A successful re-pair is a new storage provenance event even when the
     // record bytes happen to be identical.
-    _invalidateOwnerSlot(record.remote_epk);
-  });
+    _invalidateOwnerSlot(record.remote_epk)
+  })
 }
 
 /**
@@ -861,16 +861,16 @@ export function addPeer(record: PeerRecord): Promise<void> {
  * know which Owners' mesh blobs to fetch.
  */
 export async function listOwnerPubkeys(): Promise<unknown[]> {
-  const peers = (await listPeers()) as unknown[];
-  const seen = new Set<unknown>();
+  const peers = (await listPeers()) as unknown[]
+  const seen = new Set<unknown>()
   for (const peer of peers) {
     if (!peer || typeof peer !== "object") {
-      seen.add(peer);
-      continue;
+      seen.add(peer)
+      continue
     }
-    seen.add((peer as { remote_epk?: unknown }).remote_epk);
+    seen.add((peer as { remote_epk?: unknown }).remote_epk)
   }
-  return [...seen];
+  return [...seen]
 }
 
 /**
@@ -881,20 +881,20 @@ export function snapshotOwnerPubkeys(): Promise<
   readonly OwnerStorageSnapshotRecord[]
 > {
   return _serializePeerMutation(async () => {
-    const peers = await _readPeerContainerStrict();
-    const rawOwners = new Set<unknown>();
+    const peers = await _readPeerContainerStrict()
+    const rawOwners = new Set<unknown>()
     for (const peer of peers) {
       if (!peer || typeof peer !== "object") {
-        rawOwners.add(peer);
+        rawOwners.add(peer)
       } else {
-        rawOwners.add((peer as { remote_epk?: unknown }).remote_epk);
+        rawOwners.add((peer as { remote_epk?: unknown }).remote_epk)
       }
     }
     return [...rawOwners].map((rawOwnerPubkey) => ({
       rawOwnerPubkey,
       token: _tokenForSlot(_ownerSlotKey(rawOwnerPubkey)),
-    }));
-  });
+    }))
+  })
 }
 
 /**
@@ -908,34 +908,34 @@ export function conditionalRemovePeer(
   canCommit?: () => boolean,
 ): Promise<ConditionalPeerRemoval> {
   return _serializePeerMutation(async () => {
-    const slot = _ownerSlotKey(remoteEpk);
+    const slot = _ownerSlotKey(remoteEpk)
     // Provenance belongs to the canonical Owner slot, not the exact raw
     // spelling. A stale slot must therefore win over an absent old spelling.
-    if (_tokenForSlot(slot) !== expectedToken) return { outcome: "stale" };
-    const peers = await _readPeerContainerStrict();
+    if (_tokenForSlot(slot) !== expectedToken) return { outcome: "stale" }
+    const peers = await _readPeerContainerStrict()
     const filtered = peers.filter(
       (peer) =>
         !peer ||
         typeof peer !== "object" ||
         (peer as { remote_epk?: unknown }).remote_epk !== remoteEpk,
-    );
-    if (filtered.length === peers.length) return { outcome: "not_found" };
-    await mkdir(dirname(PEERS_PATH), { recursive: true });
+    )
+    if (filtered.length === peers.length) return { outcome: "not_found" }
+    await mkdir(dirname(PEERS_PATH), { recursive: true })
     // No await may intervene between the final token/authority checks and
     // synchronous write, preserving the lane's fail-closed commit boundary.
-    if (_tokenForSlot(slot) !== expectedToken) return { outcome: "stale" };
+    if (_tokenForSlot(slot) !== expectedToken) return { outcome: "stale" }
     if (canCommit) {
-      let authorized = false;
+      let authorized = false
       try {
-        authorized = canCommit();
+        authorized = canCommit()
       } catch {
-        return { outcome: "no_authority" };
+        return { outcome: "no_authority" }
       }
-      if (!authorized) return { outcome: "no_authority" };
+      if (!authorized) return { outcome: "no_authority" }
     }
-    writeFileSync(PEERS_PATH, JSON.stringify({ peers: filtered }, null, 2));
-    return { outcome: "removed", nextToken: _invalidateOwnerSlot(remoteEpk) };
-  });
+    writeFileSync(PEERS_PATH, JSON.stringify({ peers: filtered }, null, 2))
+    return { outcome: "removed", nextToken: _invalidateOwnerSlot(remoteEpk) }
+  })
 }
 
 export function removePeer(
@@ -943,48 +943,48 @@ export function removePeer(
   canCommit?: () => boolean,
 ): Promise<boolean> {
   return _serializePeerMutation(async () => {
-    const peers = (await listPeers()) as unknown[];
+    const peers = (await listPeers()) as unknown[]
     const filtered = peers.filter(
       (peer) =>
         !peer ||
         typeof peer !== "object" ||
         (peer as { remote_epk?: unknown }).remote_epk !== remoteEpk,
-    );
-    if (filtered.length === peers.length) return false;
-    await mkdir(dirname(PEERS_PATH), { recursive: true });
+    )
+    if (filtered.length === peers.length) return false
+    await mkdir(dirname(PEERS_PATH), { recursive: true })
 
-    const serialized = JSON.stringify({ peers: filtered }, null, 2);
+    const serialized = JSON.stringify({ peers: filtered }, null, 2)
     if (canCommit) {
       // Guarded SelfRevoke commits must be atomic with their final authority
       // check at the JavaScript level: fail closed on false/throw, then perform
       // the tiny JSON rewrite synchronously with no interruptible await between.
-      let authorized = false;
+      let authorized = false
       try {
-        authorized = canCommit();
+        authorized = canCommit()
       } catch {
-        return false;
+        return false
       }
-      if (!authorized) return false;
-      writeFileSync(PEERS_PATH, serialized);
+      if (!authorized) return false
+      writeFileSync(PEERS_PATH, serialized)
     } else {
       // Manual removals keep the established asynchronous storage behavior.
-      await writeFile(PEERS_PATH, serialized);
+      await writeFile(PEERS_PATH, serialized)
     }
-    const removed = true;
-    if (removed) _invalidateOwnerSlot(remoteEpk);
-    return removed;
-  });
+    const removed = true
+    if (removed) _invalidateOwnerSlot(remoteEpk)
+    return removed
+  })
 }
 
 // ── Test-only helpers ────────────────────────────────────────────────────────
 
 /** Test-only: expose the identity-file path so tests can clean it. */
-export const _IDENTITY_FILE_FOR_TEST = IDENTITY_FILE;
+export const _IDENTITY_FILE_FOR_TEST = IDENTITY_FILE
 /** Test-only: expose unlink for cleanup. */
 export const _unlinkIdentityFileForTest = async (): Promise<void> => {
   try {
-    await unlink(IDENTITY_FILE);
+    await unlink(IDENTITY_FILE)
   } catch {
     /* fine if missing */
   }
-};
+}
