@@ -47,9 +47,24 @@ targets:
         NSLocalNetworkUsageDescription: >-
           Un Bien connects to relays on your local network to reach the
           machines running your agents.
+        # REQUIRED for universal (iPhone+iPad) apps — the upload processor
+        # rejects the bundle without orientation declarations. iPad declares
+        # ALL FOUR (multitasking/Split View support); iPhone omits only
+        # upside-down portrait (standard).
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         # CryptoKit (Ed25519) + TLS only — standard/exempt crypto, declared so
         # uploads don't prompt for export compliance every time.
         ITSAppUsesNonExemptEncryption: false
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "2"
     entitlements:
       path: App/iOS/un-bien.entitlements
       properties:
