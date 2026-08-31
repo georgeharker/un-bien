@@ -97,7 +97,7 @@ public final class AppModel: ObservableObject {
     }
 
     public let mesh: MeshStore
-    private var identityStore: OwnerIdentityStore
+    var identityStore: OwnerIdentityStore
     var owner: Ed25519Identity?
     // Internal (not private): the AppModel+Queue / AppModel+Inbound extension
     // files — same module — route sends through the live per-relay connections.
@@ -117,7 +117,7 @@ public final class AppModel: ObservableObject {
     /// it's written on every scroll-settle and read only once on restore, so
     /// observing it would rerender the whole transcript as the user scrolls.
     /// Best-effort persisted to UserDefaults so a cold relaunch can also restore.
-    private var lastViewedScroll: [String: String] = [:] {
+    var lastViewedScroll: [String: String] = [:] {
         didSet {
             guard lastViewedScroll != oldValue else { return }
             scheduleScrollPersist()
@@ -127,17 +127,9 @@ public final class AppModel: ObservableObject {
     /// rememberScroll fires on every row materialization change while
     /// scrolling, so the write must not land per-settle (v1 persisted on every
     /// scroll settle).
-    private var scrollPersistTask: Task<Void, Never>?
-    private func scheduleScrollPersist() {
-        scrollPersistTask?.cancel()
-        scrollPersistTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            guard let self, !Task.isCancelled else { return }
-            self.persistLastViewedScroll()
-        }
-    }
+    var scrollPersistTask: Task<Void, Never>?
 
-    private static let iCloudDefaultsKey = "com.georgeharker.un-bien.owner-key.icloud-sync"
+    static let iCloudDefaultsKey = "com.georgeharker.un-bien.owner-key.icloud-sync"
     private static let themeKey = "com.georgeharker.un-bien.theme"
     private static let showThinkingKey = "com.georgeharker.un-bien.show-thinking"
     private static let textScaleKey = "com.georgeharker.un-bien.text-scale"
@@ -147,7 +139,7 @@ public final class AppModel: ObservableObject {
     private static let hideInputRichKey = "com.georgeharker.un-bien.hide-input-when-rich"
     private static let showSubagentsKey = "com.georgeharker.un-bien.show-subagents-home"
     private static let subagentsInteractiveKey = "com.georgeharker.un-bien.subagents-interactive"
-    private static let lastViewedScrollKey = "com.georgeharker.un-bien.last-viewed-scroll"
+    static let lastViewedScrollKey = "com.georgeharker.un-bien.last-viewed-scroll"
     /// Backstop grace for an UNCONSUMED optimistic queued chip (design 01M158S7).
     /// Long by design: consumption (user message_end) is the primary clear, so
     /// this only catches truly-stuck chips (text-normalization miss / dropped
@@ -195,24 +187,6 @@ public final class AppModel: ObservableObject {
         } else {
             needsOnboarding = true
         }
-    }
-
-    public func createOwnerKey() async {
-        let identity = Ed25519Identity()
-        identityStore = KeychainOwnerIdentityStore(syncsToICloud: syncsToICloud)
-        try? identityStore.save(identity)
-        UserDefaults.standard.set(syncsToICloud, forKey: Self.iCloudDefaultsKey)
-        owner = identity
-        needsOnboarding = false
-        await connectAll()
-    }
-
-    /// Parse an `unbien://pair?…` deep link (system Camera / pasted link) into a
-    /// pending invite. The relay is NOT in the URL (the QR carries no `r`), so
-    /// the UI then presents a relay chooser. Non-pairing URLs are ignored.
-    public func handleOpenURL(_ url: URL) {
-        guard let invite = try? PairingURI.parse(url.absoluteString) else { return }
-        pendingPairing = PendingPairing(invite: invite)
     }
 
     // MARK: - Session actions
@@ -351,96 +325,6 @@ public final class AppModel: ObservableObject {
     /// The `sessionID:panelKey` currently on screen, so live updates to it stay
     /// marked-read instead of re-badging under the user.
     @Published public var openPanel: String?
-
-    public func markPanelViewed(_ panelKey: String, session: LiveSession) {
-        panels[session.id]?[panelKey]?.changed = false
-        openPanel = "\(session.id):\(panelKey)"
-    }
-
-    public func closePanel() { openPanel = nil }
-
-    public func panels(for session: LiveSession) -> [PanelState] {
-        (panels[session.id] ?? [:]).values.sorted { $0.key < $1.key }
-    }
-
-    // MARK: - Interactive prompts (extension_ui)
-
-    /// Reply to the pending prompt for a session and clear it.
-    public func respondToPrompt(_ response: ExtensionUiResponse, session: LiveSession) async {
-        prompts[session.id] = nil
-        guard let connection = connections[session.relayID] else { return }
-        // Envelope-only: the fork routes the extension_ui_response to the ui
-        // bridge from the rpc path.
-        try? await connection.send(.extensionUiResponse(response),
-                                   toPeer: session.peerEPK, room: session.roomID)
-    }
-
-    // MARK: - Scroll restore
-
-    /// Remembered bottom-most visible STABLE row id for a session, or nil.
-    public func rememberedScroll(session: LiveSession) -> String? {
-        lastViewedScroll[session.id]
-    }
-
-    /// Record the bottom-most visible STABLE row id as the user scrolls
-    /// (design 01M1B9F6).
-    public func rememberScroll(id: String, session: LiveSession) {
-        guard lastViewedScroll[session.id] != id else { return }
-        lastViewedScroll[session.id] = id
-    }
-
-    private func persistLastViewedScroll() {
-        guard let data = try? JSONEncoder().encode(lastViewedScroll) else { return }
-        UserDefaults.standard.set(data, forKey: Self.lastViewedScrollKey)
-    }
-
-    /// Drop a dropped/ended session's remembered scroll (didSet re-persists, so
-    /// the on-disk copy prunes too) — otherwise it accumulates as rooms end.
-    func forgetSession(key: String) {
-        lastViewedScroll[key] = nil
-        // Flush immediately — the didSet only schedules a debounced write.
-        scrollPersistTask?.cancel()
-        persistLastViewedScroll()
-    }
-
-    // MARK: - Pairing
-
-    /// Pair on a dedicated short-lived connection (keeps the persistent event
-    /// loop's channel uncontended), then persist the machine and re-subscribe.
-    public func pair(relay: RelayConfig, invite: PairingInvite, deviceName: String) async throws {
-        guard let owner, let url = relay.webSocketURL else { return }
-        let channel = URLSessionWebSocketChannel(url: url)
-        let pairingConnection = RelayConnection(channel: channel, identity: owner)
-        try await pairingConnection.authenticate()
-        let result: PairResult
-        do {
-            result = try await withThrowingTaskGroup(of: PairResult.self) { group in
-                group.addTask { try await pairingConnection.pair(invite: invite, deviceName: deviceName) }
-                group.addTask {
-                    try await Task.sleep(nanoseconds: 15_000_000_000)
-                    throw RelayConnection.PairingError.unexpected(
-                        "No response from the machine. Is Pi running with un-bien "
-                        + "attached to this relay, and the code still valid?")
-                }
-                let first = try await group.next()!
-                group.cancelAll()
-                return first
-            }
-        } catch {
-            await pairingConnection.close()
-            throw error
-        }
-        await pairingConnection.close()
-
-        mesh.upsertMachine(PairedMachine(
-            epk: invite.epk, relayID: relay.id, nickname: nil,
-            hostname: result.hostname, harnessName: result.harness?.name))
-
-        if let connection = connections[relay.id] {
-            let peers = mesh.config.machines(onRelay: relay.id).map(\.epk)
-            try? await connection.subscribe(peers: peers)
-        }
-    }
 
     // MARK: - Derived
 
