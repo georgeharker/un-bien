@@ -17,6 +17,6 @@ const config = {
   useTabs: false,
   trailingComma: "all",
   printWidth: 80,
-};
+}
 
-export default config;
+export default config
