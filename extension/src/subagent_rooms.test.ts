@@ -17,7 +17,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent"
 import type { ServerMessage } from "./protocol/types.js"
-import { roomIdForSession } from "./rooms.js"
+import { roomIdFor, roomIdForSession } from "./rooms.js"
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -70,7 +70,8 @@ vi.mock("./config.js", () => ({
   resolveRelayUrl: () => ({ url: "http://relay.test", source: "config" }),
 }))
 
-const { initSubagentRooms } = await import("./subagent_rooms.js")
+const { initSubagentRooms, normalizeChildRoomId } =
+  await import("./subagent_rooms.js")
 
 // ── Harness ───────────────────────────────────────────────────────────────────
 
@@ -359,6 +360,78 @@ describe("subagent room disposal semantics", () => {
           parentSessionId: "parent-sid",
         }),
       }),
+    )
+  })
+})
+
+// ── design 01M1CAW0: fail-loud parentage guards ───────────────────────────────
+
+describe("parentage guards (design 01M1CAW0)", () => {
+  test("marker WITHOUT parentSessionId: room built WITHOUT parent — not guessing", async () => {
+    const h = makeHarness()
+    // No parentSessionId on the marker. The OLD chain fell back to
+    // opts.getParentSessionId() (the receiving process's root) and stamped
+    // set-once parentage onto a child that was never ours to nest.
+    h.events.emit("subagents:child:session-created", { sessionId: "child-20" })
+    await flush()
+
+    const relay = relayInstances.at(-1)!
+    // The room still exists (identity + transcript surface)…
+    expect(relay.connectOpts).toMatchObject({
+      roomId: roomIdForSession("child-20"),
+    })
+    // …but carries NO parentage — neither at connect…
+    const meta = (relay.connectOpts as { roomMeta?: Record<string, unknown> })
+      .roomMeta
+    expect(meta).toBeDefined()
+    expect(meta!["parent"]).toBeUndefined()
+    expect(meta!["parentSessionId"]).toBeUndefined()
+    // …nor via a later room_meta_update (relay parent merge is SET-ONCE).
+    expect(relay.sendControl).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "room_meta_update",
+        meta: expect.objectContaining({ parent: expect.anything() }),
+      }),
+    )
+    // The panel row is still registered — identity without parentage.
+    expect(rowFor(h.panels, "child-20")).toBeTruthy()
+  })
+
+  test("marker WITHOUT parent: the in-process attach still sets parentage authoritatively", async () => {
+    const h = makeHarness()
+    h.events.emit("unbien:subagent:child", { sessionId: "child-21" })
+    await flush()
+    // The child attaches in-process — onChildSession uses the root's own
+    // sessionId AUTHORITATIVELY (unchanged path), so parentage lands late.
+    h.rooms.onChildSession(childPi, childCtx("child-21"))
+    await flush()
+
+    const relay = relayInstances.at(-1)!
+    expect(relay.sendControl).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "room_meta_update",
+        room_id: roomIdForSession("child-21"),
+        meta: expect.objectContaining({
+          parent: "parent-room",
+          parentSessionId: "parent-sid",
+        }),
+      }),
+    )
+  })
+
+  test("normalizeChildRoomId: a mismatched (cwd-derived residue) id is refused", () => {
+    // No candidate → the sid-hash id.
+    expect(normalizeChildRoomId("child-30")).toBe(roomIdForSession("child-30"))
+    // The sid-hash candidate is kept verbatim.
+    expect(normalizeChildRoomId("child-30", roomIdForSession("child-30"))).toBe(
+      roomIdForSession("child-30"),
+    )
+    // A foreign id — e.g. the retired cwd-derived room, identical for
+    // same-cwd processes — is refused in favor of the sid-hash id.
+    const cwdDerived = roomIdFor("/home/user", "agent")
+    expect(cwdDerived).not.toBe(roomIdForSession("child-30"))
+    expect(normalizeChildRoomId("child-30", cwdDerived)).toBe(
+      roomIdForSession("child-30"),
     )
   })
 })

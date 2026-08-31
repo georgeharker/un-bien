@@ -2099,6 +2099,64 @@ describe("rooms wiring", () => {
     expect(capturedOpts[2]!.roomId).not.toBe(capturedOpts[0]!.roomId)
   })
 
+  test("no room announce before a session id exists — connect deferred, no cwd fallback (design 01M1CAW0)", async () => {
+    // Drop the beforeEach-seeded root session: this Pi is PRE-session.
+    _resetSessionsForTest()
+    const capturedOpts: unknown[] = []
+    _defaultConnectImpl = async (opts?: unknown) => {
+      capturedOpts.push(opts)
+    }
+
+    captureHandler("unbien")
+    const ctx = makeMockCtx("/tmp/unbien-pre-sid")
+    await _startRelayForTest(ctx)
+
+    // Fail loud: no RelayClient is even constructed — a room-less hello would
+    // register the shared "main" room, and the retired cwd-derived id would
+    // collide with any other same-cwd process.
+    expect(_getState()).toBe("idle")
+    expect(relayInstances).toHaveLength(0)
+    expect(capturedOpts).toHaveLength(0)
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("design 01M1CAW0"),
+      "warning",
+    )
+  })
+
+  test("a deferred start announces on session_start once the session id exists (design 01M1CAW0)", async () => {
+    _resetSessionsForTest()
+    const capturedOpts: unknown[] = []
+    _defaultConnectImpl = async (opts?: unknown) => {
+      capturedOpts.push(opts)
+    }
+    _setAutoInitedForTest(true) // isolate: only the deferred re-arm may start
+
+    try {
+      captureHandler("unbien")
+      await _startRelayForTest(makeMockCtx("/tmp/unbien-deferred"))
+      expect(relayInstances).toHaveLength(0) // deferred — no session id yet
+
+      // The root session starts: session_start carries a sessionManager →
+      // the deferred announce re-runs and joins the session-id-derived room.
+      const onSessionStart = captureEventHandler("session_start")
+      onSessionStart(
+        { type: "session_start" },
+        {
+          ...makeMockCtx("/tmp/unbien-deferred"),
+          sessionManager: { getSessionId: () => "sid-deferred-1" },
+        },
+      )
+
+      await vi.waitFor(() => expect(_getState()).toBe("started"))
+      expect(capturedOpts).toHaveLength(1)
+      expect(capturedOpts[0]).toMatchObject({
+        roomId: roomIdForSession("sid-deferred-1"),
+      })
+    } finally {
+      _setAutoInitedForTest(false)
+    }
+  })
+
   test("RoomAlreadyOpenError closes its initial Relay candidate before reporting", async () => {
     _defaultConnectImpl = async () => {
       throw new MockRoomAlreadyOpenError("AbCdEfGhIjKl")
