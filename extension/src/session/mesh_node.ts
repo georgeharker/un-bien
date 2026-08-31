@@ -34,7 +34,7 @@ export interface MeshSelfRelayBridge {
 }
 
 export interface MeshNodeOptions {
-  /** UDS broker socket path (e.g. ~/.pi/un-bien/sessions/local/broker.sock). */
+  /** UDS broker socket path (e.g. ~/.local/state/un-bien/sessions/local/broker.sock). */
   sockPath: string
   /** Requested mesh name (broker may add a #N collision suffix). */
   name: string

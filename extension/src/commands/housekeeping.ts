@@ -149,7 +149,7 @@ export function _deployAgentNetworkSkill(): void {
   //   <skillsRoot>/<skill-name>/SKILL.md
   // The skill `name:` frontmatter must equal the parent directory name. We
   // ship the source pre-arranged that way so deploy is a straight copy into
-  // ~/.pi/un-bien/skills/agent-network/SKILL.md.
+  // `<state root>/skills/agent-network/SKILL.md`.
   const root = _resolveExtensionDir()
   const src1 = join(root, "skills", "agent-network", "SKILL.md")
   const src2 = join(root, "..", "skills", "agent-network", "SKILL.md")
@@ -160,8 +160,8 @@ export function _deployAgentNetworkSkill(): void {
   try {
     mkdirSync(dstDir, { recursive: true })
     copyFileSync(src, dst)
-    // Cleanup legacy deploy at ~/.pi/un-bien/skills/agent-network.md (flat
-    // layout, fails the Pi SDK's name-vs-parent-dir validation).
+    // Cleanup legacy flat-layout deploy at `<state root>/skills/agent-network.md`
+    // (fails the Pi SDK's name-vs-parent-dir validation).
     const legacy = join(skillsDir(), "agent-network.md")
     if (existsSync(legacy)) {
       try {

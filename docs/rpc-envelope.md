@@ -303,7 +303,7 @@ match pi's rpc contract (`text`→`message`, `model_id`→`modelId`,
 | set thinking | `{rpc}` `set_thinking_level` | `level` |
 | list models | `{rpc}` `get_available_models` | — (data = Model[]) |
 | compact | `{rpc}` `compact` | `customInstructions?` |
-| new session | `{rpc}` `new_session` | — (daemon: fresh-restart via supervisor) |
+| new session | `{rpc}` `new_session` | — (fresh session in the attached Pi) |
 | transcript / delta | `{rpc}` `get_entries` | `since?` (leafId cursor) → `{entries, leafId}` |
 | answer a dialog | `{rpc}` `extension_ui_response` | `id`, `value`/`confirmed`/`cancelled` |
 | reconstruct panels+ui | `{ub}` `session_sync` | `id`, `limit?` |

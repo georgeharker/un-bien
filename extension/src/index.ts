@@ -1907,8 +1907,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     })
   }
 
-  // Plano 19: ensure ~/.pi/un-bien/{sessions,skills}/ exist and deploy the
-  // agent-network skill on first load. resources_discover lets Pi find it.
+  // Plano 19: ensure the state root's `sessions/` + `skills/` dirs exist and
+  // deploy the agent-network skill on first load. resources_discover lets Pi find it.
   try {
     ensureGlobalDirs()
     _deployAgentNetworkSkill()

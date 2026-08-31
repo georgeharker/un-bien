@@ -16,7 +16,7 @@ const SKILLS_DIR = join(HOME_PI_REMOTE, "skills")
  */
 export const LOCAL_SESSION_NAME = "local"
 
-/** Ensures the new subdirs exist inside the existing ~/.pi/un-bien/. */
+/** Ensures the `sessions/` + `skills/` subdirs exist in the state root. */
 export function ensureGlobalDirs(): void {
   mkdirSync(SESSIONS_DIR, { recursive: true })
   mkdirSync(SKILLS_DIR, { recursive: true })

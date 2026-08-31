@@ -32,7 +32,7 @@ export type UnBienConfig = {
    * Pi's long-term Ed25519 seed — `"keychain"` (OS-secured, the default) or
    * `"file"` (a 0600 seed file, the SSH-private-key model: cat-able, portable,
    * works headless). `path` overrides the file-backend location (default
-   * `~/.pi/un-bien/identity.json`). The unselected backend is still READ (to
+   * `~/.local/state/un-bien/identity.json`). The unselected backend is still READ (to
    * recover an existing identity) but never written; the resolver mints only on
    * a genuine first run. See `pairing/storage.ts`. Absent ⇒ keychain default.
    */

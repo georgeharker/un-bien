@@ -19,9 +19,9 @@ import { unbienStateHome } from "../paths.js"
  *   - Kernel-enforced — there is no race window between "check if held"
  *     and "claim", which an explicit PID file would have.
  *
- * Lock files live in `<root>/.pi/un-bien/locks/<roomId>.sock` (where `roomId`
- * is `sha256(realpath(cwd))[:12]` and `<root>` is `$UNBIEN_HOME` or the
- * home dir), NOT inside the cwd itself, to dodge:
+ * Lock files live in `<state root>/locks/<roomId>.sock` (where `roomId`
+ * is `sha256(realpath(cwd))[:12]` and the state root is `UNBIEN_STATE_DIR`
+ * or the XDG default `~/.local/state/un-bien`), NOT inside the cwd itself, to dodge:
  *   - The 104/108-char path-length limit on UDS sockets on macOS/Linux.
  *   - Symlinked cwds (realpath canonicalization happens in `roomIdFor`).
  *   - Read-only cwds (the home directory is always writable).

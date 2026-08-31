@@ -290,8 +290,9 @@ export async function _cmdStart(
         "[un-bien] Could not read this machine's identity, but devices are " +
           "already paired — refusing to generate a new one (that would revoke " +
           "them). This process likely cannot reach the same keyring as the " +
-          "session that paired (e.g. a systemd --user daemon). Give the service " +
-          "keyring access, or copy the paired keypair to ~/.pi/un-bien/identity.json " +
+          "session that paired (e.g. the unbien-launcher systemd --user service). " +
+          "Give the service keyring access, or copy the paired keypair to " +
+          "~/.local/state/un-bien/identity.json " +
           "(0600) so both contexts read the same identity.",
         "error",
       )

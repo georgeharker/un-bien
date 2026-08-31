@@ -126,7 +126,7 @@ function directConfig(): LocalConfig | null {
 
 /**
  * Machine-wide fallback for local-config fields, from the `defaults` block of
- * the global `~/.pi/un-bien/config.json` (see `UnBienConfig.defaults`). Lets
+ * the global config (`~/.pi/extensions/un-bien.json`, see `UnBienConfig.defaults`). Lets
  * you pin a default once instead of dropping a `config.json` into every repo.
  * Returns an empty object when no `defaults` block is present, so the whole
  * feature is inert (and every path below identical to before) unless opted in.

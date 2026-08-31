@@ -4,8 +4,8 @@ import { platform as osPlatform, userInfo } from "node:os"
  * Cross-platform local-IPC address resolution (plan/40).
  *
  * Node's `net` implements local IPC differently per OS:
- *   - **POSIX**: a filesystem Unix-domain socket — a `.sock` path under
- *     `~/.pi/un-bien/`. The file lingers if the owner crashes (stale-socket
+ *   - **POSIX**: a filesystem Unix-domain socket — a `.sock` path under the
+ *     un-bien state root (`~/.local/state/un-bien/`). The file lingers if the owner crashes (stale-socket
  *     cleanup via `unlink` matters).
  *   - **Windows**: a **named pipe** (`\\.\pipe\<name>`). There is NO file —
  *     `existsSync`/`unlink` don't apply, and the pipe vanishes automatically
