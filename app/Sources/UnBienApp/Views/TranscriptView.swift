@@ -57,6 +57,11 @@ struct TranscriptView: View {
     /// the bottom. Evaluated CONTINUOUSLY from the sentinel probe's geometry
     /// (every frame), not appearance events (design 01M1B9F6).
     @State private var atBottom = true
+    /// Set by ComposerBar.onSent: scroll to the end IMMEDIATELY on submit —
+    /// don't wait for the outgoing row to echo back (a queued steer may not
+    /// create a row for a while). Consumed inside the ScrollViewReader scope
+    /// by the `.onChange(of: pendingScrollToEnd)` handler.
+    @State private var pendingScrollToEnd = false
     /// Visible height of the transcript ScrollView (pairs with the sentinel's
     /// minY to evaluate the pin).
     @State private var viewportHeight: CGFloat = 0
@@ -248,6 +253,16 @@ struct TranscriptView: View {
                     // moved themselves"). Threshold ignores sub-pixel jitter.
                     if !didRestoreScroll, abs(offset) > 8 {
                         cancelPendingRestore()
+                    }
+                }
+                // Submit-consumed: jump to the end the moment a message is sent
+                // or queued (not just when its row echoes back).
+                .onChange(of: pendingScrollToEnd) { _, want in
+                    guard want, didRestoreScroll else { return }
+                    pendingScrollToEnd = false
+                    if let last = items.last {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                        reanchorTarget = last.id
                     }
                 }
                 #if os(iOS)
@@ -472,10 +487,15 @@ struct TranscriptView: View {
     }
 
     private var inputBar: some View {
-        // Sending/queueing is intent to engage the newest content: re-pin the
-        // follow gate so the outgoing row (and its reply) are followed even if
-        // the user had scrolled up first.
-        ComposerBar(session: session, onSent: { atBottom = true })
+        // Submitting is intent to engage the newest content: cancel any
+        // pending backfill-wait restore (their position wins), re-pin the
+        // follow gate, and scroll to the END immediately — not just when the
+        // outgoing row echoes back.
+        ComposerBar(session: session, onSent: {
+            cancelPendingRestore()
+            atBottom = true
+            pendingScrollToEnd = true
+        })
     }
 
     /// Composer replacement for a view-only subagent session (read-only).
