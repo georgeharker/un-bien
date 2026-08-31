@@ -37,7 +37,6 @@ import {
   ExtensionContext,
   ExtensionFactory,
 } from "@earendil-works/pi-coding-agent"
-import { SettingsManager } from "@earendil-works/pi-coding-agent"
 import { Ed25519Keypair } from "./pairing/crypto.js"
 import { listPeers, removePeer } from "./pairing/storage.js"
 import { SelfRevoke } from "./mesh/self_revoke.js"
@@ -64,12 +63,7 @@ import {
   createRpcEnvelope,
   type EnvelopeMessage,
 } from "./session/rpc_envelope.js"
-import {
-  dispatchRpcCommand,
-  GET_ENTRIES_PAGE_BUDGET_BYTES,
-  pageEntries,
-  type RpcCommandHandlers,
-} from "./session/rpc_inbound.js"
+import { dispatchRpcCommand } from "./session/rpc_inbound.js"
 import { envLog } from "./session/debug_log.js"
 import { roomIdFor, roomIdForSession } from "./rooms.js"
 import { registerAgentTools } from "./session/tools.js"
@@ -98,15 +92,9 @@ import {
   saveLocalConfig,
 } from "./session/local_config.js"
 import { updateFooter, type FooterState } from "./ui/footer.js"
-import { join, dirname, resolve } from "node:path"
+import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import {
-  chmodSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-  realpathSync,
-} from "node:fs"
+import { realpathSync } from "node:fs"
 import {
   loadConfig,
   saveConfig,
@@ -122,11 +110,9 @@ import {
   type InspectedPeerRecord,
 } from "./pairing/peer_trust.js"
 import {
-  _deliverImageUserMessage,
   _flushPendingReceivedImagePreviews,
   _isReceivedImageContextMessage,
   _registerReceivedImageRenderer,
-  clearPendingReceivedImagePreviews,
   type ImagePipelineDeps,
 } from "./session/received_images.js"
 import { CommandDeps } from "./commands/deps.js"
@@ -146,6 +132,10 @@ import {
 } from "./commands/housekeeping.js"
 import { registerUnbienCommands } from "./commands/register.js"
 import { createTestHooks } from "./test_hooks.js"
+import {
+  createRpcHandlers,
+  type RpcHandlersDeps,
+} from "./session/rpc_handlers.js"
 import {
   CTRL_PREFIX,
   _anyPeerActive,
@@ -541,42 +531,6 @@ let _pendingMeshMessages: MeshEnvelope[] = []
 // mesh delivery targets the ROOT run, so the drain reads _rootState().agentRun.
 let _meshDrainScheduled = false
 
-/**
- * Persist a model change to the PROJECT settings (`<cwd>/.pi/settings.json`) so
- * a model picked from the app survives a Pi/daemon restart. `pi.setModel` only
- * sets the LIVE model — on the next restart a fresh session reads the saved
- * default and reverts (the reported bug). We write the PROJECT scope, NOT
- * global, deliberately: the SDK merges global←project with PROJECT winning
- * (`SettingsManager`), so a folder that already has a project default (every
- * created daemon does) would shadow a global write like the TUI's. Project
- * scope is also correct for a fleet — each daemon keeps its own model rather
- * than leaking one default globally.
- *
- * Read-merge-write + best-effort: preserves other keys and never throws (a
- * settings write must not fail the live model change, which already applied).
- */
-function _persistModelDefault(provider: string, modelId: string): void {
-  try {
-    const path = join(process.cwd(), ".pi", "settings.json")
-    let obj: Record<string, unknown> = {}
-    try {
-      const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown
-      if (parsed && typeof parsed === "object")
-        obj = parsed as Record<string, unknown>
-    } catch {
-      /* no existing/parseable file → start fresh */
-    }
-    obj["defaultProvider"] = provider
-    obj["defaultModel"] = modelId
-    mkdirSync(dirname(path), { recursive: true })
-    writeFileSync(path, JSON.stringify(obj, null, 2))
-  } catch {
-    /* best-effort — model change already applied live */
-  }
-}
-
-type ClientUserMessage = Extract<ClientMessage, { type: "user_message" }>
-
 // ── Per-session state, keyed by pi sessionId ──────────────────────────────
 // The extension re-activates IN-PROCESS for every subagent — each is its own pi
 // AgentSession with its OWN sessionId. Turn/agent/buffer state is therefore
@@ -639,12 +593,6 @@ let _pi: ExtensionAPI | null = null
 // known to exist on the concrete AgentSession at runtime.
 interface PiEventBusInternals {
   events?: { emit(channel: string, data: unknown): void }
-}
-interface PiStreamingInternals {
-  isStreaming?: boolean
-}
-interface PiQueueControl {
-  clearQueue(): { steering: string[]; followUp: string[] }
 }
 
 // Plan/57 — Bridge to pi-ask's clarification-flow events. null until the
@@ -1151,152 +1099,7 @@ function _routeRpcCommandFrom(
   // session_sync (reconstruction) is un-bien's OWN protocol — dispatched on the
   // un plane by _routeUnBienPlaneFrom, NOT here. Only byte-faithful pi rpc
   // commands + extension_ui_response ride this rpc dispatch.
-  const handlers: RpcCommandHandlers = {
-    prompt: async (message, opts) => {
-      // Full parity with the retired stock user_message handler:
-      //  - ALWAYS hand off with deliverAs:"steer" — the SDK ignores it while idle
-      //    but REQUIRES it when a turn is running or still settling right after
-      //    agent return; without it the message is rejected as busy.
-      //  - `shouldSteer` (echo label + steer tracking) = requested OR inferred
-      //    busy-room send.
-      //  - seed `_rootState().turnId` for a fresh (non-steer) turn so the agent's
-      //    reply chunks/done have a target; restore it if the handoff fails.
-      // The APP owns the steer-vs-followUp semantic switch (design 01M14T6J5W):
-      // pass its chosen streamingBehavior straight through to pi. The extension does
-      // NOT force steer over a followUp anymore. `shouldSteer` below is now only
-      // BOOKKEEPING (turn-seeding + image-preview defer), not the delivery verb.
-      const requestedSteer = opts.streamingBehavior === "steer"
-      // Authoritative busy signal from pi's OWN state (AgentSession.isStreaming),
-      // correct across subagent lifecycles (turnId/working stick busy after a
-      // subagent run).
-      const streaming =
-        (_pi as PiStreamingInternals | null)?.isStreaming === true
-      const shouldSteer = requestedSteer || streaming
-      const msg: ClientUserMessage = {
-        type: "user_message",
-        id: opts.id ?? _rootState().turnId ?? String(Date.now()),
-        text: message,
-        images: opts.images as ClientUserMessage["images"],
-      }
-      // Image path mirrors the stock handler (SDK handoff WITH images + echo).
-      if (msg.images && msg.images.length > 0) {
-        await _deliverImageUserMessage(imageDeps, sender, msg, shouldSteer)
-        return
-      }
-      const previousTurnId = _rootState().turnId
-      const seededTurnId = !shouldSteer || _rootState().turnId === null
-      if (seededTurnId) _rootState().turnId = msg.id
-      // PASS-THROUGH the app's verb (design 01M14T6J5W). pi's prompt(): idle
-      // ignores streamingBehavior (fresh run); streaming+"steer" -> _queueSteer;
-      // streaming+"followUp" -> _queueFollowUp; streaming+none -> throws. The
-      // `?? (streaming ? "steer" : undefined)` is a MECHANICAL safety net (not
-      // semantic inference) so a racing/old client's no-behavior busy send
-      // defensively steers instead of throwing (keeps plan/43).
-      const wake = _wakeAgent(
-        message,
-        "app rpc prompt",
-        opts.streamingBehavior === "followUp"
-          ? "followUp"
-          : opts.streamingBehavior === "steer" || streaming
-            ? "steer"
-            : undefined,
-      )
-      if (!wake.ok) {
-        if (seededTurnId) _rootState().turnId = previousTurnId
-        throw new Error(wake.detail)
-      }
-    },
-    steer: async (message) => {
-      const wake = _wakeAgent(message, "app rpc steer", "steer")
-      if (!wake.ok) throw new Error(wake.detail)
-    },
-    followUp: async (message) => {
-      const wake = _wakeAgent(message, "app rpc follow_up", "followUp")
-      if (!wake.ok) throw new Error(wake.detail)
-    },
-    abort: async () => {
-      if (!_abortCurrentTurn()) throw new Error("no active turn to abort")
-    },
-    setModel: async (provider, modelId) => {
-      if (!_pi) throw new Error("agent session not bound")
-      const actionCtx = (_lastEventCtx ?? _lastCtx) as ActionCtx | null
-      const reg = actionCtx?.modelRegistry ?? ensureModelRegistry(actionCtx)
-      reg.refresh()
-      const model = reg.find(provider, modelId)
-      if (!model)
-        throw new Error(`model "${provider}/${modelId}" not in registry`)
-      // Route via the minimal ActionPi view (matches handleModelSet): the
-      // registry's `find` returns the minimal SdkModelLike, structurally fine
-      // for setModel at runtime.
-      // SAFETY: _pi (checked non-null above) is the concrete AgentSession; its
-      // setModel accepts the minimal SdkModelLike the registry's find() returns,
-      // matching handleModelSet's ActionPi view.
-      const ok = await (_pi as unknown as ActionPi).setModel(model)
-      if (!ok) throw new Error("no auth configured for this model")
-      _persistModelDefault(model.provider, model.id) // survive restart, mirrors stock model_set
-      return wireFromModel(model)
-    },
-    setThinkingLevel: async (level) => {
-      if (!_pi) throw new Error("agent session not bound")
-      _pi.setThinkingLevel(level as ThinkingLevel)
-    },
-    getAvailableModels: async () => {
-      const actionCtx = (_lastEventCtx ?? _lastCtx) as ActionCtx | null
-      const reg = actionCtx?.modelRegistry ?? ensureModelRegistry(actionCtx)
-      reg.refresh()
-      const models = reg.getAvailable().map(wireFromModel)
-      const current = actionCtx?.getModel?.()
-      return { models, current: current ? wireFromModel(current) : undefined }
-    },
-    compact: async (customInstructions) => {
-      const actionCtx = (_lastEventCtx ?? _lastCtx) as ActionCtx | null
-      if (!actionCtx?.compact)
-        throw new Error("compact unavailable (no active session ctx)")
-      actionCtx.compact(customInstructions ? { customInstructions } : undefined)
-      return {}
-    },
-    newSession: async () => {
-      const actionCtx = (_lastEventCtx ?? _lastCtx) as ActionCtx | null
-      if (!actionCtx?.newSession) {
-        throw new Error("new_session unavailable (no command ctx)")
-      }
-      await actionCtx.newSession({ withSession: async () => {} })
-      // Restamp the session clock (parity with the retired stock session_new):
-      // session_sync_end carries it so the app can detect the pi restart.
-      _resetSessionForNew()
-      return { cancelled: false }
-    },
-    clearQueue: async () => {
-      if (!_pi) throw new Error("agent session not bound")
-      // SAFETY: _pi (checked non-null above) is the concrete AgentSession,
-      // which implements clearQueue(); the public ExtensionAPI type omits it.
-      return (_pi as unknown as PiQueueControl).clearQueue()
-    },
-    getEntries: async (since?: string) => {
-      // Native pi get_entries, PAGED (design: get_entries backfill paging): the
-      // app reconstructs the transcript itself from the raw entry log (each
-      // message entry carries an AgentMessage), one budget-bounded page per
-      // reply so a long session's multi-MB log never blows a transport cap (the
-      // single-frame reply exceeded URLSessionWebSocketTask's 1 MiB default and
-      // was silently dropped). Frame shapes stay PI-FAITHFUL — no extra fields;
-      // the app loops `since: leafId` until an empty page. The extension does
-      // NOT replay these — see the app's SessionState.applyEntries (design
-      // 01M15FMQ).
-      const sm = _rootState().sessionManager
-      // Unbound → ERROR (pi always has a session here; a silent empty page on
-      // the fork side reads as "no history" — make the failure visible).
-      if (!sm) throw new Error("get_entries unavailable (no session bound)")
-      const all = sm.getEntries()
-      // pi-faithful `since` semantics (rpc-mode.js): unknown id → error, not a
-      // silent restart from the beginning.
-      if (
-        typeof since === "string" &&
-        all.findIndex((e) => e.id === since) === -1
-      )
-        throw new Error(`Entry not found: ${since}`)
-      return pageEntries(all, since, sm.getLeafId())
-    },
-  }
+  const handlers = createRpcHandlers(rpcDeps, sender)
   void dispatchRpcCommand(frame as Record<string, unknown>, handlers)
     .then((resp) => {
       // Envelope-native ONLY: no stock fallback. An unhandled rpc type is
@@ -1571,6 +1374,31 @@ const imageDeps: ImagePipelineDeps = {
     return _myRoomMeta
   },
   wakeAgent: _wakeAgent,
+}
+
+// ── Rpc-inbound handler seam ──────────────────────────────────────────────
+//
+// The rpc-command handler implementations live in ./session/rpc_handlers.ts
+// (a factory this module's `_routeRpcCommandFrom` — which owns channel/sender
+// routing — calls per dispatch). Same pattern as CommandDeps: that module
+// never imports ../index.js — no circular imports.
+const rpcDeps: RpcHandlersDeps = {
+  get pi() {
+    return _pi
+  },
+  rootState: _rootState,
+  get lastEventCtx() {
+    return _lastEventCtx
+  },
+  get lastCtx() {
+    return _lastCtx
+  },
+  imageDeps,
+  wakeAgent: _wakeAgent,
+  abortCurrentTurn: () => _abortCurrentTurn(),
+  set sessionStartedAt(v: number | null) {
+    _sessionStartedAt = v
+  },
 }
 
 // ── Relay lifecycle seam ──────────────────────────────────────────────────
@@ -2771,22 +2599,6 @@ export function routeClientMessage(
  * also dump history to owner B's wire — duplicate traffic + the wrong
  * `in_reply_to`.
  */
-
-/**
- * Resets the Pi-side session view after a SUCCESSFUL `session_new`. The app's
- * New Session clears its local store on `action_ok`, but that alone isn't
- * durable: `_messageBuffer` (which answers `session_sync`) is append-only and
- * `_sessionStartedAt` is stamped once, so a later reconnect/restart would
- * replay the OLD history. We clear the buffer and restamp the clock so the
- * envelope `session_sync` reconstructs from a clean slate. The app drops the
- * stale conversation off the new-session `hello` (changed `sessionId`).
- */
-function _resetSessionForNew(): void {
-  // Restamp the session clock so the app detects the pi restart (session_sync_end
-  // carries it). The transcript resets naturally: the app re-fetches via
-  // get_entries against the fresh session and drops the old one on the new hello.
-  _sessionStartedAt = Date.now()
-}
 
 /** Resolve the base dir for tool-arg file lookups from the last command ctx. */
 function _resolveToolCwd(): string {
