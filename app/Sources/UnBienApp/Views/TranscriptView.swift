@@ -19,6 +19,16 @@ private struct ViewportHeightKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
+/// Content-head offset in the scroll's visible frame, from the TOP probe
+/// (design 01M1B9F6). Backfill pages APPEND below the head, so content growth
+/// never moves it — unlike the BOTTOM sentinel, whose movement is ambiguous
+/// between growth and user scroll. Any real change in this value is USER
+/// scroll; during the backfill-wait restore it cancels the pending restore.
+private struct TopOffsetKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 /// Session transcript: streamed Markdown (swift-markdown-ui) with Highlightr
 /// code blocks, collapsible tool-call cards, and a text input bar (DESIGN §7).
 struct TranscriptView: View {
@@ -50,6 +60,11 @@ struct TranscriptView: View {
     /// Visible height of the transcript ScrollView (pairs with the sentinel's
     /// minY to evaluate the pin).
     @State private var viewportHeight: CGFloat = 0
+    /// Content-head offset in the scroll's visible frame, from the TOP probe
+    /// (every frame). Backfill pages APPEND below the head, so growth never
+    /// moves it — any real change is USER scroll. Used to cancel a pending
+    /// backfill-wait restore (design 01M1B9F6: user intent wins).
+    @State private var topOffset: CGFloat = 0
 
     private var items: [TranscriptItem] {
         let all = model.transcripts[session.id]?.items ?? []
@@ -88,13 +103,24 @@ struct TranscriptView: View {
         }
     }
 
+    /// The user scrolled during the backfill-wait restore — their intent wins
+    /// (design 01M1B9F6): arm the normal machinery (capture + follow gates) at
+    /// their position WITHOUT any programmatic scroll. The pending restore is
+    /// abandoned; a later page carrying the remembered row becomes a no-op.
+    private func cancelPendingRestore() {
+        guard !didRestoreScroll else { return }
+        didRestoreScroll = true
+        reanchorTarget = nil
+    }
+
     /// One scroll-restore attempt (design 01M1B9F6). Returns true when CONSUMED
     /// (restored, or bottom-fallback latched); false when still WAITING — the
     /// remembered row hasn't arrived yet and the paged backfill hasn't reached
     /// its terminal page. While waiting, auto-follow stays off (it's gated on
     /// `didRestoreScroll`) and capture stays off, so nothing fights the pages
     /// streaming in — the view simply sits until the anchor row lands and the
-    /// restore fires mid-walk.
+    /// restore fires mid-walk (or the user scrolls first, which cancels it —
+    /// see cancelPendingRestore).
     private func attemptRestore(proxy: ScrollViewProxy) -> Bool {
         guard !items.isEmpty else { return false }
         guard !didRestoreScroll else { return true }
@@ -139,6 +165,15 @@ struct TranscriptView: View {
             statusStrip
             ScrollViewReader { proxy in
                 ScrollView {
+                    // Top probe (pairs with the bottom sentinel): reports the
+                    // content head's offset every frame. Growth-proof — pages
+                    // append BELOW the head — so movement here is user scroll.
+                    Color.clear.frame(height: 1)
+                        .background(GeometryReader { geo in
+                            Color.clear.preference(
+                                key: TopOffsetKey.self,
+                                value: geo.frame(in: .named("transcript-scroll")).minY)
+                        })
                     LazyVStack(alignment: .leading, spacing: 12) {
                         ForEach(items) { item in
                             TranscriptRow(item: item, themeID: model.themeID,
@@ -205,6 +240,16 @@ struct TranscriptView: View {
                     atBottom = minY < viewportHeight + 24
                 }
                 .onPreferenceChange(ViewportHeightKey.self) { viewportHeight = $0 }
+                .onPreferenceChange(TopOffsetKey.self) { offset in
+                    topOffset = offset
+                    // During the backfill-wait restore, ANY real scroll movement
+                    // is user intent — cancel the pending restore so their
+                    // position wins ("the app never moves a user who has already
+                    // moved themselves"). Threshold ignores sub-pixel jitter.
+                    if !didRestoreScroll, abs(offset) > 8 {
+                        cancelPendingRestore()
+                    }
+                }
                 #if os(iOS)
                 // Swipe the transcript down to dismiss the composer keyboard.
                 .scrollDismissesKeyboard(.interactively)
