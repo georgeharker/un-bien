@@ -39,13 +39,11 @@ import {
 } from "@earendil-works/pi-coding-agent"
 import { SettingsManager } from "@earendil-works/pi-coding-agent"
 import { Ed25519Keypair } from "./pairing/crypto.js"
-import { qrSession } from "./pairing/qr.js"
-import { addPeer, listPeers, removePeer } from "./pairing/storage.js"
+import { listPeers, removePeer } from "./pairing/storage.js"
 import { SelfRevoke } from "./mesh/self_revoke.js"
 import { MeshTopologySnapshot } from "./mesh/siblings.js"
 import {
   ClientMessage,
-  PairErrorCode,
   ServerMessage,
   ThinkingLevel,
 } from "./protocol/types.js"
@@ -64,8 +62,6 @@ import {
 } from "./subagent_rooms.js"
 import {
   createRpcEnvelope,
-  isEnvelopeFrame,
-  helloEnvelope,
   type EnvelopeMessage,
 } from "./session/rpc_envelope.js"
 import {
@@ -111,13 +107,11 @@ import {
   writeFileSync,
   realpathSync,
 } from "node:fs"
-import { hostname } from "node:os"
 import {
   loadConfig,
   saveConfig,
   isValidRelayUrl,
   isWebSocketScheme,
-  toWebSocketUrl,
 } from "./config.js"
 import { _expandTilde, _launchSession } from "./launch.js"
 import { _enrichToolArgs } from "./enrich_tool_args.js"
@@ -152,6 +146,34 @@ import {
 } from "./commands/housekeeping.js"
 import { registerUnbienCommands } from "./commands/register.js"
 import { createTestHooks } from "./test_hooks.js"
+import {
+  CTRL_PREFIX,
+  _anyPeerActive,
+  _broadcastEnvelope,
+  _controlCtx,
+  _detachPeerChannel,
+  _emitRelayState,
+  _getReconnectTimer,
+  _getRelayLifecycleGeneration,
+  _goIdle,
+  _handleControl as _handleControlImpl,
+  _headlessUi,
+  _installAutoListener,
+  _onPeerDisconnect as _onPeerDisconnectImpl,
+  _onRelayClose,
+  _panelBroadcast,
+  _relayStatus,
+  _setRelayLifecycleGeneration,
+  _uiBroadcast,
+  type RelayConnectivity,
+  type RelayLifecycleDeps,
+} from "./session/relay_lifecycle.js"
+
+// Relay-lifecycle seam re-exports: the control-channel sentinel + the
+// connectivity type moved to ./session/relay_lifecycle.ts; these keep the
+// exact export surface (tests import CTRL_PREFIX from here).
+export { CTRL_PREFIX }
+export type { RelayConnectivity }
 
 // ── State machine ─────────────────────────────────────────────────────────────
 //
@@ -170,22 +192,6 @@ export type RemoteState = "idle" | "started"
 let _state: RemoteState = "idle"
 let _relay: RelayClient | null = null
 
-/** Relay connectivity as seen by an RPC client (Cockpit). Derived from
- *  `_state` + `_relay`: "disconnected" = relay off (idle); "connected" = live
- *  WS; "reconnecting" = was on, WS dropped, retrying. Surfaced via the
- *  `un-bien:relay-state` custom message (see `_emitRelayState`). */
-export type RelayConnectivity = "connected" | "reconnecting" | "disconnected"
-
-/** Last `RelayConnectivity` emitted, for change-dedup. Starts "disconnected"
- *  (the process boots with the relay down). */
-let _lastRelayStatus: RelayConnectivity | null = null
-
-/** Sentinel prefix for a transparent control message an RPC client sends on the
- *  `prompt` channel (stdin). The `input` hook intercepts it, runs the action,
- *  and swallows it (`action:"handled"`) so it never becomes an LLM turn or a
- *  transcript entry. Starts with NUL so it can't collide with real user input
- *  and doesn't begin with "/" (which would route to the command parser). */
-export const CTRL_PREFIX = "\x00un-bien-ctrl:"
 let _relayUrl: string | null = null // URL used by current _relay connection
 /**
  * Owners currently connected via the relay. Key = app peer pubkey (Ed25519,
@@ -496,7 +502,7 @@ function _refreshFooter(
       // `devicePaired` now reflects "any owner currently attached" — picks one
       // shortid representatively (multi-owner UX detail surfaces in the
       // `/unbien status` line, not the footer slot).
-      devicePaired: _anyPeerActive() ? _peerShort : undefined,
+      devicePaired: _anyPeerActive(relayDeps) ? _peerShort : undefined,
       hasPairings: _hasGlobalPairings,
       agentName: _meshNode?.name(),
     }
@@ -685,14 +691,6 @@ let _cwdLock: AcquiredLock | null = null
 // a live race). Null until the lock is acquired.
 let _lockedName: string | null = null
 
-// ── Relay reconnect state ─────────────────────────────────────────────────────
-// Backoffs in ms: 1s, 2s, 5s, 10s, 30s, then stays at 30s.
-const RECONNECT_BACKOFFS_MS = [1_000, 2_000, 5_000, 10_000, 30_000]
-let _reconnectTimer: ReturnType<typeof setTimeout> | null = null
-let _reconnectAttempt = 0
-// Every initial connect/reconnect candidate captures this generation. Stop,
-// relay-off, and an unexpected close invalidate older async continuations.
-let _relayLifecycleGeneration = 0
 // Root startup has pre-candidate awaits (cwd lock, wizard) that relay/mesh
 // generations cannot safely represent: child startup intentionally advances
 // those generations. Stop/off/session replacement advance this separate epoch
@@ -713,13 +711,6 @@ function _isCurrentRootLifecycle(generation: number): boolean {
 export function _getState(): "idle" | "started" | "paired" {
   if (_state === "idle") return "idle"
   return _activePeers.size > 0 ? "paired" : "started"
-}
-
-// ── Multi-channel helpers ─────────────────────────────────────────────────────
-
-/** Returns true when at least one owner is attached. Derived `paired` UX. */
-function _anyPeerActive(): boolean {
-  return _activePeers.size > 0
 }
 
 // ── Hidden e2e UI test harness (dev-only, undocumented) ───────────────────
@@ -749,7 +740,7 @@ function _runTestScenario(scenario: string): string {
   const id = `test-${Date.now()}`
   switch (s) {
     case "ask-select":
-      _broadcastEnvelope({
+      _broadcastEnvelope(relayDeps, {
         rpc: {
           type: "extension_ui_request",
           id,
@@ -760,7 +751,7 @@ function _runTestScenario(scenario: string): string {
       })
       return "sent ask-select"
     case "ask-confirm":
-      _broadcastEnvelope({
+      _broadcastEnvelope(relayDeps, {
         rpc: {
           type: "extension_ui_request",
           id,
@@ -771,7 +762,7 @@ function _runTestScenario(scenario: string): string {
       })
       return "sent ask-confirm"
     case "ask-input":
-      _broadcastEnvelope({
+      _broadcastEnvelope(relayDeps, {
         rpc: {
           type: "extension_ui_request",
           id,
@@ -782,7 +773,7 @@ function _runTestScenario(scenario: string): string {
       })
       return "sent ask-input"
     case "ask-editor":
-      _broadcastEnvelope({
+      _broadcastEnvelope(relayDeps, {
         rpc: {
           type: "extension_ui_request",
           id,
@@ -793,7 +784,7 @@ function _runTestScenario(scenario: string): string {
       })
       return "sent ask-editor"
     case "ask-notify":
-      _broadcastEnvelope({
+      _broadcastEnvelope(relayDeps, {
         rpc: {
           type: "extension_ui_request",
           id,
@@ -877,8 +868,8 @@ function _runTestScenario(scenario: string): string {
       // `{content:[{type:"image",data,mimeType}]}`) and renders them below the
       // card (WireImageView -> SVGImageView). Deliver the SVG that way.
       const tc = `tc-svg-${Date.now()}`
-      _broadcastEnvelope({ rpc: { type: "turn_start" } })
-      _broadcastEnvelope({
+      _broadcastEnvelope(relayDeps, { rpc: { type: "turn_start" } })
+      _broadcastEnvelope(relayDeps, {
         rpc: {
           type: "tool_execution_start",
           toolCallId: tc,
@@ -886,7 +877,7 @@ function _runTestScenario(scenario: string): string {
           args: { note: "test svg" },
         },
       })
-      _broadcastEnvelope({
+      _broadcastEnvelope(relayDeps, {
         rpc: {
           type: "tool_execution_end",
           toolCallId: tc,
@@ -903,13 +894,13 @@ function _runTestScenario(scenario: string): string {
           isError: false,
         },
       })
-      _broadcastEnvelope({ rpc: { type: "agent_settled" } })
+      _broadcastEnvelope(relayDeps, { rpc: { type: "agent_settled" } })
       return "sent svg (envelope tool_execution_end + image)"
     }
     case "tool": {
       const tc = `tc-${Date.now()}`
-      _broadcastEnvelope({ rpc: { type: "turn_start" } })
-      _broadcastEnvelope({
+      _broadcastEnvelope(relayDeps, { rpc: { type: "turn_start" } })
+      _broadcastEnvelope(relayDeps, {
         rpc: {
           type: "tool_execution_start",
           toolCallId: tc,
@@ -917,7 +908,7 @@ function _runTestScenario(scenario: string): string {
           args: { command: "echo hello" },
         },
       })
-      _broadcastEnvelope({
+      _broadcastEnvelope(relayDeps, {
         rpc: {
           type: "tool_execution_end",
           toolCallId: tc,
@@ -925,7 +916,7 @@ function _runTestScenario(scenario: string): string {
           isError: false,
         },
       })
-      _broadcastEnvelope({ rpc: { type: "agent_settled" } })
+      _broadcastEnvelope(relayDeps, { rpc: { type: "agent_settled" } })
       return "sent tool pair (envelope)"
     }
     case "diff": {
@@ -943,8 +934,8 @@ function _runTestScenario(scenario: string): string {
           ],
         },
       ]
-      _broadcastEnvelope({ rpc: { type: "turn_start" } })
-      _broadcastEnvelope({
+      _broadcastEnvelope(relayDeps, { rpc: { type: "turn_start" } })
+      _broadcastEnvelope(relayDeps, {
         rpc: {
           type: "tool_execution_start",
           toolCallId: tc,
@@ -957,7 +948,7 @@ function _runTestScenario(scenario: string): string {
         },
         aux: { hunks },
       })
-      _broadcastEnvelope({
+      _broadcastEnvelope(relayDeps, {
         rpc: {
           type: "tool_execution_end",
           toolCallId: tc,
@@ -965,15 +956,15 @@ function _runTestScenario(scenario: string): string {
           isError: false,
         },
       })
-      _broadcastEnvelope({ rpc: { type: "agent_settled" } })
+      _broadcastEnvelope(relayDeps, { rpc: { type: "agent_settled" } })
       return "sent diff (edit + aux hunks — shows the Diff⇄Content toggle)"
     }
     case "code-shell": {
       // bash-family result → the app classifies it into a `code` block (lang
       // shell), syntax-highlighted. OUTPUT is app-side now — no aux stamped.
       const tc = `tc-sh-${Date.now()}`
-      _broadcastEnvelope({ rpc: { type: "turn_start" } })
-      _broadcastEnvelope({
+      _broadcastEnvelope(relayDeps, { rpc: { type: "turn_start" } })
+      _broadcastEnvelope(relayDeps, {
         rpc: {
           type: "tool_execution_start",
           toolCallId: tc,
@@ -981,7 +972,7 @@ function _runTestScenario(scenario: string): string {
           args: { command: "ls -la" },
         },
       })
-      _broadcastEnvelope({
+      _broadcastEnvelope(relayDeps, {
         rpc: {
           type: "tool_execution_end",
           toolCallId: tc,
@@ -990,15 +981,15 @@ function _runTestScenario(scenario: string): string {
           isError: false,
         },
       })
-      _broadcastEnvelope({ rpc: { type: "agent_settled" } })
+      _broadcastEnvelope(relayDeps, { rpc: { type: "agent_settled" } })
       return "sent code-shell (bash output → code block, lang shell)"
     }
     case "code-file": {
       // read-family with a *.swift path → `code` block, lang inferred from the
       // extension (swift) and highlighted.
       const tc = `tc-rd-${Date.now()}`
-      _broadcastEnvelope({ rpc: { type: "turn_start" } })
-      _broadcastEnvelope({
+      _broadcastEnvelope(relayDeps, { rpc: { type: "turn_start" } })
+      _broadcastEnvelope(relayDeps, {
         rpc: {
           type: "tool_execution_start",
           toolCallId: tc,
@@ -1006,7 +997,7 @@ function _runTestScenario(scenario: string): string {
           args: { path: "/src/Greeter.swift" },
         },
       })
-      _broadcastEnvelope({
+      _broadcastEnvelope(relayDeps, {
         rpc: {
           type: "tool_execution_end",
           toolCallId: tc,
@@ -1015,15 +1006,15 @@ function _runTestScenario(scenario: string): string {
           isError: false,
         },
       })
-      _broadcastEnvelope({ rpc: { type: "agent_settled" } })
+      _broadcastEnvelope(relayDeps, { rpc: { type: "agent_settled" } })
       return "sent code-file (read .swift → highlighted code block)"
     }
     case "diff-output": {
       // A tool whose RESULT already embeds a unified diff → the app parses it
       // into a `diff` block (re-reading persisted text; replay-safe).
       const tc = `tc-do-${Date.now()}`
-      _broadcastEnvelope({ rpc: { type: "turn_start" } })
-      _broadcastEnvelope({
+      _broadcastEnvelope(relayDeps, { rpc: { type: "turn_start" } })
+      _broadcastEnvelope(relayDeps, {
         rpc: {
           type: "tool_execution_start",
           toolCallId: tc,
@@ -1031,7 +1022,7 @@ function _runTestScenario(scenario: string): string {
           args: { command: "git diff" },
         },
       })
-      _broadcastEnvelope({
+      _broadcastEnvelope(relayDeps, {
         rpc: {
           type: "tool_execution_end",
           toolCallId: tc,
@@ -1040,7 +1031,7 @@ function _runTestScenario(scenario: string): string {
           isError: false,
         },
       })
-      _broadcastEnvelope({ rpc: { type: "agent_settled" } })
+      _broadcastEnvelope(relayDeps, { rpc: { type: "agent_settled" } })
       return "sent diff-output (result embeds a unified diff → diff block)"
     }
     case "write": {
@@ -1049,8 +1040,8 @@ function _runTestScenario(scenario: string): string {
       const tc = `tc-wr-${Date.now()}`
       const content =
         "export function add(a: number, b: number): number {\n  return a + b;\n}"
-      _broadcastEnvelope({ rpc: { type: "turn_start" } })
-      _broadcastEnvelope({
+      _broadcastEnvelope(relayDeps, { rpc: { type: "turn_start" } })
+      _broadcastEnvelope(relayDeps, {
         rpc: {
           type: "tool_execution_start",
           toolCallId: tc,
@@ -1058,7 +1049,7 @@ function _runTestScenario(scenario: string): string {
           args: { path: "/src/math.ts", content },
         },
       })
-      _broadcastEnvelope({
+      _broadcastEnvelope(relayDeps, {
         rpc: {
           type: "tool_execution_end",
           toolCallId: tc,
@@ -1066,12 +1057,12 @@ function _runTestScenario(scenario: string): string {
           isError: false,
         },
       })
-      _broadcastEnvelope({ rpc: { type: "agent_settled" } })
+      _broadcastEnvelope(relayDeps, { rpc: { type: "agent_settled" } })
       return "sent write (args.content → content-as-code block)"
     }
     case "agent": {
-      _broadcastEnvelope({ rpc: { type: "turn_start" } })
-      _broadcastEnvelope({
+      _broadcastEnvelope(relayDeps, { rpc: { type: "turn_start" } })
+      _broadcastEnvelope(relayDeps, {
         rpc: {
           type: "message_update",
           assistantMessageEvent: {
@@ -1080,7 +1071,7 @@ function _runTestScenario(scenario: string): string {
           },
         },
       })
-      _broadcastEnvelope({
+      _broadcastEnvelope(relayDeps, {
         rpc: {
           type: "message_update",
           assistantMessageEvent: {
@@ -1089,7 +1080,7 @@ function _runTestScenario(scenario: string): string {
           },
         },
       })
-      _broadcastEnvelope({
+      _broadcastEnvelope(relayDeps, {
         rpc: {
           type: "message_end",
           message: {
@@ -1098,11 +1089,11 @@ function _runTestScenario(scenario: string): string {
           },
         },
       })
-      _broadcastEnvelope({ rpc: { type: "agent_settled" } })
+      _broadcastEnvelope(relayDeps, { rpc: { type: "agent_settled" } })
       return "sent agent message (envelope)"
     }
     case "error":
-      _broadcastEnvelope({
+      _broadcastEnvelope(relayDeps, {
         rpc: {
           type: "message_end",
           message: {
@@ -1112,7 +1103,7 @@ function _runTestScenario(scenario: string): string {
           },
         },
       })
-      _broadcastEnvelope({ rpc: { type: "agent_settled" } })
+      _broadcastEnvelope(relayDeps, { rpc: { type: "agent_settled" } })
       return "sent error (envelope message_end/error)"
     case "all":
       for (const sc of [
@@ -1385,72 +1376,6 @@ function _routeUnBienPlaneFrom(
   }
 }
 
-/** Broadcast for the extension_ui bridge. The bridge only ever emits
- *  `extension_ui_request`, sent ENVELOPE-ONLY as a `{rpc}` frame (the wire
- *  shape mirrors the SDK rpc contract 1:1). No stock fallback. */
-function _uiBroadcast(msg: ServerMessage): void {
-  if (msg.type === "extension_ui_request") _broadcastEnvelope({ rpc: msg })
-}
-
-/** Broadcast for the panel bridge. The bridge only ever emits `panel_update`,
- *  forwarded ENVELOPE-ONLY as `{evt:{channel:"panel", data}}` (the {evt} plane);
- *  the app folds it into its panel store. No stock fallback. */
-function _panelBroadcast(msg: ServerMessage): void {
-  if (msg.type === "panel_update")
-    _broadcastEnvelope({ evt: { channel: "panel", data: msg } })
-}
-
-/** Fan an rpc-envelope frame out to every attached peer (base64 ct via each
- *  channel) — the single owner-fanout path for `{ rpc | evt }` messages. */
-function _broadcastEnvelope(env: EnvelopeMessage): void {
-  {
-    // Observability only (not a route gate): watch the {rpc|evt} wire during
-    // e2e bring-up. Frame type only — payloads can be large / carry images.
-    const kind = env.rpc
-      ? `rpc:${(env.rpc as { type?: string }).type ?? "?"}`
-      : `evt:${env.evt?.channel ?? "?"}`
-    envLog(`envelope -> ${_activePeers.size} peer(s): ${kind}`)
-  }
-  for (const ch of _activePeers.values()) {
-    try {
-      ch.sendEnvelope(env)
-    } catch {
-      /* best-effort per channel */
-    }
-  }
-}
-
-/**
- * Adds an owner's channel to `_activePeers`. Also updates the UX hint
- * `_peerShort` (last-attached shortid) so the footer + status can pick
- * a representative device when only one is connected.
- */
-function _attachPeerChannel(
-  appPeerId: string,
-  channel: PlainPeerChannel,
-): void {
-  _activePeers.set(appPeerId, channel)
-  _peerShort = appPeerId.slice(0, 8)
-}
-
-/** Detaches a single owner's channel + removes it from the map. Used by
- *  `_onPeerDisconnect`, `_cmdRevoke`, and the SelfRevoke callback. */
-function _detachPeerChannel(appPeerId: string): void {
-  const ch = _activePeers.get(appPeerId)
-  if (!ch) return
-  try {
-    ch.detach()
-  } catch {
-    /* best-effort */
-  }
-  _activePeers.delete(appPeerId)
-  if (_peerShort === appPeerId.slice(0, 8)) {
-    // Pick a different remaining peer for the UX hint, or clear when none.
-    const next = _activePeers.keys().next().value
-    _peerShort = next ? next.slice(0, 8) : ""
-  }
-}
-
 // ── Display-name helpers ──────────────────────────────────────────────────────
 
 /**
@@ -1493,321 +1418,9 @@ function _reportRevocationByFingerprint(canonicalOwnerPubkey: string): void {
 function _revokeActiveOwnerRuntime(canonicalOwnerPubkey: string): void {
   if (!_activePeers.has(canonicalOwnerPubkey)) return
   _refreshPairingsCache()
-  _detachPeerChannel(canonicalOwnerPubkey)
+  _detachPeerChannel(relayDeps, canonicalOwnerPubkey)
   _refreshFooter()
   _reportRevocationByFingerprint(canonicalOwnerPubkey)
-}
-
-// ── Transition helpers ────────────────────────────────────────────────────────
-
-/**
- * Full teardown: stop listener, detach channel, close relay → idle.
- */
-function _goIdle(): void {
-  _rootLifecycleGeneration += 1
-  _relayLifecycleGeneration += 1
-
-  // Cancel any pending reconnect attempt. Critical: /unbien stop must
-  // win the race against a scheduled reconnect.
-  if (_reconnectTimer !== null) {
-    clearTimeout(_reconnectTimer)
-    _reconnectTimer = null
-  }
-  _reconnectAttempt = 0
-
-  _stopAutoListener?.()
-  _stopAutoListener = null
-
-  // Tear down every per-owner channel and clear the map.
-  for (const ch of _activePeers.values()) {
-    try {
-      ch.detach()
-    } catch {
-      /* best-effort */
-    }
-  }
-  _activePeers.clear()
-  _peerShort = ""
-  _rootState().turnId = null
-  clearPendingReceivedImagePreviews()
-
-  // Invalidate async producers and bridge ownership before closing the host
-  // Relay. A synchronous/delayed close callback must observe stale identity.
-  const producer = _selfRevoke
-  _selfRevoke = null
-  _selfRevokeEpoch += 1
-  _selfRevokeTopologyReadyEpoch = -1
-  _selfRevokeTopology = null
-  producer?.stop()
-
-  _meshNode?.detachBridge()
-
-  const relay = _relay
-  _relay = null
-  _relayUrl = null
-  relay?.close()
-
-  // Preserve _sessionStartedAt + _messageBuffer across stop/start cycles.
-  // The Pi agent session outlives the relay connection — `message_end` keeps
-  // firing for terminal turns even while idle, and the buffer must survive
-  // so those turns appear in the next session_sync. Only a Pi process
-  // restart resets these (init-time values).
-
-  _state = "idle"
-  _refreshFooter()
-  _emitRelayState() // → disconnected
-}
-
-/**
- * Called when the relay WS closes unexpectedly (network drop, relay restart,
- * etc.). Does a **partial** teardown — keeps `_sessionStartedAt`, `_messageBuffer`,
- * `_relayUrl`, `_cachedEd25519`, `_peerShort` so the session can resume on
- * reconnect — and schedules an `_attemptReconnect`.
- *
- * Peer (app) reconnect after a successful relay reconnect is handled by the
- * existing auto-listener via `peers.json` lookup, so we don't need to track
- * the prior peer here; we just go back to `started` and wait.
- */
-function _onRelayClose(closedRelay: RelayClient): void {
-  if (_relay !== closedRelay) return // delayed close from a replaced Relay
-  if (_state === "idle") return // already torn down (e.g. /unbien stop)
-
-  _relayLifecycleGeneration += 1
-  _stopAutoListener?.()
-  _stopAutoListener = null
-
-  // Detach every per-owner channel — relay is gone, none can route. The
-  // auto-listener re-attaches owners after `_attemptReconnect` succeeds
-  // (via the same known-peer + pair_request paths used on first connect).
-  for (const ch of _activePeers.values()) {
-    try {
-      ch.detach()
-    } catch {
-      /* best-effort */
-    }
-  }
-  _activePeers.clear()
-  _peerShort = ""
-  _rootState().turnId = null
-
-  _relay = null // _relayUrl preserved for retry
-
-  // Cross-PC routing relies on _relay; bring it down. Will be re-instated
-  // by _attemptReconnect on success.
-  _meshNode?.detachBridge()
-
-  _state = "started"
-  _refreshFooter()
-  _emitRelayState() // → reconnecting
-
-  const reconnectUrl = _relayUrl
-  if (reconnectUrl) {
-    _scheduleReconnect(_relayLifecycleGeneration, reconnectUrl)
-  }
-}
-
-function _isCurrentReconnect(
-  lifecycleGeneration: number,
-  url: string,
-): boolean {
-  return (
-    lifecycleGeneration === _relayLifecycleGeneration &&
-    _state === "started" &&
-    _relay === null &&
-    _relayUrl === url
-  )
-}
-
-function _scheduleReconnect(lifecycleGeneration: number, url: string): void {
-  if (_reconnectTimer !== null) return // already scheduled
-  if (!_cachedEd25519) return // can't reconnect without the cached identity
-  if (!_isCurrentReconnect(lifecycleGeneration, url)) return
-
-  const idx = Math.min(_reconnectAttempt, RECONNECT_BACKOFFS_MS.length - 1)
-  const delay = RECONNECT_BACKOFFS_MS[idx]!
-  _reconnectAttempt += 1
-
-  // The timer belongs to the lifecycle that scheduled it. Re-check that exact
-  // generation + URL before constructing a candidate so a dequeued old timer
-  // cannot act on a newer stop/start lifecycle.
-  _reconnectTimer = setTimeout(() => {
-    _reconnectTimer = null
-    if (!_isCurrentReconnect(lifecycleGeneration, url)) return
-    void _attemptReconnect(lifecycleGeneration, url)
-  }, delay)
-}
-
-async function _attemptReconnect(
-  lifecycleGeneration: number,
-  url: string,
-): Promise<void> {
-  if (!_cachedEd25519) return
-  if (!_isCurrentReconnect(lifecycleGeneration, url)) return
-
-  const edKp = _cachedEd25519
-  // _relayUrl is stored in canonical http(s):// form — convert at the
-  // WS boundary, same as _cmdStart.
-  const relay = new RelayClient(toWebSocketUrl(url), edKp)
-
-  try {
-    // Replay the same room identity from _cmdStart. Without this the relay
-    // would log this WS as a default-room peer and the app would see a
-    // phantom "legacy session" appear (regression of plano 17 + 18).
-    await relay.connect({
-      ...(_myRoomId ? { roomId: _myRoomId } : {}),
-      ...(_myRoomMeta ? { roomMeta: _myRoomMeta } : {}),
-    })
-  } catch {
-    // A reconnect candidate stays local until publication; every rejected
-    // candidate is deterministically closed before stale-return or retry.
-    try {
-      relay.close()
-    } catch {
-      /* best-effort rejected candidate cleanup */
-    }
-    if (!_isCurrentReconnect(lifecycleGeneration, url)) return
-    _scheduleReconnect(lifecycleGeneration, url)
-    return
-  }
-
-  if (!_isCurrentReconnect(lifecycleGeneration, url)) {
-    try {
-      relay.close()
-    } catch {
-      /* best-effort stale candidate cleanup */
-    }
-    return
-  }
-
-  _relay = relay
-  _reconnectAttempt = 0
-
-  relay.on("close", () => _onRelayClose(relay))
-  _stopAutoListener = _installAutoListener(relay)
-
-  // Plan/25 Wave B/C: relay is back; bring cross-PC routing back online.
-  _attachBridgeIfReady()
-
-  // _state stays "started"; peer reconnect (if previously paired) flows
-  // through _installAutoListener → _findKnownPeer → _promoteToPaired
-  // automatically when the app sends any inner.
-  _emitRelayState()
-}
-
-// ── Relay state event + transparent control channel (Cockpit toggle) ─────────
-
-/** Current relay connectivity, derived from `_state` + `_relay`. */
-function _relayStatus(): RelayConnectivity {
-  if (_getState() === "idle") return "disconnected"
-  return _relay ? "connected" : "reconnecting"
-}
-
-/**
- * Emit the `un-bien:relay-state` custom message so an RPC client (Cockpit)
- * can render a relay on/off indicator. Pure data (`display:false`) — never
- * shown in the transcript. De-duped on the connectivity value; pass
- * `force=true` to answer an explicit `relay:status` query regardless.
- */
-function _emitRelayState(force = false): void {
-  const status = _relayStatus()
-  if (!force && status === _lastRelayStatus) return
-  _lastRelayStatus = status
-  // This can run inside a WebSocket 'close' callback (via _onRelayClose). After a
-  // session replacement (newSession/fork/switchSession/reload) the module-level
-  // `_pi` is stale, and `assertActive` throws synchronously inside `sendMessage`.
-  // An uncaught throw from a WS event callback becomes a process-level
-  // uncaughtException and exits pi. Swallow it here: the next relay-state
-  // change re-emits, so connectivity is eventually consistent. See issue #55.
-  try {
-    _pi?.sendMessage({
-      customType: "un-bien:relay-state",
-      content: `Relay ${status}`,
-      details: {
-        status,
-        connected: status === "connected",
-        ...(_relayUrl ? { relayUrl: _relayUrl } : {}),
-        ...(_myRoomId ? { room: _myRoomId } : {}),
-      },
-      display: false,
-    })
-  } catch {
-    // _pi stale (session replaced) or extension runtime not yet bound.
-  }
-}
-
-/** Minimal ctx for relay start/stop driven by a control message (no command
- *  ctx is available in the `input` hook). cwd matches the daemon's launch dir,
- *  so the derived relay room is identical to the one `_cmdStart` first used. */
-function _controlCtx(): Pick<ExtensionContext, "ui" | "cwd"> {
-  // SAFETY: _headlessUi() implements every ui method the relay start/stop path
-  // actually calls; the notify-forwarding shim is structurally narrower than the
-  // full ExtensionContext["ui"] but complete for this headless control path.
-  return {
-    ui: _headlessUi(),
-    cwd: process.cwd(),
-  } as unknown as Pick<ExtensionContext, "ui" | "cwd">
-}
-
-/**
- * `ui.notify` for headless contexts (daemon auto-init + control channel). There
- * is no TUI, and the RPC client (Cockpit) already gets everything it needs via
- * structured events (`un-bien:relay-state`, `un-bien:name-assigned`,
- * room_meta) — so routine INFO chatter would just pollute the client's captured
- * stderr. We drop info and forward only warnings/errors (kept for the
- * supervisor's journal / genuine failures). The interactive Pi keeps its normal
- * footer/notify path — this only affects headless ctxs.
- */
-function _headlessUi(): {
-  notify: (msg: string, type?: "info" | "warning" | "error") => void
-} {
-  return {
-    notify: (msg: string, type?: "info" | "warning" | "error") => {
-      if (type === "warning" || type === "error")
-        process.stderr.write(`${msg}\n`)
-    },
-  }
-}
-
-/**
- * Handle a transparent control command from an RPC client (Cockpit), received
- * as a `CTRL_PREFIX`-tagged input the `input` hook swallowed. Toggles the relay
- * WITHOUT leaving the local mesh (relay-only: `_cmdStart` up / `_goIdle` down),
- * then emits the fresh state. `relay:status` just re-emits (no change) so the
- * client can sync its button after (re)attaching to the RPC stream.
- */
-export async function _handleControl(cmd: string): Promise<void> {
-  // `rename:<new-name>` carries an argument, so it's matched before the
-  // fixed-verb switch. Renames the agent live (broker re-register + relay room
-  // swap) WITHOUT restarting the process or losing the SDK session.
-  if (cmd.startsWith("rename:")) {
-    await _renameAgent(cmd.slice("rename:".length).trim())
-    return
-  }
-  switch (cmd) {
-    case "relay:on":
-      if (_getState() === "idle") await _cmdStart(deps, _controlCtx())
-      _emitRelayState(true)
-      return
-    case "relay:off":
-      if (_getState() === "idle") {
-        _rootLifecycleGeneration += 1
-        _relayLifecycleGeneration += 1
-      } else _goIdle()
-      _emitRelayState(true)
-      return
-    case "relay:toggle":
-      if (_getState() === "idle") await _cmdStart(deps, _controlCtx())
-      else _goIdle()
-      _emitRelayState(true)
-      return
-    case "relay:status":
-      _emitRelayState(true)
-      return
-    default:
-      // Unknown control verb — ignore (forward-compat: a newer client may send
-      // verbs an older extension doesn't know).
-      return
-  }
 }
 
 /**
@@ -1839,7 +1452,7 @@ async function _renameAgent(newName: string): Promise<void> {
   // first (also detaches the bridge) so the broker re-register below starts
   // clean; bring it back up after with the new name.
   const wasStarted = _getState() !== "idle"
-  if (wasStarted) _goIdle()
+  if (wasStarted) _goIdle(relayDeps)
 
   let assigned = newName
   try {
@@ -1857,385 +1470,6 @@ async function _renameAgent(newName: string): Promise<void> {
         ? `Mesh name: ${assigned}`
         : `Mesh name reassigned: "${newName}" → "${assigned}" (collision)`,
     details: { requested: newName, assigned, changed: assigned !== newName },
-    display: false,
-  })
-}
-
-/**
- * Per-owner disconnect callback. Fires when one specific owner's channel
- * detaches (e.g. relay told us the peer is gone). Other owners' channels
- * keep running — relay stays "started".
- *
- * Exported so tests can trigger the disconnect path for a specific peer.
- *
- * Backward-compat: a no-arg call (legacy tests / pre-W2D callers) falls
- * back to detaching the most recently attached peer, mirroring the old
- * singleton semantics.
- */
-export function _onPeerDisconnect(appPeerId?: string): void {
-  if (_state === "idle") return
-  const target = appPeerId ?? [..._activePeers.keys()].pop()
-  if (!target) return
-  if (!_activePeers.has(target)) return
-
-  _detachPeerChannel(target)
-  if (_anyPeerActive()) {
-    // Other owners still attached — keep _rootState().turnId so they continue
-    // seeing the in-flight agent stream.
-    _refreshFooter()
-    return
-  }
-
-  // No owner left. Conservatively clear the turn so the next pair_request
-  // starts cleanly.
-  _rootState().turnId = null
-  _refreshFooter()
-  _safeNotify(
-    "[un-bien] All app peers disconnected, listening for reconnect",
-    "info",
-  )
-  // Auto-listener stays up — same listener catches the reconnect on any peer.
-}
-
-/**
- * Attaches a new owner channel to the multi-owner set. Replaces the
- * pre-W2D singleton `_promoteToPaired` which set `_state = "paired"` and
- * a single `_peerChannel`. The relay state remains `started`; pairing
- * status is derived from `_activePeers.size`.
- *
- * Idempotent for the same `appPeerId` (re-attaching tears down the prior
- * channel and installs a fresh one — covers reconnect from the same
- * device without leaking listeners).
- */
-function _attachOwner(
-  relay: RelayClient,
-  appPeerId: string,
-  peerName: string,
-  firstInner?: ClientMessage,
-): PlainPeerChannel {
-  const peerShort = appPeerId.slice(0, 8)
-
-  // Drop any stale channel for this owner before re-attaching.
-  if (_activePeers.has(appPeerId)) _detachPeerChannel(appPeerId)
-
-  // Prefer always-fresh session_start ctx for async relay routing — `_lastCtx`
-  // is a captured command ctx that goes stale after session replacement (#55).
-  const channel = new PlainPeerChannel(
-    relay,
-    appPeerId,
-    _myRoomId ?? undefined,
-    (msg) =>
-      _routeClientMessageFrom(
-        channel,
-        msg,
-        (_liveCtx() as typeof _noopCtx) ?? _noopCtx,
-      ),
-    () => _onPeerDisconnect(appPeerId),
-    (env) =>
-      env.ub === undefined
-        ? _routeRpcCommandFrom(channel, env)
-        : _routeUnBienPlaneFrom(channel, env),
-    () =>
-      _rootState().sessionManager?.getSessionId() ??
-      _rootSessionId ??
-      undefined,
-  )
-
-  _attachPeerChannel(appPeerId, channel)
-  // Envelope-native capability handshake: advertise caps up front so the app can
-  // enable the {rpc|evt} route + suppress stock before any session content
-  // arrives. Additive to the stock session_history caps (parity transition).
-  const _sid = _rootState().sessionManager?.getSessionId()
-  channel.sendEnvelope(helloEnvelope(_capabilities(), _sid))
-  envLog(
-    `attach: peer=${appPeerId.slice(0, 8)} hello sent (caps + sessionId=${_sid ?? "?"}); active=${_activePeers.size}`,
-  )
-  // Reconstruction (transcript + panels + extension_ui) is request-driven: the
-  // app issues session_sync — on fresh open AND on relay reconnect — and the
-  // handler in _routeUnBienPlaneFrom replays all of it. Re-sync is idempotent
-  // (stable identify ids + ns/id panel merge), so nothing is replayed
-  // proactively here.
-  _refreshFooter()
-
-  _safeNotify(
-    `[un-bien] Owner attached: peer=${peerShort}, name=${peerName} ` +
-      `(${_activePeers.size} active)`,
-    "info",
-  )
-
-  if (firstInner) {
-    // The PlainPeerChannel listener fired on the same line that triggered
-    // attachment in some flows; we route explicitly here too to ensure the
-    // inner reaches the handler exactly once.
-    void firstInner
-  }
-  return channel
-}
-
-// ── Auto-listener ─────────────────────────────────────────────────────────────
-//
-// Installed while in 'started' state. Decodes the outer envelope as
-// base64(JSON) and dispatches per sender peer_id:
-//   • Sender already in `_activePeers` → ignored here (the per-owner
-//     PlainPeerChannel listens on the same relay event and handles its own
-//     traffic via its `remotePeerId` filter)
-//   • `pair_request` from a new peer → validate token, persist peer, send
-//     pair_ok/pair_error, attach a new channel
-//   • Non-pair message from a known peer (peers.json) without an active
-//     channel yet → attach + route the inner (reconnect path)
-//   • Anything else (unknown peer + non-pair) → emit `error: unknown_peer`
-
-function _installAutoListener(relay: RelayClient): () => void {
-  const listenerGeneration = _relayLifecycleGeneration
-  const hasListenerAuthority = (): boolean =>
-    !_disposed &&
-    _state === "started" &&
-    _relay === relay &&
-    _relayLifecycleGeneration === listenerGeneration
-  const onMsg = async (line: string) => {
-    let outer: { peer?: string; ct?: string }
-    try {
-      outer = JSON.parse(line) as { peer?: string; ct?: string }
-    } catch {
-      return
-    }
-
-    if (!outer.peer || !outer.ct) return
-
-    if (!hasListenerAuthority()) return
-    // Already-attached owners: their PlainPeerChannel handles routing.
-    if (_activePeers.has(outer.peer)) return
-
-    // Decode inner envelope (base64 JSON)
-    let inner: ClientMessage
-    try {
-      const plaintext = Buffer.from(outer.ct, "base64").toString("utf8")
-      const parsed = JSON.parse(plaintext) as unknown
-      if (
-        !parsed ||
-        typeof parsed !== "object" ||
-        typeof (parsed as Record<string, unknown>).type !== "string"
-      )
-        return
-      inner = parsed as ClientMessage
-    } catch {
-      return
-    }
-
-    const appPeerId = outer.peer
-
-    if (inner.type === "pair_request") {
-      await _handlePairRequest(relay, appPeerId, inner, hasListenerAuthority)
-      return
-    }
-
-    // Reconnect path: known peer (peers.json) without an active channel
-    // sends a non-pair message → attach + route through the new channel.
-    // See pairing.md §Reconexão.
-    const known = await _findKnownPeer(appPeerId)
-    if (!hasListenerAuthority()) return
-    if (known) {
-      const channel = _attachOwner(relay, appPeerId, known.name)
-      // The channel listener didn't see the line that triggered the attach, so
-      // route it explicitly — MIRRORING the channel's own dispatch (peer_channel
-      // _onLine): a real-typed envelope ("rpc"/"evt"/"ub", legacy "env") or a
-      // bare rpc/evt/ub body goes to the envelope dispatcher, a stock
-      // ClientMessage to the stock switch. Everything is on the envelope proto
-      // now, so the first message is normally the ub session_sync (or the rpc
-      // get_entries) — routing that through the stock switch dropped it. Use
-      // _liveCtx (session_start-fresh), not #55.
-      const innerObj = inner as Record<string, unknown>
-      if (isEnvelopeFrame(innerObj)) {
-        {
-          // SAFETY: isEnvelopeFrame confirmed rpc/evt/ub envelope keys are
-          // present, so this ClientMessage is byte-compatible with EnvelopeMessage.
-          const innerEnv = inner as unknown as EnvelopeMessage
-          if (innerEnv.ub === undefined) _routeRpcCommandFrom(channel, innerEnv)
-          else _routeUnBienPlaneFrom(channel, innerEnv)
-        }
-      } else {
-        _routeClientMessageFrom(
-          channel,
-          inner,
-          (_liveCtx() as typeof _noopCtx) ?? _noopCtx,
-        )
-      }
-      return
-    }
-
-    // Unknown peer with non-pair_request inner — signal so the app can react
-    // (peer was revoked / never paired). pair_request from unknown peer was
-    // already handled above as a legitimate path. We never log inner contents,
-    // only inner.type.
-    const errReply: ServerMessage = {
-      type: "error",
-      code: "unknown_peer",
-      message: "Peer not paired — re-scan QR",
-    }
-    const errCt = Buffer.from(JSON.stringify(errReply)).toString("base64")
-    relay.send(JSON.stringify({ peer: appPeerId, ct: errCt }))
-  }
-
-  relay.on("message", onMsg)
-  return () => relay.off("message", onMsg)
-}
-
-/**
- * Plan/27 Wave A: lazily resolve the pi-extension package version from
- * disk so the `pair_ok.harness.version` field reflects what's actually
- * shipped. The lookup is best-effort — a parse failure (or running this
- * file out-of-tree) falls back to "0.0.0" which is still semver-valid
- * and the app tolerates it. Cached at module load.
- */
-function _readExtensionVersion(): string {
-  try {
-    const here = fileURLToPath(import.meta.url)
-    // dist/index.js → ../package.json. src/index.ts under tsx → also one level up.
-    const pkgPath = join(here, "..", "..", "package.json")
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as {
-      version?: string
-    }
-    return typeof pkg.version === "string" ? pkg.version : "0.0.0"
-  } catch {
-    return "0.0.0"
-  }
-}
-const _HARNESS = {
-  name: "Pi coding agent",
-  version: _readExtensionVersion(),
-} as const
-const _HOSTNAME = hostname()
-
-// un-bien capability handshake. PROTOCOL_VERSION bumps on a HARD (breaking)
-// wire change; the app gates UI on capability PRESENCE, not this number.
-const PROTOCOL_VERSION = 1
-// Features this extension supports, advertised on attach (session_history) + pair_ok.
-// `remote_launch` is conditional (added only when local config opts in) — see
-// `_capabilities()`. Passive server->app extras (images/panels) are listed so
-// the app can also gate any future *controls* it grows for them.
-const _BASE_CAPABILITIES = [
-  "thinking",
-  "models",
-  "cancel",
-  "queued_messages",
-  "images",
-  "tool_result_images",
-  "panels",
-  "rpc_envelope",
-] as const
-
-/** The capability set to advertise right now (config-dependent bits included). */
-function _capabilities(): string[] {
-  const caps: string[] = [..._BASE_CAPABILITIES]
-  // `remote_launch` is advertised ONLY when the machine opts in via local
-  // config — single choke point so the advertised set and honored behavior
-  // can't drift. Read the session cwd's config (pi runs in the session cwd).
-  if (effectiveAllowRemoteLaunch(loadLocalConfig(process.cwd()))) {
-    caps.push("remote_launch")
-  }
-  return caps
-}
-
-async function _handlePairRequest(
-  relay: RelayClient,
-  appPeerId: string,
-  inner: Extract<ClientMessage, { type: "pair_request" }>,
-  hasListenerAuthority: () => boolean,
-): Promise<void> {
-  const sendInner = (msg: ServerMessage) => {
-    const ct = Buffer.from(JSON.stringify(msg)).toString("base64")
-    relay.send(JSON.stringify({ peer: appPeerId, ct }))
-  }
-
-  const sendError = (code: PairErrorCode, message: string) => {
-    sendInner({ type: "pair_error", in_reply_to: inner.id, code, message })
-  }
-
-  const status = qrSession.consumeToken(inner.token)
-  if (status !== "ok") {
-    const code: PairErrorCode =
-      status === "expired"
-        ? "token_expired"
-        : status === "consumed"
-          ? "token_consumed"
-          : "token_unknown"
-    const msg =
-      code === "token_expired"
-        ? "Ephemeral token expired. Generate a new QR with /unbien pair."
-        : code === "token_consumed"
-          ? "Token already consumed by another pair_request."
-          : "Token was not issued by this Pi."
-    sendError(code, msg)
-    return
-  }
-
-  // A delayed signed revoke must lose authority before the same-process
-  // re-pair enters storage; the replacement owns a fresh token snapshot.
-  const producer = _selfRevoke
-  const producerEpoch = _selfRevokeEpoch
-  producer?.invalidateStorageAuthority()
-  const pairedAt = new Date().toISOString()
-  try {
-    await addPeer({
-      name: inner.device_name,
-      remote_epk: appPeerId,
-      paired_at: pairedAt,
-    })
-    if (!hasListenerAuthority()) return
-    _refreshPairingsCache()
-    if (
-      producer &&
-      _selfRevoke === producer &&
-      _selfRevokeEpoch === producerEpoch
-    ) {
-      void producer.requestFreshCheck().catch(() => {
-        // The regular cadence retries; pairing itself already succeeded.
-      })
-    }
-  } catch (err) {
-    if (!hasListenerAuthority()) return
-    sendError("internal_error", `Failed to persist peer: ${String(err)}`)
-    return
-  }
-
-  const cwd =
-    _lastCtx && "cwd" in _lastCtx
-      ? (_lastCtx as ExtensionCommandContext).cwd
-      : process.cwd()
-  // Prefer the user-configured agent_name (with broker suffix when on the
-  // mesh) over the legacy parent/folder path — matches what the user sees
-  // in the terminal title and in /unbien status.
-  const sessionName = _displayName(cwd)
-
-  _attachOwner(relay, appPeerId, inner.device_name)
-
-  sendInner({
-    type: "pair_ok",
-    in_reply_to: inner.id,
-    session_name: sessionName,
-    session_started_at: _sessionStartedAt ?? Date.now(),
-    // App uses this to address subsequent inner messages to the right room
-    // when this Pi runs alongside others with the same epk. Defensive fallback
-    // to roomIdFor(cwd, name) covers the edge case where pair_request lands
-    // before _cmdStart could set _myRoomId (shouldn't happen in practice) —
-    // and stays plan/41-consistent (same (cwd, name) derivation as the announce).
-    room_id: _myRoomId ?? _deriveRoomId(cwd, sessionName),
-    // Plan/27 Wave A — surface the host coding-agent identity + machine
-    // hostname so the app can render a meaningful device row (and tell
-    // two PCs apart even when nicknames collide).
-    harness: _HARNESS,
-    hostname: _HOSTNAME,
-    protocol_version: PROTOCOL_VERSION,
-    capabilities: _capabilities(),
-  })
-
-  // Notify local RPC clients (e.g. Cockpit) that pairing completed, so they can
-  // close the QR screen and show the new device. Pure data event (display:false)
-  // — still emitted to the RPC stdout via the session stream.
-  _pi?.sendMessage({
-    customType: "un-bien:paired",
-    content: `Paired with ${inner.device_name}`,
-    details: { name: inner.device_name, peerId: appPeerId, pairedAt },
     display: false,
   })
 }
@@ -2337,6 +1571,130 @@ const imageDeps: ImagePipelineDeps = {
     return _myRoomMeta
   },
   wakeAgent: _wakeAgent,
+}
+
+// ── Relay lifecycle seam ──────────────────────────────────────────────────
+//
+// The relay lifecycle + owner-management code lives in
+// ./session/relay_lifecycle.ts and reaches this module's state and helpers
+// ONLY through this object (that module never imports ../index.js — no
+// circular imports). Same pattern as CommandDeps. The two wrappers below
+// preserve the exact `_handleControl` / `_onPeerDisconnect` export signatures
+// the integration tests import.
+const relayDeps: RelayLifecycleDeps = {
+  get state() {
+    return _state
+  },
+  set state(v) {
+    _state = v
+  },
+  get relay() {
+    return _relay
+  },
+  set relay(v) {
+    _relay = v
+  },
+  get relayUrl() {
+    return _relayUrl
+  },
+  set relayUrl(v) {
+    _relayUrl = v
+  },
+  get peerShort() {
+    return _peerShort
+  },
+  set peerShort(v) {
+    _peerShort = v
+  },
+  get stopAutoListener() {
+    return _stopAutoListener
+  },
+  set stopAutoListener(v) {
+    _stopAutoListener = v
+  },
+  get selfRevoke() {
+    return _selfRevoke
+  },
+  set selfRevoke(v) {
+    _selfRevoke = v
+  },
+  get selfRevokeEpoch() {
+    return _selfRevokeEpoch
+  },
+  set selfRevokeEpoch(v) {
+    _selfRevokeEpoch = v
+  },
+  get selfRevokeTopologyReadyEpoch() {
+    return _selfRevokeTopologyReadyEpoch
+  },
+  set selfRevokeTopologyReadyEpoch(v) {
+    _selfRevokeTopologyReadyEpoch = v
+  },
+  get selfRevokeTopology() {
+    return _selfRevokeTopology
+  },
+  set selfRevokeTopology(v) {
+    _selfRevokeTopology = v
+  },
+  get rootLifecycleGeneration() {
+    return _rootLifecycleGeneration
+  },
+  set rootLifecycleGeneration(v) {
+    _rootLifecycleGeneration = v
+  },
+  get meshNode() {
+    return _meshNode
+  },
+  get cachedEd25519() {
+    return _cachedEd25519
+  },
+  get myRoomId() {
+    return _myRoomId
+  },
+  get myRoomMeta() {
+    return _myRoomMeta
+  },
+  get sessionStartedAt() {
+    return _sessionStartedAt
+  },
+  get lastCtx() {
+    return _lastCtx
+  },
+  get disposed() {
+    return _disposed
+  },
+  get pi() {
+    return _pi
+  },
+  get rootSessionId() {
+    return _rootSessionId
+  },
+  get commandDeps() {
+    return deps
+  },
+  activePeers: _activePeers,
+  rootState: _rootState,
+  getState: _getState,
+  refreshFooter: _refreshFooter,
+  safeNotify: _safeNotify,
+  refreshPairingsCache: _refreshPairingsCache,
+  displayName: _displayName,
+  deriveRoomId: _deriveRoomId,
+  attachBridgeIfReady: _attachBridgeIfReady,
+  routeClientMessageFrom: _routeClientMessageFrom,
+  routeRpcCommandFrom: _routeRpcCommandFrom,
+  routeUnBienPlaneFrom: _routeUnBienPlaneFrom,
+  liveCtx: _liveCtx,
+  noopCtx: _noopCtx,
+  renameAgent: _renameAgent,
+}
+
+export async function _handleControl(cmd: string): Promise<void> {
+  await _handleControlImpl(relayDeps, cmd)
+}
+
+export function _onPeerDisconnect(appPeerId?: string): void {
+  _onPeerDisconnectImpl(relayDeps, appPeerId)
 }
 
 // ── Command seam ──────────────────────────────────────────────────────────────
@@ -2444,10 +1802,10 @@ const deps: CommandDeps = {
     _lockedName = v
   },
   get relayLifecycleGeneration() {
-    return _relayLifecycleGeneration
+    return _getRelayLifecycleGeneration()
   },
   set relayLifecycleGeneration(v) {
-    _relayLifecycleGeneration = v
+    _setRelayLifecycleGeneration(v)
   },
   get rootLifecycleGeneration() {
     return _rootLifecycleGeneration
@@ -2512,19 +1870,19 @@ const deps: CommandDeps = {
   deriveRoomId: _deriveRoomId,
   currentModelName: _currentModelName,
   rootState: _rootState,
-  goIdle: _goIdle,
-  onRelayClose: _onRelayClose,
-  installAutoListener: _installAutoListener,
+  goIdle: () => _goIdle(relayDeps),
+  onRelayClose: (closedRelay) => _onRelayClose(relayDeps, closedRelay),
+  installAutoListener: (relay) => _installAutoListener(relayDeps, relay),
   refreshFooter: _refreshFooter,
   revokeActiveOwnerRuntime: _revokeActiveOwnerRuntime,
   attachBridgeIfReady: _attachBridgeIfReady,
-  emitRelayState: _emitRelayState,
+  emitRelayState: (force?) => _emitRelayState(relayDeps, force),
   refreshSessionPeerCount: _refreshSessionPeerCount,
   deliverMeshMessageToAgent: _deliverMeshMessageToAgent,
   refreshPairingsCache: _refreshPairingsCache,
-  detachPeerChannel: _detachPeerChannel,
+  detachPeerChannel: (appPeerId) => _detachPeerChannel(relayDeps, appPeerId),
   handleControl: _handleControl,
-  relayStatus: _relayStatus,
+  relayStatus: () => _relayStatus(relayDeps),
   getState: _getState,
   runTestScenario: _runTestScenario,
   safeNotify: _safeNotify,
@@ -2608,7 +1966,7 @@ const _testHooks = createTestHooks({
     return _cachedEd25519
   },
   get reconnectTimer() {
-    return _reconnectTimer
+    return _getReconnectTimer()
   },
   activePeers: _activePeers,
   rootState: _rootState,
@@ -2663,25 +2021,35 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   if (_claimRootSession(pi)) {
     _pi = pi
     _extensionUiBridge?.dispose()
-    _extensionUiBridge = createExtensionUiBridge(pi, _uiBroadcast)
+    _extensionUiBridge = createExtensionUiBridge(pi, (msg) =>
+      _uiBroadcast(relayDeps, msg),
+    )
     _panelBridge?.dispose()
-    _panelBridge = createPanelBridge(pi, _panelBroadcast, {
-      suppressAgents: subagentRoomsEnabled(),
-    })
-    _rpcEnvelope?.dispose()
-    _rpcEnvelope = createRpcEnvelope(pi, _broadcastEnvelope, {
-      enrichArgs: (tool, args) => {
-        const e = _enrichToolArgs(tool, args, _resolveToolCwd()) as {
-          hunks?: unknown[]
-        }
-        return Array.isArray(e.hunks) ? { hunks: e.hunks } : null
+    _panelBridge = createPanelBridge(
+      pi,
+      (msg) => _panelBroadcast(relayDeps, msg),
+      {
+        suppressAgents: subagentRoomsEnabled(),
       },
-    })
+    )
+    _rpcEnvelope?.dispose()
+    _rpcEnvelope = createRpcEnvelope(
+      pi,
+      (env) => _broadcastEnvelope(relayDeps, env),
+      {
+        enrichArgs: (tool, args) => {
+          const e = _enrichToolArgs(tool, args, _resolveToolCwd()) as {
+            hunks?: unknown[]
+          }
+          return Array.isArray(e.hunks) ? { hunks: e.hunks } : null
+        },
+      },
+    )
     _subagentRooms?.dispose()
     _subagentRooms = initSubagentRooms(pi, {
       getParentRoomId: () => _myRoomId,
       getParentSessionId: () => _rootSessionId,
-      broadcastPanel: _panelBroadcast,
+      broadcastPanel: (msg) => _panelBroadcast(relayDeps, msg),
     })
   }
 
@@ -2733,7 +2101,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       void _handleControl(event.text.slice(CTRL_PREFIX.length).trim())
       return { action: "handled" } as const
     }
-    if (!_anyPeerActive()) return
+    if (!_anyPeerActive(relayDeps)) return
     if (event.source === "extension") return
     // Turn id still stamped for queue/turn correlation; the app renders the
     // user bubble from the envelope message_end (role:user), not a stock frame.
@@ -2923,25 +2291,35 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     if (_claimRootSession(pi)) {
       if (ctx?.sessionManager) _rootSessionId = sid
       if (!_extensionUiBridge)
-        _extensionUiBridge = createExtensionUiBridge(pi, _uiBroadcast)
+        _extensionUiBridge = createExtensionUiBridge(pi, (msg) =>
+          _uiBroadcast(relayDeps, msg),
+        )
       if (!_panelBridge)
-        _panelBridge = createPanelBridge(pi, _panelBroadcast, {
-          suppressAgents: subagentRoomsEnabled(),
-        })
-      if (!_rpcEnvelope)
-        _rpcEnvelope = createRpcEnvelope(pi, _broadcastEnvelope, {
-          enrichArgs: (tool, args) => {
-            const e = _enrichToolArgs(tool, args, _resolveToolCwd()) as {
-              hunks?: unknown[]
-            }
-            return Array.isArray(e.hunks) ? { hunks: e.hunks } : null
+        _panelBridge = createPanelBridge(
+          pi,
+          (msg) => _panelBroadcast(relayDeps, msg),
+          {
+            suppressAgents: subagentRoomsEnabled(),
           },
-        })
+        )
+      if (!_rpcEnvelope)
+        _rpcEnvelope = createRpcEnvelope(
+          pi,
+          (env) => _broadcastEnvelope(relayDeps, env),
+          {
+            enrichArgs: (tool, args) => {
+              const e = _enrichToolArgs(tool, args, _resolveToolCwd()) as {
+                hunks?: unknown[]
+              }
+              return Array.isArray(e.hunks) ? { hunks: e.hunks } : null
+            },
+          },
+        )
       if (!_subagentRooms)
         _subagentRooms = initSubagentRooms(pi, {
           getParentRoomId: () => _myRoomId,
           getParentSessionId: () => _rootSessionId,
-          broadcastPanel: _panelBroadcast,
+          broadcastPanel: (msg) => _panelBroadcast(relayDeps, msg),
         })
     } else if (_isNonRootSid(sid)) {
       // A subagent child session (non-root) — surface it as its own relay room.
@@ -3056,7 +2434,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // clears `_disposed` before its promises settle.
     _disposed = true
     _rootLifecycleGeneration += 1
-    _relayLifecycleGeneration += 1
+    _setRelayLifecycleGeneration(_getRelayLifecycleGeneration() + 1)
     _meshJoinGeneration += 1
     // The bridge owns live pi.events subscriptions + flow TTLs. Dispose before
     // the outgoing session is replaced so stale listeners cannot leak or
@@ -3071,8 +2449,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       // app can mark the session ended. Emit EXPLICITLY here, BEFORE the
       // producer dispose below: `_rpcEnvelope` gates on its `disposed` flag,
       // so once disposed it can no longer build/broadcast this frame.
-      if (_anyPeerActive()) {
-        _broadcastEnvelope({ rpc: { type: "session_shutdown" } })
+      if (_anyPeerActive(relayDeps)) {
+        _broadcastEnvelope(relayDeps, { rpc: { type: "session_shutdown" } })
       }
       _extensionUiBridge?.dispose()
       _extensionUiBridge = null
@@ -3097,7 +2475,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     if (_state === "idle") {
       _meshNode?.detachBridge()
     } else {
-      _goIdle()
+      _goIdle(relayDeps)
     }
 
     const meshNode = _meshNode
