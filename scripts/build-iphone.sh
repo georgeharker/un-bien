@@ -41,8 +41,8 @@ xcodebuild \
   -destination "platform=iOS,id=$UDID" \
   -derivedDataPath "$DERIVED" \
   -allowProvisioningUpdates \
-  build \
-  | tail -20
+  build |
+  tail -20
 
 # --- Locate the bundle ---------------------------------------------------------
 APP=$(find "$DERIVED/Build/Products/Debug-iphoneos" -maxdepth 1 -name '*.app' | head -1)
