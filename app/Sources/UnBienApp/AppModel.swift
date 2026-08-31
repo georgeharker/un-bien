@@ -20,6 +20,15 @@ public final class AppModel: ObservableObject {
     var envelopeReducers: [String: EnvelopeReducer] = [:]
     /// Pending interactive prompt per session (extension_ui_request).
     @Published public var prompts: [String: ExtensionUiRequest] = [:]
+    /// Sessions whose get_entries backfill WALK has reached its terminal page
+    /// (empty page / error / nil leaf) — the transcript is complete for now.
+    /// TranscriptView's scroll-restore WAITS on this while pages stream in: the
+    /// remembered anchor row sits near the END of the entry log, and the first
+    /// pages carry the OLDEST entries — restoring on page 1 would consume the
+    /// once-per-lifetime restore with a bottom fallback the following pages then
+    /// auto-follow to the transcript end (paged backfill × scroll-restore
+    /// interaction; designs 01M1B9F6 + 01M1BANZ).
+    @Published public private(set) var backfilledSessions: Set<String> = []
     /// Pending queued follow-up messages per session (pi-native `queue_update`).
     @Published public var queued: [String: [QueuedMessageItem]] = [:]
     /// rpc request/reply correlation (plan 01M1A39Y4G): continuations parked by
@@ -218,6 +227,11 @@ public final class AppModel: ObservableObject {
     /// panel ns-merge), so re-issuing them freely is safe.
     func requestReconstruction(_ session: LiveSession, connection: RelayConnection) async {
         let since = envelopeReducers[session.id]?.leafId
+        // A fresh walk is starting: the restore waiter must not treat a stale
+        // terminal flag as "the remembered row will never come" until this
+        // walk's terminal page lands. A delta refetch (warm reconnect, since
+        // != nil) re-marks it complete on its (usually empty) terminal page.
+        backfilledSessions.remove(session.id)
         try? await connection.send(.getEntries(id: UUID().uuidString, since: since),
                                    toPeer: session.peerEPK, room: session.roomID)
         try? await connection.send(.sessionSync(id: UUID().uuidString, limit: nil),

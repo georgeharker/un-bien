@@ -259,20 +259,33 @@ extension AppModel {
                         // fetching with the page's leafId until an empty page
                         // (or an error / nil leaf). Folding is idempotent
                         // (identify dedup), so pages + live frames interleave
-                        // freely.
+                        // freely. The terminal page also marks the session
+                        // backfilled so TranscriptView's scroll-restore can stop
+                        // WAITING for the remembered row (paged-backfill ×
+                        // restore interaction, designs 01M1BANZ + 01M1B9F6).
                         if let page = rpc["data"],
                            rpc["command"]?.stringValue == "get_entries",
-                           rpc["success"]?.boolValue == true,
-                           let entries = page["entries"]?.arrayValue, !entries.isEmpty,
-                           let leaf = page["leafId"]?.stringValue,
-                           let conn = connections[relayID] {
-                            let peer = envelope.peer, room = envelope.room
-                            let n = entries.count
-                            let leafTail = String(leaf.suffix(8))
-                            let keyTail = String(key.suffix(12))
-                            log.notice("get_entries page key=\(keyTail, privacy: .public) n=\(n, privacy: .public) leaf=\(leafTail, privacy: .public) — fetching next page")
-                            Task { try? await conn.send(.getEntries(id: UUID().uuidString, since: leaf),
-                                                         toPeer: peer, room: room) }
+                           rpc["success"]?.boolValue == true {
+                            if let entries = page["entries"]?.arrayValue, !entries.isEmpty,
+                               let leaf = page["leafId"]?.stringValue,
+                               let conn = connections[relayID] {
+                                backfilledSessions.remove(key) // pages still streaming
+                                let peer = envelope.peer, room = envelope.room
+                                let n = entries.count
+                                let leafTail = String(leaf.suffix(8))
+                                let keyTail = String(key.suffix(12))
+                                log.notice("get_entries page key=\(keyTail, privacy: .public) n=\(n, privacy: .public) leaf=\(leafTail, privacy: .public) — fetching next page")
+                                Task { try? await conn.send(.getEntries(id: UUID().uuidString, since: leaf),
+                                                             toPeer: peer, room: room) }
+                            } else {
+                                // Terminal page (empty entries / nil leaf): the
+                                // walk is over — the transcript is complete.
+                                backfilledSessions.insert(key)
+                            }
+                        } else if rpc["command"]?.stringValue == "get_entries" {
+                            // Error response: the walk can't continue — mark
+                            // complete so a waiting restore doesn't hang forever.
+                            backfilledSessions.insert(key)
                         }
                     }
                     // Queue display is APP-OWNED. pi never delivers queue_update

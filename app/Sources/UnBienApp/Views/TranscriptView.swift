@@ -88,6 +88,51 @@ struct TranscriptView: View {
         }
     }
 
+    /// One scroll-restore attempt (design 01M1B9F6). Returns true when CONSUMED
+    /// (restored, or bottom-fallback latched); false when still WAITING — the
+    /// remembered row hasn't arrived yet and the paged backfill hasn't reached
+    /// its terminal page. While waiting, auto-follow stays off (it's gated on
+    /// `didRestoreScroll`) and capture stays off, so nothing fights the pages
+    /// streaming in — the view simply sits until the anchor row lands and the
+    /// restore fires mid-walk.
+    private func attemptRestore(proxy: ScrollViewProxy) -> Bool {
+        guard !items.isEmpty else { return false }
+        guard !didRestoreScroll else { return true }
+        if let remembered = model.rememberedScroll(session: session) {
+            if items.contains(where: { $0.id == remembered }) {
+                didRestoreScroll = true
+                // Restore to the remembered STABLE row, attaching at the BOTTOM
+                // of its extent. The scrollTo runs on ESTIMATED geometry for a
+                // far-down, not-yet-materialized row; the materialized pass
+                // re-anchors (reanchorIfNeeded).
+                proxy.scrollTo(remembered, anchor: .bottom)
+                reanchorTarget = remembered
+                // The sentinel never appeared before this programmatic scroll;
+                // sync the auto-follow gate so a mid-transcript restore isn't
+                // immediately yanked down by the next incoming message.
+                atBottom = remembered == items.last?.id
+                return true
+            }
+            // Paged-backfill × restore interaction (designs 01M1B9F6 +
+            // 01M1BANZ): the remembered row sits near the END of the entry log,
+            // but the first pages carry the OLDEST entries. WAIT for it instead
+            // of consuming the restore with a bottom fallback that the following
+            // pages then auto-follow to the transcript end (the "restore doesn't
+            // stick across app relaunch" bug).
+            if !model.backfilledSessions.contains(session.id) { return false }
+            // Backfill complete and the row never appeared (compacted away /
+            // filtered out): fall through to the bottom fallback.
+        }
+        // Nothing remembered (or it's permanently gone): land at the bottom.
+        didRestoreScroll = true
+        if let last = items.last {
+            proxy.scrollTo(last.id, anchor: .bottom)
+            reanchorTarget = last.id
+            atBottom = true
+        }
+        return true
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if model.hasEnded(session) { endedBanner }
@@ -127,34 +172,25 @@ struct TranscriptView: View {
                     Color.clear.preference(key: ViewportHeightKey.self, value: geo.size.height)
                 })
                 .onChange(of: items.count, initial: true) { _, _ in
-                    guard !items.isEmpty else { return }
                     if !didRestoreScroll {
-                        didRestoreScroll = true
-                        // Restore to the remembered STABLE row, attaching at the
-                        // BOTTOM of its extent; fall back to the bottom when
-                        // nothing is remembered (or it's gone).
-                        if let remembered = model.rememberedScroll(session: session),
-                           items.contains(where: { $0.id == remembered }) {
-                            proxy.scrollTo(remembered, anchor: .bottom)
-                            // The scrollTo above runs on ESTIMATED geometry for a
-                            // far-down, not-yet-materialized row; re-anchor on the
-                            // materialized pass (reanchorIfNeeded).
-                            reanchorTarget = remembered
-                            // The sentinel never appeared before this programmatic
-                            // scroll; sync the auto-follow gate so a mid-transcript
-                            // restore isn't immediately yanked down by the next
-                            // incoming message.
-                            atBottom = remembered == items.last?.id
-                        } else if let last = items.last {
-                            proxy.scrollTo(last.id, anchor: .bottom)
-                            reanchorTarget = last.id
-                            atBottom = true
-                        }
+                        // May consume (restore / bottom fallback) or WAIT for a
+                        // later page carrying the remembered row — see
+                        // attemptRestore. While waiting, the follow branch below
+                        // stays disabled (didRestoreScroll is still false).
+                        _ = attemptRestore(proxy: proxy)
                     } else if atBottom, let last = items.last {
                         // Only follow new rows while pinned to the bottom. Snap
                         // (no animation): animated follows during streaming are
                         // what made the pull-down feel like fighting the user.
                         proxy.scrollTo(last.id, anchor: .bottom)
+                    }
+                }
+                // The backfill's TERMINAL page (empty entries) doesn't change
+                // items.count — give a waiting restore its final chance (bottom
+                // fallback when the remembered row never arrived).
+                .onChange(of: model.backfilledSessions.contains(session.id)) { _, complete in
+                    if complete, !didRestoreScroll {
+                        _ = attemptRestore(proxy: proxy)
                     }
                 }
                 // Capture: remember the bottom-most visible row (design 01M1B9F6);
