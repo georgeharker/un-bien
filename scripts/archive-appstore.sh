@@ -24,7 +24,8 @@
 set -eu
 
 SCRIPT_DIR=$( # shellcheck disable=SC1007
-    CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+    CDPATH= cd -- "$(dirname -- "$0")" && pwd
+)
 ROOT="$SCRIPT_DIR/.."
 PROJECT="$ROOT/app/UnBien.xcodeproj"
 DERIVED="$ROOT/app/build"
@@ -37,7 +38,7 @@ PLATFORM="${1:-both}"
 mkdir -p "$ARCHIVES" "$EXPORT"
 
 write_export_options() { # $1 = platform tag
-    cat > "$DERIVED/ExportOptions-$1.plist" <<PLIST
+    cat >"$DERIVED/ExportOptions-$1.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -58,7 +59,8 @@ PLIST
 }
 
 do_archive() { # $1 = scheme, $2 = destination
-    scheme="$1"; dest="$2"
+    scheme="$1"
+    dest="$2"
     log="$DERIVED/archive-$scheme.log"
     echo "==> archiving $scheme (Release, App Store signing)..."
     if ! xcodebuild \
@@ -69,7 +71,7 @@ do_archive() { # $1 = scheme, $2 = destination
         -archivePath "$ARCHIVES/$scheme.xcarchive" \
         -derivedDataPath "$DERIVED" \
         -allowProvisioningUpdates \
-        archive > "$log" 2>&1; then
+        archive >"$log" 2>&1; then
         tail -30 "$log"
         echo "ERROR: $scheme archive failed — NOT exporting (see $log)"
         exit 1
@@ -83,7 +85,8 @@ do_archive() { # $1 = scheme, $2 = destination
 }
 
 do_export() { # $1 = scheme, $2 = platform tag
-    scheme="$1"; tag="$2"
+    scheme="$1"
+    tag="$2"
     write_export_options "$tag"
     log="$DERIVED/export-$scheme.log"
     echo "==> exporting $scheme (app-store-connect)..."
@@ -98,7 +101,7 @@ do_export() { # $1 = scheme, $2 = platform tag
         -archivePath "$ARCHIVES/$scheme.xcarchive" \
         -exportOptionsPlist "$DERIVED/ExportOptions-$tag.plist" \
         -exportPath "$EXPORT" \
-        -allowProvisioningUpdates > "$log" 2>&1; then
+        -allowProvisioningUpdates >"$log" 2>&1; then
         tail -30 "$log"
         echo "ERROR: $scheme export failed (see $log)"
         exit 1
@@ -107,24 +110,24 @@ do_export() { # $1 = scheme, $2 = platform tag
 }
 
 case "$PLATFORM" in
-    ios|IOS)
-        do_archive "UnBien-iOS" "generic/platform=iOS"
-        do_export "UnBien-iOS" "ios"
-        ;;
-    macos|MACOS)
-        do_archive "UnBien-macOS" "generic/platform=macOS"
-        do_export "UnBien-macOS" "macos"
-        ;;
-    both)
-        do_archive "UnBien-iOS" "generic/platform=iOS"
-        do_export "UnBien-iOS" "ios"
-        do_archive "UnBien-macOS" "generic/platform=macOS"
-        do_export "UnBien-macOS" "macos"
-        ;;
-    *)
-        echo "Usage: $0 [ios|macos|both]"
-        exit 1
-        ;;
+ios | IOS)
+    do_archive "UnBien-iOS" "generic/platform=iOS"
+    do_export "UnBien-iOS" "ios"
+    ;;
+macos | MACOS)
+    do_archive "UnBien-macOS" "generic/platform=macOS"
+    do_export "UnBien-macOS" "macos"
+    ;;
+both)
+    do_archive "UnBien-iOS" "generic/platform=iOS"
+    do_export "UnBien-iOS" "ios"
+    do_archive "UnBien-macOS" "generic/platform=macOS"
+    do_export "UnBien-macOS" "macos"
+    ;;
+*)
+    echo "Usage: $0 [ios|macos|both]"
+    exit 1
+    ;;
 esac
 
 echo "Artifacts in $EXPORT:"
