@@ -11,16 +11,16 @@
 		4762E29E584B7811437CEBA2 /* UnBienApp in Frameworks */ = {isa = PBXBuildFile; productRef = 3AA6F37DC9C7C7D7CF500BB7 /* UnBienApp */; };
 		48623343A5189359F30E20C3 /* demo-subagent-run.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = 0A69500B0FF76C79403CBE21 /* demo-subagent-run.jsonl */; };
 		4BF70302A5ACE76E1E05E803 /* UnBienApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 105D6ECB55459B12DC4E7F91 /* UnBienApp.swift */; };
+		55EE814200F926A1801CDEC0 /* demo-main.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = D69E080047C661D47CD1FD70 /* demo-main.jsonl */; };
 		5793FAFA6862C1D619912217 /* demo-ask.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = 044E789A3168E6A923FB0425 /* demo-ask.jsonl */; };
 		5EB8545E494D5758AE60C296 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 363F503535BEAFD31CBD4424 /* Assets.xcassets */; };
 		6E00E326DF525B73178588E7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 363F503535BEAFD31CBD4424 /* Assets.xcassets */; };
 		7A8F1AAEA8103F1DF9290D41 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 05C112673CDC32F4C230FA6D /* PrivacyInfo.xcprivacy */; };
-		7F983EBCAA052A84F51A5002 /* demo-message-turn.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = F364C97A66C47BCF4DCB5AC6 /* demo-message-turn.jsonl */; };
 		958EE8CD05A8B6ACDF732B51 /* UnBienApp in Frameworks */ = {isa = PBXBuildFile; productRef = 59C154A563AD5B08B3955A71 /* UnBienApp */; };
 		B1F92F492B7E24E319E5CC04 /* demo-subagent-run.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = 0A69500B0FF76C79403CBE21 /* demo-subagent-run.jsonl */; };
 		B4145D91BFDF8D7B4DB00DA9 /* UnBienApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 105D6ECB55459B12DC4E7F91 /* UnBienApp.swift */; };
 		D821A4852418B275C5C2385F /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 05C112673CDC32F4C230FA6D /* PrivacyInfo.xcprivacy */; };
-		E6035485CC85D7894E4DCE9C /* demo-message-turn.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = F364C97A66C47BCF4DCB5AC6 /* demo-message-turn.jsonl */; };
+		DB31BEE90348CA3EB9B9A27B /* demo-main.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = D69E080047C661D47CD1FD70 /* demo-main.jsonl */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -32,7 +32,7 @@
 		363F503535BEAFD31CBD4424 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		7A34C497832570683B1E6030 /* UnBien-iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "UnBien-iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		B590CD84FB480AC9F416CD86 /* app */ = {isa = PBXFileReference; lastKnownFileType = folder; name = app; path = .; sourceTree = SOURCE_ROOT; };
-		F364C97A66C47BCF4DCB5AC6 /* demo-message-turn.jsonl */ = {isa = PBXFileReference; path = "demo-message-turn.jsonl"; sourceTree = "<group>"; };
+		D69E080047C661D47CD1FD70 /* demo-main.jsonl */ = {isa = PBXFileReference; path = "demo-main.jsonl"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -96,7 +96,7 @@
 			isa = PBXGroup;
 			children = (
 				044E789A3168E6A923FB0425 /* demo-ask.jsonl */,
-				F364C97A66C47BCF4DCB5AC6 /* demo-message-turn.jsonl */,
+				D69E080047C661D47CD1FD70 /* demo-main.jsonl */,
 				0A69500B0FF76C79403CBE21 /* demo-subagent-run.jsonl */,
 			);
 			path = DemoFixtures;
@@ -203,7 +203,7 @@
 				6E00E326DF525B73178588E7 /* Assets.xcassets in Resources */,
 				D821A4852418B275C5C2385F /* PrivacyInfo.xcprivacy in Resources */,
 				5793FAFA6862C1D619912217 /* demo-ask.jsonl in Resources */,
-				E6035485CC85D7894E4DCE9C /* demo-message-turn.jsonl in Resources */,
+				DB31BEE90348CA3EB9B9A27B /* demo-main.jsonl in Resources */,
 				48623343A5189359F30E20C3 /* demo-subagent-run.jsonl in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -215,7 +215,7 @@
 				5EB8545E494D5758AE60C296 /* Assets.xcassets in Resources */,
 				7A8F1AAEA8103F1DF9290D41 /* PrivacyInfo.xcprivacy in Resources */,
 				0DA52ECBCCD33FE2C2CF045D /* demo-ask.jsonl in Resources */,
-				7F983EBCAA052A84F51A5002 /* demo-message-turn.jsonl in Resources */,
+				55EE814200F926A1801CDEC0 /* demo-main.jsonl in Resources */,
 				B1F92F492B7E24E319E5CC04 /* demo-subagent-run.jsonl in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

@@ -46,13 +46,16 @@ extension AppModel {
         guard !mesh.config.relays.contains(where: { $0.id == Self.demoRelayID }) else { return }
         mesh.addTransientRelay(RelayConfig(id: Self.demoRelayID, name: "Demo", url: "demo://local"))
 
-        // Main: the message-turn fixture (streamed text, thinking, tool cards,
-        // notifies) — the richest single transcript.
+        // Main: a purpose-built fixture (design 01M1CGET…) — a realistic
+        // coding turn: thinking, streamed narration, an Edit card with real
+        // diff hunks (envelope aux), a test run, and a markdown summary. The
+        // raw smoke-test capture it replaced read as confusing ("reply with
+        // exactly hello world", aimless follow-up turns).
         let main = LiveSession(relayID: Self.demoRelayID, peerEPK: "demo-peer",
                                roomID: "demo-room-main", sessionID: "demo-session-main",
                                name: "Agent turn", cwd: "~/demo", model: "claude-opus-4-8",
                                parentSessionID: nil, parentRoomID: nil, subagentID: nil)
-        foldDemoFixture("demo-message-turn", into: main)
+        foldDemoFixture("demo-main", into: main)
         sessions[main.id] = main
         loadDemoAsk(into: main)
 
