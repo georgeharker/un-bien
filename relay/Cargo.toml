@@ -16,6 +16,14 @@ categories = ["network-programming", "web-programming::websocket", "authenticati
 [lib]
 name = "relay"
 
+# Binary name follows the TYPED-surface convention — `unbien*`, like the
+# `unbien` (extension) and `unbien-launcher` bins and the `/unbien` commands —
+# while the published crate keeps the NAMED-surface `un-bien-relay` (npm scope
+# / crate / dirs are hyphenated like the project name).
+[[bin]]
+name = "unbien-relay"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1.0.102"
 axum = { version = "0.7.9", features = ["ws"] }
