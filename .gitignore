@@ -19,6 +19,10 @@ target/
 # relay runtime DB (UNBIEN_MESH_DB_PATH default: data/mesh.db)
 data/
 
+# Per-machine iPhone device name for scripts/build-iphone.sh — device ids
+# stay out of the repo; set here or via the UNBIEN_IPHONE env var.
+.iphone-device
+
 # Xcode build products (iOS/mac device builds)
 app/build/
 

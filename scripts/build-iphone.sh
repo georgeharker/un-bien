@@ -21,9 +21,23 @@ PROJECT="$ROOT/app/UnBien.xcodeproj"
 SCHEME="UnBien-iOS"
 DERIVED="$ROOT/app/build"
 
-DEVICE_NAME="${1:-geoifon}"
-
 # --- Resolve the device by name -> CoreDevice identifier ---------------------
+# Resolution order: CLI arg > UNBIEN_IPHONE env > .iphone-device (gitignored,
+# per-machine). No committed default — device ids/names are personal and stay
+# out of the repo.
+DEVICE_NAME=""
+if [ -n "${1:-}" ]; then
+  DEVICE_NAME="$1"
+elif [ -n "${UNBIEN_IPHONE:-}" ]; then
+  DEVICE_NAME="$UNBIEN_IPHONE"
+elif [ -f "$ROOT/.iphone-device" ]; then
+  DEVICE_NAME=$(cat "$ROOT/.iphone-device")
+fi
+if [ -z "$DEVICE_NAME" ]; then
+  echo "ERROR: no device name. Pass one ($0 <device-name>), export UNBIEN_IPHONE, or write it to .iphone-device (gitignored). Connected devices:"
+  xcrun devicectl list devices
+  exit 1
+fi
 UDID=$(xcrun devicectl list devices 2>/dev/null | awk -v n="$DEVICE_NAME" '$1==n {print $3; exit}')
 if [ -z "$UDID" ]; then
   echo "ERROR: device '$DEVICE_NAME' not found. Connected devices:"
