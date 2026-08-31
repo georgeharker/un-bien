@@ -179,9 +179,14 @@ transcript, tool-approval, mesh view are the natural set.)
 
 - Root `LICENSE` (MIT, © 2026 George Harker); the remote-pi MIT license +
   attribution preserved in `extension/LICENSE` and the README.
-- Settings → Acknowledgements section: Highlightr + bundled highlight.js
-  (MIT/BSD-3), swift-markdown-ui (MIT), NetworkImage (MIT), swift-cmark /
-  cmark-gfm (BSD-2), + the remote-pi derivation footer.
+- Settings → Acknowledgements → **Licenses** (drill-down screen, `LicensesView`):
+  the FULL agreement text for every bundled part — Un Bien, remote-pi,
+  Highlightr, highlight.js (notice from the minified bundle + BSD-3),
+  swift-markdown-ui, NetworkImage, swift-cmark — selectable, monospaced,
+  rendered verbatim. Texts are vendored into `app/App/Shared/Licenses/`
+  (bundled as resources) and guarded by `scripts/sync-licenses.sh`, which
+  syncs from the SPM checkouts and FAILS on drift (highlightjs.txt is
+  hand-maintained — upstream ships no standalone file).
 
 ### 12. 🔲 Archive / upload pipeline
 

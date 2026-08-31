@@ -188,18 +188,23 @@ struct SettingsView: View {
         }
     }
 
-    /// Third-party acknowledgements (App Store requirement for bundled code;
-    /// plan item: license housekeeping). Direct deps + markdown-ui's transitives.
+    /// Third-party acknowledgements (App Store compliance): the full license
+    /// AGREEMENTS for every bundled part, drill-down style — MIT/BSD want the
+    /// text reproduced, not just named. Texts vendored into
+    /// App/Shared/Licenses (see LicensesView).
     private var acknowledgementsSection: some View {
         Section {
-            LabeledContent("Highlightr + highlight.js", value: "MIT / BSD-3")
-            LabeledContent("swift-markdown-ui", value: "MIT")
-            LabeledContent("NetworkImage", value: "MIT")
-            LabeledContent("swift-cmark (cmark-gfm)", value: "BSD-2")
+            NavigationLink("Licenses") {
+                LicensesView()
+            }
         } header: {
             Text("Acknowledgements")
         } footer: {
-            Text("Un Bien is derived from remote-pi by Jacob Moura (MIT). Full license texts are in the repository: github.com/georgeharker/un-bien.")
+            Text("""
+            Un Bien is derived from remote-pi by Jacob Moura (MIT). The \
+            Licenses screen carries the full agreement text for every \
+            bundled part.
+            """)
         }
     }
 

@@ -8,17 +8,31 @@
 
 /* Begin PBXBuildFile section */
 		0DA52ECBCCD33FE2C2CF045D /* demo-ask.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = 044E789A3168E6A923FB0425 /* demo-ask.jsonl */; };
+		183B13A4C402039F5011D1F7 /* highlightjs.txt in Resources */ = {isa = PBXBuildFile; fileRef = 6B7387809B0629FB48DB4E9F /* highlightjs.txt */; };
+		3D5C3734C86EE274FE946A76 /* highlightr.txt in Resources */ = {isa = PBXBuildFile; fileRef = 20C12F29833F76BE5B0E4F9A /* highlightr.txt */; };
+		429118400B400066EC8E81E2 /* highlightjs.txt in Resources */ = {isa = PBXBuildFile; fileRef = 6B7387809B0629FB48DB4E9F /* highlightjs.txt */; };
 		4762E29E584B7811437CEBA2 /* UnBienApp in Frameworks */ = {isa = PBXBuildFile; productRef = 3AA6F37DC9C7C7D7CF500BB7 /* UnBienApp */; };
 		48623343A5189359F30E20C3 /* demo-subagent-run.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = 0A69500B0FF76C79403CBE21 /* demo-subagent-run.jsonl */; };
 		4BF70302A5ACE76E1E05E803 /* UnBienApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 105D6ECB55459B12DC4E7F91 /* UnBienApp.swift */; };
 		55EE814200F926A1801CDEC0 /* demo-main.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = D69E080047C661D47CD1FD70 /* demo-main.jsonl */; };
 		5793FAFA6862C1D619912217 /* demo-ask.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = 044E789A3168E6A923FB0425 /* demo-ask.jsonl */; };
 		5EB8545E494D5758AE60C296 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 363F503535BEAFD31CBD4424 /* Assets.xcassets */; };
+		6CAE402EA4E6007AFEF06F1B /* swift-markdown-ui.txt in Resources */ = {isa = PBXBuildFile; fileRef = 678ED531F6610CB64E22241E /* swift-markdown-ui.txt */; };
 		6E00E326DF525B73178588E7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 363F503535BEAFD31CBD4424 /* Assets.xcassets */; };
+		71DE8CB090DFC32B9CA6C3A9 /* remote-pi.txt in Resources */ = {isa = PBXBuildFile; fileRef = 8352D479ACDF777CE3E04C20 /* remote-pi.txt */; };
 		7A8F1AAEA8103F1DF9290D41 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 05C112673CDC32F4C230FA6D /* PrivacyInfo.xcprivacy */; };
+		7AA0825A15CABCC67316911C /* remote-pi.txt in Resources */ = {isa = PBXBuildFile; fileRef = 8352D479ACDF777CE3E04C20 /* remote-pi.txt */; };
+		89A02EC256059EC4F4566456 /* un-bien.txt in Resources */ = {isa = PBXBuildFile; fileRef = AAE1F01866472F0EDD3C2634 /* un-bien.txt */; };
 		958EE8CD05A8B6ACDF732B51 /* UnBienApp in Frameworks */ = {isa = PBXBuildFile; productRef = 59C154A563AD5B08B3955A71 /* UnBienApp */; };
+		A461F8BE862D9B7D20020A89 /* networkimage.txt in Resources */ = {isa = PBXBuildFile; fileRef = A6AFBFC012B80E09058AB87C /* networkimage.txt */; };
+		AB2464C83ABFF8420774BCB1 /* swift-markdown-ui.txt in Resources */ = {isa = PBXBuildFile; fileRef = 678ED531F6610CB64E22241E /* swift-markdown-ui.txt */; };
 		B1F92F492B7E24E319E5CC04 /* demo-subagent-run.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = 0A69500B0FF76C79403CBE21 /* demo-subagent-run.jsonl */; };
+		B36D163AE9D39EA56C6FC27F /* cmark.txt in Resources */ = {isa = PBXBuildFile; fileRef = 8396EB27D83717DD0B5B6F8D /* cmark.txt */; };
 		B4145D91BFDF8D7B4DB00DA9 /* UnBienApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 105D6ECB55459B12DC4E7F91 /* UnBienApp.swift */; };
+		BAFBB475365C05C3365FF214 /* cmark.txt in Resources */ = {isa = PBXBuildFile; fileRef = 8396EB27D83717DD0B5B6F8D /* cmark.txt */; };
+		BEA551A9708A6A0A33981E79 /* un-bien.txt in Resources */ = {isa = PBXBuildFile; fileRef = AAE1F01866472F0EDD3C2634 /* un-bien.txt */; };
+		D07EEB0A7BF12CAE10A4DED8 /* highlightr.txt in Resources */ = {isa = PBXBuildFile; fileRef = 20C12F29833F76BE5B0E4F9A /* highlightr.txt */; };
+		D5A0626D600DC5D038E457DE /* networkimage.txt in Resources */ = {isa = PBXBuildFile; fileRef = A6AFBFC012B80E09058AB87C /* networkimage.txt */; };
 		D821A4852418B275C5C2385F /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 05C112673CDC32F4C230FA6D /* PrivacyInfo.xcprivacy */; };
 		DB31BEE90348CA3EB9B9A27B /* demo-main.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = D69E080047C661D47CD1FD70 /* demo-main.jsonl */; };
 /* End PBXBuildFile section */
@@ -29,8 +43,15 @@
 		0A69500B0FF76C79403CBE21 /* demo-subagent-run.jsonl */ = {isa = PBXFileReference; path = "demo-subagent-run.jsonl"; sourceTree = "<group>"; };
 		105D6ECB55459B12DC4E7F91 /* UnBienApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnBienApp.swift; sourceTree = "<group>"; };
 		1D913B5BB0A3D0C3C487F6F1 /* UnBien-macOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "UnBien-macOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		20C12F29833F76BE5B0E4F9A /* highlightr.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = highlightr.txt; sourceTree = "<group>"; };
 		363F503535BEAFD31CBD4424 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		678ED531F6610CB64E22241E /* swift-markdown-ui.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "swift-markdown-ui.txt"; sourceTree = "<group>"; };
+		6B7387809B0629FB48DB4E9F /* highlightjs.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = highlightjs.txt; sourceTree = "<group>"; };
 		7A34C497832570683B1E6030 /* UnBien-iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "UnBien-iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		8352D479ACDF777CE3E04C20 /* remote-pi.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "remote-pi.txt"; sourceTree = "<group>"; };
+		8396EB27D83717DD0B5B6F8D /* cmark.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = cmark.txt; sourceTree = "<group>"; };
+		A6AFBFC012B80E09058AB87C /* networkimage.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = networkimage.txt; sourceTree = "<group>"; };
+		AAE1F01866472F0EDD3C2634 /* un-bien.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "un-bien.txt"; sourceTree = "<group>"; };
 		B590CD84FB480AC9F416CD86 /* app */ = {isa = PBXFileReference; lastKnownFileType = folder; name = app; path = .; sourceTree = SOURCE_ROOT; };
 		D69E080047C661D47CD1FD70 /* demo-main.jsonl */ = {isa = PBXFileReference; path = "demo-main.jsonl"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -80,6 +101,7 @@
 				05C112673CDC32F4C230FA6D /* PrivacyInfo.xcprivacy */,
 				105D6ECB55459B12DC4E7F91 /* UnBienApp.swift */,
 				B13939CA2B7D4F10BDEECD99 /* DemoFixtures */,
+				C98E31F276DB516441CDD14D /* Licenses */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -108,6 +130,20 @@
 				B590CD84FB480AC9F416CD86 /* app */,
 			);
 			name = Packages;
+			sourceTree = "<group>";
+		};
+		C98E31F276DB516441CDD14D /* Licenses */ = {
+			isa = PBXGroup;
+			children = (
+				8396EB27D83717DD0B5B6F8D /* cmark.txt */,
+				6B7387809B0629FB48DB4E9F /* highlightjs.txt */,
+				20C12F29833F76BE5B0E4F9A /* highlightr.txt */,
+				A6AFBFC012B80E09058AB87C /* networkimage.txt */,
+				8352D479ACDF777CE3E04C20 /* remote-pi.txt */,
+				678ED531F6610CB64E22241E /* swift-markdown-ui.txt */,
+				AAE1F01866472F0EDD3C2634 /* un-bien.txt */,
+			);
+			path = Licenses;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -202,9 +238,16 @@
 			files = (
 				6E00E326DF525B73178588E7 /* Assets.xcassets in Resources */,
 				D821A4852418B275C5C2385F /* PrivacyInfo.xcprivacy in Resources */,
+				B36D163AE9D39EA56C6FC27F /* cmark.txt in Resources */,
 				5793FAFA6862C1D619912217 /* demo-ask.jsonl in Resources */,
 				DB31BEE90348CA3EB9B9A27B /* demo-main.jsonl in Resources */,
 				48623343A5189359F30E20C3 /* demo-subagent-run.jsonl in Resources */,
+				429118400B400066EC8E81E2 /* highlightjs.txt in Resources */,
+				3D5C3734C86EE274FE946A76 /* highlightr.txt in Resources */,
+				A461F8BE862D9B7D20020A89 /* networkimage.txt in Resources */,
+				71DE8CB090DFC32B9CA6C3A9 /* remote-pi.txt in Resources */,
+				AB2464C83ABFF8420774BCB1 /* swift-markdown-ui.txt in Resources */,
+				89A02EC256059EC4F4566456 /* un-bien.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -214,9 +257,16 @@
 			files = (
 				5EB8545E494D5758AE60C296 /* Assets.xcassets in Resources */,
 				7A8F1AAEA8103F1DF9290D41 /* PrivacyInfo.xcprivacy in Resources */,
+				BAFBB475365C05C3365FF214 /* cmark.txt in Resources */,
 				0DA52ECBCCD33FE2C2CF045D /* demo-ask.jsonl in Resources */,
 				55EE814200F926A1801CDEC0 /* demo-main.jsonl in Resources */,
 				B1F92F492B7E24E319E5CC04 /* demo-subagent-run.jsonl in Resources */,
+				183B13A4C402039F5011D1F7 /* highlightjs.txt in Resources */,
+				D07EEB0A7BF12CAE10A4DED8 /* highlightr.txt in Resources */,
+				D5A0626D600DC5D038E457DE /* networkimage.txt in Resources */,
+				7AA0825A15CABCC67316911C /* remote-pi.txt in Resources */,
+				6CAE402EA4E6007AFEF06F1B /* swift-markdown-ui.txt in Resources */,
+				BEA551A9708A6A0A33981E79 /* un-bien.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
