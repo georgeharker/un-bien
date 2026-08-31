@@ -11,19 +11,19 @@ wire — there is no stock `ServerMessage`/`ClientMessage` session protocol. The
 one non-envelope frame is the pre-attach `pair_request` (before any plane
 exists), plus the outer relay/transport control (auth, rooms, keepalive).
 
-Governing decisions: *envelope tx is tagged `{rpc | evt | ub}`* · *Un Bien = pi's
+Governing decisions: _envelope tx is tagged `{rpc | evt | ub}`_ · _Un Bien = pi's
 first-class rpc surface + a thin mesh/display layer on top (never replace pi
-primitives)* · *transcript = native `get_entries`; `session_sync` = panels + ui
-only* · *queue display is app-owned (pi does not deliver `queue_update` to
-extensions)* · *aux display sidecar rides alongside rpc* · *arbitration = relay
-whole-frame ordering* · *cross-language conformance harness*.
+primitives)_ · _transcript = native `get_entries`; `session_sync` = panels + ui
+only_ · _queue display is app-owned (pi does not deliver `queue_update` to
+extensions)_ · _aux display sidecar rides alongside rpc_ · _arbitration = relay
+whole-frame ordering_ · _cross-language conformance harness_.
 
 ## Message
 
 Each relay message on a session channel carries exactly **one** `EnvelopeMessage`
 (base64(JSON) inside the relay's opaque `ct`). One message = one whole frame —
 the relay delivers whole messages in order, so command frames never
-byte-interleave at the child (that *is* the arbitration).
+byte-interleave at the child (that _is_ the arbitration).
 
 ```ts
 interface EnvelopeMessage {
@@ -38,43 +38,54 @@ interface EnvelopeMessage {
    *  Direction is NOT encoded here — the receiver knows its own role, and the
    *  inner frame's `.type` carries command-vs-response / which-end-acts. Legacy
    *  "env" is still ACCEPTED on read for one transition, never stamped. */
-  type?: string;
+  type?: string
   /** Epoch ms, stamped at send (ordering / dedup / debug). Cross-cutting. */
-  ts?: number;
+  ts?: number
   /** Envelope / pi-rpc protocol version for decode-guarding. Cross-cutting
    *  (meaningful on any frame), so it stays top-level. */
-  protocolVersion?: number;
+  protocolVersion?: number
   /** A VERBATIM pi rpc frame, forwarded opaquely. The app parses only what it
    *  renders and IGNORES unknown types (forward-compatible). Byte-faithful to
    *  pi — its own `.type` (message_update/response/…) is a DIFFERENT object
    *  level from the wrapper `type` and never clashes. */
-  rpc?: RpcFrame;
+  rpc?: RpcFrame
   /** An ephemeral, NON-persisted forwarded in-process bus event (the {evt}
    *  plane): plan/subagents/… The extension produces these; they never appear on
    *  `pi --mode rpc` stdout. */
-  evt?: Evt;
+  evt?: Evt
   /** Un Bien's OWN protocol plane. The inner `.type` discriminates: hello
    *  (extension→app handshake), session_sync (app→extension), session_sync_end (extension→app),
    *  session_launch (app→extension). Handshake caps/sessionId nest in the `hello`
    *  inner frame, NOT at the envelope top level. */
-  ub?: UbFrame;
+  ub?: UbFrame
   /** OPTIONAL Un Bien display sidecar riding ALONGSIDE `rpc` in the same
    *  envelope (the `rpc` frame stays byte-faithful). Sole tenant: best-effort
    *  LIVE input-Edit diff `hunks` on a `tool_execution_start` frame. OUTPUT is
    *  classified app-side from the persisted result (no `aux.output` on the
    *  wire) — design 01M177AF. */
-  aux?: { hunks?: unknown[] };
+  aux?: { hunks?: unknown[] }
 }
 
 type UbFrame =
-  | { type: "hello"; caps: string[]; sessionId?: string }          // extension→app
-  | { type: "session_sync"; id?: string; limit?: number }          // app→extension
-  | { type: "session_sync_end"; in_reply_to?: string;              // extension→app
-      session_started_at?: number }
-  | { type: "session_launch"; id?: string; mode: string;           // app→extension
-      cwd?: string; name?: string };
+  | { type: "hello"; caps: string[]; sessionId?: string } // extension→app
+  | { type: "session_sync"; id?: string; limit?: number } // app→extension
+  | {
+      type: "session_sync_end"
+      in_reply_to?: string // extension→app
+      session_started_at?: number
+    }
+  | {
+      type: "session_launch"
+      id?: string
+      mode: string // app→extension
+      cwd?: string
+      name?: string
+    }
 
-interface Evt { channel: string; data: unknown; }  // channel: "panel" | …
+interface Evt {
+  channel: string
+  data: unknown
+} // channel: "panel" | …
 ```
 
 Exactly one of `rpc` / `evt` / `ub` is the payload; `aux` (when present) rides
@@ -99,7 +110,7 @@ inner type occurred in both directions with different handling; none does, so it
 would be pure redundancy. This is exactly why an earlier `ext`(app→extension) +
 `app`(extension→app) split collapsed into the single bidirectional `ub` plane. Escape
 hatch: if a genuinely bidirectional same-type frame ever appears, add a direction
-tag *then*.
+tag _then_.
 
 ## Stamping (the wrapper)
 
@@ -130,7 +141,7 @@ and reconstructs the live plane via `createRpcEnvelope` over `RPC_EVENT_NAMES`
   fire-and-forget `notify` / `setStatus` / `setWidget` / `setTitle` (empty
   text/lines = CLEAR; `statusText` may carry ANSI SGR — strip it) + dialogs
   `select` / `confirm` / `input` / `editor` (app replies `extension_ui_response`).
-- **App→extension commands** — see *command taxonomy* below.
+- **App→extension commands** — see _command taxonomy_ below.
 
 The app folds every `{rpc}` frame — live OR reconstructed — through the SAME
 `SessionState.applyRPC` / `applyEntries` reducers. There is no separate "history"
@@ -143,9 +154,9 @@ aggregated update as `{evt:{channel:"panel", data:<panel_update>}}`. Underlying
 bus channels: `plan:snapshot` · `plan:update` · `subagents:ready/started/steered/
 compacted/completed/failed`. Observed payloads:
 
-- `subagents:started`   `{ id, type, description }`
+- `subagents:started` `{ id, type, description }`
 - `subagents:completed` `{ id, type, description, result, error? }`
-- `plan:snapshot`       `{ op, ns, seq, project, items }`
+- `plan:snapshot` `{ op, ns, seq, project, items }`
 
 A subagent surfaces three ways and the reducer renders each once: the `Agent`
 **tool_execution** is the transcript card (`{rpc}`); `subagents:*` **evt** drives
@@ -191,9 +202,10 @@ early (session not built yet).
 carries only lifecycle + labels, never transcript content.
 
 **Room advertisement.** The child room carries `room_meta.parent` (parent room id)
+
 - `subagentId` (record id) via the relay's room_meta passthrough, so the app nests
-and navigates from `room_announced` alone. `room_meta` is transport/negotiation
-ONLY — no app state rides it.
+  and navigates from `room_announced` alone. `room_meta` is transport/negotiation
+  ONLY — no app state rides it.
 
 **Status is PULLED over the child connection, not pushed.** Lifecycle status
 (`done`/`failed`/`in_progress`/`pending`) is app STATE, so it does NOT ride
@@ -218,15 +230,15 @@ features like `room_meta`. Mirrors the `presence_status` caps PULL exactly.
 
 ## ub plane — Un Bien's own protocol
 
-| inner `.type` | direction | payload | purpose |
-| --- | --- | --- | --- |
-| `hello` | extension→app | `{ caps: string[], sessionId? }` | capability handshake on attach |
-| `session_sync` | app→extension | `{ id?, limit? }` | request panels + pending-ui reconstruction |
-| `session_sync_end` | extension→app | `{ in_reply_to?, session_started_at? }` | reconstruction terminator + session clock |
-| `session_launch` | app→extension | `{ mode, cwd?, name? }` | mesh remote-launch of a SEPARATE pi process |
-| `get_session_info` | app→extension | `{ id? }` | PULL a session's own state (subagent lifecycle status) |
-| `session_info` | extension→app | `{ status?, in_reply_to? }` | response to `get_session_info`, from the extension's tracked state |
-| `presence_status` | app↔extension/daemon | `{ id? }` → `{ caps?, hostname?, backend?, in_reply_to? }` | PULL a machine's daemon caps |
+| inner `.type`      | direction            | payload                                                    | purpose                                                            |
+| ------------------ | -------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------ |
+| `hello`            | extension→app        | `{ caps: string[], sessionId? }`                           | capability handshake on attach                                     |
+| `session_sync`     | app→extension        | `{ id?, limit? }`                                          | request panels + pending-ui reconstruction                         |
+| `session_sync_end` | extension→app        | `{ in_reply_to?, session_started_at? }`                    | reconstruction terminator + session clock                          |
+| `session_launch`   | app→extension        | `{ mode, cwd?, name? }`                                    | mesh remote-launch of a SEPARATE pi process                        |
+| `get_session_info` | app→extension        | `{ id? }`                                                  | PULL a session's own state (subagent lifecycle status)             |
+| `session_info`     | extension→app        | `{ status?, in_reply_to? }`                                | response to `get_session_info`, from the extension's tracked state |
+| `presence_status`  | app↔extension/daemon | `{ id? }` → `{ caps?, hostname?, backend?, in_reply_to? }` | PULL a machine's daemon caps                                       |
 
 `hello` and `session_sync_end` are folded by the app the same way as an rpc
 frame (`session_sync_end`'s inner `.type` drives `applyRPC`). `session_launch` is
@@ -293,23 +305,23 @@ seam (`RelayConnection.mapToWire`); app call sites stay unchanged. Field renames
 match pi's rpc contract (`text`→`message`, `model_id`→`modelId`,
 `streaming_behavior`→`streamingBehavior`).
 
-| app intent | wire | payload |
-| --- | --- | --- |
-| send a message | `{rpc}` `prompt` | `message`, `images?`, `streamingBehavior?` |
-| steer mid-turn | `{rpc}` `steer` | `message`, `images?` |
-| follow-up after turn | `{rpc}` `follow_up` | `message`, `images?` |
-| stop | `{rpc}` `abort` | — |
-| switch model | `{rpc}` `set_model` | `provider`, `modelId` (data = Model) |
-| set thinking | `{rpc}` `set_thinking_level` | `level` |
-| list models | `{rpc}` `get_available_models` | — (data = Model[]) |
-| compact | `{rpc}` `compact` | `customInstructions?` |
-| new session | `{rpc}` `new_session` | — (fresh session in the attached Pi) |
-| transcript / delta | `{rpc}` `get_entries` | `since?` (leafId cursor) → `{entries, leafId}` |
-| answer a dialog | `{rpc}` `extension_ui_response` | `id`, `value`/`confirmed`/`cancelled` |
-| reconstruct panels+ui | `{ub}` `session_sync` | `id`, `limit?` |
-| remote launch | `{ub}` `session_launch` | `mode`, `cwd?`, `name?` |
-| pull subagent status | `{ub}` `get_session_info` | `id?` → `session_info { status }` |
-| pull daemon caps | `{ub}` `presence_status` | `id?` → `{ caps, hostname, backend }` |
+| app intent            | wire                            | payload                                        |
+| --------------------- | ------------------------------- | ---------------------------------------------- |
+| send a message        | `{rpc}` `prompt`                | `message`, `images?`, `streamingBehavior?`     |
+| steer mid-turn        | `{rpc}` `steer`                 | `message`, `images?`                           |
+| follow-up after turn  | `{rpc}` `follow_up`             | `message`, `images?`                           |
+| stop                  | `{rpc}` `abort`                 | —                                              |
+| switch model          | `{rpc}` `set_model`             | `provider`, `modelId` (data = Model)           |
+| set thinking          | `{rpc}` `set_thinking_level`    | `level`                                        |
+| list models           | `{rpc}` `get_available_models`  | — (data = Model[])                             |
+| compact               | `{rpc}` `compact`               | `customInstructions?`                          |
+| new session           | `{rpc}` `new_session`           | — (fresh session in the attached Pi)           |
+| transcript / delta    | `{rpc}` `get_entries`           | `since?` (leafId cursor) → `{entries, leafId}` |
+| answer a dialog       | `{rpc}` `extension_ui_response` | `id`, `value`/`confirmed`/`cancelled`          |
+| reconstruct panels+ui | `{ub}` `session_sync`           | `id`, `limit?`                                 |
+| remote launch         | `{ub}` `session_launch`         | `mode`, `cwd?`, `name?`                        |
+| pull subagent status  | `{ub}` `get_session_info`       | `id?` → `session_info { status }`              |
+| pull daemon caps      | `{ub}` `presence_status`        | `id?` → `{ caps, hostname, backend }`          |
 
 Each pi-native command carries an optional `id`; the extension replies
 `{rpc:{type:"response", command, success, data?, error?, id}}` to the SENDER,
@@ -342,7 +354,7 @@ Split into two INDEPENDENT app-issued requests, on BOTH open and reconnect:
 1. **Transcript = native pi `get_entries` (rpc, app-direct).** The app sends
    `{rpc:{type:"get_entries", since?}}` where `since` = the reducer's last
    `leafId` (delta cursor). The extension replies `{rpc:{type:"response",
-   command:"get_entries", data:{entries, leafId}}}` — the FULL session log
+command:"get_entries", data:{entries, leafId}}}` — the FULL session log
    (compaction appears in-log as a `CompactionEntry`, no hole). The app reduces
    raw pi `SessionEntry`s through the SAME identify/message_end/tool_execution
    path as the live stream (`SessionState.applyEntries`), so live == replay and
