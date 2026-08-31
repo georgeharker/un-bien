@@ -243,10 +243,16 @@ step; the script pins `/usr/bin` first for the export so the system rsync
 resolves. UPLOAD stays manual (Xcode Organizer / Transporter / `xcrun altool
 --upload-app`) until the ASC records exist — then it can be scripted.
 
-### 13. 🔲 TestFlight beta
+### 13. 🟡 TestFlight beta pass (IN PROGRESS — builds live 2026-08-31)
 
-Run a beta pass before public release — especially the iOS Local-Network prompt
-flow and the macOS sandboxed Keychain + relay-connect flow.
+iOS 1.0(2) + macOS 1.0(2) uploaded after two processor bounces (fixed:
+`UISupportedInterfaceOrientations` for the universal build; macOS
+`LSApplicationCategoryType`). Both "Ready to test"; internal testing set up.
+**iOS verified: connects to the real relay on the distribution build**
+(ATS + Local Network + Tailscale path all good). Still to exercise: macOS
+sandboxed Keychain + relay connect; ask-from-phone; machine-row launch. Then:
+paste review notes (text-first, per §7 decision), pick builds on each 1.0,
+submit per platform.
 
 ## Both v1-blocking decisions are settled
 
