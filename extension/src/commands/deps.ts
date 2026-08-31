@@ -154,4 +154,14 @@ export interface CommandDeps {
   relayStatus(): "connected" | "reconnecting" | "disconnected"
   /** Test-visible state: `idle` | `started` | derived `paired`. */
   getState(): "idle" | "started" | "paired"
+  /** Hidden dev-only e2e UI harness (`/unbien test <scenario>`). */
+  runTestScenario(scenario: string): string
+  /** ctx.ui.notify that never throws (stale-ctx safe). */
+  safeNotify(
+    message: string,
+    level?: "info" | "warning" | "error",
+    preferred?: { ui?: unknown } | null,
+  ): void
+  /** Rename this agent (mesh + relay room) — `/unbien rename`. */
+  renameAgent(newName: string): Promise<void>
 }

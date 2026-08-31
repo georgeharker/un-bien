@@ -31,41 +31,25 @@
  */
 
 import { randomUUID } from "node:crypto"
-import type {
+import {
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
   ExtensionFactory,
 } from "@earendil-works/pi-coding-agent"
 import { SettingsManager } from "@earendil-works/pi-coding-agent"
-import type { Ed25519Keypair } from "./pairing/crypto.js"
-import {
-  buildQRUri,
-  qrSession,
-  renderQRAscii,
-  clampPairTtlMs,
-  TOKEN_TTL_MS,
-} from "./pairing/qr.js"
-import {
-  addPeer,
-  getOrCreateEd25519Keypair,
-  KeyringUnavailableError,
-  PairedIdentityMissingError,
-  listPeers,
-  removePeer,
-  snapshotOwnerPubkeys,
-  conditionalRemovePeer,
-} from "./pairing/storage.js"
-import { MeshClient } from "./mesh/client.js"
+import { Ed25519Keypair } from "./pairing/crypto.js"
+import { qrSession } from "./pairing/qr.js"
+import { addPeer, listPeers, removePeer } from "./pairing/storage.js"
 import { SelfRevoke } from "./mesh/self_revoke.js"
-import type { MeshTopologySnapshot } from "./mesh/siblings.js"
-import type {
+import { MeshTopologySnapshot } from "./mesh/siblings.js"
+import {
   ClientMessage,
   PairErrorCode,
   ServerMessage,
   ThinkingLevel,
 } from "./protocol/types.js"
-import { RelayClient, RoomAlreadyOpenError } from "./transport/relay_client.js"
+import { RelayClient } from "./transport/relay_client.js"
 import { PlainPeerChannel } from "./transport/peer_channel.js"
 import {
   createExtensionUiBridge,
@@ -104,17 +88,11 @@ import { ensureModelRegistry } from "./actions/registry.js"
 import {
   ensureGlobalDirs,
   LOCAL_SESSION_NAME,
-  sessionAuditPath,
   sessionSockPath,
   skillsDir,
 } from "./session/global_config.js"
-import { acquireCwdLock, type AcquiredLock } from "./session/cwd_lock.js"
-import {
-  installService,
-  uninstallService,
-  linkCliBinaries,
-  unlinkCliBinaries,
-} from "./daemon/install.js"
+import { type AcquiredLock } from "./session/cwd_lock.js"
+import { installService, unlinkCliBinaries } from "./daemon/install.js"
 import {
   defaultAgentName,
   effectiveAutoStartRelay,
@@ -123,25 +101,18 @@ import {
   localConfigExists,
   saveLocalConfig,
 } from "./session/local_config.js"
-import { runSetupWizard, type WizardUI } from "./session/setup_wizard.js"
 import { updateFooter, type FooterState } from "./ui/footer.js"
 import { join, dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
   chmodSync,
   mkdirSync,
-  copyFileSync,
-  existsSync,
-  unlinkSync,
   readFileSync,
   writeFileSync,
   realpathSync,
 } from "node:fs"
-import { createInterface } from "node:readline"
-import { spawnSync } from "node:child_process"
-import { hostname, tmpdir } from "node:os"
+import { hostname } from "node:os"
 import {
-  resolveRelayUrl,
   loadConfig,
   saveConfig,
   isValidRelayUrl,
@@ -167,34 +138,22 @@ import {
   type InspectedPeerRecord,
 } from "./pairing/peer_trust.js"
 import { Box, Container, Image, Text } from "@earendil-works/pi-tui"
-import type { CommandDeps } from "./commands/deps.js"
-import {
-  _cmdStatus,
-  _cmdPeers,
-  _cmdList,
-  _cmdConfig,
-  _cmdIdentity,
-} from "./commands/info.js"
+import { CommandDeps } from "./commands/deps.js"
 import {
   type RootRestartAuthority,
   _cmdRoot,
-  _cmdSetup,
   _cmdStart,
   _cmdStop,
   _cmdJoin,
 } from "./commands/lifecycle.js"
-import {
-  _cmdPair,
-  _cmdRevoke,
-  _shortidCompletions,
-} from "./commands/pairing.js"
-import { _cmdSetRelay, _cmdRelay } from "./commands/relay.js"
+import { _cmdRevoke } from "./commands/pairing.js"
 import {
   _cmdClaudeCli,
   _cmdInstall,
   _cmdUninstall,
   _deployAgentNetworkSkill,
 } from "./commands/housekeeping.js"
+import { registerUnbienCommands } from "./commands/register.js"
 
 // ── State machine ─────────────────────────────────────────────────────────────
 //
@@ -3010,6 +2969,9 @@ const deps: CommandDeps = {
   handleControl: _handleControl,
   relayStatus: _relayStatus,
   getState: _getState,
+  runTestScenario: _runTestScenario,
+  safeNotify: _safeNotify,
+  renameAgent: _renameAgent,
 }
 
 const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
@@ -3500,232 +3462,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     }
   })
 
-  // ── Commands ──────────────────────────────────────────────────────────────
-  //
-  // Final surface: 8 commands. Pre-2026-05-23 we had 20 commands covering
-  // multi-session UDS + granular relay control; in practice every install
-  // converged on one session and the relay was always either fully on or
-  // fully off. The simplified surface keeps the day-to-day path one-key
-  // (`/unbien`) and exposes only the actions that have distinct user
-  // intent: setup, status, stop, pair, devices, revoke, set-relay.
-  pi.registerCommand("unbien", {
-    description:
-      "Connect (join local mesh + start relay), or run setup on first use",
-    getArgumentCompletions: async (prefix) => {
-      if (prefix.startsWith("revoke ") || prefix === "revoke") {
-        const shortPrefix =
-          prefix === "revoke" ? "" : prefix.slice("revoke ".length)
-        return _shortidCompletions(shortPrefix, "revoke ")
-      }
-      return [
-        "setup",
-        "status",
-        "stop",
-        "pair",
-        "devices",
-        "revoke",
-        "rename",
-        "set-relay",
-        "relay",
-        "relay start",
-        "relay stop",
-        "relay status",
-        "relay url",
-        "config",
-        "identity",
-        "identity show",
-        "test", // hidden e2e UI harness (dev-only)
-        "peers", // plan/25 Wave D — local + cross-PC inventory
-        "create",
-        "remove",
-        "daemons", // daemon registry (plan/26 W1)
-        // Fleet ops use the `daemon` prefix so `/unbien stop` keeps
-        // meaning "stop this local Pi" — the local UX shipped in plan/25.
-        "daemon start",
-        "daemon stop",
-        "daemon restart",
-        "daemon send",
-        "daemon status",
-        "cron",
-        "cron add",
-        "cron list",
-        "cron remove",
-        "cron enable",
-        "cron disable",
-        "cron run",
-        "cron log",
-        "install",
-        "uninstall", // service install (plan/26 W3)
-      ]
-        .filter((o) => o.startsWith(prefix))
-        .map((o) => ({ value: o, label: o }))
-    },
-    handler: async (args, ctx) => {
-      _lastCtx = ctx
-      const sub = args.trim()
-      if (sub === "") {
-        await _cmdRoot(deps, ctx)
-      } else if (sub === "setup") {
-        await _cmdSetup(ctx)
-      } else if (sub === "status") {
-        _cmdStatus(deps, ctx)
-      } else if (sub === "stop") {
-        await _cmdStop(deps, ctx)
-      } else if (sub === "pair" || sub.startsWith("pair ")) {
-        await _cmdPair(deps, ctx, sub.slice("pair".length).trim())
-      } else if (sub === "devices") {
-        await _cmdList(deps, ctx)
-      } else if (sub.startsWith("revoke")) {
-        await _cmdRevoke(deps, sub.slice("revoke".length).trim(), ctx)
-      } else if (sub.startsWith("set-relay")) {
-        _cmdSetRelay(sub.slice("set-relay".length).trim(), ctx)
-      } else if (sub === "relay" || sub.startsWith("relay ")) {
-        await _cmdRelay(deps, sub.slice("relay".length).trim(), ctx)
-      } else if (sub === "config") {
-        _cmdConfig(deps, ctx)
-      } else if (sub === "identity" || sub.startsWith("identity ")) {
-        await _cmdIdentity(ctx)
-      } else if (sub === "test" || sub.startsWith("test ")) {
-        // Hidden dev-only e2e UI harness: broadcast canned frames to paired apps.
-        _safeNotify(
-          `[un-bien test] ${_runTestScenario(sub.slice("test".length).trim())}`,
-          "info",
-          ctx,
-        )
-      } else if (sub === "rename" || sub.startsWith("rename ")) {
-        await _renameAgent(sub.slice("rename".length).trim())
-      } else if (sub === "peers") {
-        await _cmdPeers(deps, ctx)
-      } else if (sub === "install") {
-        _cmdInstall(ctx, { linkCli: true })
-      } else if (sub === "uninstall") {
-        _cmdUninstall(ctx, { linkCli: true })
-      } else {
-        await _cmdRoot(deps, ctx)
-      }
-    },
-  })
-
-  // Nested registrations (one entry per public action). The flat handler
-  // above already routes `/unbien <sub>` — these exist for the SDK's
-  // command palette and slash-autocomplete in some UI modes.
-  pi.registerCommand("unbien setup", {
-    description: "Run the setup wizard and update local config",
-    handler: async (_, ctx) => {
-      _lastCtx = ctx
-      await _cmdSetup(ctx)
-    },
-  })
-  pi.registerCommand("unbien status", {
-    description: "Show local mesh + relay status",
-    handler: async (_, ctx) => {
-      _lastCtx = ctx
-      _cmdStatus(deps, ctx)
-    },
-  })
-  pi.registerCommand("unbien stop", {
-    description: "Stop everything (leave local mesh + disconnect relay)",
-    handler: async (_, ctx) => {
-      _lastCtx = ctx
-      await _cmdStop(deps, ctx)
-    },
-  })
-  pi.registerCommand("unbien pair", {
-    description:
-      "Show a QR code to pair a new mobile device (optional: --ttl <seconds>)",
-    handler: async (args, ctx) => {
-      _lastCtx = ctx
-      await _cmdPair(deps, ctx, args.trim())
-    },
-  })
-  pi.registerCommand("unbien devices", {
-    description: "List paired mobile devices",
-    handler: async (_, ctx) => {
-      _lastCtx = ctx
-      await _cmdList(deps, ctx)
-    },
-  })
-  pi.registerCommand("unbien rename", {
-    description:
-      "Rename this agent in the current session (updates mesh + relay room)",
-    handler: async (args, ctx) => {
-      _lastCtx = ctx
-      await _renameAgent(args.trim())
-    },
-  })
-  pi.registerCommand("unbien revoke", {
-    description: "Revoke a paired device by its shortid",
-    getArgumentCompletions: async (prefix) => _shortidCompletions(prefix),
-    handler: async (args, ctx) => {
-      _lastCtx = ctx
-      await _cmdRevoke(deps, args.trim(), ctx)
-    },
-  })
-  pi.registerCommand("unbien set-relay", {
-    description: "Persist a new relay URL to user config",
-    handler: async (args, ctx) => {
-      _lastCtx = ctx
-      _cmdSetRelay(args.trim(), ctx)
-    },
-  })
-  pi.registerCommand("unbien config", {
-    description: "Show the effective relay URL and where it came from",
-    handler: async (_, ctx) => {
-      _lastCtx = ctx
-      _cmdConfig(deps, ctx)
-    },
-  })
-  pi.registerCommand("unbien identity", {
-    description:
-      "Show this machine's identity: active EPK (public), backend, and source",
-    handler: async (_, ctx) => {
-      _lastCtx = ctx
-      await _cmdIdentity(ctx)
-    },
-  })
-  pi.registerCommand("unbien identity show", {
-    description:
-      "Show this machine's identity (EPK/backend/source) — alias of `identity`",
-    handler: async (_, ctx) => {
-      _lastCtx = ctx
-      await _cmdIdentity(ctx)
-    },
-  })
-  pi.registerCommand("unbien relay", {
-    description:
-      "Relay control: start | stop | status | url <http(s) url> (no arg toggles)",
-    handler: async (args, ctx) => {
-      _lastCtx = ctx
-      await _cmdRelay(deps, args.trim(), ctx)
-    },
-  })
-
-  // Plan/25 Wave D
-  pi.registerCommand("unbien peers", {
-    description: "List local + cross-PC mesh peers, grouped by PC label",
-    handler: async (_, ctx) => {
-      _lastCtx = ctx
-      await _cmdPeers(deps, ctx)
-    },
-  })
-
-  // Service install / uninstall — the launcher daemon as a system service.
-  pi.registerCommand("unbien install", {
-    description:
-      "Install the un-bien launcher daemon as a system service + link the un-bien CLI (systemd/launchd/Task Scheduler; Windows prompts for admin)",
-    handler: async (_, ctx) => {
-      _lastCtx = ctx
-      _cmdInstall(ctx, { linkCli: true })
-    },
-  })
-  pi.registerCommand("unbien uninstall", {
-    description:
-      "Remove the un-bien launcher daemon system service + the CLI shims (Windows prompts for admin)",
-    handler: async (_, ctx) => {
-      _lastCtx = ctx
-      _cmdUninstall(ctx, { linkCli: true })
-    },
-  })
+  registerUnbienCommands(pi, deps)
 
   // Auto-init now runs from the session_start handler (above), AFTER the
   // SDK calls bindCore(). The original setTimeout(0) here fired before bindCore
