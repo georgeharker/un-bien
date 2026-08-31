@@ -9,7 +9,7 @@ struct OnboardingView: View {
     var body: some View {
         VStack(spacing: 24) {
             Spacer()
-            Text("un-bien")
+            Text("Un Bien")
                 .font(.system(size: 40, weight: .bold, design: .rounded))
                 .foregroundStyle(theme.accent)
             Text("A native client for your Pi coding agents.")

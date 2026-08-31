@@ -23,7 +23,7 @@ targets:
     info:
       path: App/iOS/Info.plist
       properties:
-        CFBundleDisplayName: un-bien
+        CFBundleDisplayName: Un Bien
         UILaunchScreen: {}
         NSCameraUsageDescription: Scan a pairing QR code.
         # Deep link: system Camera / links open `unbien://pair?…` into the app,
@@ -81,7 +81,7 @@ targets:
     info:
       path: App/macOS/Info.plist
       properties:
-        CFBundleDisplayName: un-bien
+        CFBundleDisplayName: Un Bien
         LSMinimumSystemVersion: "14.0"
         NSCameraUsageDescription: Scan a pairing QR code.
         CFBundleURLTypes:
