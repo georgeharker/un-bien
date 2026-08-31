@@ -54,6 +54,15 @@ public struct SessionState: Equatable, Sendable {
         ended = false
     }
 
+    /// Append a one-off informational notice row. Used by the APP-side routing
+    /// of extension_ui `notify` frames (AppModel+Inbound): a warning notify is
+    /// actionable (answer rejected / bridge TTL expired) but must not own a
+    /// modal — it lands inline in the transcript instead.
+    public mutating func appendNotice(code: String, message: String) {
+        noticeSeq += 1
+        append(.notice(NoticeItem(id: "ext\(noticeSeq)", code: code, message: message)))
+    }
+
     /// Usage from the most recent assistant turn that reported it (for a status
     /// line). `agent_done`/`agent_message` carry per-turn token counts.
     public var latestUsage: Usage? {

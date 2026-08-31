@@ -200,4 +200,18 @@ final class EnvelopeReducerTests: XCTestCase {
         XCTAssertEqual(blocks[0]["kind"]?.stringValue, "diff")
         XCTAssertEqual(reducer.leafId, "L1")
     }
+
+    /// appendNotice forwards to the session (app-side routing of extension_ui
+    /// WARNING notifies folds through the reducer so the row persists like any
+    /// other notice — AppModel+Inbound calls this, never SessionState directly).
+    func testAppendNoticeForwardsToSession() {
+        var reducer = EnvelopeReducer()
+        reducer.appendNotice(code: "ask_warning", message: "Answer was not accepted")
+        let notices = reducer.session.items.compactMap { item -> NoticeItem? in
+            if case let .notice(n) = item { return n } else { return nil }
+        }
+        XCTAssertEqual(notices.count, 1)
+        XCTAssertEqual(notices[0].code, "ask_warning")
+        XCTAssertEqual(notices[0].message, "Answer was not accepted")
+    }
 }

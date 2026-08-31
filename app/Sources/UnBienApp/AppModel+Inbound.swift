@@ -218,6 +218,20 @@ extension AppModel {
                     reducer.apply(EnvelopeMessage(rpc: ub))
                     envelopeReducers[key] = reducer
                     transcripts[key] = reducer.session
+                    // Ask-reconciliation backstop (AskSyncWindow): the sync
+                    // reply replays the bridge's FULL activeFlows set to the
+                    // sender ahead of this terminator, so a stored prompt whose
+                    // flow wasn't replayed is stale — its resolution happened
+                    // while the dismissal notify was dropped. Retire it. Fail-open:
+                    // no window in flight (sync never sent / terminator dropped)
+                    // keeps the prompt; the next open or reconnect retries.
+                    if ub["type"]?.stringValue == "session_sync_end",
+                       let window = askSyncWindows.removeValue(forKey: key),
+                       let prompt = prompts[key],
+                       !window.replayedAskIDs.contains(prompt.id) {
+                        prompts[key] = nil
+                        log.notice("ask reconcile: stale prompt retired key=\(String(key.suffix(12)), privacy: .public) flow=\(String(prompt.id.suffix(8)), privacy: .public)")
+                    }
                     return
                 }
                 if env.rpc != nil || env.evt != nil {
@@ -225,6 +239,12 @@ extension AppModel {
                     reducer.apply(env)
                     envelopeReducers[key] = reducer
                     transcripts[key] = reducer.session
+                    // A shut-down session's pending ask is dead by construction
+                    // (the bridge is disposed and pi-ask emits no `completed` for
+                    // disposed flows) — drop the modal so a stale ask can't pop
+                    // on the next open (or across a resume, before pi-ask's
+                    // re-open lands).
+                    if reducer.session.ended { prompts[key] = nil }
                     // Panels are envelope-only: {evt channel:"panel"} carries a
                     // panel_update; decode it with the stock decoder and route it
                     // into the panel store (reuses PanelState + the panel UI).
@@ -238,12 +258,42 @@ extension AppModel {
                     // extension_ui is envelope-only: the {rpc} extension_ui_request
                     // frame is the same JSON as the stock ServerMessage, so reuse
                     // the stock decoder to surface it in the existing prompt UI.
+                    // pi-ask dismissal contract (extension_ui_bridge): a `notify`
+                    // whose id matches the open interactive request means "that
+                    // flow resolved — dismiss it" (e.g. answered on the desktop
+                    // TUI). It used to REPLACE the prompt, so an already-resolved
+                    // ask re-presented a sheet ("Clarification resolved.") the
+                    // next time the transcript was opened. Routing now:
+                    //   warning notify  → inline transcript notice (actionable:
+                    //                    answer rejected / bridge TTL expired);
+                    //                    any open ask STAYS open as the retry
+                    //                    surface — never clobbered, never a modal.
+                    //   notify, id matches our open ask → dismiss the sheet.
+                    //   notify, no match → drop (a pure resolution ack, e.g.
+                    //                    completed after we answered ourselves —
+                    //                    nothing to dismiss, a row would be noise).
                     if let rpc = env.rpc, rpc["type"]?.stringValue == "extension_ui_request",
                        let data = try? JSONEncoder().encode(rpc),
                        let line = String(data: data, encoding: .utf8),
                        let decoded = try? Codec.decodeServer(line),
                        case let .extensionUiRequest(request) = decoded {
-                        prompts[key] = request
+                        if request.method == .notify {
+                            if request.notifyType == "warning" {
+                                appendSessionNotice(key: key, code: "ask_warning",
+                                                    message: request.message ?? request.title ?? "")
+                            } else if prompts[key]?.id == request.id {
+                                prompts[key] = nil
+                            }
+                        } else {
+                            prompts[key] = request
+                            // Ask-reconciliation window: collect this ask id —
+                            // replayed (session_sync) or live — so the
+                            // session_sync_end handler can tell a still-pending
+                            // flow from a stale one.
+                            if askSyncWindows[key] != nil {
+                                askSyncWindows[key]?.replayedAskIDs.insert(request.id)
+                            }
+                        }
                     }
                     // rpc RESPONSE plane (general): the extension answers every
                     // rpc command with a {type:"response", command, success,
@@ -325,6 +375,18 @@ extension AppModel {
         case let .control(event):
             handle(control: event, relayID: relayID)
         }
+    }
+
+    /// Surface a non-modal informational notice in a session's transcript.
+    /// Used for extension_ui WARNING notifies (actionable — answer rejected /
+    /// bridge TTL expired — but never sheet-worthy). Folds through the reducer
+    /// so the row persists in its session like any other notice.
+    func appendSessionNotice(key: String, code: String, message: String) {
+        guard !message.isEmpty else { return }
+        var reducer = envelopeReducers[key] ?? EnvelopeReducer()
+        reducer.appendNotice(code: code, message: message)
+        envelopeReducers[key] = reducer
+        transcripts[key] = reducer.session
     }
 
     /// Retract a session's ended state (banner + input lock): the session was

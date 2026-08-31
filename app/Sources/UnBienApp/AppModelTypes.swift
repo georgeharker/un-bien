@@ -39,6 +39,20 @@ public struct LiveSession: Identifiable, Equatable, Hashable, Sendable {
     public var isSubagent: Bool { parentSessionID != nil }
 }
 
+/// Ask-reconciliation window (robustness backstop for dropped dismissal
+/// notifies). Opened when a `session_sync` is sent (`requestReconstruction`);
+/// collects every interactive extension_ui ask id that arrives before the
+/// matching `session_sync_end`; at the terminator a stored prompt whose flow
+/// wasn't replayed is stale (the bridge replays its FULL activeFlows set on
+/// every sync — absence = resolved/expired) and is retired. Internal to
+/// AppModel's routing (AppModel.swift owns the map; AppModel+Inbound drives it).
+struct AskSyncWindow: Equatable, Sendable {
+    /// A session_sync was sent and its terminator hasn't landed yet.
+    var inFlight = false
+    /// Ask request ids seen (replayed or live) since the sync was sent.
+    var replayedAskIDs: Set<String> = []
+}
+
 /// Daemon/machine status pulled via a `presence_status` request (design
 /// 01M1813Q) — an idle machine's launch capabilities + configured backend,
 /// kept SEPARATE from per-session `capabilities` (there is no session here).

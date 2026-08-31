@@ -32,6 +32,11 @@ public final class AppModel: ObservableObject {
     /// module, so a plain internal setter (private(set) is FILE-scoped and the
     /// Inbound extension is a different file).
     @Published public var backfilledSessions: Set<String> = []
+    /// Ask-reconciliation windows per session (see AskSyncWindow): the
+    /// robustness backstop that retires a stale prompt whose dismissal notify
+    /// was dropped — reconciled at `session_sync_end` in AppModel+Inbound.
+    /// Deliberately NOT @Published: internal routing state, no view observes it.
+    var askSyncWindows: [String: AskSyncWindow] = [:]
     /// Pending queued follow-up messages per session (pi-native `queue_update`).
     @Published public var queued: [String: [QueuedMessageItem]] = [:]
     /// rpc request/reply correlation (plan 01M1A39Y4G): continuations parked by
@@ -235,6 +240,13 @@ public final class AppModel: ObservableObject {
         // walk's terminal page lands. A delta refetch (warm reconnect, since
         // != nil) re-marks it complete on its (usually empty) terminal page.
         backfilledSessions.remove(session.id)
+        // Open the ask-reconciliation window: the sync reply replays every
+        // still-pending ask to the sender ahead of its terminator, and the
+        // session_sync_end handler in AppModel+Inbound retires a stored prompt
+        // whose flow wasn't replayed (stale — its dismissal notify was dropped).
+        // Reset-at-send keeps a late terminator from an older sync reconciling
+        // against a stale set (a still-pending flow re-replays every sync).
+        askSyncWindows[session.id] = AskSyncWindow()
         try? await connection.send(.getEntries(id: UUID().uuidString, since: since),
                                    toPeer: session.peerEPK, room: session.roomID)
         try? await connection.send(.sessionSync(id: UUID().uuidString, limit: nil),

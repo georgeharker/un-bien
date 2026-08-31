@@ -254,4 +254,23 @@ final class SessionStateTests: XCTestCase {
         state.markResumed()
         XCTAssertFalse(state.ended, "markResumed retracts ended")
     }
+
+    // appendNotice (app-side routing of extension_ui WARNING notifies): a
+    // notice row lands inline in the transcript — actionable but never modal.
+    func testAppendNoticeAddsInlineRow() {
+        var state = SessionState()
+        state.applyRPC(.object(["type": .string("message_end"),
+                                "message": .object(["role": .string("user"), "timestamp": .number(1),
+                                                    "content": .string("hi")])]))
+        state.appendNotice(code: "ask_warning", message: "Clarification expired on the bridge")
+        state.appendNotice(code: "ask_warning", message: "Answer was not accepted")
+        XCTAssertEqual(state.items.count, 3, "user bubble + two notice rows")
+        let notices = state.items.compactMap { item -> NoticeItem? in
+            if case let .notice(n) = item { return n } else { return nil }
+        }
+        XCTAssertEqual(notices.map(\.code), ["ask_warning", "ask_warning"])
+        XCTAssertEqual(notices.map(\.message),
+                       ["Clarification expired on the bridge", "Answer was not accepted"])
+        XCTAssertEqual(Set(notices.map(\.id)).count, 2, "notice ids must be unique (ForEach)")
+    }
 }

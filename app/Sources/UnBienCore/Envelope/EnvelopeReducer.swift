@@ -79,6 +79,13 @@ public struct EnvelopeReducer {
         session.markResumed()
     }
 
+    /// Append an informational notice row to the transcript — app-side routing
+    /// of extension_ui `notify` frames (see AppModel+Inbound). Forwarded so the
+    /// app can fold it into the reducer's session and publish the transcript.
+    public mutating func appendNotice(code: String, message: String) {
+        session.appendNotice(code: code, message: message)
+    }
+
     // MARK: - rpc plane
 
     private mutating func applyRpc(_ rpc: JSONValue, aux: JSONValue? = nil) {
