@@ -85,7 +85,31 @@ setup)
     echo "OK: app running. Navigate in the Simulator, then: $0 shot <name>"
     ;;
 shot)
-    NAME="${2:?usage: $0 shot <name>}"
+    if [ $# -ge 3 ] && printf '%s' "$2" | grep -qE '^[0-9]{2}$'; then
+        # Explicit slot: `shot <number> <name>` — shoot in any order while
+        # keeping a logical filename sequence.
+        NN="$2"
+        NAME="$3"
+    else
+        NAME="${2:?usage: $0 shot <name> | $0 shot <number> <name>}"
+        # Auto-number: the next capture-order stamp.
+        DEV=$(booted_device)
+        [ -n "$DEV" ] || {
+            echo "ERROR: no booted simulator"
+            exit 1
+        }
+        DIR="$OUT/$DEV"
+        mkdir -p "$DIR"
+        NN=0
+        for f in "$DIR"/[0-9][0-9]-*.png; do
+            [ -e "$f" ] && NN=$((NN + 1))
+        done
+        NN=$((NN + 1))
+        FILE=$(printf "%s/%02d-%s.png" "$DIR" "$NN" "$NAME")
+        xcrun simctl io booted screenshot "$FILE"
+        echo "captured: $FILE"
+        exit 0
+    fi
     DEV=$(booted_device)
     [ -n "$DEV" ] || {
         echo "ERROR: no booted simulator"
@@ -93,17 +117,12 @@ shot)
     }
     DIR="$OUT/$DEV"
     mkdir -p "$DIR"
-    NN=0
-    for f in "$DIR"/[0-9][0-9]-*.png; do
-        [ -e "$f" ] && NN=$((NN + 1))
-    done
-    NN=$((NN + 1))
     FILE=$(printf "%s/%02d-%s.png" "$DIR" "$NN" "$NAME")
     xcrun simctl io booted screenshot "$FILE"
     echo "captured: $FILE"
     ;;
 *)
-    echo "usage: $0 [setup iphone|setup ipad|shot <name>|sizes]"
+    echo "usage: $0 [setup iphone|setup ipad|shot <name>|shot <number> <name>|sizes]"
     exit 1
     ;;
 esac
