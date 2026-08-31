@@ -19,16 +19,18 @@ async fn main() -> anyhow::Result<()> {
     let max_ct_bytes = relay::protocol::outer::max_ct_bytes();
     info!(max_ct_bytes, "outer envelope size limit");
 
-    // Default puts the SQLite file (and any transient -journal) under data/,
-    // so bare-metal `cargo run` doesn't litter the project root.
-    let db_path =
-        std::env::var("UNBIEN_MESH_DB_PATH").unwrap_or_else(|_| "data/mesh.db".to_string());
+    // The DB lands under the shared state root (`UNBIEN_STATE_DIR` /
+    // XDG-style default) — `UNBIEN_MESH_DB_PATH` still wins as the direct
+    // override (Docker presets it to /data/mesh.db). The old CWD-relative
+    // `data/mesh.db` default is gone: it littered whatever directory the
+    // relay happened to start in. MeshStore::open creates the parent dir.
+    let db_path = relay::paths::resolve_mesh_db_path();
 
     let mesh = Arc::new(
         relay::MeshStore::open(&db_path)
-            .with_context(|| format!("failed to open mesh DB at {db_path}"))?,
+            .with_context(|| format!("failed to open mesh DB at {}", db_path.display()))?,
     );
-    info!("mesh storage opened at {db_path}");
+    info!("mesh storage opened at {}", db_path.display());
 
     let presence = Arc::new(relay::PresenceManager::new());
     let rooms = Arc::new(relay::RoomManager::new());
