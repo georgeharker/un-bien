@@ -215,6 +215,18 @@ struct HomeView: View {
                         .frame(width: 16)
                 }
                 SessionRow(session: session)
+                // A pending extension_ui ask for this session: the ask sheet only
+                // presents INSIDE the open transcript, so without a row-level
+                // affordance an ask that fires while the user is elsewhere in
+                // the app is invisible (and if they answer on the machine, the
+                // dismissal notify clears it silently — it never appears at
+                // all). Badge the row so a waiting ask is discoverable from Home.
+                if model.prompts[session.id] != nil {
+                    Image(systemName: "questionmark.bubble.fill")
+                        .imageScale(.medium)
+                        .foregroundStyle(theme.accent)
+                        .accessibilityLabel("This session is asking a question")
+                }
                 // Subagent lifecycle status as a glyph (done ✓ / failed / running),
                 // pulled onto the child session via get_session_info (design 01M18PCM).
                 if session.isSubagent, let status = session.status {
