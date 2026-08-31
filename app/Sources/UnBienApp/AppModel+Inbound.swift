@@ -2,11 +2,11 @@ import Foundation
 import os
 import UnBienCore
 
-// Inbound routing helpers split out of AppModel.swift (its 1000-line cap):
-// the rpc-command RESPONSE router and the panel decode path. Both act on the
-// per-session state AppModel owns (availableModels / currentModel / panels),
-// keyed by the pi-sessionId composite key — same keying as AppModel's
-// envelope handler, which calls in.
+// Inbound routing split out of AppModel.swift (its 1000-line cap): the
+// per-relay frame handlers ({rpc|evt} routed envelopes + control frames), the
+// session upsert/keying helpers, and the rpc-command RESPONSE router + panel
+// decode path. All act on the per-session state AppModel owns, keyed by the
+// pi-sessionId composite key.
 
 private let log = Logger(subsystem: "un-bien", category: "relay")
 
@@ -136,5 +136,289 @@ extension AppModel {
         default:
             break
         }
+    }
+
+    // MARK: - Inbound
+
+    func handle(frame: InboundFrame, relayID: UUID) {
+        switch frame {
+        case let .routed(envelope):
+            // Envelope route ({rpc|evt}): a fork advertising `rpc_envelope`
+            // carries the transcript as pi rpc frames inside `ct`. Discriminate
+            // by SHAPE — a stock ServerMessage decodes to an EnvelopeMessage with
+            // both fields nil. The reducer owns the transcript for this key;
+            // stock session-content is suppressed in `route`.
+            if let env = try? envelope.decodeEnvelope() {
+                // Key per-session state on the pi sessionId (wire identity); the
+                // outer room is mesh/relay ROUTING only.
+                let key = "\(relayID.uuidString):\(envelope.peer):\(env.sessionId ?? envelope.room)"
+                // Envelope-native capability handshake: learn caps here (not just
+                // from stock session_history) so the {rpc|evt} route + stock
+                // suppression turn on before any session content arrives.
+                // Envelope-native capability handshake on the un-bien plane: a
+                // {type:"ub", ub:{type:"hello", caps, sessionId}} frame the APP
+                // acts on (learn caps + session identity) so the {rpc|evt} route
+                // + stock suppression turn on before any session content arrives.
+                if env.type == "ub", let ub = env.ub, ub["type"]?.stringValue == "hello" {
+                    // Last NON-EMPTY wins: re-hellos (session_sync/attach, N clients)
+                    // carry the pi's current caps; a legit change is still a
+                    // non-empty set. But an empty/degraded hello must NOT clobber a
+                    // good set — that silently gates off thinking/models/panels.
+                    let caps = ub["caps"]?.arrayValue?.compactMap { $0.stringValue }
+                    log.notice("ub hello: key=\(String(key.suffix(12)), privacy: .public) sid=\(env.sessionId ?? "nil", privacy: .public) caps=\(caps?.count ?? -1, privacy: .public)")
+                    if let caps, !caps.isEmpty {
+                        capabilities[key] = Set(caps)
+                    } else if capabilities[key] == nil {
+                        capabilities[key] = []
+                    }
+                    // The key IS the pi sessionId now, so a replaced session is
+                    // simply a NEW key with fresh state — no reset needed here.
+                    if envelopeReducers[key] == nil { envelopeReducers[key] = EnvelopeReducer() }
+                    return
+                }
+                // Daemon caps PULL response (design 01M1813Q): a DAEMON-SPECIFIC
+                // {type:"presence_status", caps, hostname, backend} frame. Store
+                // machine/daemon status SEPARATELY from per-session capabilities
+                // (this describes an idle machine, not a session) — do NOT fold
+                // it into the transcript reducer. Keyed by the control-room key.
+                if env.type == "ub", let ub = env.ub,
+                   ub["type"]?.stringValue == "presence_status" {
+                    let caps = ub["caps"]?.arrayValue?.compactMap { $0.stringValue } ?? []
+                    // MACHINE-caps entry: key by the MACHINE (relay + canonical
+                    // epk), NOT the control room. The room is only transport.
+                    let mkey = machineCapsKey(relayID: relayID, epk: envelope.peer)
+                    daemonPresence[mkey] = DaemonPresence(
+                        caps: Set(caps),
+                        hostname: ub["hostname"]?.stringValue,
+                        backend: ub["backend"]?.stringValue)
+                    return
+                }
+                // Response to a `get_session_info` PULL: a subagent reporting its
+                // own lifecycle status over its connection (design 01M18PCM). Set
+                // it on the child LiveSession, keyed by the child's pi sessionId,
+                // so the home-row checkmark reads it WITHOUT the parent's panel.
+                if env.type == "ub", let ub = env.ub,
+                   ub["type"]?.stringValue == "session_info" {
+                    if var s = sessions[key] {
+                        s.status = ub["status"]?.stringValue
+                        sessions[key] = s
+                    }
+                    return
+                }
+                // Other un-bien-plane frames (the session_sync_end terminator):
+                // fold via the reducer as a frame — its inner `.type` drives
+                // applyRPC, exactly like an rpc-plane frame.
+                if env.type == "ub", let ub = env.ub {
+                    var reducer = envelopeReducers[key] ?? EnvelopeReducer()
+                    reducer.apply(EnvelopeMessage(rpc: ub))
+                    envelopeReducers[key] = reducer
+                    transcripts[key] = reducer.session
+                    return
+                }
+                if env.rpc != nil || env.evt != nil {
+                    var reducer = envelopeReducers[key] ?? EnvelopeReducer()
+                    reducer.apply(env)
+                    envelopeReducers[key] = reducer
+                    transcripts[key] = reducer.session
+                    // Panels are envelope-only: {evt channel:"panel"} carries a
+                    // panel_update; decode it with the stock decoder and route it
+                    // into the panel store (reuses PanelState + the panel UI).
+                    if let evt = env.evt, evt.channel == "panel",
+                       let pdata = try? JSONEncoder().encode(evt.data),
+                       let pline = String(data: pdata, encoding: .utf8),
+                       let pmsg = try? Codec.decodeServer(pline) {
+                        route(pmsg, relayID: relayID, peer: envelope.peer,
+                              sessionID: env.sessionId ?? envelope.room)
+                    }
+                    // extension_ui is envelope-only: the {rpc} extension_ui_request
+                    // frame is the same JSON as the stock ServerMessage, so reuse
+                    // the stock decoder to surface it in the existing prompt UI.
+                    if let rpc = env.rpc, rpc["type"]?.stringValue == "extension_ui_request",
+                       let data = try? JSONEncoder().encode(rpc),
+                       let line = String(data: data, encoding: .utf8),
+                       let decoded = try? Codec.decodeServer(line),
+                       case let .extensionUiRequest(request) = decoded {
+                        prompts[key] = request
+                    }
+                    // rpc RESPONSE plane (general): the extension answers every
+                    // rpc command with a {type:"response", command, success,
+                    // data|error} envelope. The reducer above already folded the
+                    // transcript-relevant ones (get_state / get_entries); this
+                    // route owns the APP-side per-session effects the reducer
+                    // can't see (model roster, current model). Replaces the old
+                    // stock `models_list` handling — the extension retired that
+                    // frame when list_models migrated to `get_available_models`.
+                    if let rpc = env.rpc, rpc["type"]?.stringValue == "response" {
+                        resumeAwaitedReply(rpc) // request/reply correlation, by id
+                        handleRpcResponse(rpc, key: key) // side effects, by command
+                        // get_entries backfill PAGING (design 01M1BANZ): the
+                        // reply is ONE budget-bounded page of a possibly
+                        // multi-MB entry log. The frame stays pi-faithful
+                        // ({entries, leafId}, no extra fields) — the loop is
+                        // implied by pi's own since-cursor semantics: keep
+                        // fetching with the page's leafId until an empty page
+                        // (or an error / nil leaf). Folding is idempotent
+                        // (identify dedup), so pages + live frames interleave
+                        // freely.
+                        if let page = rpc["data"],
+                           rpc["command"]?.stringValue == "get_entries",
+                           rpc["success"]?.boolValue == true,
+                           let entries = page["entries"]?.arrayValue, !entries.isEmpty,
+                           let leaf = page["leafId"]?.stringValue,
+                           let conn = connections[relayID] {
+                            let peer = envelope.peer, room = envelope.room
+                            let n = entries.count
+                            let leafTail = String(leaf.suffix(8))
+                            let keyTail = String(key.suffix(12))
+                            log.notice("get_entries page key=\(keyTail, privacy: .public) n=\(n, privacy: .public) leaf=\(leafTail, privacy: .public) — fetching next page")
+                            Task { try? await conn.send(.getEntries(id: UUID().uuidString, since: leaf),
+                                                         toPeer: peer, room: room) }
+                        }
+                    }
+                    // Queue display is APP-OWNED. pi never delivers queue_update
+                    // to extensions — it's routed only to the host subscribe stream,
+                    // never to pi.on / the ExtensionAPI (which exposes just
+                    // hasPendingMessages():Bool, no queue text) — so the fork can't
+                    // send us a queue snapshot. Instead: an optimistic pending chip
+                    // on Queue submit, RESOLVED when the MODEL consumes the message.
+                    // The model "saw the post" when pi dequeues + runs it, which
+                    // surfaces as a user message_end here; correlate by TEXT only
+                    // (timestamp / send-id don't persist) and clear that chip. The
+                    // queueMessage timeout is the backstop. Design 01M158S7.
+                    if let rpc = env.rpc, rpc["type"]?.stringValue == "message_end",
+                       rpc["message"]?["role"]?.stringValue == "user" {
+                        let text = rpc["message"]?["content"]?.joinedText() ?? ""
+                        if !text.isEmpty {
+                            let norm = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                            // ONE consumption clears ONE pending chip. If the same
+                            // text was queued twice, each run clears the FIRST
+                            // (oldest / FIFO — pi delivers in order) match, not all
+                            // identical-in-flight copies.
+                            if let idx = queued[key]?.firstIndex(where: {
+                                $0.pending && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == norm
+                            }) {
+                                queued[key]?.remove(at: idx)
+                            }
+                        }
+                    }
+                    return
+                }
+            }
+        case let .control(event):
+            handle(control: event, relayID: relayID)
+        }
+    }
+
+    private func handle(control event: RelayControlIn, relayID: UUID) {
+        switch event {
+        case let .rooms(peer, rooms):
+            // Authoritative per-peer snapshot (rooms_check on subscribe): RECONCILE,
+            // don't just add. Drop any session for this (relay, peer) whose room
+            // isn't in the snapshot — it ended while we were disconnected/backgrounded
+            // (missed roomEnded); add-only left those as ghosts ("old chats in the
+            // mix"). Then upsert the live ones. Scoped to this peer, so other
+            // machines' sessions are untouched. See design 01M18AK9.
+            // Sessions are keyed by pi sessionId now, so match the snapshot on the
+            // LiveSession.roomID FIELD (routing) — NOT by parsing the key (which is
+            // the sessionId). Parsing the key would treat every sessionId as an
+            // unknown room and purge all live sessions.
+            let liveRoomIDs = Set(rooms.map(\.roomID))
+            // Observability: rooms in the snapshot we didn't already have live
+            // are room_announced pushes we missed — on first connect this is the
+            // initial load, on a manual refresh a non-zero count means a push
+            // was dropped.
+            let knownRoomIDs = Set(sessions.values
+                .filter { $0.relayID == relayID && $0.peerEPK == peer }
+                .map(\.roomID))
+            let recovered = liveRoomIDs.subtracting(knownRoomIDs).count
+            if recovered > 0 {
+                log.info("rooms_check recovered \(recovered, privacy: .public) not-live room(s) for peer \(String(peer.prefix(8)), privacy: .public) (initial load or missed room_announced)")
+            }
+            for (key, session) in sessions
+            where session.relayID == relayID && session.peerEPK == peer
+            && !liveRoomIDs.contains(session.roomID) {
+                sessions[key] = nil
+                forgetSession(key: key)
+            }
+            for room in rooms { upsertSession(relayID: relayID, peer: peer, room: room) }
+        case let .roomAnnounced(peer, room):
+            upsertSession(relayID: relayID, peer: peer, room: room)
+        case let .roomEnded(peer, roomID, _):
+            if let k = sessionKey(relayID: relayID, peer: peer, roomID: roomID) {
+                sessions[k] = nil
+                forgetSession(key: k)
+            }
+        case let .roomMetaUpdated(peer, roomID, model, parent, parentSessionID):
+            if let k = sessionKey(relayID: relayID, peer: peer, roomID: roomID),
+               var session = sessions[k] {
+                let wasSubagent = session.isSubagent
+                if let model { session.model = model }
+                // Last-info-wins parentage (present-only, never clears): a
+                // LATE-advertised parent (in-process subagent, after attach)
+                // re-nests the child. Reassigning sessions[k] re-derives
+                // HomeView's top/kids grouping so the row moves in the hierarchy.
+                if let parentSessionID { session.parentSessionID = parentSessionID }
+                if let parent { session.parentRoomID = parent }
+                sessions[k] = session
+                // Newly a subagent -> pull its lifecycle status (mirror upsert).
+                if !wasSubagent, session.isSubagent,
+                   let connection = connections[relayID] {
+                    let peerEPK = session.peerEPK
+                    let rid = session.roomID
+                    Task {
+                        try? await connection.send(
+                            .getSessionInfo(id: UUID().uuidString),
+                            toPeer: peerEPK, room: rid)
+                    }
+                }
+            }
+        default:
+            break
+        }
+    }
+
+    private func upsertSession(relayID: UUID, peer: String, room: RoomInfo) {
+        // The presence daemon's control room is not a chat session: it carries the
+        // `is_daemon` cap, its roomId is the control-room derivation, and it has no
+        // pi sessionId (a real session's wire identity).
+        if room.caps?.contains("is_daemon") == true { return }
+        if let control = Base64.deriveControlRoom(epk: peer), room.roomID == control { return }
+        guard let sessionID = room.sessionID else { return }
+        var session = LiveSession(relayID: relayID, peerEPK: peer, roomID: room.roomID,
+                                  sessionID: sessionID,
+                                  name: room.name, cwd: room.cwd, model: nil,
+                                  parentSessionID: room.parentSessionID,
+                                  parentRoomID: room.parent, subagentID: room.subagentID)
+        // Carry a known status across re-announce (reconnect/relaunch replays
+        // room_announced); the pull below refreshes it.
+        session.status = sessions[session.id]?.status
+        sessions[session.id] = session
+        // PULL the subagent's lifecycle status over its OWN connection, re-issued
+        // on every announce so it survives app relaunch (design 01M18PCM). The
+        // send itself is what makes the child room attach + answer.
+        if session.isSubagent, let connection = connections[relayID] {
+            let peerEPK = session.peerEPK
+            let roomID = session.roomID
+            Task { try? await connection.send(.getSessionInfo(id: UUID().uuidString),
+                                              toPeer: peerEPK, room: roomID) }
+        }
+    }
+
+    /// The child subagent session for a subagents-panel record id, on the same
+    /// machine as `parent`. nil until that subagent's room is announced.
+    public func subagentSession(sessionID: String, under parent: LiveSession) -> LiveSession? {
+        sessions.values.first {
+            $0.sessionID == sessionID
+                && $0.relayID == parent.relayID
+                && $0.peerEPK == parent.peerEPK
+        }
+    }
+
+    /// Resolve a relay (peer, roomID) ROUTING tuple to the pi-sessionId state key
+    /// (LiveSession.id) — for control frames keyed by roomID.
+    private func sessionKey(relayID: UUID, peer: String, roomID: String) -> String? {
+        sessions.values.first {
+            $0.relayID == relayID && $0.peerEPK == peer && $0.roomID == roomID
+        }?.id
     }
 }
