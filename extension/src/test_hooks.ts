@@ -67,6 +67,8 @@ export interface TestHooksDeps {
   set extensionUiBridge(value: ExtensionUiBridge | null)
   /** Root session id — cleared with the per-session state map. */
   set rootSessionId(value: string | null)
+  /** Relay start deferred pending a session id (design 01M1CAW0). */
+  set relayStartDeferred(value: boolean)
   /** Per-(cwd,name) singleton lock backing the mesh registration. */
   get cwdLock(): AcquiredLock | null
   set cwdLock(value: AcquiredLock | null)
@@ -101,6 +103,8 @@ export interface TestHooksDeps {
 
   /** The ROOT session's state record (turnId for cancel routing). */
   rootState(): { turnId: string | null }
+  /** Seed the ROOT session record + id (test-only session emulation). */
+  seedRootSession(sid: string): void
   /** Queue an inbound mesh message for agent delivery. */
   deliverMeshMessageToAgent(env: MeshEnvelope): void
 }
@@ -132,8 +136,15 @@ export interface TestHooks {
   /** Test-only: reset the keyed per-session state at a TEST BOUNDARY (beforeEach).
    *  Must NOT be folded into resetBridgeOwnersForTest — that fires mid-test on
    *  every captureEventHandler call and would wipe state a test seeds across two
-   *  captures (e.g. input seeds turnId, message_update reads it). */
+   *  captures (e.g. input seeds turnId, message_update reads it). Also clears a
+   *  deferred relay start (design 01M1CAW0) so a pending announce never leaks
+   *  across tests. */
   resetSessionsForTest(): void
+  /** Test-only: seed the ROOT session (id + sessionManager record) so
+   *  `_deriveRoomId` has a session id — production always has one by the time
+   *  `/unbien` runs (design 01M1CAW0: no room announce without it). Tests of
+   *  the pre-id refusal simply skip this (or call resetSessionsForTest). */
+  seedRootSessionForTest(sid?: string): void
   /** Test-only: set the auto-init gate for lifecycle replacement tests. */
   setAutoInitedForTest(value: boolean): void
   /** Test-only: true when this instance holds a live local-mesh node. */
@@ -212,6 +223,11 @@ export function createTestHooks(deps: TestHooksDeps): TestHooks {
     resetSessionsForTest(): void {
       deps.sessions.clear()
       deps.rootSessionId = null
+      deps.relayStartDeferred = false
+    },
+
+    seedRootSessionForTest(sid = "test-root-session"): void {
+      deps.seedRootSession(sid)
     },
 
     setAutoInitedForTest(value: boolean): void {

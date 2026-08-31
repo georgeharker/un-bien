@@ -322,12 +322,27 @@ export async function _cmdStart(
   // Same name we send in pair_ok — keeps room_meta.name and the per-pair
   // session_name aligned so the app shows consistent labels.
   const sessionName = deps.displayName(cwd)
-  // plan/41: derive the App↔Pi room from (cwd, name) so several agents in the
-  // SAME folder get distinct rooms (the app renders one tile per agent). The
-  // default/unnamed case preserves the legacy cwd-only id (no re-keying). Uses
-  // the SAME name as room_meta.name / pair_ok below — the invariant that the
-  // app pairs on the room the Pi actually announces.
+  // design 01M1CAW0 (announce waits for the session id): the App↔Pi room is
+  // ALWAYS session-id-derived (rooms.ts). With no session id there is NO room
+  // to announce — the retired (cwd, name) fallback produced an id IDENTICAL
+  // for same-cwd processes, so a pre-session subprocess could announce the
+  // room an earlier session already occupies. Connecting room-less is not an
+  // option either: the relay registers a room-less hello into the shared
+  // "main" room, which surfaces in the app as a phantom session. So the WHOLE
+  // connect is deferred — the root session_start handler re-runs this start
+  // once the session id exists (see the relayStartDeferred re-arm in
+  // index.ts). The cwd lock (lockIdFor) is unaffected: lock ids are NOT room
+  // ids and stay (cwd, name)-keyed by design.
   const roomId = deps.deriveRoomId(cwd, sessionName)
+  if (roomId === null) {
+    deps.relayStartDeferred = true
+    ctx.ui.notify(
+      "[un-bien] No session id yet — refusing to announce a cwd-derived room " +
+        "(design 01M1CAW0). The relay will connect once this session has started.",
+      "warning",
+    )
+    return
+  }
 
   // Seed the current model from the SDK's resolved selection so room_meta
   // carries it on connect. `model_select` only fires on an explicit set/cycle

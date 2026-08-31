@@ -148,8 +148,6 @@ export interface RelayLifecycleDeps {
   refreshPairingsCache(): void
   /** Friendly (configured or derived) agent name for a cwd. */
   displayName(cwd: string): string
-  /** Room id for (cwd, name), preferring the stable pi session id. */
-  deriveRoomId(cwd: string, name: string): string
   /** Attach the cross-PC bridge once relay + leader are both up. */
   attachBridgeIfReady(): void
   /** Stock ClientMessage router (ping / cancel / pre-attach paths). */
@@ -949,6 +947,22 @@ async function _handlePairRequest(
     return
   }
 
+  // design 01M1CAW0: pair_ok must carry the session-id-derived room the Pi
+  // actually announced. A relay connection only comes up once the session id
+  // exists (a pre-id start defers), so a null myRoomId here is a torn state —
+  // refuse the pair instead of falling back to the retired cwd-derived room
+  // (which the app would then address while the Pi announces another). The
+  // app surfaces pair_error and the user rescans once the session has started.
+  if (!deps.myRoomId) {
+    envLog("pair_request refused: no session room yet (design 01M1CAW0)")
+    sendError(
+      "internal_error",
+      "No session room yet — retry pairing once this session has started " +
+        "(design 01M1CAW0).",
+    )
+    return
+  }
+
   // A delayed signed revoke must lose authority before the same-process
   // re-pair enters storage; the replacement owns a fresh token snapshot.
   const producer = deps.selfRevoke
@@ -995,11 +1009,10 @@ async function _handlePairRequest(
     session_name: sessionName,
     session_started_at: deps.sessionStartedAt ?? Date.now(),
     // App uses this to address subsequent inner messages to the right room
-    // when this Pi runs alongside others with the same epk. Defensive fallback
-    // to roomIdFor(cwd, name) covers the edge case where pair_request lands
-    // before _cmdStart could set _myRoomId (shouldn't happen in practice) —
-    // and stays plan/41-consistent (same (cwd, name) derivation as the announce).
-    room_id: deps.myRoomId ?? deps.deriveRoomId(cwd, sessionName),
+    // when this Pi runs alongside others with the same epk. Always the
+    // session-id-derived room the Pi announced (guarded above; design
+    // 01M1CAW0 — never a cwd-derived guess).
+    room_id: deps.myRoomId,
     // Plan/27 Wave A — surface the host coding-agent identity + machine
     // hostname so the app can render a meaningful device row (and tell
     // two PCs apart even when nicknames collide).

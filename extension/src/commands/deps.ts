@@ -74,6 +74,10 @@ export interface CommandDeps {
   lockedName: string | null
   /** Relay candidate generation (invalidates in-flight starts/stops). */
   relayLifecycleGeneration: number
+  /** True when a relay start was deferred because no session id existed yet
+   *  (design 01M1CAW0); the root session_start re-runs the start once the id
+   *  is available. */
+  relayStartDeferred: boolean
   /** Root replacement authority epoch (session replacements). */
   rootLifecycleGeneration: number
   /** Mesh join candidate generation. */
@@ -113,8 +117,11 @@ export interface CommandDeps {
   isCurrentRootLifecycle(generation: number): boolean
   /** Friendly (configured or derived) agent name for a cwd. */
   displayName(cwd: string): string
-  /** Room id for (cwd, name), preferring the stable pi session id. */
-  deriveRoomId(cwd: string, name: string): string
+  /** Room id for the current chat session, derived from the stable pi
+   *  session id — or null when no session id exists yet, in which case the
+   *  caller must NOT announce/join a room (design 01M1CAW0; the cwd-derived
+   *  fallback is retired). */
+  deriveRoomId(cwd: string, name: string): string | null
   /** Friendly model name for room_meta. */
   currentModelName(): string | undefined
   /** The ROOT session's state record (turn/agentRun/sessionManager). */

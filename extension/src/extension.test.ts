@@ -20,6 +20,7 @@ import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { getCapabilities, setCapabilities } from "@earendil-works/pi-tui"
+import { roomIdForSession } from "./rooms.js"
 import type {
   ExtensionAPI,
   ExtensionFactory,
@@ -277,6 +278,7 @@ const {
   _getLockedNameForTest,
   _resetCwdLockForTest,
   _resetSessionsForTest,
+  _seedRootSessionForTest,
   _handleControl,
   _deliverMeshMessageToAgentForTest,
   CTRL_PREFIX,
@@ -286,8 +288,13 @@ const { acquireCwdLock } = await import("./session/cwd_lock.js")
 // Keyed per-session state (_sessions Map + _rootSessionId) is module-global;
 // reset it at every test boundary so it can't leak across tests. NOT in
 // _resetBridgeOwnersForTest — that fires mid-test on each captureEventHandler.
+// The seed emulates the ROOT session (id + sessionManager): design 01M1CAW0
+// forbids announcing a room before the session id exists, and production
+// always has one by the time /unbien runs. Tests of the pre-id refusal call
+// _resetSessionsForTest() to drop the seed.
 beforeEach(() => {
   _resetSessionsForTest()
+  _seedRootSessionForTest()
 })
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -2043,7 +2050,7 @@ describe("rooms wiring", () => {
     await stop("", makeMockCtx())
   })
 
-  test("_cmdStart calls relay.connect with roomId and roomMeta derived from cwd", async () => {
+  test("_cmdStart calls relay.connect with the session-id-derived roomId (design 01M1CAW0)", async () => {
     const capturedOpts: unknown[] = []
     _defaultConnectImpl = async (opts?: unknown) => {
       capturedOpts.push(opts)
@@ -2057,13 +2064,13 @@ describe("rooms wiring", () => {
       roomId?: string
       roomMeta?: { name: string; cwd: string }
     }
-    expect(opts.roomId).toBeTruthy()
-    expect(opts.roomId).toMatch(/^[A-Za-z0-9_-]{12}$/)
+    // The room is keyed on the SEEDED root session id, never the cwd.
+    expect(opts.roomId).toBe(roomIdForSession("test-root-session"))
     expect(opts.roomMeta?.cwd).toBe("/tmp/unbien-test-room")
     expect(opts.roomMeta?.name).toContain("unbien-test-room")
   })
 
-  test("_cmdStart with different cwds uses different roomIds", async () => {
+  test("same session keeps its roomId across stop/start; a new session gets a new one", async () => {
     const capturedOpts: Array<{ roomId?: string }> = []
     _defaultConnectImpl = async (opts?: unknown) => {
       capturedOpts.push(opts as { roomId?: string })
@@ -2075,10 +2082,79 @@ describe("rooms wiring", () => {
     const stop = captureHandler("unbien stop")
     await stop("", makeMockCtx())
 
+    // Same root session (the seed survives stop/start) → SAME room.
     await _connectForTest(makeMockCtx("/tmp/unbien-B"))
 
-    expect(capturedOpts).toHaveLength(2)
-    expect(capturedOpts[0]!.roomId).not.toBe(capturedOpts[1]!.roomId)
+    // A DIFFERENT root session → a different (session-id-derived) room.
+    await stop("", makeMockCtx())
+    _seedRootSessionForTest("test-root-session-2")
+    await _connectForTest(makeMockCtx("/tmp/unbien-B"))
+
+    expect(capturedOpts).toHaveLength(3)
+    expect(capturedOpts[0]!.roomId).toBe(roomIdForSession("test-root-session"))
+    expect(capturedOpts[1]!.roomId).toBe(capturedOpts[0]!.roomId)
+    expect(capturedOpts[2]!.roomId).toBe(
+      roomIdForSession("test-root-session-2"),
+    )
+    expect(capturedOpts[2]!.roomId).not.toBe(capturedOpts[0]!.roomId)
+  })
+
+  test("no room announce before a session id exists — connect deferred, no cwd fallback (design 01M1CAW0)", async () => {
+    // Drop the beforeEach-seeded root session: this Pi is PRE-session.
+    _resetSessionsForTest()
+    const capturedOpts: unknown[] = []
+    _defaultConnectImpl = async (opts?: unknown) => {
+      capturedOpts.push(opts)
+    }
+
+    captureHandler("unbien")
+    const ctx = makeMockCtx("/tmp/unbien-pre-sid")
+    await _startRelayForTest(ctx)
+
+    // Fail loud: no RelayClient is even constructed — a room-less hello would
+    // register the shared "main" room, and the retired cwd-derived id would
+    // collide with any other same-cwd process.
+    expect(_getState()).toBe("idle")
+    expect(relayInstances).toHaveLength(0)
+    expect(capturedOpts).toHaveLength(0)
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("design 01M1CAW0"),
+      "warning",
+    )
+  })
+
+  test("a deferred start announces on session_start once the session id exists (design 01M1CAW0)", async () => {
+    _resetSessionsForTest()
+    const capturedOpts: unknown[] = []
+    _defaultConnectImpl = async (opts?: unknown) => {
+      capturedOpts.push(opts)
+    }
+    _setAutoInitedForTest(true) // isolate: only the deferred re-arm may start
+
+    try {
+      captureHandler("unbien")
+      await _startRelayForTest(makeMockCtx("/tmp/unbien-deferred"))
+      expect(relayInstances).toHaveLength(0) // deferred — no session id yet
+
+      // The root session starts: session_start carries a sessionManager →
+      // the deferred announce re-runs and joins the session-id-derived room.
+      const onSessionStart = captureEventHandler("session_start")
+      onSessionStart(
+        { type: "session_start" },
+        {
+          ...makeMockCtx("/tmp/unbien-deferred"),
+          sessionManager: { getSessionId: () => "sid-deferred-1" },
+        },
+      )
+
+      await vi.waitFor(() => expect(_getState()).toBe("started"))
+      expect(capturedOpts).toHaveLength(1)
+      expect(capturedOpts[0]).toMatchObject({
+        roomId: roomIdForSession("sid-deferred-1"),
+      })
+    } finally {
+      _setAutoInitedForTest(false)
+    }
   })
 
   test("RoomAlreadyOpenError closes its initial Relay candidate before reporting", async () => {

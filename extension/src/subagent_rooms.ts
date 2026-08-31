@@ -93,6 +93,33 @@ const NOOP: SubagentRoomsController = {
 }
 
 /**
+ * Child rooms are ALWAYS `roomIdForSession(sessionId)` (design 01M1CAW0 —
+ * announce waits for the session id, so a child's self-announce always
+ * registers the sid-hash room). A pre-registered/caller-supplied id that
+ * DIFFERS — e.g. residue of the retired cwd-derived announce, which was
+ * identical for same-cwd processes — is suspect: refuse it in favor of the
+ * sid-hash id. Returns the room id to use. Pure + exported for tests.
+ */
+export function normalizeChildRoomId(
+  sessionId: string,
+  candidate?: string,
+): string {
+  const sidRoomId = roomIdForSession(sessionId)
+  if (candidate && candidate !== sidRoomId) {
+    envLog(
+      `subagent room id mismatch — refusing "${candidate}" for sid=${sessionId.slice(0, 8)} (design 01M1CAW0)`,
+    )
+    console.warn(
+      `[un-bien] subagent room id "${candidate}" differs from the ` +
+        `session-derived id — using the sid-hash room instead ` +
+        `(design 01M1CAW0)`,
+    )
+    return sidRoomId
+  }
+  return candidate ?? sidRoomId
+}
+
+/**
  * Root-side init. Subscribes to the subagents:* bus (record metadata) so a
  * child session_start can bind to the record that spawned it. `getParentRoomId`
  * returns the ROOT room id (roomIdForSession(rootSid)) captured extension-side.
@@ -263,9 +290,11 @@ export function initSubagentRooms(
     const status = typeof p.status === "string" ? p.status : undefined
     // Enrich if an in-process room already owns this child (dedup on sessionId),
     // else register it fleet-side WITHOUT building a room (the child owns its own).
+    // The row's roomId is ALWAYS the sid-hash id — a pre-registered foreign id
+    // (retired cwd-derived residue) is refused (design 01M1CAW0).
     const existing = panelBySession.get(sessionId)
     panelBySession.set(sessionId, {
-      roomId: existing?.roomId ?? roomIdForSession(sessionId),
+      roomId: normalizeChildRoomId(sessionId, existing?.roomId),
       type: type ?? existing?.type,
       description: description ?? existing?.description,
       status: status ?? existing?.status ?? "started",
@@ -299,17 +328,32 @@ export function initSubagentRooms(
     // launch (if any) later attaches the producer to THIS same room via
     // ensureChildRoom. Keyed by child sessionId; needs the parent room up.
     const parentRoomId = opts.getParentRoomId()
+    // design 01M1CAW0: parentage comes from the MARKER only. The old chain
+    // fell back to opts.getParentSessionId() — the RECEIVING process's root —
+    // so a marker with no parent of its own got THIS process's root stamped
+    // as its parent (set-once on the relay, never correctable). A parent-less
+    // marker now builds the room WITHOUT parent (the in-process path still
+    // sets it authoritatively later via onChildSession) — never a guess.
     const parentSessionId =
       (typeof p.parentSessionId === "string" && p.parentSessionId) ||
       (typeof p.parentSession === "string" && p.parentSession) ||
       (typeof p.parent === "string" && p.parent) ||
-      opts.getParentSessionId() ||
       undefined
+    if (!parentSessionId) {
+      envLog(
+        `subagent marker without parent — not guessing (design 01M1CAW0): sid=${sessionId.slice(0, 8)}`,
+      )
+      console.warn(
+        "[un-bien] subagent marker carries no parentSessionId — creating " +
+          "the room WITHOUT parentage rather than guessing the local root " +
+          "(design 01M1CAW0)",
+      )
+    }
     if (parentRoomId) {
       ensureChildRoom(sessionId, {
         relayUrl,
         sessionId,
-        roomId: existing?.roomId ?? roomIdForSession(sessionId),
+        roomId: normalizeChildRoomId(sessionId, existing?.roomId),
         parentRoomId,
         parentSessionId,
         startedAt: existing?.startedAt ?? Date.now(),
@@ -544,6 +588,19 @@ export function initSubagentRooms(
         : undefined
     const existing = children.get(sessionId)
     if (existing) {
+      // design 01M1CAW0: a LIVE room keyed by anything but the sid-hash id is
+      // residue of the retired cwd-derived announce. It cannot be rebuilt
+      // (the room is already open on the relay) — log loudly and keep serving.
+      if (existing.roomId !== roomIdForSession(sessionId)) {
+        envLog(
+          `subagent live room id mismatch: ${existing.roomId} != sid-hash for sid=${sessionId.slice(0, 8)} (design 01M1CAW0)`,
+        )
+        console.warn(
+          `[un-bien] subagent room "${existing.roomId}" is not the ` +
+            `session-derived room — set-once parentage on it is suspect ` +
+            `(design 01M1CAW0)`,
+        )
+      }
       if (launch) existing.attach(launch.childPi, launch.ctx)
       if (parent)
         existing.setParent(parent.parentRoomId, parent.parentSessionId)
@@ -555,8 +612,13 @@ export function initSubagentRooms(
       return
     }
     building.add(sessionId)
+    // design 01M1CAW0: the room this build opens is ALWAYS the sid-hash id —
+    // a buildArgs.roomId that differs (cwd-derived residue fed from a stale
+    // panel row) is refused here, the single authoritative choke point.
+    const roomId = normalizeChildRoomId(sessionId, buildArgs.roomId)
     void startChildRoom({
       ...buildArgs,
+      roomId,
       onClosed: () => children.delete(sessionId),
     }).then((room) => {
       building.delete(sessionId)
@@ -658,7 +720,7 @@ export function initSubagentRooms(
       if (!unboundSessions.includes(sessionId)) unboundSessions.push(sessionId)
       unboundInProcess.add(sessionId)
     }
-    const roomId = existing?.roomId ?? roomIdForSession(sessionId)
+    const roomId = normalizeChildRoomId(sessionId, existing?.roomId)
     const name = existing?.description ?? existing?.type ?? "subagent"
 
     // Register/enrich the panel row keyed by the CHILD sessionId (identity from
@@ -862,10 +924,15 @@ async function startChildRoom(args: {
       // Pi ids — the app nests + maps by these; parent (roomId) + subagentId are
       // kept as supplementary (not the logic keys).
       sessionId: args.sessionId,
+      // design 01M1CAW0: parentage (parent roomId + parentSessionId) is
+      // advertised ONLY when the parent SESSION is known — the relay merges
+      // it SET-ONCE, so a parent-less build must never stamp a guessed parent.
       ...(args.parentSessionId
-        ? { parentSessionId: args.parentSessionId }
+        ? {
+            parent: args.parentRoomId,
+            parentSessionId: args.parentSessionId,
+          }
         : {}),
-      parent: args.parentRoomId,
       ...(args.subagentId ? { subagentId: args.subagentId } : {}),
     },
   })
