@@ -248,11 +248,12 @@ resolves. UPLOAD stays manual (Xcode Organizer / Transporter / `xcrun altool
 iOS 1.0(2) + macOS 1.0(2) uploaded after two processor bounces (fixed:
 `UISupportedInterfaceOrientations` for the universal build; macOS
 `LSApplicationCategoryType`). Both "Ready to test"; internal testing set up.
-**iOS verified: connects to the real relay on the distribution build**
-(ATS + Local Network + Tailscale path all good). Still to exercise: macOS
-sandboxed Keychain + relay connect; ask-from-phone; machine-row launch. Then:
-paste review notes (text-first, per §7 decision), pick builds on each 1.0,
-submit per platform.
+**VERIFIED on both platforms: the distribution builds connect to the real
+ relay — iOS (ATS + Local Network + Tailscale path) and macOS (sandboxed
+ Keychain + relay connect, first run outside Xcode).** Still to exercise:
+ask-from-phone; machine-row launch (needs the launcher daemon). Then: paste
+review notes (text-first, per §7 decision), pick builds on each 1.0, submit
+per platform.
 
 ## Both v1-blocking decisions are settled
 
