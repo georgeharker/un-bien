@@ -1,0 +1,8 @@
+# pi-lens's yamllint runner flags 80-col lines; this repo's workflows and
+# generated-adjacent YAML legitimately run longer (long URLs, composite action
+# refs). Match prettier's printWidth 120 for YAML (see .prettierrc.mjs
+# overrides) so the two formatters agree and the cascade stays a no-op.
+extends: default
+rules:
+  line-length:
+    max: 120

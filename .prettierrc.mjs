@@ -17,6 +17,17 @@ const config = {
   useTabs: false,
   trailingComma: "all",
   printWidth: 80,
+  // Harden against the formatter CASCADE: prettier also claims YAML/JSON/
+  // Markdown when pi-lens formats them. This repo's YAML is already
+  // 2-space (tabWidth matches), but printWidth 80 would wrap the workflow
+  // lines longer than 80 cols on the next format pass. proseWrap stays
+  // default (preserve) so Markdown prose is not reflowed.
+  overrides: [
+    {
+      files: ["*.yml", "*.yaml", "*.json", "*.jsonc", "*.md", "*.mdx"],
+      options: { tabWidth: 2, printWidth: 120 },
+    },
+  ],
 }
 
 export default config
