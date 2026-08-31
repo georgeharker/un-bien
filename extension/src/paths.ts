@@ -1,5 +1,6 @@
 import { homedir } from "node:os"
 import { join } from "node:path"
+import { migrateLegacyStateOnce } from "./state_migration.js"
 
 /**
  * Absolute root for un-bien on-disk STATE: `sessions/`, `skills/`, the
@@ -9,23 +10,48 @@ import { join } from "node:path"
  * relocated install can never split its state across two roots.
  *
  * The GLOBAL config is the one exception — it follows the coding-agent dir via
- * `unbienConfigHome()` (below) as `extensions/un-bien.json`, not this resolver.
+ * `unbienConfigHome()` (below) as `extensions/un-bien.json`, not this resolver
+ * (design 01M1CB6Q: the config/state split).
  *
  * Precedence (resolved at CALL time so tests — and a relocated deployment —
  * can override via env without re-importing):
  *
- *   1. `UNBIEN_DIR`  — an ABSOLUTE override of the state dir itself. Lets the
- *      state live at an arbitrary path (e.g. an XDG-style `~/.config/pi/un-bien`)
- *      with no forced `.pi/un-bien` suffix. This is the knob to reach for when
- *      relocating; `UNBIEN_HOME` cannot express it.
- *   2. `UNBIEN_HOME` — a stand-in `$HOME`; state lives at
- *      `<UNBIEN_HOME>/.pi/un-bien`. Long-standing test/override knob.
- *   3. `os.homedir()`   — the default, `~/.pi/un-bien`.
+ *   1. `UNBIEN_STATE_DIR` — an ABSOLUTE override of the state dir itself. This
+ *      is the knob to reach for when relocating state.
+ *   2. `UNBIEN_DIR`      — legacy absolute override, same semantics, lower
+ *      precedence (kept because test suites use it).
+ *   3. `UNBIEN_HOME`     — legacy stand-in `$HOME`; state lives at
+ *      `<UNBIEN_HOME>/.pi/un-bien` (kept because test suites use it).
+ *   4. `${XDG_STATE_HOME:-~/.local/state}/un-bien` — the XDG-style default.
+ *      `XDG_STATE_HOME` unset (conventionally so on macOS) falls back to
+ *      `$HOME/.local/state`.
+ *
+ * The resolver itself is pure — it returns a path and never touches the
+ * filesystem. Writers create the root with mkdir -p on first use; the
+ * one-time legacy migration (see `state_migration.ts`) is the first writer.
  */
-export function unbienStateHome(): string {
+export function resolveUnbienStateRoot(): string {
+  const stateDir = process.env["UNBIEN_STATE_DIR"]
+  if (stateDir && stateDir.length > 0) return stateDir
   const dir = process.env["UNBIEN_DIR"]
   if (dir && dir.length > 0) return dir
-  return join(process.env["UNBIEN_HOME"] || homedir(), ".pi", "un-bien")
+  const home = process.env["UNBIEN_HOME"]
+  if (home && home.length > 0) return join(home, ".pi", "un-bien")
+  const xdg = process.env["XDG_STATE_HOME"]
+  const base = xdg && xdg.length > 0 ? xdg : join(homedir(), ".local", "state")
+  return join(base, "un-bien")
+}
+
+/**
+ * The state root, with the one-time legacy-state migration hooked in. Same
+ * name/signature as ever (many callers); see `resolveUnbienStateRoot()` for
+ * the precedence order. The migration hook is cheap after the first call and
+ * is skipped entirely under vitest, so tests can call this freely.
+ */
+export function unbienStateHome(): string {
+  const root = resolveUnbienStateRoot()
+  migrateLegacyStateOnce()
+  return root
 }
 
 /**
