@@ -188,12 +188,18 @@ transcript, tool-approval, mesh view are the natural set.)
   syncs from the SPM checkouts and FAILS on drift (highlightjs.txt is
   hand-maintained — upstream ships no standalone file).
 
-### 12. 🔲 Archive / upload pipeline
+### 12. ✅ Archive / export pipeline (upload pending ASC records)
 
-Today the app runs via SwiftPM (`swift run un-bien-mac`). Ship path needs a real
-`xcodebuild archive` of the Xcode targets → validate → upload (Xcode Organizer
-or Transporter). Covered by the existing app-CI plan item. (App Store distribution
-does not need separate notarization — that's for direct distribution.)
+`scripts/archive-appstore.sh [ios|macos|both]` — Release archive of both
+schemes with App Store distribution signing (`-allowProvisioningUpdates`
+registers the explicit App ID + mints the distribution profile on first run),
+then exports `UnBien-iOS.ipa` / `UnBien-macOS.pkg` to `app/build/Export/`
+(gitignored). VERIFIED end-to-end 2026-08-31 — including the fix for the
+`exportArchive Copy failed` trap: the distribution pipeline shells out to
+`rsync` from PATH, and a homebrew rsync 3.5.0 override kills the IPA packaging
+step; the script pins `/usr/bin` first for the export so the system rsync
+resolves. UPLOAD stays manual (Xcode Organizer / Transporter / `xcrun altool
+--upload-app`) until the ASC records exist — then it can be scripted.
 
 ### 13. 🔲 TestFlight beta
 
