@@ -210,6 +210,9 @@ macOS platform. ASC accepts the native simulator dimensions directly.
   > Self-hosted by design: there is no Un Bien cloud, no account, and no
   > telemetry — your relay, your keys, your machines. Includes a read-only demo
   > mode so you can look around without any setup.
+  >
+  > Get started (self-hosting in ~5 minutes):
+  > https://docs.georgeharker.com/un-bien/main/docs/install.html
 - **What's new (1.0):** Initial release.
 - **Privacy nutrition labels:** mirror the manifest — Data Not Collected,
   no tracking. Category answers: everything "none".
