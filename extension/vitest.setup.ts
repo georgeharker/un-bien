@@ -3,7 +3,11 @@
 // hatch) makes `directConfig()` win in every test, so "fresh cwd / first-time /
 // no-config" assertions see a config the test never wrote. Same class of leak
 // for `UNBIEN_RELAY` (relay resolution) and the `UNBIEN_DIR` /
-// `UNBIEN_HOME` state-dir overrides.
+// `UNBIEN_HOME` state-dir overrides. Since the config/state split (design
+// 01M1CB6Q) the same leak exists for `UNBIEN_STATE_DIR` and
+// `XDG_STATE_HOME`: the state root's XDG default means an ambient
+// `XDG_STATE_HOME` (commonly exported in dev shells) would point every
+// default-resolution test at the developer's REAL state root.
 //
 // We UNSET these rather than pin a temp home on purpose. `unbienStateHome()`
 // prefers `UNBIEN_HOME`/`UNBIEN_DIR` over `os.homedir()`, and
@@ -21,6 +25,8 @@ for (const key of [
   "UNBIEN_RELAY",
   "UNBIEN_DIR",
   "UNBIEN_HOME",
+  "UNBIEN_STATE_DIR",
+  "XDG_STATE_HOME",
 ]) {
   delete process.env[key];
 }

@@ -192,13 +192,13 @@ describe("renderTemplate", () => {
 })
 
 describe("vbsLauncherPath", () => {
-  test("is absolute and ends with the launcher .vbs under ~/.pi/un-bien", () => {
+  test("is absolute and ends with the launcher .vbs under the state root", () => {
     const p = vbsLauncherPath()
     expect(isAbsolute(p)).toBe(true)
     expect(p.endsWith("RemotePiLauncherRun.vbs")).toBe(true)
-    expect(p.endsWith(join(".pi", "un-bien", "RemotePiLauncherRun.vbs"))).toBe(
-      true,
-    )
+    expect(
+      p.endsWith(join(".local", "state", "un-bien", "RemotePiLauncherRun.vbs")),
+    ).toBe(true)
   })
 })
 

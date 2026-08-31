@@ -131,7 +131,8 @@ state at the next mutation.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `UNBIEN_RELAY_PORT` | `3000` | TCP port that serves the WebSocket upgrade, `/health`, and `/mesh/*` (all on the same port) |
-| `UNBIEN_MESH_DB_PATH` | `/data/mesh.db` in Docker · `data/mesh.db` (cwd-relative) for bare-metal builds | Path to the SQLite database that stores signed membership versions. The parent directory is created automatically on first boot. The Docker image presets this to `/data/mesh.db` and declares `/data` as a volume — see the volume note above |
+| `UNBIEN_MESH_DB_PATH` | `/data/mesh.db` in Docker · `<state root>/mesh.db` for bare-metal builds | Path to the SQLite database that stores signed membership versions. The parent directory is created automatically on first boot. Bare-metal default derives from the state root (`UNBIEN_STATE_DIR` > `${XDG_STATE_HOME:-$HOME/.local/state}/un-bien`) — the old CWD-relative `data/mesh.db` default is gone. The Docker image presets this to `/data/mesh.db` and declares `/data` as a volume — see the volume note above |
+| `UNBIEN_STATE_DIR` | `~/.local/state/un-bien` | State root: the mesh DB default (`mesh.db`) and the relay's own log file (`relay.log`) live here. Set to relocate both with one knob |
 | `RUST_LOG` | *(none)* | Log level filter — e.g. `info`, `debug`, `warn` |
 
 Example with a custom port and logging (volume mount is the same):
@@ -177,9 +178,14 @@ current view at their next mutation.
 WAL), so only `mesh.db` persists. During a write transaction a transient
 `mesh.db-journal` may appear in the same directory and is deleted on commit.
 Both files live under `UNBIEN_MESH_DB_PATH`'s parent directory — typically
-`/data/` in Docker or `data/` next to the binary on bare metal. The directory
+`/data/` in Docker or the state root (`~/.local/state/un-bien/`) on bare
+metal. The directory
 is created automatically on first boot. This database contains membership
 authorization metadata only, never message traffic.
+
+The relay also appends its own log to `<state root>/relay.log` (alongside
+stdout) — look there for bare-metal startup lines instead of relying on the
+launcher's stdout redirect.
 
 For upgrades, deploy Relay 0.3 first: old Extensions can consume its UUID
 errors. Then coordinate the Extension 0.6 rollout and minimize mixed old/new

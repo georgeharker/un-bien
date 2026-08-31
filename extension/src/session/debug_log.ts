@@ -9,7 +9,16 @@ import { dirname, join } from "node:path"
 import { loadConfig } from "../config.js"
 import { unbienStateHome } from "../paths.js"
 
-const LOG_PATH = join(unbienStateHome(), "envelope-debug.log")
+// Resolved lazily on first use (NOT at module load): the state root is
+// resolved at call time so env overrides work, and resolving at import time
+// would re-enter the one-time legacy-state migration during module init.
+let logPath: string | undefined
+function logFilePath(): string {
+  if (logPath === undefined) {
+    logPath = join(unbienStateHome(), "envelope-debug.log")
+  }
+  return logPath
+}
 
 // Resolved once: the debug pref is a dev switch, not something that flips
 // mid-process, so we read the config file a single time on first use.
@@ -24,8 +33,9 @@ function isEnabled(): boolean {
 export function envLog(msg: string): void {
   if (!isEnabled()) return
   try {
-    mkdirSync(dirname(LOG_PATH), { recursive: true })
-    appendFileSync(LOG_PATH, `${new Date().toISOString()} ${msg}\n`)
+    const path = logFilePath()
+    mkdirSync(dirname(path), { recursive: true })
+    appendFileSync(path, `${new Date().toISOString()} ${msg}\n`)
   } catch {
     /* best-effort */
   }

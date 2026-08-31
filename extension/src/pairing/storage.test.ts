@@ -12,7 +12,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 // Tests import the module after stubbing `os.homedir` so the fallback
-// path writes inside a temp dir instead of the dev's real ~/.pi/un-bien.
+// (default) path writes inside a temp dir instead of the dev's real
+// `~/.local/state/un-bien`.
 // vi.mock must run before the real module load.
 const _tmpHome = mkdtempSync(join(tmpdir(), "pi-storage-"))
 vi.mock("node:os", async (importOriginal) => {
@@ -107,7 +108,9 @@ beforeEach(async () => {
   await _unlinkIdentityFileForTest()
   // peers.json now gates identity minting (issues #95/#69), so a container left
   // by a previous test would make an unrelated "fresh install" case throw.
-  rmSync(join(_tmpHome, ".pi", "un-bien", "peers.json"), { force: true })
+  rmSync(join(_tmpHome, ".local", "state", "un-bien", "peers.json"), {
+    force: true,
+  })
 })
 
 afterEach(() => {
@@ -428,7 +431,9 @@ describe("getOrCreateEd25519Keypair — UNBIEN_IDENTITY_SEED override", () => {
 
 describe("getOrCreateEd25519Keypair — unreadable identity file", () => {
   test("a corrupt identity.json throws FileIdentityUnreadableError, never mints", async () => {
-    mkdirSync(join(_tmpHome, ".pi", "un-bien"), { recursive: true })
+    mkdirSync(join(_tmpHome, ".local", "state", "un-bien"), {
+      recursive: true,
+    })
     writeFileSync(_IDENTITY_FILE_FOR_TEST, "{ not valid json")
     const backend = new InMemoryBackend() // keychain readable + empty
     _setKeyStoreBackendForTest(backend)
@@ -474,9 +479,11 @@ describe("getOrCreateEd25519Keypair — cross-backend migration read-in-place", 
 
 describe("getOrCreateEd25519Keypair — paired devices block identity minting", () => {
   function seedPairedDevice(): void {
-    mkdirSync(join(_tmpHome, ".pi", "un-bien"), { recursive: true })
+    mkdirSync(join(_tmpHome, ".local", "state", "un-bien"), {
+      recursive: true,
+    })
     writeFileSync(
-      join(_tmpHome, ".pi", "un-bien", "peers.json"),
+      join(_tmpHome, ".local", "state", "un-bien", "peers.json"),
       JSON.stringify({
         peers: [
           {
@@ -605,10 +612,12 @@ describe("describeIdentity — non-secret, read-only", () => {
 // ── Corrupt peer record isolation ────────────────────────────────────────────
 
 describe("peer record corruption isolation", () => {
-  const peersPath = join(_tmpHome, ".pi", "un-bien", "peers.json")
+  const peersPath = join(_tmpHome, ".local", "state", "un-bien", "peers.json")
 
   function writePeers(peers: unknown): void {
-    mkdirSync(join(_tmpHome, ".pi", "un-bien"), { recursive: true })
+    mkdirSync(join(_tmpHome, ".local", "state", "un-bien"), {
+      recursive: true,
+    })
     writeFileSync(peersPath, JSON.stringify({ peers }, null, 2))
   }
 
@@ -742,7 +751,7 @@ describe("getOrCreateEd25519Keypair — backend precedence (default keychain)", 
 })
 
 describe("owner snapshot mutation tokens", () => {
-  const peersPath = join(_tmpHome, ".pi", "un-bien", "peers.json")
+  const peersPath = join(_tmpHome, ".local", "state", "un-bien", "peers.json")
   const snapshotStorage = storage as typeof storage & {
     snapshotOwnerPubkeys(): Promise<
       readonly { rawOwnerPubkey: unknown; token: unknown }[]
@@ -754,7 +763,9 @@ describe("owner snapshot mutation tokens", () => {
   }
 
   function writePeers(peers: unknown): void {
-    mkdirSync(join(_tmpHome, ".pi", "un-bien"), { recursive: true })
+    mkdirSync(join(_tmpHome, ".local", "state", "un-bien"), {
+      recursive: true,
+    })
     writeFileSync(peersPath, JSON.stringify({ peers }, null, 2))
   }
 

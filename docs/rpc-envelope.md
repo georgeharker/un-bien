@@ -438,7 +438,7 @@ Two identities, deliberately **different**:
 
 - **Machine identity = the Pi's persisted Ed25519 pubkey (`epk`).** Resolved by
   `getOrCreateEd25519Keypair()` from the OS keychain (or
-  `~/.pi/un-bien/identity.json`, `0o600`), stable across restarts, unique per
+  `~/.local/state/un-bien/identity.json`, `0o600`), stable across restarts, unique per
   machine. Pairing trust is recorded against it (`PairedMachine` keyed by `epk`),
   and it is the relay's routing key.
 - **Chat-session identity = a room id derived from the Pi session id**
