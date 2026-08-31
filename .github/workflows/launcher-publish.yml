@@ -1,43 +1,43 @@
 name: Publish Launcher
 
 on:
-    push:
-        tags:
-            # Component-scoped: extension publishes on `v*`, relay on
-            # `relay-v*`, launcher on `launcher-v*` — one tag never
-            # publishes two packages.
-            - "launcher-v*"
-    workflow_dispatch:
+  push:
+    tags:
+      # Component-scoped: extension publishes on `v*`, relay on
+      # `relay-v*`, launcher on `launcher-v*` — one tag never
+      # publishes two packages.
+      - "launcher-v*"
+  workflow_dispatch:
 
 permissions:
-    id-token: write # Required for OIDC trusted publishing
-    contents: read
+  id-token: write # Required for OIDC trusted publishing
+  contents: read
 
 jobs:
-    publish:
-        runs-on: ubuntu-latest
-        environment: npm
-        steps:
-            - uses: actions/checkout@v4
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v4
 
-            - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4
 
-            - uses: actions/setup-node@v4
-              with:
-                  node-version: "24.x"
-                  cache: pnpm
-                  cache-dependency-path: pnpm-lock.yaml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.x"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
-            - run: npm install -g npm@latest
+      - run: npm install -g npm@latest
 
-            # The launcher is a thin wrapper over @geohar/un-bien/launcher;
-            # build the extension first so the shim's import type resolves.
-            - run: pnpm install --frozen-lockfile
-            - run: pnpm -C extension build
-            - run: pnpm -C launcher build
+      # The launcher is a thin wrapper over @geohar/un-bien/launcher;
+      # build the extension first so the shim's import type resolves.
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -C extension build
+      - run: pnpm -C launcher build
 
-            # `pnpm publish` rewrites the `workspace:^` dep on @geohar/un-bien
-            # to the concrete published version (npm publish can't).
-            - name: Publish @geohar/un-bien-launcher
-              working-directory: launcher
-              run: pnpm publish --provenance --access public --no-git-checks
+      # `pnpm publish` rewrites the `workspace:^` dep on @geohar/un-bien
+      # to the concrete published version (npm publish can't).
+      - name: Publish @geohar/un-bien-launcher
+        working-directory: launcher
+        run: pnpm publish --provenance --access public --no-git-checks

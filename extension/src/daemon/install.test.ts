@@ -198,9 +198,9 @@ describe("vbsLauncherPath", () => {
     const p = vbsLauncherPath();
     expect(isAbsolute(p)).toBe(true);
     expect(p.endsWith("RemotePiLauncherRun.vbs")).toBe(true);
-    expect(
-      p.endsWith(join(".pi", "un-bien", "RemotePiLauncherRun.vbs")),
-    ).toBe(true);
+    expect(p.endsWith(join(".pi", "un-bien", "RemotePiLauncherRun.vbs"))).toBe(
+      true,
+    );
   });
 });
 

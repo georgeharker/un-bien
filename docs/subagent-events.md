@@ -8,7 +8,7 @@ no coupling to a specific subagents implementation; unknown events and fields ar
 ignored.
 
 The hard case this contract exists for: **a subagent an extension launches in a
-different process.** un-bien's extension is loaded in the *parent* process, so it
+different process.** un-bien's extension is loaded in the _parent_ process, so it
 sees in-process children automatically but is **blind to an out-of-process
 child** unless that child (or its launcher) tells us. The rule:
 
@@ -19,10 +19,10 @@ child** unless that child (or its launcher) tells us. The rule:
 Two subagent implementations emit the same `subagents:*` family today, and a
 third-party extension may too:
 
-| Source | Package | Lineage | Notes |
-| --- | --- | --- | --- |
-| **tintinweb** | `@tintinweb/pi-subagents` | upstream, batteries-included | scheduling, cross-ext RPC, model-scope, tool denylist |
-| **gotgenes** | `@gotgenes/pi-subagents` | hard fork of tintinweb (Chris Lasher) | minimal core + typed `SubagentsService`; **adds an authoritative child-marker event** |
+| Source        | Package                   | Lineage                               | Notes                                                                                 |
+| ------------- | ------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------- |
+| **tintinweb** | `@tintinweb/pi-subagents` | upstream, batteries-included          | scheduling, cross-ext RPC, model-scope, tool denylist                                 |
+| **gotgenes**  | `@gotgenes/pi-subagents`  | hard fork of tintinweb (Chris Lasher) | minimal core + typed `SubagentsService`; **adds an authoritative child-marker event** |
 
 Both run subagents **in-process** (a child Pi session in the parent's process).
 The plan bus is defined by `@geohar/pi-plan`, a generic consumer.
@@ -40,17 +40,17 @@ The plan bus is defined by `@geohar/pi-plan`, a generic consumer.
 Emitted via `pi.events.emit(channel, payload)`. Fields un-bien **reads today**
 are ✅; fields it currently ignores (display/telemetry) are ⚪.
 
-| Channel | When | Fields |
-| --- | --- | --- |
-| `subagents:created` | background agent registered (Agent-tool spawn / detached resume; **not** RPC/scheduler/`@handle`) | ✅`id` ✅`type` ✅`description` ⚪`isBackground` |
-| `subagents:started` | agent transitions to running (incl. queued→running) | ✅`id` ✅`type` ✅`description` |
-| `subagents:completed` | finished successfully | ✅`id` ✅`type` ⚪`description` ✅`status` ⚪`durationMs` ⚪`tokens{input,output,total}` ⚪`usage` (pi `Usage`, incl. `cost.total`; tintinweb only) ⚪`toolUses` ✅`result` |
-| `subagents:failed` | errored / stopped / aborted | same shape as `completed`; ✅`error` and ✅`status` populated (may be empty) |
-| `subagents:resumed` | **gotgenes only** — a resumed run reached a terminal state | same as `completed` + `error`/`status` (discriminate on `status`) |
-| `subagents:steered` | steering message accepted (incl. queued steer) | ✅`id` ⚪`message` |
-| `subagents:compacted` | child session compacted | ✅`id` ✅`type` ✅`description` ⚪`reason` (`manual`\|`threshold`\|`overflow`) ⚪`tokensBefore` ⚪`compactionCount` |
-| `subagents:settings_loaded` / `subagents:settings_changed` | settings lifecycle | ⚪ ignored |
-| `subagents:scheduled`, `subagents:ready`, `subagents:scheduler_ready`, `subagents:rpc:*`, `subagents:record`, `subagents:manager` | **tintinweb only** — scheduling / cross-ext RPC / internal | ⚪ ignored (but `subagents:rpc:*` is a control surface — see §5) |
+| Channel                                                                                                                           | When                                                                                              | Fields                                                                                                                                                                      |
+| --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `subagents:created`                                                                                                               | background agent registered (Agent-tool spawn / detached resume; **not** RPC/scheduler/`@handle`) | ✅`id` ✅`type` ✅`description` ⚪`isBackground`                                                                                                                            |
+| `subagents:started`                                                                                                               | agent transitions to running (incl. queued→running)                                               | ✅`id` ✅`type` ✅`description`                                                                                                                                             |
+| `subagents:completed`                                                                                                             | finished successfully                                                                             | ✅`id` ✅`type` ⚪`description` ✅`status` ⚪`durationMs` ⚪`tokens{input,output,total}` ⚪`usage` (pi `Usage`, incl. `cost.total`; tintinweb only) ⚪`toolUses` ✅`result` |
+| `subagents:failed`                                                                                                                | errored / stopped / aborted                                                                       | same shape as `completed`; ✅`error` and ✅`status` populated (may be empty)                                                                                                |
+| `subagents:resumed`                                                                                                               | **gotgenes only** — a resumed run reached a terminal state                                        | same as `completed` + `error`/`status` (discriminate on `status`)                                                                                                           |
+| `subagents:steered`                                                                                                               | steering message accepted (incl. queued steer)                                                    | ✅`id` ⚪`message`                                                                                                                                                          |
+| `subagents:compacted`                                                                                                             | child session compacted                                                                           | ✅`id` ✅`type` ✅`description` ⚪`reason` (`manual`\|`threshold`\|`overflow`) ⚪`tokensBefore` ⚪`compactionCount`                                                         |
+| `subagents:settings_loaded` / `subagents:settings_changed`                                                                        | settings lifecycle                                                                                | ⚪ ignored                                                                                                                                                                  |
+| `subagents:scheduled`, `subagents:ready`, `subagents:scheduler_ready`, `subagents:rpc:*`, `subagents:record`, `subagents:manager` | **tintinweb only** — scheduling / cross-ext RPC / internal                                        | ⚪ ignored (but `subagents:rpc:*` is a control surface — see §5)                                                                                                            |
 
 **Two properties that shape the design:**
 
@@ -82,15 +82,15 @@ the earliest signal and is tracked as such.
 For the fields un-bien reads (`id`/`type`/`description`/`status`/`result`/
 `error`) they are **compatible** — same channel names, same shapes. Differences:
 
-| | tintinweb | gotgenes |
-| --- | --- | --- |
-| core lifecycle | ✔ | ✔ (compatible fields) |
-| `subagents:resumed` | ✖ | ✔ |
-| `usage` (billed pi `Usage`) | ✔ | ✖ (`tokens` only) |
-| scheduling / RPC / `ready` | ✔ | ✖ (delegated to consumers) |
-| **authoritative child-marker event** | ✖ | ✔ `subagents:child:session-created` |
-| in-process child `session_start`/`session_shutdown` | ✔ | ✔ (documented; shutdown awaited pre-dispose) |
-| control surface for other extensions | `subagents:rpc:spawn/stop/consume` (bus) | typed `SubagentsService` (`spawn`/`steer`/`getRecord`) |
+|                                                     | tintinweb                                | gotgenes                                               |
+| --------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------ |
+| core lifecycle                                      | ✔                                        | ✔ (compatible fields)                                  |
+| `subagents:resumed`                                 | ✖                                        | ✔                                                      |
+| `usage` (billed pi `Usage`)                         | ✔                                        | ✖ (`tokens` only)                                      |
+| scheduling / RPC / `ready`                          | ✔                                        | ✖ (delegated to consumers)                             |
+| **authoritative child-marker event**                | ✖                                        | ✔ `subagents:child:session-created`                    |
+| in-process child `session_start`/`session_shutdown` | ✔                                        | ✔ (documented; shutdown awaited pre-dispose)           |
+| control surface for other extensions                | `subagents:rpc:spawn/stop/consume` (bus) | typed `SubagentsService` (`spawn`/`steer`/`getRecord`) |
 
 The decisive difference: gotgenes publishes **`subagents:child:session-created`
 before `bindExtensions()`**, so a consumer learns the child synchronously and
@@ -100,7 +100,7 @@ authoritatively; tintinweb makes you infer it from `session_start`.
 
 ## 3. Detection & authority (who is a child, and whose child)
 
-Establishing *this session is a child, and its parent is X* is the **authority**
+Establishing _this session is a child, and its parent is X_ is the **authority**
 question. Two regimes, and the rule above resolves both:
 
 ### Regime A — in-process child → **auto-detected**
@@ -108,7 +108,7 @@ question. Two regimes, and the rule above resolves both:
 The child fires its own `session_start` with a `sessionId` ≠ the root's;
 un-bien's `_isNonRootSid` claim is the **authoritative** signal and needs nothing
 from `subagents:*` (the record only enriches labels/status). Parent comes from
-the SDK session header (`parentSession`), falling back to root, so a *nested*
+the SDK session header (`parentSession`), falling back to root, so a _nested_
 child nests under its true spawner. Works for tintinweb and gotgenes today.
 
 ### Regime B — out-of-process child → **must be asserted, with the child id**
@@ -134,7 +134,7 @@ accepted markers:
 implementation's whole obligation is the announcement —
 
 - **in-process:** emit `subagents:child:session-created` `{ sessionId,
-  parentSessionId? }` synchronously before `bindExtensions()`, and
+parentSessionId? }` synchronously before `bindExtensions()`, and
   `subagents:child:disposed` `{ sessionId }` in the `finally`;
 - **out-of-process:** set env `PI_SUBAGENT_PARENT_SESSION=<parent-session-id>` in
   the spawned child so it learns its parent.
@@ -151,7 +151,7 @@ room and stamps it; out-of-process, the child's own un-bien stamps it from its
 **spawn context** (parentSessionId handed in at spawn — the same mechanism a
 launched session uses). For the OPPOSITE case — an extension hands us the childId
 on **spawn** of a subagent (parent-knows-child) but the child doesn't know its
-parent — *we* pre-create the child room with `parentId` already stamped, and when
+parent — _we_ pre-create the child room with `parentId` already stamped, and when
 the child recreates itself in that same deterministic room it simply **doesn't
 overwrite** `parentId`. The relay backs this: `update_room_meta` writes only the
 fields present in a patch, so a child write that omits `parent` leaves the
@@ -174,17 +174,17 @@ marker events (fleet/panel/status); nesting rides the child-stamped `room_meta`.
 ### Advertising the parent — early vs late (the exact flow)
 
 `parentId`/`parentSessionId` ride the child room's `room_meta`, and **when they
-land depends on when parentage is known** — but *both* funnel through the same
+land depends on when parentage is known** — but _both_ funnel through the same
 idempotent `ensureChildRoom`, and the room is **never rebuilt/disposed** to change
 it.
 
-- **EARLY — gotgenes + out-of-process** (parent known at *creation*). The child
+- **EARLY — gotgenes + out-of-process** (parent known at _creation_). The child
   marker (`subagents:child:session-created` / `unbien:subagent:child`) carries
   `{ sessionId, parentSessionId }`, so the room is **created with the
   parent-child relationship already set** in its connect `room_meta` →
   `room_announced` (first-conn) carries it → the app nests immediately. This is
   the design; do not remove it.
-- **LATE — tintinweb / in-process** (parent known only at *attach*). tintinweb
+- **LATE — tintinweb / in-process** (parent known only at _attach_). tintinweb
   gives no early child id, so the room is created **optimistically without a
   parent**; parentage is learned when the child session attaches (`session_start`
   → SDK header `parentSession`). Because `room_announced` fires **first-conn
@@ -253,7 +253,7 @@ child this closes only un-bien's keeper connection — the child's own connectio
 
 ---
 
-## 5. Status tracking is event-based  *(near-term target)*
+## 5. Status tracking is event-based _(near-term target)_
 
 This section is the piece to support **now** (interaction in §6 is later). It is
 largely how un-bien already works — the extension derives status from the
@@ -277,7 +277,7 @@ the contract — an out-of-process authority that goes silent leaves the child
 running-with-last-known-status until a terminal event arrives.
 
 **Failure is a status stamp, not a removal.** A launch/agent failure arrives as
-`subagents:failed` (or the marker's `status`) and is simply *stamped* onto the
+`subagents:failed` (or the marker's `status`) and is simply _stamped_ onto the
 child (`failed`/`error`/`aborted`/`stopped`); the child is **kept** — it lingers
 showing that terminal status (and its transcript, if it produced one) until
 parent teardown. That is why no reap is needed: nothing is removed on failure.
@@ -310,7 +310,7 @@ is un-bien's neutral surface and a small **per-manager adapter** applies it:
   **in-process import-and-call**, not a bus message — it cannot be driven purely
   over the event bus.
 
-So `unbien:subagent:control` is authoritative as *un-bien's* request; reaching a
+So `unbien:subagent:control` is authoritative as _un-bien's_ request; reaching a
 specific manager is an adapter concern, and not every manager is reachable by bus
 alone.
 
@@ -330,8 +330,9 @@ alone.
   The authority (its `manager`) receives it — via its bus RPC, or an in-process
   adapter that calls its typed service — applies it to its child (in- or
   out-of-process), and pushes the outcome + new status back via §5. Covers opaque
-  cross-process children uniformly at the *un-bien* layer; the last hop is
+  cross-process children uniformly at the _un-bien_ layer; the last hop is
   per-manager.
+
 - **(B) Direct mesh room — fast-path.** Only when the child is itself un-bien-aware
   (a real Pi process running our extension): it stands up its own room and un-bien
   interacts directly, like any launched session; the marker event just links
@@ -390,9 +391,9 @@ State is kept **per source namespace (`ns`)**, so multiple sources coexist.
 
 ## Summary — what un-bien requires of an emitter
 
-| To… | in-process | out-of-process |
-| --- | --- | --- |
-| **appear** as a subagent | nothing (non-root `session_start` auto-detected) | emit `unbien:subagent:child` / `subagents:child:session-created` **with the child id** (§3–4) |
-| show **live status** | **emit** `subagents:*` (by `id`) — event-based (§5) | **emit** `subagents:*` (by `id`) or re-emit marker `status` — event-based (§5) |
-| be **interactive** (steer/abort) | via the authority (§6A); direct room if un-bien-aware (§6B) | via the authority (§6A) — `unbien:subagent:control` keyed by `id` |
-| drive the **plan panel** | `plan:snapshot` / `plan:update` under your `ns` (§7) | same |
+| To…                              | in-process                                                  | out-of-process                                                                                |
+| -------------------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| **appear** as a subagent         | nothing (non-root `session_start` auto-detected)            | emit `unbien:subagent:child` / `subagents:child:session-created` **with the child id** (§3–4) |
+| show **live status**             | **emit** `subagents:*` (by `id`) — event-based (§5)         | **emit** `subagents:*` (by `id`) or re-emit marker `status` — event-based (§5)                |
+| be **interactive** (steer/abort) | via the authority (§6A); direct room if un-bien-aware (§6B) | via the authority (§6A) — `unbien:subagent:control` keyed by `id`                             |
+| drive the **plan panel**         | `plan:snapshot` / `plan:update` under your `ns` (§7)        | same                                                                                          |

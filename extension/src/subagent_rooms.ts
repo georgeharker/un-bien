@@ -393,7 +393,8 @@ export function initSubagentRooms(
     const existing = children.get(sessionId);
     if (existing) {
       if (launch) existing.attach(launch.childPi, launch.ctx);
-      if (parent) existing.setParent(parent.parentRoomId, parent.parentSessionId);
+      if (parent)
+        existing.setParent(parent.parentRoomId, parent.parentSessionId);
       return;
     }
     if (building.has(sessionId)) {
@@ -492,13 +493,24 @@ export function initSubagentRooms(
     });
     emitPanel();
 
-    // Prefer the child's OWN parent (SDK session header) so a nested subagent
-    // nests under its real spawner, not always the root; fall back to root.
+    // getParentSessionId() returns the PARENT session's bare sessionId directly —
+    // exactly what the parent advertises as room_meta.sessionId, so the child
+    // nests. (For the subagents that surface it resolves to the root, since
+    // managers suppress nested subagents.) Do NOT use the SDK
+    // `header.parentSession`: it is the parent's session FILE PATH
+    // (…/<ts>_<id>.jsonl), not an id, and a path never equals the parent's
+    // advertised sessionId — so every subagent would orphan (shows flat in the
+    // home view). Depth-2 under-real-spawner, if ever needed, wants a
+    // sessionFile->sessionId map, not filename parsing.
     const header = ctx.sessionManager.getHeader?.() ?? null;
-    const parentSessionId =
-      (typeof header?.parentSession === "string" && header.parentSession) ||
-      opts.getParentSessionId() ||
-      undefined;
+    const parentSessionId = opts.getParentSessionId() ?? undefined;
+    // DEBUG (keep until nesting confirmed): header.parentSession is a FILE PATH,
+    // so we ignore it and use the root's bare sessionId directly.
+    envLog(
+      `subagent nest: child=${sessionId.slice(0, 8)} ` +
+        `header.parentSession=${String(header?.parentSession)} ` +
+        `-> parentSessionId=${String(parentSessionId)}`,
+    );
     // The child's real start (session-header timestamp) so its room reports its
     // own start instead of 0; fall back to the panel stamp, then now.
     const startedAt =

@@ -1,41 +1,41 @@
 name: Publish Package
 
 on:
-    push:
-        tags:
-            - "v*"
-    workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
 
 permissions:
-    id-token: write # Required for OIDC trusted publishing
-    contents: read
+  id-token: write # Required for OIDC trusted publishing
+  contents: read
 
 jobs:
-    publish:
-        runs-on: ubuntu-latest
-        environment: npm
-        steps:
-            - uses: actions/checkout@v4
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v4
 
-            - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4
 
-            - uses: actions/setup-node@v4
-              with:
-                  node-version: "24.x"
-                  cache: pnpm
-                  # Workspace root lockfile (the per-package
-                  # extension/pnpm-lock.yaml was retired for the workspace).
-                  cache-dependency-path: pnpm-lock.yaml
-                  # No registry-url: it writes an .npmrc expecting
-                  # NODE_AUTH_TOKEN, shadowing OIDC (publish would 404).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.x"
+          cache: pnpm
+          # Workspace root lockfile (the per-package
+          # extension/pnpm-lock.yaml was retired for the workspace).
+          cache-dependency-path: pnpm-lock.yaml
+          # No registry-url: it writes an .npmrc expecting
+          # NODE_AUTH_TOKEN, shadowing OIDC (publish would 404).
 
-            - run: npm install -g npm@latest
+      - run: npm install -g npm@latest
 
-            # Install the whole workspace from the root lockfile, then
-            # build/test + publish just the extension.
-            - run: pnpm install --frozen-lockfile
-            - run: pnpm -C extension build
-            - run: pnpm -C extension test
-            - name: Publish @geohar/un-bien
-              working-directory: extension
-              run: npm publish --provenance --access public
+      # Install the whole workspace from the root lockfile, then
+      # build/test + publish just the extension.
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -C extension build
+      - run: pnpm -C extension test
+      - name: Publish @geohar/un-bien
+        working-directory: extension
+        run: npm publish --provenance --access public
