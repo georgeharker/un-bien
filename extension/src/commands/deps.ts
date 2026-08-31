@@ -148,4 +148,10 @@ export interface CommandDeps {
   refreshPairingsCache(): void
   /** Tear down a connected owner's channel (revoke / disconnect). */
   detachPeerChannel(appPeerId: string): void
+  /** RPC control channel verbs (`relay:toggle` / `relay:on` / `relay:off`). */
+  handleControl(cmd: string): Promise<void>
+  /** Relay connectivity label for status output. */
+  relayStatus(): "connected" | "reconnecting" | "disconnected"
+  /** Test-visible state: `idle` | `started` | derived `paired`. */
+  getState(): "idle" | "started" | "paired"
 }
