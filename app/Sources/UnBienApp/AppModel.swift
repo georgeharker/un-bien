@@ -399,6 +399,7 @@ public final class AppModel: ObservableObject {
                     // non-empty set. But an empty/degraded hello must NOT clobber a
                     // good set — that silently gates off thinking/models/panels.
                     let caps = ub["caps"]?.arrayValue?.compactMap { $0.stringValue }
+                    log.notice("ub hello: key=\(String(key.suffix(12)), privacy: .public) sid=\(env.sessionId ?? "nil", privacy: .public) caps=\(caps?.count ?? -1, privacy: .public)")
                     if let caps, !caps.isEmpty {
                         capabilities[key] = Set(caps)
                     } else if capabilities[key] == nil {
@@ -636,11 +637,18 @@ public final class AppModel: ObservableObject {
 
     public func openSession(_ session: LiveSession, limit: Int = 100) async {
         openSessions[session.id] = session
+        let rosterCount = availableModels[session.id]?.count ?? -1
+        let hasCurrent = currentModel[session.id] != nil
+        let thinking = thinkingLevel[session.id]?.rawValue ?? "nil"
+        log.notice("open key=\(String(session.id.suffix(12)), privacy: .public) roster=\(rosterCount, privacy: .public) cur=\(hasCurrent, privacy: .public) think=\(thinking, privacy: .public)")
         guard let connection = connections[session.relayID] else {
             return
         }
         await requestReconstruction(session, connection: connection)
-        if availableModels[session.id] == nil {
+        // Re-fetch when the roster is nil OR EMPTY: a non-nil-but-empty roster
+        // (a reply that legitimately carried zero models, or one that clobbered
+        // a good list) must not stick forever — the picker would never return.
+        if (availableModels[session.id] ?? []).isEmpty {
             try? await connection.send(.listModels(id: UUID().uuidString),
                                        toPeer: session.peerEPK, room: session.roomID)
         }

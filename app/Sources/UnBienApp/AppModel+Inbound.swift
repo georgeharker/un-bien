@@ -84,6 +84,10 @@ extension AppModel {
                case let .modelsList(_, models, current) = decoded {
                 availableModels[key] = models
                 if let current { currentModel[key] = current }
+                let curName = current?.name ?? "nil"
+                log.notice("models reply key=\(String(key.suffix(12)), privacy: .public) n=\(models.count, privacy: .public) cur=\(curName, privacy: .public)")
+            } else {
+                log.notice("models reply DECODE FAILED key=\(String(key.suffix(12)), privacy: .public)")
             }
         case "set_model":
             // data: the newly-set model (WireModel) — authoritative, replaces the
@@ -92,6 +96,7 @@ extension AppModel {
                let encoded = try? JSONEncoder().encode(data),
                let model = try? JSONDecoder().decode(WireModel.self, from: encoded) {
                 currentModel[key] = model
+                log.notice("set_model reply key=\(String(key.suffix(12)), privacy: .public) \(model.provider, privacy: .public)/\(model.id, privacy: .public)")
             }
         default:
             break // transcript-relevant responses are the reducer's; unknown commands are forward-compat no-ops
