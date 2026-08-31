@@ -33,16 +33,29 @@ fi
 echo "==> device: $DEVICE_NAME ($UDID)"
 
 # --- Build --------------------------------------------------------------------
+# Output goes to a FILE first: piping xcodebuild into tail would mask its exit
+# status under /bin/sh (no pipefail), and a failed build used to fall through
+# and INSTALL A STALE .app from the previous successful build. Capture, check,
+# THEN show the tail.
 echo "==> building $SCHEME (Debug) for $DEVICE_NAME..."
-xcodebuild \
+BUILD_LOG="$DERIVED/build.log"
+if ! xcodebuild \
   -project "$PROJECT" \
   -scheme "$SCHEME" \
   -configuration Debug \
   -destination "platform=iOS,id=$UDID" \
   -derivedDataPath "$DERIVED" \
   -allowProvisioningUpdates \
-  build |
-  tail -20
+  build >"$BUILD_LOG" 2>&1; then
+  tail -30 "$BUILD_LOG"
+  echo "ERROR: build failed — NOT installing the stale .app from a previous build"
+  exit 1
+fi
+tail -2 "$BUILD_LOG" | grep -q "BUILD SUCCEEDED" || {
+  tail -5 "$BUILD_LOG"
+  echo "ERROR: build did not report success — NOT installing"
+  exit 1
+}
 
 # --- Locate the bundle ---------------------------------------------------------
 APP=$(find "$DERIVED/Build/Products/Debug-iphoneos" -maxdepth 1 -name '*.app' | head -1)

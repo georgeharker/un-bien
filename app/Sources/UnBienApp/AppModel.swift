@@ -27,8 +27,11 @@ public final class AppModel: ObservableObject {
     /// pages carry the OLDEST entries — restoring on page 1 would consume the
     /// once-per-lifetime restore with a bottom fallback the following pages then
     /// auto-follow to the transcript end (paged backfill × scroll-restore
-    /// interaction; designs 01M1B9F6 + 01M1BANZ).
-    @Published public private(set) var backfilledSessions: Set<String> = []
+    /// interaction; designs 01M1B9F6 + 01M1BANZ). Mutated from AppModel+Inbound
+    /// (page arrival / terminal) and requestReconstruction (fresh walk) — same
+    /// module, so a plain internal setter (private(set) is FILE-scoped and the
+    /// Inbound extension is a different file).
+    @Published public var backfilledSessions: Set<String> = []
     /// Pending queued follow-up messages per session (pi-native `queue_update`).
     @Published public var queued: [String: [QueuedMessageItem]] = [:]
     /// rpc request/reply correlation (plan 01M1A39Y4G): continuations parked by
