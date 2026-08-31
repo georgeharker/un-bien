@@ -27,6 +27,17 @@ either Pi, and there is no transitivity across blobs. Because of all this,
 Un Bien ships with **no default relay** and recommends you self-host one behind
 a VPN. See [rpc-envelope](rpc-envelope.md) for the exact boundaries.
 
+**Remote launch is never a default.** Pairing lets the phone attach to and
+steer sessions *you* are running — it grants no code execution by itself.
+Spawning anything on a machine requires active, machine-side steps the phone
+cannot take: a per-directory `allow_remote_launch` opt-in in that machine's
+un-bien config (absent ⇒ every `session_launch` request is silently dropped,
+regardless of any other un-bien settings), and — for launching on an idle
+machine where no Pi is running at all — the [launcher
+daemon](../launcher/README.md) explicitly installed and running to hold the
+machine's control room. No daemon, no listener: there is nothing to receive a
+launch request.
+
 ## Building, signing & testing
 
 | Document | What it covers |

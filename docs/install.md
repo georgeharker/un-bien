@@ -20,6 +20,61 @@ at that relay, then **build/install the app** and pair it. Do them in that order
 
 ---
 
+## Quickstart
+
+The 5-minute path: one relay, one machine, one pairing. (The app also ships a
+**demo mode** — canned sessions, no infrastructure — if you just want to look
+around first.)
+
+### 1. Run a relay (any host your phone can reach)
+
+```bash
+docker build -t un-bien-relay ./relay
+docker run -d --name un-bien-relay -p 3000:3000 -v un-bien-data:/data \
+  --restart unless-stopped un-bien-relay
+```
+
+Note the address your phone will use — e.g. `http://192.168.1.20:3000` on your
+LAN, or a Tailnet address. Put it behind a VPN or TLS for anything beyond your
+home network (see [trust model](design.md#trust-model-in-one-paragraph)).
+
+### 2. Set up Pi on your machine
+
+Un Bien drives the [Pi coding agent](https://github.com/earendil-works/pi) — you
+need Pi installed **with a working model provider** (an AI backend), plus the
+un-bien extension:
+
+```bash
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+pi install npm:@geohar/un-bien
+```
+
+Then, inside `pi`, authenticate a provider and point un-bien at your relay:
+
+```text
+/login          # pick a provider (Claude Pro/Max, ChatGPT Plus/Pro, or an API key)
+/model          # pick the model to use
+/unbien set-relay http://192.168.1.20:3000
+```
+
+No cloud provider needed if you run a local one — configure Ollama / vLLM /
+LM Studio via `~/.pi/agent/models.json` (see [Pi's models
+docs](https://github.com/earendil-works/pi)) and `/login` with a placeholder
+key.
+
+### 3. Pair your phone
+
+In the app: **Add relay** → the same URL. Then on the machine:
+
+```text
+/unbien pair
+```
+
+Scan the QR (or paste the code). Your Pi sessions appear on the phone — tap in
+to attach, or launch a new session remotely.
+
+---
+
 ## 1. Stand up a relay
 
 The relay is a Rust binary in the `relay/` crate. Host it yourself and put it

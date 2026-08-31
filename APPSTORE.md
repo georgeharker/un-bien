@@ -105,7 +105,7 @@ way. Two routes, not mutually exclusive:
   survives every future re-review untouched, doubles as onboarding/marketing.
   Self-contained and **app-side**: a "Try it" affordance on the onboarding /
   relay-chooser screen loads an in-memory fake mesh with canned sessions — no
-  pairing, no socket. Reuses the *same* canned scenarios the extension-side
+  pairing, no socket. Reuses the _same_ canned scenarios the extension-side
   `/unbien test <scenario>` harness broadcasts: bundle those fixtures in the app
   and replay them through the same `applyRPC` fold used for live frames (one
   scenario source, two players). Note the existing `/unbien test` harness alone
