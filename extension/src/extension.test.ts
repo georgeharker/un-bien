@@ -76,7 +76,7 @@ type StoredPeer = { name: string; remote_epk: string; paired_at: string }
 const _knownPeers: StoredPeer[] = []
 const _addedPeers: StoredPeer[] = []
 const _removedPeers: string[] = []
-let _meshOwnerDiscoveryEnabled = false
+const _meshOwnerDiscoveryEnabled = false
 
 vi.mock("./pairing/storage.js", async (importOriginal) => {
   const orig = await importOriginal<typeof import("./pairing/storage.js")>()
@@ -3160,14 +3160,57 @@ describe("un-bien:name-assigned event", () => {
 
 // ── Local config owns mesh name ───────────────────────────────────────────────
 describe("local config owns mesh name", () => {
-  test("join ignores the Pi session display name", async () => {
+  // History (remote-pi 200f876, "decouple mesh name from pi sessions"): the
+  // extension once SYNCED the pi session display name into agent_name, and a
+  // SUBAGENT activation's session name poisoned the mesh join. That sync is
+  // gone. Today the precedence is inverted-but-safe: an explicitly-set ROOT
+  // session name (pi `-n`, e.g. from a remote launch) is honored ABOVE the
+  // configured agent_name — see resolveAgentName. The subagent poison can't
+  // recur because `_pi` is bound ONLY to the root session (children re-activate
+  // in-process but never replace it) and the name is never persisted, so a
+  // subagent's own session name is never read by the join path.
+  test("join honors an explicitly-set pi session display name (pi -n launch)", async () => {
     process.env["UNBIEN_DIRECT_CONFIG"] = JSON.stringify({
       agent_name: "crow",
       auto_start_relay: false,
     })
     const root = captureHandler("unbien")
-    _setPiForTest({ getSessionName: () => "pi-subagent-poison" })
+    _setPiForTest({ getSessionName: () => "night-train" })
     const cwd = `/tmp/unbien-name-config-${process.pid}-${Date.now()}`
+
+    await root("", makeMockCtx(cwd))
+
+    expect(_getLockedNameForTest()?.replace(/#\d+$/, "")).toBe("night-train")
+    const stop = captureHandler("unbien stop")
+    await stop("", makeMockCtx(cwd))
+    _resetCwdLockForTest()
+  })
+
+  test("join ignores the pi session display name when unset", async () => {
+    process.env["UNBIEN_DIRECT_CONFIG"] = JSON.stringify({
+      agent_name: "crow",
+      auto_start_relay: false,
+    })
+    const root = captureHandler("unbien")
+    _setPiForTest({ getSessionName: () => undefined })
+    const cwd = `/tmp/unbien-name-unset-${process.pid}-${Date.now()}`
+
+    await root("", makeMockCtx(cwd))
+
+    expect(_getLockedNameForTest()?.replace(/#\d+$/, "")).toBe("crow")
+    const stop = captureHandler("unbien stop")
+    await stop("", makeMockCtx(cwd))
+    _resetCwdLockForTest()
+  })
+
+  test("join ignores a stub pi without getSessionName (older host / pre-bind)", async () => {
+    process.env["UNBIEN_DIRECT_CONFIG"] = JSON.stringify({
+      agent_name: "crow",
+      auto_start_relay: false,
+    })
+    const root = captureHandler("unbien")
+    _setPiForTest({}) as unknown as ExtensionAPI
+    const cwd = `/tmp/unbien-name-stub-${process.pid}-${Date.now()}`
 
     await root("", makeMockCtx(cwd))
 

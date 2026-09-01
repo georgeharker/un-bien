@@ -7,6 +7,8 @@ import {
   localConfigExists,
   saveLocalConfig,
   effectiveAllowRemoteLaunch,
+  piSessionName,
+  resolveAgentName,
 } from "./local_config.js"
 
 const ENV = "UNBIEN_DIRECT_CONFIG"
@@ -246,5 +248,47 @@ describe("global defaults — allow_remote_launch flows machine-wide", () => {
     writeGlobalDefaults({ allow_remote_launch: true })
     writeFileConfig(cwd, { agent_name: "x", allow_remote_launch: false })
     expect(effectiveAllowRemoteLaunch(loadLocalConfig(cwd))).toBe(false)
+  })
+})
+
+// ── resolveAgentName / piSessionName (session-scoped launch name) ─────────────
+
+describe("resolveAgentName — session-scoped launch name beats configured name", () => {
+  let cwd: string
+  beforeEach(() => {
+    cwd = makeCwd()
+  })
+
+  test("pi session name (pi -n) wins over the configured agent_name", () => {
+    writeFileConfig(cwd, { agent_name: "configured" })
+    expect(resolveAgentName(cwd, "Launched Name")).toBe("Launched Name")
+  })
+
+  test("no session name → configured agent_name, then path default", () => {
+    writeFileConfig(cwd, { agent_name: "configured" })
+    expect(resolveAgentName(cwd, undefined)).toBe("configured")
+    expect(resolveAgentName(cwd, null)).toBe("configured")
+    expect(resolveAgentName(cwd, "  ")).toBe("configured")
+    // No config file either → basename fallback (fixed-name dir, not mkdtemp)
+    const fresh = join(makeCwd(), "MyProject")
+    mkdirSync(fresh, { recursive: true })
+    expect(resolveAgentName(fresh, undefined)).toBe("MyProject")
+  })
+
+  test("session name is trimmed but otherwise free-form", () => {
+    expect(resolveAgentName(cwd, "  My Session  ")).toBe("My Session")
+  })
+})
+
+describe("piSessionName — defensive read of the SDK session display name", () => {
+  test("reads the name when the host exposes getSessionName", () => {
+    expect(piSessionName({ getSessionName: () => "named" })).toBe("named")
+    expect(piSessionName({ getSessionName: () => undefined })).toBeUndefined()
+  })
+
+  test("stubs / older hosts without getSessionName yield undefined, never throw", () => {
+    expect(piSessionName({})).toBeUndefined()
+    expect(piSessionName(null)).toBeUndefined()
+    expect(piSessionName(undefined)).toBeUndefined()
   })
 })

@@ -488,6 +488,18 @@ The spawn backend is machine-wide: `launch.backend` in the global config —
 or `herdr`. The backend binary must be on PATH: `unbien install` snapshots
 your PATH at install time, so re-run it after installing new tools.
 
+### Launch names
+
+A `session_launch` request may carry a `name`. On the tmux backend the
+launched Pi gets it as `pi -n <name>` — pi's native session display name —
+which the extension resolves as the session-scoped agent name: the mesh
+join, cwd lock, `room_meta`, and the app's session tile all show it instead
+of the path-derived default. It is per-process (never inherited by
+subagents or child processes) and never persisted — a manual `pi` in the
+same directory keeps its configured `agent_name`. `/unbien rename` still
+wins once it runs. The herdr backend uses the name as the workspace label
+only until it can pass args through to pi.
+
 ### Removing or uninstalling
 
 ```bash

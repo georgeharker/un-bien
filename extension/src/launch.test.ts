@@ -10,7 +10,25 @@ import {
 describe("launch backends — tmux/herdr argv + tilde expansion", () => {
   test("remote launch: first pi creates the shared tmux session (new-session, safe array)", () => {
     expect(
-      _buildTmuxLaunchArgs("un-bien", "pi-foo", "/tmp/work", false),
+      _buildTmuxLaunchArgs("un-bien", "pi-foo", "/tmp/work", false, "My Session"),
+    ).toEqual([
+      "new-session",
+      "-d",
+      "-s",
+      "un-bien",
+      "-n",
+      "pi-foo",
+      "-c",
+      "/tmp/work",
+      "pi",
+      "-n",
+      "My Session",
+    ])
+  })
+
+  test("remote launch: no name → bare `pi` argv (path-derived name as before)", () => {
+    expect(
+      _buildTmuxLaunchArgs("un-bien", "pi-foo", "/tmp/work", false, undefined),
     ).toEqual([
       "new-session",
       "-d",
@@ -24,9 +42,15 @@ describe("launch backends — tmux/herdr argv + tilde expansion", () => {
     ])
   })
 
+  test("remote launch: blank name → no -n (treated as unset)", () => {
+    expect(
+      _buildTmuxLaunchArgs("un-bien", "pi-foo", "/tmp/work", false, "   "),
+    ).toEqual(_buildTmuxLaunchArgs("un-bien", "pi-foo", "/tmp/work", false))
+  })
+
   test("remote launch: later pis add a WINDOW to the shared session (new-window, no keystrokes)", () => {
     expect(
-      _buildTmuxLaunchArgs("un-bien", "pi-foo", "/tmp/work", true),
+      _buildTmuxLaunchArgs("un-bien", "pi-foo", "/tmp/work", true, "My Session"),
     ).toEqual([
       "new-window",
       "-t",
@@ -36,6 +60,8 @@ describe("launch backends — tmux/herdr argv + tilde expansion", () => {
       "-c",
       "/tmp/work",
       "pi",
+      "-n",
+      "My Session",
     ])
   })
 

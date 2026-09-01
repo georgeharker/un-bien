@@ -217,6 +217,41 @@ export function defaultAgentName(cwd: string): string {
   return basename(cwd) || "agent"
 }
 
+/**
+ * The pi session display name (set at launch with `pi -n <name>`), read
+ * defensively: stubbed/older ExtensionAPI hosts without `getSessionName`
+ * yield undefined instead of throwing. Returns undefined when unset/cleared.
+ */
+export function piSessionName(pi: unknown): string | undefined {
+  const holder = pi as { getSessionName?: unknown } | null
+  const fn = holder?.getSessionName
+  return typeof fn === "function"
+    ? (fn as () => string | undefined).call(pi)
+    : undefined
+}
+
+/**
+ * Resolve the name this Pi presents (mesh join, cwd lock, room_meta, display).
+ *
+ * Precedence: a **session-scoped name** (the pi session display name, set at
+ * launch with `pi -n <name>` by the remote launcher) beats the configured
+ * `agent_name`, which beats the path-derived default. The session name is
+ * per-process — never persisted, never inherited by subagents/child processes
+ * — so a remotely-launched Pi shows what the app asked for while a manual `pi`
+ * in the same directory keeps its configured name.
+ *
+ * `/unbien rename` still wins over everything once it runs: it persists
+ * `agent_name` AND live-renames the mesh/relay identity.
+ */
+export function resolveAgentName(
+  cwd: string,
+  sessionName?: string | null,
+): string {
+  const override = sessionName?.trim()
+  if (override) return override
+  return loadLocalConfig(cwd).agent_name || defaultAgentName(cwd)
+}
+
 /** Resolves auto_start_relay with backward-compat (undefined → true). */
 export function effectiveAutoStartRelay(cfg: LocalConfig): boolean {
   return cfg.auto_start_relay !== false

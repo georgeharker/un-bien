@@ -29,6 +29,8 @@ import {
   effectiveAutoStartRelay,
   loadLocalConfig,
   localConfigExists,
+  piSessionName,
+  resolveAgentName,
   saveLocalConfig,
 } from "../session/local_config.js"
 import { runSetupWizard, type WizardUI } from "../session/setup_wizard.js"
@@ -116,7 +118,10 @@ export async function _cmdRootInner(
   // Lock identity is (cwd, name). Several agents may run in the SAME folder; the
   // requested name just has to be made unique. Derive the name the same way
   // `_cmdJoin` does so the lock and the mesh registration agree on identity.
-  const requestedName = loadLocalConfig(cwd).agent_name || defaultAgentName(cwd)
+  // A session-scoped name (pi -n, set by the remote launcher) beats the
+  // configured agent_name so a launched Pi locks/joins under what the app
+  // asked for.
+  const requestedName = resolveAgentName(cwd, piSessionName(deps.pi))
 
   // Per-(cwd,name) lock. Interactive agents may coexist by auto-suffixing
   // (`name#2`, `name#3`, …), but supervised daemons must be singletons for their
@@ -642,11 +647,10 @@ export async function _cmdJoin(
 ): Promise<void> {
   const cwd =
     "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd()
-  const local = loadLocalConfig(cwd)
   const sessionName = LOCAL_SESSION_NAME
-  // What the user configured for this agent…
-  const requestedName = local.agent_name || defaultAgentName(cwd)
-  // …and what we actually register: the name the cwd-lock reserved, which is
+  // What the user configured for this agent… (a session-scoped `pi -n` name
+  // from a remote launch wins — see resolveAgentName)
+  const requestedName = resolveAgentName(cwd, piSessionName(deps.pi))
   // `requestedName` or a `#N` variant when same-named agents share this folder.
   // Falls back to requestedName when join runs without a prior `_cmdRoot` lock
   // (e.g. legacy/test paths).

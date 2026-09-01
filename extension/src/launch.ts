@@ -38,15 +38,49 @@ function _safeTmuxName(name: string | undefined, fallback: string): string {
  *  NO keystrokes/prefix). First launch creates the detached session; later ones
  *  add a window. Array (never a shell string) so cwd/names can't inject.
  *  Exported for tests. */
+/**
+ * argv for the tmux launch. The pi invocation carries `-n <name>` when the
+ * launch request named the session: pi's native session display name, which
+ * the extension reads back (piSessionName → resolveAgentName) so the mesh
+ * join, cwd lock, room_meta, and the app tile ALL show the requested name
+ * instead of the path-derived default. Per-process arg — never inherited by
+ * subagents or child processes. Exported for tests.
+ */
 export function _buildTmuxLaunchArgs(
   session: string,
   windowName: string,
   cwd: string,
   sessionExists: boolean,
+  sessionName?: string | undefined,
 ): string[] {
+  const nameArgv =
+    typeof sessionName === "string" && sessionName.trim().length > 0
+      ? ["-n", sessionName.trim()]
+      : []
   return sessionExists
-    ? ["new-window", "-t", session, "-n", windowName, "-c", cwd, "pi"]
-    : ["new-session", "-d", "-s", session, "-n", windowName, "-c", cwd, "pi"]
+    ? [
+        "new-window",
+        "-t",
+        session,
+        "-n",
+        windowName,
+        "-c",
+        cwd,
+        "pi",
+        ...nameArgv,
+      ]
+    : [
+        "new-session",
+        "-d",
+        "-s",
+        session,
+        "-n",
+        windowName,
+        "-c",
+        cwd,
+        "pi",
+        ...nameArgv,
+      ]
 }
 
 /** Sanitize a herdr agent name: must match [a-z][a-z0-9_-]{0,31}. */
@@ -182,6 +216,9 @@ export function _launchSession(
   // attach point). Clean `new-window` via the CLI — never a prefix keystroke.
   const session = _safeTmuxName(loadConfig().launch?.tmux_session, "un-bien")
   const windowName = _safeTmuxName(name, `pi-${basename(cwd) || "session"}`)
+  // The raw name rides the pi argv (`-n`) — the extension resolves it as the
+  // session-scoped agent name (see resolveAgentName). herdr keeps the
+  // workspace-label-only plumbing until it can pass args through to pi.
   const sessionExists =
     spawnSync("tmux", ["has-session", "-t", session], {
       stdio: "ignore",
@@ -190,7 +227,7 @@ export function _launchSession(
   try {
     const child = spawn(
       "tmux",
-      _buildTmuxLaunchArgs(session, windowName, cwd, sessionExists),
+      _buildTmuxLaunchArgs(session, windowName, cwd, sessionExists, name),
       { detached: true, stdio: "ignore" },
     )
     child.unref()

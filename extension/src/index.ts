@@ -32,22 +32,22 @@
 
 import { randomUUID } from "node:crypto"
 import {
-  ExtensionAPI,
+  type ExtensionAPI,
   ExtensionCommandContext,
-  ExtensionContext,
-  ExtensionFactory,
+  type ExtensionContext,
+  type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent"
-import { Ed25519Keypair } from "./pairing/crypto.js"
+import type { Ed25519Keypair } from "./pairing/crypto.js"
 import { listPeers, removePeer } from "./pairing/storage.js"
-import { SelfRevoke } from "./mesh/self_revoke.js"
-import { MeshTopologySnapshot } from "./mesh/siblings.js"
+import type { SelfRevoke } from "./mesh/self_revoke.js"
+import type { MeshTopologySnapshot } from "./mesh/siblings.js"
 import {
-  ClientMessage,
+  type ClientMessage,
   ServerMessage,
-  ThinkingLevel,
+  type ThinkingLevel,
 } from "./protocol/types.js"
-import { RelayClient } from "./transport/relay_client.js"
-import { PlainPeerChannel } from "./transport/peer_channel.js"
+import type { RelayClient } from "./transport/relay_client.js"
+import type { PlainPeerChannel } from "./transport/peer_channel.js"
 import {
   createExtensionUiBridge,
   type ExtensionUiBridge,
@@ -68,7 +68,7 @@ import { envLog } from "./session/debug_log.js"
 import { roomIdForSession } from "./rooms.js"
 import { registerAgentTools } from "./session/tools.js"
 import { formatPeerInventory } from "./session/peer_inventory.js"
-import { MeshNode } from "./session/mesh_node.js"
+import type { MeshNode } from "./session/mesh_node.js"
 import {
   wireFromModel,
   type ActionCtx,
@@ -81,18 +81,18 @@ import {
   sessionSockPath,
   skillsDir,
 } from "./session/global_config.js"
-import { type AcquiredLock } from "./session/cwd_lock.js"
+import type { AcquiredLock } from "./session/cwd_lock.js"
 import { installService, unlinkCliBinaries } from "./daemon/install.js"
 import {
-  defaultAgentName,
   effectiveAutoStartRelay,
   effectiveAllowRemoteLaunch,
   loadLocalConfig,
   localConfigExists,
+  piSessionName,
+  resolveAgentName,
   saveLocalConfig,
 } from "./session/local_config.js"
 import { updateFooter, type FooterState } from "./ui/footer.js"
-import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { realpathSync } from "node:fs"
 import {
@@ -115,7 +115,7 @@ import {
   _registerReceivedImageRenderer,
   type ImagePipelineDeps,
 } from "./session/received_images.js"
-import { CommandDeps } from "./commands/deps.js"
+import type { CommandDeps } from "./commands/deps.js"
 import {
   type RootRestartAuthority,
   _cmdRoot,
@@ -1210,11 +1210,13 @@ function _routeUnBienPlaneFrom(
  * inline at three different sites (pair_ok, room_meta, QR URI); this
  * helper consolidates them and lifts the user's configured name above
  * the raw cwd path.
+ *
+ * A session-scoped name (pi `-n`, set by the remote launcher) slots in just
+ * below the broker-assigned mesh name — see `resolveAgentName`.
  */
 function _displayName(cwd: string): string {
   if (_meshNode) return _meshNode.name()
-  const local = loadLocalConfig(cwd)
-  return local.agent_name || defaultAgentName(cwd)
+  return resolveAgentName(cwd, piSessionName(_pi))
 }
 
 function _reportRevocationByFingerprint(canonicalOwnerPubkey: string): void {
