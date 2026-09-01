@@ -70,6 +70,18 @@ struct TranscriptView: View {
     /// moves it — any real change is USER scroll. Used to cancel a pending
     /// backfill-wait restore (design 01M1B9F6: user intent wins).
     @State private var topOffset: CGFloat = 0
+    /// Top-head offset snapshotted at the last sentinel-verified pin. The
+    /// reference for the growth-vs-user-scroll test: growth appends below the
+    /// head (topOffset unchanged), user scroll moves it. Refreshed ONLY on a
+    /// true pin — refreshing it every sticky frame would never let a slow
+    /// scroll-up accumulate past the threshold and re-introduce the yank.
+    @State private var pinnedTopOffset: CGFloat = 0
+    /// One-update-deferred growth follow (see SentinelMinYKey handler): set
+    /// when content GREW past the pin with no head movement; consumed by
+    /// `.onChange(of: followGrowth)` AFTER the same frame's preference
+    /// handlers have run, so a same-frame user-scroll unpin wins the race
+    /// instead of the follow fighting an in-flight drag.
+    @State private var followGrowth = false
 
     private var items: [TranscriptItem] {
         let all = model.transcripts[session.id]?.items ?? []
@@ -243,7 +255,27 @@ struct TranscriptView: View {
                 .onPreferenceChange(SentinelMinYKey.self) { minY in
                     // Pinned: the content's end sits at (or within a small slack
                     // of) the viewport's bottom edge.
-                    atBottom = minY < viewportHeight + 24
+                    let pinned = minY < viewportHeight + 24
+                    if pinned {
+                        atBottom = true
+                        pinnedTopOffset = topOffset
+                    } else if abs(topOffset - pinnedTopOffset) > 8 {
+                        // The head MOVED — that is USER scroll (growth appends
+                        // below the head, so it can't move the top probe). The
+                        // pin is genuinely broken: drop stickiness and let the
+                        // reader stay exactly where they scrolled to.
+                        atBottom = false
+                    } else if atBottom, didRestoreScroll, !items.isEmpty {
+                        // Off the pin with NO head movement: content GREW past
+                        // the pin. Streaming mutates the last row in place, so
+                        // items.count never changes and the count-gated follow
+                        // never fires — this is the "at the bottom, follow new
+                        // content" path. Stay sticky and follow the growth;
+                        // deferred one update (followGrowth) so a same-frame
+                        // user-scroll unpin wins the race instead of the follow
+                        // fighting an in-flight drag.
+                        followGrowth = true
+                    }
                 }
                 .onPreferenceChange(ViewportHeightKey.self) { viewportHeight = $0 }
                 .onPreferenceChange(TopOffsetKey.self) { offset in
@@ -255,6 +287,25 @@ struct TranscriptView: View {
                     if !didRestoreScroll, abs(offset) > 8 {
                         cancelPendingRestore()
                     }
+                    // Same-frame unpin: head movement TOWARD THE TOP (offset
+                    // increasing) is user scroll intent — break bottom stickiness
+                    // immediately. Movement toward the bottom (decreasing: our
+                    // own follow scrolls, bottom bounce) keeps it.
+                    if atBottom, offset > pinnedTopOffset + 8 {
+                        atBottom = false
+                    }
+                }
+                // Growth follow (SentinelMinYKey handler): consumed AFTER the
+                // same frame's preference handlers have settled, re-checked
+                // against the final atBottom — a user who started scrolling up
+                // this frame has un-pinned by now and is left alone.
+                .onChange(of: followGrowth) { _, want in
+                    guard want else { return }
+                    followGrowth = false
+                    guard atBottom, didRestoreScroll, let last = items.last else { return }
+                    // Snap (no animation): animated follows during streaming are
+                    // what made the pull-down feel like fighting the user.
+                    proxy.scrollTo(last.id, anchor: .bottom)
                 }
                 // Submit-consumed: jump to the end the moment a message is sent
                 // or queued (not just when its row echoes back).
