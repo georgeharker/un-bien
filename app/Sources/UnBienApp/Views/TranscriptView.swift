@@ -1,29 +1,26 @@
 import MarkdownUI
+import os
 import SwiftUI
 import UnBienCore
 
-/// Y offset of the bottom sentinel within the ScrollView's visible frame,
-/// reported EVERY FRAME — "pinned to bottom" is derived continuously from
-/// it (design 01M1B9F6). Appearance events lose the race against streaming
-/// arrivals: a follow scrollTo can re-pin the sentinel before its
-/// onDisappear ever lands, so a user who just scrolled up keeps getting
-/// yanked. Continuous evaluation closes that race within one frame.
-private struct SentinelMinYKey: PreferenceKey {
-    static let defaultValue: CGFloat = .infinity
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = min(value, nextValue()) }
+#if DEBUG
+/// Scroll-machinery diagnostics (scroll redesign diagnosis): pin transitions,
+/// follows, restores. Read with:
+/// `log stream --level debug --predicate 'subsystem == "un-bien" AND category == "scroll"'`
+private let scrollLog = Logger(subsystem: "un-bien", category: "scroll")
+private func dbgScrollLog(_ message: String) {
+    scrollLog.info("\(message, privacy: .public)")
 }
-
-/// Visible height of the transcript ScrollView.
-private struct ViewportHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
-}
+#else
+/// No-op in release: the scroll diagnostics are a DEBUG harness.
+private func dbgScrollLog(_ message: String) {}
+#endif
 
 /// Content-head offset in the scroll's visible frame, from the TOP probe
 /// (design 01M1B9F6). Backfill pages APPEND below the head, so content growth
-/// never moves it — unlike the BOTTOM sentinel, whose movement is ambiguous
-/// between growth and user scroll. Any real change in this value is USER
-/// scroll; during the backfill-wait restore it cancels the pending restore.
+/// never moves it — any real change is USER scroll. Used to cancel a pending
+/// backfill-wait restore (design 01M1B9F6: user intent wins). NOTE: the bottom
+/// pin no longer uses geometry at all — see the sentinel cell in the LazyVStack.
 private struct TopOffsetKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
@@ -32,6 +29,13 @@ private struct TopOffsetKey: PreferenceKey {
 /// Session transcript: streamed Markdown (swift-markdown-ui) with Highlightr
 /// code blocks, collapsible tool-call cards, and a text input bar (DESIGN §7).
 struct TranscriptView: View {
+    /// Scroll-target id of the bottom sentinel cell. "The bottom" IS the
+    /// sentinel — every bottom-targeting scroll anchors THIS cell to the
+    /// viewport's bottom edge (anchoring the last message row instead would
+    /// park the sentinel below the fold and disarm the pin on the first
+    /// follow, killing bottom-following).
+    private static let bottomSentinelID = "unbien.bottom-sentinel"
+
     let session: LiveSession
     @EnvironmentObject var model: AppModel
     @State private var selectedPanelKey: String?
@@ -52,36 +56,28 @@ struct TranscriptView: View {
     /// overshoot into the prefetch buffer by a row or two — accepted).
     /// Self-heals: onAppear re-fires on re-materialization.
     @State private var materializedIDs: Set<String> = []
-    /// Whether the viewport is PINNED to the transcript's bottom edge — gates
-    /// auto-follow so an incoming row only scrolls a reader who was already at
-    /// the bottom. Evaluated CONTINUOUSLY from the sentinel probe's geometry
-    /// (every frame), not appearance events (design 01M1B9F6).
+    /// Whether the reader is AT THE BOTTOM — driven by the bottom sentinel
+    /// cell's MATERIALIZATION (onAppear/onDisappear), not geometry. The
+    /// sentinel is the last cell of the LazyVStack (doubles as the busy "…"
+    /// indicator while a turn runs), so it only exists on screen when the
+    /// reader is actually looking at the transcript's end — no estimated-
+    /// geometry pin math to misread, and a drag away from the bottom un-pins
+    /// the moment the cell leaves the window. Gates auto-follow.
     @State private var atBottom = true
     /// Set by ComposerBar.onSent: scroll to the end IMMEDIATELY on submit —
     /// don't wait for the outgoing row to echo back (a queued steer may not
     /// create a row for a while). Consumed inside the ScrollViewReader scope
     /// by the `.onChange(of: pendingScrollToEnd)` handler.
     @State private var pendingScrollToEnd = false
-    /// Visible height of the transcript ScrollView (pairs with the sentinel's
-    /// minY to evaluate the pin).
-    @State private var viewportHeight: CGFloat = 0
+    /// Debounced-unpin task for the bottom sentinel (see bottomSentinel):
+    /// transient dematerialization during growth churn doesn't drop the pin;
+    /// a real scroll-away does.
+    @State private var sentinelUnpinTask: Task<Void, Never>?
     /// Content-head offset in the scroll's visible frame, from the TOP probe
     /// (every frame). Backfill pages APPEND below the head, so growth never
     /// moves it — any real change is USER scroll. Used to cancel a pending
     /// backfill-wait restore (design 01M1B9F6: user intent wins).
     @State private var topOffset: CGFloat = 0
-    /// Top-head offset snapshotted at the last sentinel-verified pin. The
-    /// reference for the growth-vs-user-scroll test: growth appends below the
-    /// head (topOffset unchanged), user scroll moves it. Refreshed ONLY on a
-    /// true pin — refreshing it every sticky frame would never let a slow
-    /// scroll-up accumulate past the threshold and re-introduce the yank.
-    @State private var pinnedTopOffset: CGFloat = 0
-    /// One-update-deferred growth follow (see SentinelMinYKey handler): set
-    /// when content GREW past the pin with no head movement; consumed by
-    /// `.onChange(of: followGrowth)` AFTER the same frame's preference
-    /// handlers have run, so a same-frame user-scroll unpin wins the race
-    /// instead of the follow fighting an in-flight drag.
-    @State private var followGrowth = false
 
     private var items: [TranscriptItem] {
         let all = model.transcripts[session.id]?.items ?? []
@@ -110,6 +106,16 @@ struct TranscriptView: View {
     /// items so it can never fire late and fight the user.
     private func reanchorIfNeeded(proxy: ScrollViewProxy) {
         guard let target = reanchorTarget else { return }
+        if target == Self.bottomSentinelID {
+            // Sentinel re-anchor: onAppear (atBottom) means REAL geometry —
+            // polish the estimated restore/jump so the cell sits exactly at
+            // the viewport's bottom edge.
+            if atBottom {
+                reanchorTarget = nil
+                proxy.scrollTo(Self.bottomSentinelID, anchor: .bottom)
+            }
+            return
+        }
         guard items.contains(where: { $0.id == target }) else {
             reanchorTarget = nil
             return
@@ -130,6 +136,27 @@ struct TranscriptView: View {
         reanchorTarget = nil
     }
 
+    /// Scroll "to the bottom" — target the SENTINEL cell, anchored to the
+    /// viewport's bottom edge, with an estimated-geometry correction pass:
+    /// a scrollTo computed while the sentinel is dematerialized or the lazy
+    /// layout is mid-growth can land a row-height (a screen, for text rows)
+    /// past the real end. The deferred pass re-runs against SETTLED geometry
+    /// (~one layout cycle later), guarded on still-at-bottom so it can never
+    /// yank a reader who started dragging in between. Idempotent when the
+    /// first scroll already landed right.
+    private func scrollToBottom(proxy: ScrollViewProxy) {
+        proxy.scrollTo(Self.bottomSentinelID, anchor: .bottom)
+        dbgScrollLog("follow → sentinel (immediate)")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            guard atBottom else {
+                dbgScrollLog("follow deferred pass skipped (unpinned)")
+                return
+            }
+            dbgScrollLog("follow → sentinel (deferred re-anchor)")
+            proxy.scrollTo(Self.bottomSentinelID, anchor: .bottom)
+        }
+    }
+
     /// One scroll-restore attempt (design 01M1B9F6). Returns true when CONSUMED
     /// (restored, or bottom-fallback latched); false when still WAITING — the
     /// remembered row hasn't arrived yet and the paged backfill hasn't reached
@@ -144,6 +171,7 @@ struct TranscriptView: View {
         if let remembered = model.rememberedScroll(session: session) {
             if items.contains(where: { $0.id == remembered }) {
                 didRestoreScroll = true
+                dbgScrollLog("restore → remembered row \(remembered)")
                 // Restore to the remembered STABLE row, attaching at the BOTTOM
                 // of its extent. The scrollTo runs on ESTIMATED geometry for a
                 // far-down, not-yet-materialized row; the materialized pass
@@ -167,12 +195,14 @@ struct TranscriptView: View {
             // filtered out): fall through to the bottom fallback.
         }
         // Nothing remembered (or it's permanently gone): land at the bottom.
+        // "The bottom" is the SENTINEL cell, not the last row — anchoring the
+        // last row would park the sentinel below the viewport and disarm the
+        // pin on the very first follow.
         didRestoreScroll = true
-        if let last = items.last {
-            proxy.scrollTo(last.id, anchor: .bottom)
-            reanchorTarget = last.id
-            atBottom = true
-        }
+        dbgScrollLog("restore → bottom fallback (sentinel-anchored)")
+        scrollToBottom(proxy: proxy)
+        reanchorTarget = Self.bottomSentinelID
+        atBottom = true
         return true
     }
 
@@ -203,40 +233,52 @@ struct TranscriptView: View {
                                 .onAppear { materializedIDs.insert(item.id) }
                                 .onDisappear { materializedIDs.remove(item.id) }
                         }
+                        // Bottom sentinel cell — MATERIALIZATION IS THE PIN.
+                        // As a LazyVStack cell it only exists on screen when the
+                        // reader is actually at the transcript's end: no
+                        // geometry math against estimated row heights to
+                        // misread, and a drag away from the bottom un-pins the
+                        // moment the cell leaves the window. Doubles as the busy
+                        // indicator: a small "…" box while a turn runs (the same
+                        // signal that shows the composer's stop button), an
+                        // invisible 2pt cell when idle.
+                        bottomSentinel
                     }
                     .padding()
                     // Cap line length on wide windows; centered. No-op on phones.
                     .frame(maxWidth: 1100, alignment: .leading)
                     .frame(maxWidth: .infinity, alignment: .center)
-                    // Bottom sentinel probe: reports its Y offset within the
-                    // ScrollView's visible frame every frame; `atBottom` is
-                    // derived from it continuously. (Row onAppear is flaky under
-                    // LazyVStack recycling, and appearance events lose the race
-                    // against streaming arrivals.)
-                    Color.clear.frame(height: 1)
-                        .background(GeometryReader { geo in
-                            Color.clear.preference(
-                                key: SentinelMinYKey.self,
-                                value: geo.frame(in: .named("transcript-scroll")).minY)
-                        })
                 }
                 .coordinateSpace(name: "transcript-scroll")
-                .background(GeometryReader { geo in
-                    Color.clear.preference(key: ViewportHeightKey.self, value: geo.size.height)
-                })
                 .onChange(of: items.count, initial: true) { _, _ in
                     if !didRestoreScroll {
                         // May consume (restore / bottom fallback) or WAIT for a
                         // later page carrying the remembered row — see
-                        // attemptRestore. While waiting, the follow branch below
-                        // stays disabled (didRestoreScroll is still false).
+                        // attemptRestore. (Follow is NOT count-gated: backfill
+                        // pages arrive here too and must never move the reader.)
                         _ = attemptRestore(proxy: proxy)
-                    } else if atBottom, let last = items.last {
-                        // Only follow new rows while pinned to the bottom. Snap
-                        // (no animation): animated follows during streaming are
-                        // what made the pull-down feel like fighting the user.
-                        proxy.scrollTo(last.id, anchor: .bottom)
                     }
+                }
+                // Follow LIVE arrivals only (scroll design: live-vs-replay is
+                // the trigger, the sentinel is the pin). `liveArrivals` is
+                // bumped by the LIVE reducer path (rpc frames: streamed deltas,
+                // new rows, tool updates) and NEVER by get_entries backfill —
+                // so replayed/restored history can't yank a reader, while a
+                // bottom-pinned reader tracks every live delta. Scroll target is
+                // the SENTINEL (not the last row) so the pin survives its own
+                // follow. Snap (no animation): animated follows during streaming
+                // are what made the pull-down feel like fighting the user.
+                .onChange(of: model.transcripts[session.id]?.liveArrivals ?? 0) { _, live in
+                    guard didRestoreScroll else {
+                        dbgScrollLog("live arrival #\(live) ignored (restore pending)")
+                        return
+                    }
+                    guard atBottom else {
+                        dbgScrollLog("live arrival #\(live) ignored (not at bottom)")
+                        return
+                    }
+                    dbgScrollLog("live arrival #\(live) → follow (items=\(items.count))")
+                    scrollToBottom(proxy: proxy)
                 }
                 // The backfill's TERMINAL page (empty entries) doesn't change
                 // items.count — give a waiting restore its final chance (bottom
@@ -252,32 +294,6 @@ struct TranscriptView: View {
                     rememberVisibleAnchor()
                     reanchorIfNeeded(proxy: proxy)
                 }
-                .onPreferenceChange(SentinelMinYKey.self) { minY in
-                    // Pinned: the content's end sits at (or within a small slack
-                    // of) the viewport's bottom edge.
-                    let pinned = minY < viewportHeight + 24
-                    if pinned {
-                        atBottom = true
-                        pinnedTopOffset = topOffset
-                    } else if abs(topOffset - pinnedTopOffset) > 8 {
-                        // The head MOVED — that is USER scroll (growth appends
-                        // below the head, so it can't move the top probe). The
-                        // pin is genuinely broken: drop stickiness and let the
-                        // reader stay exactly where they scrolled to.
-                        atBottom = false
-                    } else if atBottom, didRestoreScroll, !items.isEmpty {
-                        // Off the pin with NO head movement: content GREW past
-                        // the pin. Streaming mutates the last row in place, so
-                        // items.count never changes and the count-gated follow
-                        // never fires — this is the "at the bottom, follow new
-                        // content" path. Stay sticky and follow the growth;
-                        // deferred one update (followGrowth) so a same-frame
-                        // user-scroll unpin wins the race instead of the follow
-                        // fighting an in-flight drag.
-                        followGrowth = true
-                    }
-                }
-                .onPreferenceChange(ViewportHeightKey.self) { viewportHeight = $0 }
                 .onPreferenceChange(TopOffsetKey.self) { offset in
                     topOffset = offset
                     // During the backfill-wait restore, ANY real scroll movement
@@ -287,35 +303,15 @@ struct TranscriptView: View {
                     if !didRestoreScroll, abs(offset) > 8 {
                         cancelPendingRestore()
                     }
-                    // Same-frame unpin: head movement TOWARD THE TOP (offset
-                    // increasing) is user scroll intent — break bottom stickiness
-                    // immediately. Movement toward the bottom (decreasing: our
-                    // own follow scrolls, bottom bounce) keeps it.
-                    if atBottom, offset > pinnedTopOffset + 8 {
-                        atBottom = false
-                    }
-                }
-                // Growth follow (SentinelMinYKey handler): consumed AFTER the
-                // same frame's preference handlers have settled, re-checked
-                // against the final atBottom — a user who started scrolling up
-                // this frame has un-pinned by now and is left alone.
-                .onChange(of: followGrowth) { _, want in
-                    guard want else { return }
-                    followGrowth = false
-                    guard atBottom, didRestoreScroll, let last = items.last else { return }
-                    // Snap (no animation): animated follows during streaming are
-                    // what made the pull-down feel like fighting the user.
-                    proxy.scrollTo(last.id, anchor: .bottom)
                 }
                 // Submit-consumed: jump to the end the moment a message is sent
-                // or queued (not just when its row echoes back).
+                // or queued (not just when its row echoes back). Target the
+                // sentinel so the submit jump lands with the pin armed.
                 .onChange(of: pendingScrollToEnd) { _, want in
                     guard want, didRestoreScroll else { return }
                     pendingScrollToEnd = false
-                    if let last = items.last {
-                        proxy.scrollTo(last.id, anchor: .bottom)
-                        reanchorTarget = last.id
-                    }
+                    scrollToBottom(proxy: proxy)
+                    reanchorTarget = Self.bottomSentinelID
                 }
                 #if os(iOS)
                 // Swipe the transcript down to dismiss the composer keyboard.
@@ -553,6 +549,44 @@ struct TranscriptView: View {
         }
     }
 
+    /// Bottom sentinel cell — see the LazyVStack. Busy: a small animated
+    /// "…" box (turn running — the same signal as the composer's stop
+    /// button). Idle: an invisible 2pt cell. Either way its on-screen
+    /// existence IS the at-bottom pin.
+    private var bottomSentinel: some View {
+        Group {
+            if model.activeTurnID(for: session) != nil, !model.hasEnded(session) {
+                BusyIndicatorBox(theme: theme)
+            } else {
+                Color.clear.frame(height: 2)
+            }
+        }
+        .id(Self.bottomSentinelID)
+        .onAppear {
+            sentinelUnpinTask?.cancel()
+            sentinelUnpinTask = nil
+            if !atBottom { dbgScrollLog("sentinel appeared → PINNED") }
+            atBottom = true
+        }
+        .onDisappear {
+            // DEBOUNCED unpin: growth between deltas (or lazy-estimate churn)
+            // can push the sentinel transiently below the fold — the next
+            // follow re-pins it within a frame or two, and re-materialization
+            // cancels this task. Only a REAL departure (the reader scrolled
+            // away and stayed away) lets the debounce lapse.
+            sentinelUnpinTask?.cancel()
+            sentinelUnpinTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                guard !Task.isCancelled else {
+                    dbgScrollLog("unpin debounce cancelled (re-appeared)")
+                    return
+                }
+                if atBottom { dbgScrollLog("unpin debounce lapsed → UNPINNED") }
+                atBottom = false
+            }
+        }
+    }
+
     private var inputBar: some View {
         // Submitting is intent to engage the newest content: cancel any
         // pending backfill-wait restore (their position wins), re-pin the
@@ -573,5 +607,36 @@ struct TranscriptView: View {
             .frame(maxWidth: .infinity)
             .padding(10)
             .background(theme.background)
+    }
+}
+
+/// The busy half of the transcript's bottom sentinel cell: a small "…"
+/// box shown while a turn runs. Doubles as the at-bottom pin (see
+/// TranscriptView.bottomSentinel) — when it's on screen, the reader is at
+/// the transcript's end and live arrivals may follow.
+private struct BusyIndicatorBox: View {
+    let theme: AppTheme
+    @State private var phase = false
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(0..<3, id: \.self) { dot in
+                Circle()
+                    .fill(theme.secondaryText)
+                    .frame(width: 5, height: 5)
+                    .opacity(phase ? 0.25 : 1.0)
+                    .animation(
+                        .easeInOut(duration: 0.6)
+                            .repeatForever(autoreverses: true)
+                            .delay(Double(dot) * 0.2),
+                        value: phase)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(theme.surface.opacity(0.7), in: RoundedRectangle(cornerRadius: 12))
+        .frame(maxWidth: 1100, alignment: .leading)
+        .accessibilityLabel("Session working")
+        .onAppear { phase = true }
     }
 }

@@ -220,6 +220,16 @@ public final class AppModel: ObservableObject {
             needsOnboarding = false
             await connectAll()
         } else {
+            #if DEBUG
+            if UserDefaults.standard.bool(forKey: "unbien.demo.stream-replay") {
+                // TEMPORARY debug harness (scroll-follow diagnosis): skip
+                // onboarding on a fresh simulator so the harness can reach the
+                // demo transcript without UI interaction. No owner key — demo
+                // mode never connects, so nothing needs one.
+                needsOnboarding = false
+                return
+            }
+            #endif
             needsOnboarding = true
         }
     }

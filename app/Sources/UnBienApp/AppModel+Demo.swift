@@ -55,9 +55,30 @@ extension AppModel {
                                roomID: "demo-room-main", sessionID: "demo-session-main",
                                name: "Agent turn", cwd: "~/demo", model: "claude-opus-4-8",
                                parentSessionID: nil, parentRoomID: nil, subagentID: nil)
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: "unbien.demo.stream-replay") {
+            // TEMPORARY debug harness (scroll-follow diagnosis): fold the
+            // fixture LIVE, frame by frame with delays, through the real
+            // reducer — bumps liveArrivals per delta exactly like a real
+            // streaming turn. Off by default; normal demo folds instantly.
+            // Also auto-opens the session (hands-off diagnosis: no UI tap
+            // needed from the harness driving the simulator).
+            streamDemoFixture("demo-main", into: main)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                if self.sessions[main.id] != nil { self.pendingSessionNav = main }
+            }
+        } else {
+            foldDemoFixture("demo-main", into: main)
+        }
+        sessions[main.id] = main
+        if !UserDefaults.standard.bool(forKey: "unbien.demo.stream-replay") {
+            loadDemoAsk(into: main)
+        }
+        #else
         foldDemoFixture("demo-main", into: main)
         sessions[main.id] = main
         loadDemoAsk(into: main)
+        #endif
 
         // Child: the subagent-run fixture, nested under the main session so
         // Home shows the subagent-parenting surface.
@@ -73,6 +94,37 @@ extension AppModel {
         // not render as a failed connection — the demo IS present, in memory.
         relayHealth[Self.demoRelayID] = .online
     }
+
+    #if DEBUG
+    /// TEMPORARY debug harness (see loadDemoSessions): replay a fixture's
+    /// frames into the LIVE reducer with per-frame delays, so the transcript
+    /// grows in place exactly like a real streaming turn (liveArrivals ticks,
+    /// the last row mutates, the busy indicator shows). Used for local
+    /// scroll-follow diagnosis (simulator screenshots); remove when the
+    /// scroll redesign settles.
+    private func streamDemoFixture(_ resource: String, into session: LiveSession) {
+        var reducer = EnvelopeReducer()
+        envelopeReducers[session.id] = reducer
+        transcripts[session.id] = reducer.session
+        backfilledSessions.insert(session.id)
+        let frames = Self.demoFixtures(resource)
+        Task { @MainActor in
+            for frame in frames {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                guard self.sessions[session.id] != nil else { return } // demo unloaded
+                // Mutate the STORED reducer (value semantics: a captured `var`
+                // copy would drift from envelopeReducers) and publish its
+                // session snapshot so liveArrivals ticks per frame.
+                self.envelopeReducers[session.id]?.apply([frame])
+                if let live = self.envelopeReducers[session.id] {
+                    reducer = live
+                    self.transcripts[session.id] = live.session
+                }
+            }
+        }
+        _ = reducer
+    }
+    #endif
 
     /// Tear the demo mesh down (toggle off). Only touches demo-namespaced state.
     public func unloadDemoSessions() {

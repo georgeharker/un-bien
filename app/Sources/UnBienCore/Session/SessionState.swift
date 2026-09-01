@@ -20,6 +20,15 @@ public struct SessionState: Equatable, Sendable {
     /// or `nil` when idle. This is the `target_id` a `cancel` should carry.
     public private(set) var activeTurnID: String?
 
+    /// LIVE-arrival version for transcript bottom-following (scroll design):
+    /// bumped by every LIVE reducer mutation (applyRPC item changes,
+    /// appendNotice) and NEVER by `applyEntries` (get_entries backfill) or
+    /// dedup no-ops. The view follows new content to the bottom ONLY on a
+    /// change here — so replayed/restored history can never yank a reader,
+    /// while streamed deltas, new rows, and tool updates do follow (when the
+    /// reader is at the bottom). Int-based: `.onChange(of:)` needs Equatable.
+    public private(set) var liveArrivals: Int = 0
+
     /// Set once the paired pi session has shut down (`rpc:session_shutdown`).
     /// The UI shows a "session ended" banner and refuses further input.
     /// RETRACTABLE: a pi session can be RESUMED — the fresh extension instance
@@ -61,6 +70,7 @@ public struct SessionState: Equatable, Sendable {
     public mutating func appendNotice(code: String, message: String) {
         noticeSeq += 1
         append(.notice(NoticeItem(id: "ext\(noticeSeq)", code: code, message: message)))
+        liveArrivals += 1
     }
 
     /// Usage from the most recent assistant turn that reported it (for a status
@@ -196,24 +206,30 @@ public struct SessionState: Equatable, Sendable {
             closeOpenAssistant()
         case "message_end":
             applyRPCMessageEnd(frame["message"])
+            liveArrivals += 1
         case "message_update":
             applyRPCDelta(frame["assistantMessageEvent"])
+            liveArrivals += 1
         case "tool_execution_start":
             openToolCard(toolCallID: frame["toolCallId"]?.stringValue ?? "",
                          tool: frame["toolName"]?.stringValue ?? "",
                          args: frame["args"]?.objectValue ?? [:])
+            liveArrivals += 1
         case "tool_execution_update":
             updateToolCard(toolCallID: frame["toolCallId"]?.stringValue ?? "",
                            partial: frame["partialResult"])
+            liveArrivals += 1
         case "tool_execution_end":
             let isError = frame["isError"]?.boolValue ?? false
             fillToolCard(toolCallID: frame["toolCallId"]?.stringValue ?? "",
                          result: frame["result"], error: isError ? "error" : nil,
                          images: Self.imagesFromToolResult(frame["result"]))
+            liveArrivals += 1
         case "compaction_end":
             if let result = frame["result"], result != .null {
                 appendCompaction(summary: result["summary"]?.stringValue ?? "",
                                  tokensBefore: result["tokensBefore"]?.intValue ?? 0)
+                liveArrivals += 1
             }
         case "agent_settled":
             if let turn = rpcTurn, activeTurnID == turn { activeTurnID = nil }
@@ -239,12 +255,14 @@ public struct SessionState: Equatable, Sendable {
             let err = frame["error"]?.stringValue ?? "failed"
             append(.notice(NoticeItem(id: "act\(noticeSeq)", code: "action_error",
                                       message: "\(action) failed: \(err)")))
+            liveArrivals += 1
         case "error":
             // Enveloped error reply (e.g. malformed models.json on list_models):
             // same notice surface as a provider error.
             noticeSeq += 1
             append(.notice(NoticeItem(id: "n\(noticeSeq)", code: frame["code"]?.stringValue ?? "error",
                                       message: frame["message"]?.stringValue ?? "")))
+            liveArrivals += 1
         default:
             break
         }

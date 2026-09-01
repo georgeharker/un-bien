@@ -10,7 +10,13 @@ import {
 describe("launch backends — tmux/herdr argv + tilde expansion", () => {
   test("remote launch: first pi creates the shared tmux session (new-session, safe array)", () => {
     expect(
-      _buildTmuxLaunchArgs("un-bien", "pi-foo", "/tmp/work", false, "My Session"),
+      _buildTmuxLaunchArgs(
+        "un-bien",
+        "pi-foo",
+        "/tmp/work",
+        false,
+        "My Session",
+      ),
     ).toEqual([
       "new-session",
       "-d",
@@ -50,7 +56,13 @@ describe("launch backends — tmux/herdr argv + tilde expansion", () => {
 
   test("remote launch: later pis add a WINDOW to the shared session (new-window, no keystrokes)", () => {
     expect(
-      _buildTmuxLaunchArgs("un-bien", "pi-foo", "/tmp/work", true, "My Session"),
+      _buildTmuxLaunchArgs(
+        "un-bien",
+        "pi-foo",
+        "/tmp/work",
+        true,
+        "My Session",
+      ),
     ).toEqual([
       "new-window",
       "-t",
