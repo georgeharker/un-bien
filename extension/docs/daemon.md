@@ -107,7 +107,73 @@ environment (PATH, node path). Re-run `unbien install`.
 
 ---
 
-## 3. The app can't launch a session on this machine
+## 3. Remotely launched pis can't read the keychain (tmux security sessions)
+
+**Symptoms:** a remote launch opens the tmux window but pi dies silently (no
+output, no stderr), or fails with `No identity could be read, but N device(s)
+are already paired — refusing to generate a NEW one` (the
+`PairedIdentityMissingError` guard). An `identity.json.bogus-*` file appears
+in the state root. Everything works when you start pi yourself in Terminal.
+
+**Cause — macOS security sessions:** keychain access follows the *security
+session* a process was spawned into, and every tmux pane inherits the tmux
+**server's** context — not the terminal that opened the window. With
+`launch.backend: "tmux"` the server is created by whichever process first
+needed it: the launcher. If the launcher was started from a detached or
+session-poor context (a daemon, a service manager like `sharedserver`, SSH),
+the tmux server it creates carries that context and **denies keychain access
+to every pane it ever hosts**. Worse, the server **outlives the launcher**:
+killing/restarting the launcher just attaches new windows to the orphaned
+server, so a bad creation context persists across launcher restarts.
+
+A second wrinkle: a keychain read can require an **ACL confirmation** when
+the reading binary differs from the one that created the item (e.g. after an
+nvm/npm reinstall swaps the node binary). A background process has no path to
+the Security Agent UI, so it gets `errSecInteractionNotAllowed` instead of a
+prompt — same symptom, same fixes.
+
+**Recovery:** kill the orphaned tmux server so the next launch recreates it
+from a healthy context:
+
+```bash
+tmux kill-session -t un-bien    # or tmux kill-server (kills ALL sessions)
+```
+
+**Lasting fixes (any one of these):**
+
+1. **Pre-seed the tmux session from your own Terminal** — the server then
+   lives in your GUI login session for good, and the launcher only ever adds
+   windows to it:
+
+   ```bash
+   tmux new-session -d -s un-bien
+   ```
+
+2. **Run the launcher as a login service** (`unbien install` — launchd
+   LaunchAgent / systemd `--user`), not from a detached daemon: the launcher
+   — and any tmux server it creates — stays inside your login session where
+   the keychain just works.
+
+3. **The context-proof option — seed the file identity fallback.** The
+   resolver reads `~/.local/state/un-bien/identity.json` automatically
+   whenever the keychain throws (no prompt, no re-pairing, any security
+   session):
+
+   ```bash
+   security find-generic-password -s dev.unbien.pi -a longterm-ed25519 -w \
+     > ~/.local/state/un-bien/identity.json
+   chmod 600 ~/.local/state/un-bien/identity.json
+   ```
+
+**Related:** the launcher needs your env (`PI_CODING_AGENT_DIR`, and
+`UNBIEN_RELAY`/`UNBIEN_STATE_DIR` if you use them) in its spawn context. If
+you run it under a service manager, pin them explicitly in the server
+definition's env map instead of relying on ambient shell env — a daemon's
+children inherit the *daemon's* environment, not your shell's.
+
+---
+
+## 4. The app can't launch a session on this machine
 
 The launcher is running and the app sees the machine's control room, but
 launch requests do nothing.
@@ -156,7 +222,7 @@ session on the machine and scan the QR from the app.
 
 ---
 
-## 4. The app can't see the machine at all
+## 5. The app can't see the machine at all
 
 - **Relay mismatch.** The launcher uses the same global relay config as
   the extension — check `/unbien config` and make sure the app is pointed
@@ -166,7 +232,7 @@ session on the machine and scan the QR from the app.
 
 ---
 
-## 5. Uninstall cleanly + re-install from scratch
+## 6. Uninstall cleanly + re-install from scratch
 
 When you suspect everything is misconfigured:
 
@@ -185,7 +251,7 @@ full reset.
 
 ---
 
-## 6. Diagnostic commands cheat-sheet
+## 7. Diagnostic commands cheat-sheet
 
 ```bash
 # Service status
