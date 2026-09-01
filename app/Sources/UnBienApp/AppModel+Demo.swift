@@ -55,29 +55,37 @@ extension AppModel {
                                roomID: "demo-room-main", sessionID: "demo-session-main",
                                name: "Agent turn", cwd: "~/demo", model: "claude-opus-4-8",
                                parentSessionID: nil, parentRoomID: nil, subagentID: nil)
-        #if DEBUG
-        if UserDefaults.standard.bool(forKey: "unbien.demo.stream-replay") {
-            // TEMPORARY debug harness (scroll-follow diagnosis): fold the
-            // fixture LIVE, frame by frame with delays, through the real
-            // reducer — bumps liveArrivals per delta exactly like a real
-            // streaming turn. Off by default; normal demo folds instantly.
-            // Also auto-opens the session (hands-off diagnosis: no UI tap
-            // needed from the harness driving the simulator).
-            streamDemoFixture("demo-main", into: main)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                if self.sessions[main.id] != nil { self.pendingSessionNav = main }
+        if Self.streamDemoReplayEnabled() {
+            // The demo streams its fixture LIVE — frame by frame with delays,
+            // through the real reducer — so it reads as a real coding turn
+            // (text growing in place, busy indicator, bottom-follow tracking)
+            // instead of an instantly-complete transcript. The interactive
+            // ask surfaces AFTER the turn settles plus a short beat (below).
+            streamDemoFixture("demo-main", into: main) { [weak self] in
+                self?.loadDemoAsk(into: main)
             }
         } else {
+            // Escape hatch (explicit `defaults write unbien.demo.stream-replay
+            // -bool false`): the original instant-fold demo, ask up front.
             foldDemoFixture("demo-main", into: main)
-        }
-        sessions[main.id] = main
-        if !UserDefaults.standard.bool(forKey: "unbien.demo.stream-replay") {
             loadDemoAsk(into: main)
         }
-        #else
-        foldDemoFixture("demo-main", into: main)
         sessions[main.id] = main
-        loadDemoAsk(into: main)
+        // Headless-harness auto-open (scroll diagnosis in the simulator): when
+        // the flag is EXPLICITLY true, auto-open a session so the harness needs
+        // no UI tap. Target defaults to the main session;
+        // `unbien.demo.auto-open-session` = "stress" opens the stress session
+        // (defined below — hence the late id lookup at fire time).
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: "unbien.demo.stream-replay") {
+            let target = UserDefaults.standard.string(forKey: "unbien.demo.auto-open-session") ?? "main"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                let wanted = self.sessions.values.first {
+                    (target == "stress") == ($0.roomID == "demo-room-stress")
+                }
+                if let wanted { self.pendingSessionNav = wanted }
+            }
+        }
         #endif
 
         // Child: the subagent-run fixture, nested under the main session so
@@ -90,41 +98,59 @@ extension AppModel {
         foldDemoFixture("demo-subagent-run", into: child)
         sessions[child.id] = child
 
+        #if DEBUG
+        // Headless-harness stress session (scroll/materialization diagnosis
+        // only — the shipped demo stays svelte): a long, wildly varied-height
+        // transcript (one-liners → 100-line code blocks) streamed FAST (~30ms
+        // per frame) so a ~45-second real-time replay finishes in ~20s. Keyed
+        // on the same explicitly-set flag as the other harness bits.
+        if UserDefaults.standard.bool(forKey: "unbien.demo.stream-replay") {
+            let stress = LiveSession(relayID: Self.demoRelayID, peerEPK: "demo-peer",
+                                     roomID: "demo-room-stress", sessionID: "demo-session-stress",
+                                     name: "Stress", cwd: "~/demo", model: "claude-opus-4-8",
+                                     parentSessionID: nil, parentRoomID: nil, subagentID: nil)
+            streamDemoFixture("demo-stress", into: stress, frameDelayNs: 30_000_000)
+            sessions[stress.id] = stress
+        }
+        #endif
+
         // Cosmetic: the demo relay has no socket, but its Home header should
         // not render as a failed connection — the demo IS present, in memory.
         relayHealth[Self.demoRelayID] = .online
     }
 
-    #if DEBUG
-    /// TEMPORARY debug harness (see loadDemoSessions): replay a fixture's
-    /// frames into the LIVE reducer with per-frame delays, so the transcript
-    /// grows in place exactly like a real streaming turn (liveArrivals ticks,
-    /// the last row mutates, the busy indicator shows). Used for local
-    /// scroll-follow diagnosis (simulator screenshots); remove when the
-    /// scroll redesign settles.
-    private func streamDemoFixture(_ resource: String, into session: LiveSession) {
-        var reducer = EnvelopeReducer()
+    /// Replay a fixture's frames into the LIVE reducer with per-frame delays,
+    /// so the demo transcript grows in place exactly like a real streaming
+    /// turn (liveArrivals ticks, the last row mutates, the busy indicator
+    /// shows, bottom-follow tracks). `onSettled` fires one beat after the last
+    /// frame — the demo uses it to surface the interactive ask as the finale,
+    /// AFTER the reviewer has watched the turn stream in.
+    private func streamDemoFixture(_ resource: String, into session: LiveSession,
+                                   frameDelayNs: UInt64 = 300_000_000,
+                                   onSettled: (() -> Void)? = nil) {
+        let reducer = EnvelopeReducer()
         envelopeReducers[session.id] = reducer
         transcripts[session.id] = reducer.session
         backfilledSessions.insert(session.id)
         let frames = Self.demoFixtures(resource)
         Task { @MainActor in
             for frame in frames {
-                try? await Task.sleep(nanoseconds: 300_000_000)
+                try? await Task.sleep(nanoseconds: frameDelayNs)
                 guard self.sessions[session.id] != nil else { return } // demo unloaded
-                // Mutate the STORED reducer (value semantics: a captured `var`
+                // Mutate the STORED reducer (value semantics: a captured local
                 // copy would drift from envelopeReducers) and publish its
                 // session snapshot so liveArrivals ticks per frame.
                 self.envelopeReducers[session.id]?.apply([frame])
                 if let live = self.envelopeReducers[session.id] {
-                    reducer = live
                     self.transcripts[session.id] = live.session
                 }
             }
+            // One beat after the turn settles — the ask lands as the finale.
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard self.sessions[session.id] != nil else { return }
+            onSettled?()
         }
-        _ = reducer
     }
-    #endif
 
     /// Tear the demo mesh down (toggle off). Only touches demo-namespaced state.
     public func unloadDemoSessions() {
@@ -151,6 +177,16 @@ extension AppModel {
     /// True when this session belongs to the demo mesh (read-only surfaces).
     public func isDemo(_ session: LiveSession) -> Bool {
         session.relayID == Self.demoRelayID
+    }
+
+
+    /// Whether the demo STREAMS its fixture (default) or instant-folds it
+    /// (escape hatch). Default ON — the streamed demo reads as a real coding
+    /// turn (App Review / first impressions); an explicit
+    /// `defaults write unbien.demo.stream-replay -bool false` restores the
+    /// original instant-fold behavior.
+    static func streamDemoReplayEnabled() -> Bool {
+        UserDefaults.standard.object(forKey: "unbien.demo.stream-replay") as? Bool ?? true
     }
 
     /// Load one bundled demo fixture as envelope messages. Discriminate by

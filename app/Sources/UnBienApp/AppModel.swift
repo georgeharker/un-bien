@@ -222,10 +222,11 @@ public final class AppModel: ObservableObject {
         } else {
             #if DEBUG
             if UserDefaults.standard.bool(forKey: "unbien.demo.stream-replay") {
-                // TEMPORARY debug harness (scroll-follow diagnosis): skip
-                // onboarding on a fresh simulator so the harness can reach the
-                // demo transcript without UI interaction. No owner key — demo
-                // mode never connects, so nothing needs one.
+                // DEBUG-only headless harness: when the flag is EXPLICITLY set
+                // (the simulator diagnosis setup), skip onboarding on a fresh
+                // install so the harness reaches the demo transcript without UI
+                // interaction. No owner key — demo mode never connects, so
+                // nothing needs one.
                 needsOnboarding = false
                 return
             }

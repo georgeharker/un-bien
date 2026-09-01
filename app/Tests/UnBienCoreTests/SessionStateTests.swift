@@ -297,4 +297,80 @@ final class SessionStateTests: XCTestCase {
         XCTAssertEqual(notices.map(\.message), ["Deploy finished", "Task complete"],
                        "display:false custom messages must be suppressed; absent/true render")
     }
+
+    // REGRESSION (the "text arrives as sentence-fragment bubbles" corruption):
+    // a get_entries refetch on relay reconnect lands MID-STREAM while an
+    // assistant bubble is open. Replayed rows append below it — the walk must
+    // NOT close the open bubble (else the next live delta mints a NEW bubble,
+    // fragmenting one message into fractions) and must NOT re-key it (a
+    // replayed settled message_end must not steal the live bubble's identity).
+    func testMidStreamGetEntriesRefetchDoesNotFragmentOpenBubble() {
+        var state = SessionState()
+
+        func endFrame(role: String, text: String, ts: Double, responseId: String? = nil) -> JSONValue {
+            var msg: [String: JSONValue] = [
+                "role": .string(role),
+                "content": .array([.object(["type": .string("text"), "text": .string(text)])]),
+                "timestamp": .number(ts),
+            ]
+            if let rid = responseId { msg["responseId"] = .string(rid) }
+            return .object(["type": .string("message_end"), "message": .object(msg)])
+        }
+        func delta(_ s: String) -> JSONValue {
+            .object(["type": .string("message_update"),
+                     "assistantMessageEvent": .object(["type": .string("text_delta"), "delta": .string(s)])])
+        }
+        let simple: (String) -> JSONValue = { .object(["type": .string($0)]) }
+        func entry(role: String, text: String, ts: Double, responseId: String? = nil) -> JSONValue {
+            var msg: [String: JSONValue] = [
+                "role": .string(role),
+                "content": .array([.object(["type": .string("text"), "text": .string(text)])]),
+                "timestamp": .number(ts),
+            ]
+            if let rid = responseId { msg["responseId"] = .string(rid) }
+            return .object(["type": .string("message"), "id": .string("entry-\(ts)"),
+                            "message": .object(msg)])
+        }
+
+        // History: one settled turn.
+        state.applyRPC(endFrame(role: "user", text: "first", ts: 100))
+        state.applyRPC(simple("turn_start"))
+        state.applyRPC(delta("ear"))
+        state.applyRPC(endFrame(role: "assistant", text: "earlier", ts: 200, responseId: "resp_1"))
+        state.applyRPC(simple("agent_settled"))
+
+        // LIVE: a second turn starts streaming.
+        state.applyRPC(endFrame(role: "user", text: "second", ts: 300))
+        state.applyRPC(simple("turn_start"))
+        state.applyRPC(delta("streaming "))
+        state.applyRPC(delta("mid-message"))
+
+        // RECONNECT: a get_entries refetch replays the log (the settled first
+        // turn + the user's second message — the in-flight assistant text is
+        // NOT in the log yet). All dedup except the second user row, which
+        // appends BELOW the open bubble — the open bubble must survive intact.
+        state.applyEntries([
+            entry(role: "user", text: "first", ts: 100),
+            entry(role: "assistant", text: "earlier", ts: 200, responseId: "resp_1"),
+        ])
+
+        // The stream continues after the reconnect.
+        state.applyRPC(delta(", and more"))
+        state.applyRPC(delta(" text arrives"))
+
+        // ONE assistant bubble for the second turn, full text, still streaming.
+        let assistantBubbles = state.items.filter {
+            if case .assistant = $0 { return true } else { return false }
+        }
+        XCTAssertEqual(assistantBubbles.count, 2,
+                       "two turns = two assistant bubbles; the live one must not fragment")
+        if case let .assistant(live)? = state.items.last(where: {
+            if case .assistant = $0 { return true } else { return false }
+        }) {
+            XCTAssertEqual(live.text, "streaming mid-message, and more text arrives")
+            XCTAssertTrue(live.streaming, "the live bubble stays open across the refetch")
+        } else {
+            XCTFail("expected an open assistant bubble")
+        }
+    }
 }

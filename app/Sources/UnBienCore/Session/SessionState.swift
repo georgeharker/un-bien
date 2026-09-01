@@ -53,6 +53,14 @@ public struct SessionState: Equatable, Sendable {
     // rpc-envelope reduction state
     private var rpcTurn: String?
     private var rpcTurnSeq = 0
+    /// True while `applyEntries` is folding REPLAYED history (get_entries
+    /// refetch). A replay must never disturb live-stream continuation state:
+    /// replayed rows append BELOW an in-flight streaming bubble, so the walk
+    /// neither CLOSES the open bubble (else the next live delta mints a NEW
+    /// bubble — the "text arrives as sentence-fragment bubbles" corruption
+    /// after a reconnect mid-stream) nor RE-KEYS it (a replayed settled
+    /// message_end must not steal the live bubble's identity via reid).
+    private var isReplayingEntries = false
 
     public init() {}
 
@@ -103,6 +111,9 @@ public struct SessionState: Equatable, Sendable {
     /// Mark any currently-open streaming block (assistant text or reasoning)
     /// as settled and forget it, so the next inserted row starts fresh.
     private mutating func closeOpenAssistant() {
+        // Inert during a replay walk: history folding must not settle the
+        // in-flight live bubble (see isReplayingEntries).
+        if isReplayingEntries { return }
         if let index = openAssistantIndex, case var .assistant(bubble) = items[index] {
             bubble.streaming = false
             items[index] = .assistant(bubble)
@@ -291,9 +302,12 @@ public struct SessionState: Equatable, Sendable {
                 // graphics settle here (the live stream is text deltas only).
                 let bubbleID = "\(Self.identify(message))-a"
                 let images = Self.imagesFromContent(message?["content"])
-                if openAssistantIndex != nil {
+                if openAssistantIndex != nil, !isReplayingEntries {
                     // Finalize WITHOUT clobbering delta-built interleaving; keep
-                    // activeTurnID (turn isn't done until agent_settled).
+                    // activeTurnID (turn isn't done until agent_settled). During a
+                    // replay walk this branch is OFF: a replayed settled message
+                    // is NOT the open live bubble — append it directly instead of
+                    // stealing the live bubble's identity.
                     reidOpenAssistant(to: bubbleID, images: images)
                     closeOpenAssistant()
                 } else {
@@ -344,6 +358,10 @@ public struct SessionState: Equatable, Sendable {
     /// `toolCall` content + `toolResult` entries (keyed by toolCallId). Applied
     /// to the LIVE reducer — not a reset — so it merges idempotently.
     public mutating func applyEntries(_ entries: [JSONValue]) {
+        // Guard the walk: replayed history must not disturb live-stream state
+        // (see isReplayingEntries). Cleared even on early exit via defer.
+        isReplayingEntries = true
+        defer { isReplayingEntries = false }
         for entry in entries {
             switch entry["type"]?.stringValue {
             case "compaction":

@@ -115,8 +115,8 @@ are already paired — refusing to generate a NEW one` (the
 `PairedIdentityMissingError` guard). An `identity.json.bogus-*` file appears
 in the state root. Everything works when you start pi yourself in Terminal.
 
-**Cause — macOS security sessions:** keychain access follows the *security
-session* a process was spawned into, and every tmux pane inherits the tmux
+**Cause — macOS security sessions:** keychain access follows the _security
+session_ a process was spawned into, and every tmux pane inherits the tmux
 **server's** context — not the terminal that opened the window. With
 `launch.backend: "tmux"` the server is created by whichever process first
 needed it: the launcher. If the launcher was started from a detached or
@@ -169,7 +169,7 @@ tmux kill-session -t un-bien    # or tmux kill-server (kills ALL sessions)
 `UNBIEN_RELAY`/`UNBIEN_STATE_DIR` if you use them) in its spawn context. If
 you run it under a service manager, pin them explicitly in the server
 definition's env map instead of relying on ambient shell env — a daemon's
-children inherit the *daemon's* environment, not your shell's.
+children inherit the _daemon's_ environment, not your shell's.
 
 ---
 
