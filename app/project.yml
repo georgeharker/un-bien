@@ -64,7 +64,7 @@ targets:
         # uploads don't prompt for export compliance every time.
         ITSAppUsesNonExemptEncryption: false
         CFBundleShortVersionString: "1.0"
-        CFBundleVersion: "2"
+        CFBundleVersion: "3"
     entitlements:
       path: App/iOS/un-bien.entitlements
       properties:
@@ -116,7 +116,7 @@ targets:
         # primary category (Developer Tools).
         LSApplicationCategoryType: public.app-category.developer-tools
         CFBundleShortVersionString: "1.0"
-        CFBundleVersion: "2"
+        CFBundleVersion: "3"
     entitlements:
       path: App/macOS/un-bien.entitlements
       properties:
