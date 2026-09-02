@@ -26,7 +26,11 @@ export type UnBienConfig = {
    * file into every repo. See `session/local_config.ts`. Absent by default, so
    * omitting it preserves the historical per-cwd-only behaviour exactly.
    */
-  defaults?: { auto_start_relay?: boolean; allow_remote_launch?: boolean }
+  defaults?: {
+    auto_start_relay?: boolean
+    allow_remote_launch?: boolean
+    allow_remote_terminate?: boolean
+  }
   /**
    * Machine-identity storage. `storage` selects the PRIMARY backend for this
    * Pi's long-term Ed25519 seed — `"keychain"` (OS-secured, the default) or

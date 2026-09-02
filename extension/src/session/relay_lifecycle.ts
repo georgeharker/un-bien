@@ -54,7 +54,11 @@ import {
   type EnvelopeMessage,
 } from "./rpc_envelope.js"
 import { envLog } from "./debug_log.js"
-import { effectiveAllowRemoteLaunch, loadLocalConfig } from "./local_config.js"
+import {
+  effectiveAllowRemoteLaunch,
+  effectiveAllowRemoteTerminate,
+  loadLocalConfig,
+} from "./local_config.js"
 import { clearPendingReceivedImagePreviews } from "./received_images.js"
 import type { CommandDeps } from "../commands/deps.js"
 import { _cmdStart } from "../commands/lifecycle.js"
@@ -909,6 +913,13 @@ function _capabilities(): string[] {
   // can't drift. Read the session cwd's config (pi runs in the session cwd).
   if (effectiveAllowRemoteLaunch(loadLocalConfig(process.cwd()))) {
     caps.push("remote_launch")
+  }
+  // `remote_terminate`: app-driven kill of this session (red trash + confirm
+  // on the app side). Default-ON (`!== false`) — paired owners only, and the
+  // root-terminate path exits the host, so it's the same authority as the
+  // user's own Ctrl-C, but remote.
+  if (effectiveAllowRemoteTerminate(loadLocalConfig(process.cwd()))) {
+    caps.push("remote_terminate")
   }
   return caps
 }

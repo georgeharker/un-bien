@@ -100,6 +100,26 @@ export type UbFrame =
     }
   | { type: "get_session_info"; id?: string } // app->ext: session-info PULL request
   | {
+      // app->ext: kill the session THIS room serves. Root room: graceful host
+      // shutdown (pi fires session_shutdown → existing forward → app marks
+      // ended; process exits → last conn drops → relay room_ended → app
+      // purges the row). Child room (in-process subagent): stop serving the
+      // room + tombstone it. Config-gated (`allow_remote_terminate`); the
+      // app confirms + styles the affordance red before sending.
+      type: "terminate"
+      id?: string
+      reason?: string
+    }
+  | {
+      // app->ext(PARENT): permanently close one of MY child rooms — drop its
+      // serving/keeper connection + tombstone it (never re-ensure). Used by
+      // the app's Remove on a done subagent: the room otherwise lingers by
+      // design, so this is what makes removal stick across app restarts.
+      type: "close_child_room"
+      id?: string
+      room_id: string
+    }
+  | {
       // ext->app: session-info PULL response — a session's own state, answered
       // from the extension's tracked data (subagent lifecycle status for now).
       type: "session_info"

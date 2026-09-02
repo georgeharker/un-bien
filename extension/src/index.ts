@@ -31,21 +31,16 @@
  */
 
 import { randomUUID } from "node:crypto"
-import {
-  type ExtensionAPI,
-  ExtensionCommandContext,
-  type ExtensionContext,
-  type ExtensionFactory,
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  ExtensionFactory,
 } from "@earendil-works/pi-coding-agent"
 import type { Ed25519Keypair } from "./pairing/crypto.js"
-import { listPeers, removePeer } from "./pairing/storage.js"
+import { listPeers } from "./pairing/storage.js"
 import type { SelfRevoke } from "./mesh/self_revoke.js"
 import type { MeshTopologySnapshot } from "./mesh/siblings.js"
-import {
-  type ClientMessage,
-  ServerMessage,
-  type ThinkingLevel,
-} from "./protocol/types.js"
+import type { ClientMessage, ThinkingLevel } from "./protocol/types.js"
 import type { RelayClient } from "./transport/relay_client.js"
 import type { PlainPeerChannel } from "./transport/peer_channel.js"
 import {
@@ -70,22 +65,16 @@ import { registerAgentTools } from "./session/tools.js"
 import { formatPeerInventory } from "./session/peer_inventory.js"
 import type { MeshNode } from "./session/mesh_node.js"
 import {
-  wireFromModel,
-  type ActionCtx,
-  type ActionPi,
-} from "./actions/handlers.js"
-import { ensureModelRegistry } from "./actions/registry.js"
-import {
   ensureGlobalDirs,
   LOCAL_SESSION_NAME,
   sessionSockPath,
   skillsDir,
 } from "./session/global_config.js"
 import type { AcquiredLock } from "./session/cwd_lock.js"
-import { installService, unlinkCliBinaries } from "./daemon/install.js"
 import {
   effectiveAutoStartRelay,
   effectiveAllowRemoteLaunch,
+  effectiveAllowRemoteTerminate,
   loadLocalConfig,
   localConfigExists,
   piSessionName,
@@ -1165,6 +1154,72 @@ function _routeUnBienPlaneFrom(
         session_started_at: _sessionStartedAt ?? 0,
       } as EnvelopeMessage["ub"],
     })
+    return
+  }
+
+  if (type === "terminate") {
+    // app->ext: kill THIS session. Root room only — a child room's terminate
+    // is handled by the child-room router in subagent_rooms (never reaches
+    // here; that room's conn dispatches its own ub frames). Gate on local
+    // config; the app confirms + shows red before sending.
+    if (!effectiveAllowRemoteTerminate(loadLocalConfig(process.cwd()))) {
+      envLog("terminate(ub): remote terminate disabled on this machine")
+      return
+    }
+    envLog(
+      `terminate(ub): graceful host shutdown requested${typeof (frame as Record<string, unknown>).reason === "string" ? ` (${String((frame as Record<string, unknown>).reason)})` : ""}`,
+    )
+    _safeNotify("Terminated from the app", "warning")
+    try {
+      // ctx.shutdown() IS the /quit equivalent — pi's own source lists
+      // "extension shutdown()" alongside Ctrl+D / /quit (interactive-mode.js
+      // 3229: same graceful this.shutdown(): drain input, ui.stop() restores
+      // cooked mode + cursor, extension disposal, resume hint, exit). It sits
+      // DIRECTLY on the event ctx (ExtensionContext.shutdown — there is no
+      // ctx.actions sub-object; the first two attempts failed exactly there).
+      //
+      // MID-TURN DEFERRAL: the interactive handler fires immediately only when
+      // idle; otherwise it sets `shutdownRequested` and waits for
+      // `agent_settled` — which never arrives when nothing is running. So
+      // abort() FIRST: aborting a running turn forces the settle that
+      // re-checks the flag; on an idle session abort is a no-op and the
+      // idle fast-path fires directly.
+      //
+      // NO process.exit fallback, ever: a raw exit leaves the TTY in raw
+      // mode (keypresses echo escape codes until `stty sane`). No live ctx =>
+      // log loudly and stay up; the user quits on the machine.
+      const ctx = _liveCtx() as {
+        abort?: () => void
+        shutdown?: () => void
+      } | null
+      if (ctx?.shutdown) {
+        ctx.abort?.()
+        ctx.shutdown()
+      } else {
+        envLog(
+          "terminate(ub): no live ctx — refusing raw exit (would leave the terminal in raw mode); staying up",
+        )
+      }
+    } catch (err) {
+      envLog(
+        `terminate(ub) error: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+    return
+  }
+
+  if (type === "close_child_room") {
+    // app->ext(PARENT): permanently close one of MY child rooms (done-subagent
+    // removal — the room lingers by design otherwise). Tombstone + dispose in
+    // subagent_rooms; the relay fires room_ended when the last conn drops.
+    if (!effectiveAllowRemoteTerminate(loadLocalConfig(process.cwd()))) {
+      envLog("close_child_room(ub): remote terminate disabled on this machine")
+      return
+    }
+    const roomId = (frame as Record<string, unknown>).room_id
+    if (typeof roomId !== "string" || roomId.length === 0) return
+    const closed = _subagentRooms?.closeChildRoom(roomId) ?? false
+    envLog(`close_child_room(ub): room=${roomId.slice(0, 8)} closed=${closed}`)
     return
   }
 

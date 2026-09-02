@@ -21,6 +21,10 @@ import {
   type EnvelopeMessage,
 } from "./session/rpc_envelope.js"
 import { envLog } from "./session/debug_log.js"
+import {
+  effectiveAllowRemoteTerminate,
+  loadLocalConfig,
+} from "./session/local_config.js"
 import type { ServerMessage } from "./protocol/types.js"
 
 /**
@@ -84,12 +88,25 @@ export interface SubagentRoomsController {
   /** Hook: called at a NON-root session_start with the child's pi + ctx. */
   onChildSession(childPi: ExtensionAPI, ctx: ExtensionContext | undefined): void
   dispose(): void
+  /**
+   * app-driven close (`close_child_room` ub frame): permanently close the
+   * child room with this id — tombstone the sid FIRST (in-flight builds
+   * dispose instead of registering), then dispose the room (drops its conn;
+   * last conn at the relay => room_ended, which purges the app row). An
+   * in-process SDK child is NOT force-killed (v1: its run finishes headless;
+   * the panel row stamps terminal on natural completion) — this kills the
+   * CHAT, not the subagent's work. Returns whether a room was found.
+   */
+  closeChildRoom(roomId: string): boolean
 }
 
 /** No-op controller when the feature is off — keeps the index.ts hooks trivial. */
 const NOOP: SubagentRoomsController = {
   onChildSession() {},
   dispose() {},
+  closeChildRoom(): boolean {
+    return false
+  },
 }
 
 /**
@@ -350,10 +367,11 @@ export function initSubagentRooms(
       )
     }
     if (parentRoomId) {
+      const markerRoomId = normalizeChildRoomId(sessionId, existing?.roomId)
       ensureChildRoom(sessionId, {
         relayUrl,
         sessionId,
-        roomId: normalizeChildRoomId(sessionId, existing?.roomId),
+        roomId: markerRoomId,
         parentRoomId,
         parentSessionId,
         startedAt: existing?.startedAt ?? Date.now(),
@@ -361,6 +379,7 @@ export function initSubagentRooms(
         subagentId: id,
         makeHandlers,
         getStatus: () => normalizeStatus(panelBySession.get(sessionId)?.status),
+        onTerminate: () => terminateChildRoom(sessionId, markerRoomId),
       })
     }
   }
@@ -771,11 +790,72 @@ export function initSubagentRooms(
       name,
       makeHandlers,
       getStatus: () => normalizeStatus(panelBySession.get(sessionId)?.status),
+      onTerminate: () => terminateChildRoom(sessionId, roomId),
     })
+  }
+
+  /**
+   * The config gate for app-driven termination, read at call time (config can
+   * change mid-run). Shared by the root dispatcher's `terminate` /
+   * `close_child_room` gates and the child-room `onTerminate` callback.
+   */
+  function allowRemoteTerminate(): boolean {
+    return effectiveAllowRemoteTerminate(loadLocalConfig(process.cwd()))
+  }
+
+  /**
+
+  /**
+   * app-driven close (`close_child_room` ub frame + child-room `terminate`):
+   * permanently close the child room — tombstone the sid FIRST (in-flight
+   * builds dispose instead of registering), then dispose the room (drops its
+   * conn; last conn at the relay => room_ended, which purges the app row). An
+   * in-process SDK child is NOT force-killed (v1: its run finishes headless;
+   * the panel row stamps terminal on natural completion) — this kills the
+   * CHAT, not the subagent's work. `room_id` must be the sid-hash id of
+   * `sid` (normalizeChildRoomId contract); the sid comes from the marker/
+   * ensure path that owns the room. Returns whether the gate allowed it.
+   * Closure-level so the controller method, the root dispatcher's
+   * `close_child_room` (via the controller) and the startChildRoom
+   * `onTerminate` callback share ONE teardown path.
+   */
+  function terminateChildRoom(sessionId: string, roomId: string): boolean {
+    if (!allowRemoteTerminate()) return false
+    const room = children.get(sessionId)
+    if (room && room.roomId !== roomId) {
+      // design 01M1CAW0: never tear down a room keyed by a foreign id.
+      envLog(
+        `terminate refused: room ${roomId.slice(0, 8)} != sid-hash for sid=${sessionId.slice(0, 8)}`,
+      )
+      return false
+    }
+    keeperReleased.add(sessionId)
+    children.delete(sessionId)
+    building.delete(sessionId)
+    pendingAttach.delete(sessionId)
+    pendingParent.delete(sessionId)
+    try {
+      room?.dispose()
+    } catch {
+      /* best-effort — the conn drops with the process either way */
+    }
+    envLog(
+      `close_child_room: room=${roomId.slice(0, 8)} (sid=${sessionId.slice(0, 8)})`,
+    )
+    return true
   }
 
   return {
     onChildSession,
+    closeChildRoom(roomId: string): boolean {
+      // Root-dispatcher path (`close_child_room`): close by ROOM id — the app
+      // knows only the room. The gate lives in the root dispatcher.
+      for (const [sid, room] of children) {
+        if (room.roomId !== roomId) continue
+        return terminateChildRoom(sid, roomId)
+      }
+      return false
+    },
     dispose() {
       disposed = true
       for (const u of unsub) {
@@ -805,6 +885,14 @@ async function startChildRoom(args: {
   makeHandlers: (ctx: ExtensionContext) => RpcCommandHandlers
   getStatus: () => string | undefined
   onClosed: () => void
+  /**
+   * `terminate` ub frame on THIS room (app-driven child-chat kill): runs the
+   * controller-side teardown (tombstone + map cleanup + room dispose) and
+   * returns whether the machine allows remote terminate at all — the room
+   * itself has no config access, and the closure state it needs lives above.
+   * false => refused (log-only).
+   */
+  onTerminate: () => boolean
 }): Promise<ChildRoom> {
   const kp = await getOrCreateEd25519Keypair()
   const relay = new RelayClient(args.relayUrl, kp)
@@ -862,6 +950,20 @@ async function startChildRoom(args: {
             ...(typeof f.id === "string" ? { in_reply_to: f.id } : {}),
           } as EnvelopeMessage["ub"],
         })
+      } else if (f.type === "terminate") {
+        // app-driven kill of a CHILD chat (plan [lifecycle][send]): stop
+        // serving this room + tombstone it. The in-process SDK child is not
+        // force-killed (v1) — its run finishes headless and the panel row
+        // stamps terminal on natural completion. There is NO re-serve: the
+        // tombstone is lifted only by a genuine same-sid session_start
+        // (resume of the same session file), never by reconnect. The actual
+        // teardown runs through the controller's closeChildRoom (closure
+        // state — tombstone + map cleanup + dispose), reached via the
+        // onTerminate callback the room was built with.
+        if (!args.onTerminate()) {
+          envLog("terminate(ub): remote terminate disabled on this machine")
+          return
+        }
       }
     }
   }

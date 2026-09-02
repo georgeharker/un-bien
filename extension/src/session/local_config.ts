@@ -31,6 +31,16 @@ export interface LocalConfig {
    * Advertised as the `remote_launch` capability only when enabled.
    */
   allow_remote_launch?: boolean
+  /**
+   * un-bien remote terminate: when not false, this machine HONORS `terminate`
+   * requests from a paired owner (kill this session / close one of its child
+   * rooms). Default TRUE — termination is bounded (kills a chat the user
+   * already sees, paired-mesh only, app-side confirm dialog; opt-out for the
+   * cautious). Unlike launch there is nothing to spawn: the guard is the
+   * app's red-trash confirmation. Advertised as the `remote_terminate`
+   * capability only when enabled.
+   */
+  allow_remote_terminate?: boolean
   // `workspace?`/`worktree?` were removed (plan/38, reescrito 2026-06-08): the
   // mesh identity is `(cwd, nome)`, with `cwd` subsuming folder + worktree
   // disambiguation. Neither axis is derived anymore, so the config fields are
@@ -114,6 +124,8 @@ function parseLocalConfig(raw: string): LocalConfig | null {
     cfg.auto_start_relay = src["auto_start_relay"]
   if (typeof src["allow_remote_launch"] === "boolean")
     cfg.allow_remote_launch = src["allow_remote_launch"]
+  if (typeof src["allow_remote_terminate"] === "boolean")
+    cfg.allow_remote_terminate = src["allow_remote_terminate"]
   return cfg
 }
 
@@ -138,6 +150,8 @@ function globalLocalDefaults(): LocalConfig {
     cfg.auto_start_relay = d.auto_start_relay
   if (d && typeof d.allow_remote_launch === "boolean")
     cfg.allow_remote_launch = d.allow_remote_launch
+  if (d && typeof d.allow_remote_terminate === "boolean")
+    cfg.allow_remote_terminate = d.allow_remote_terminate
   return cfg
 }
 
@@ -260,4 +274,14 @@ export function effectiveAutoStartRelay(cfg: LocalConfig): boolean {
 /** Remote launch is OFF unless explicitly enabled (authority-sensitive). */
 export function effectiveAllowRemoteLaunch(cfg: LocalConfig): boolean {
   return cfg.allow_remote_launch === true
+}
+
+/**
+ * Remote terminate defaults ON (unlike launch): it kills a session the user
+ * ALREADY sees and owns in the app — the same authority as `cancel` — and the
+ * app confirms destructively before sending. Set false to refuse. Advertised
+ * as the `remote_terminate` capability only when enabled.
+ */
+export function effectiveAllowRemoteTerminate(cfg: LocalConfig): boolean {
+  return cfg.allow_remote_terminate !== false
 }
