@@ -63,8 +63,8 @@ targets:
         # CryptoKit (Ed25519) + TLS only — standard/exempt crypto, declared so
         # uploads don't prompt for export compliance every time.
         ITSAppUsesNonExemptEncryption: false
-        CFBundleShortVersionString: "1.0"
-        CFBundleVersion: "3"
+        CFBundleShortVersionString: "1.1"
+        CFBundleVersion: "4"
     entitlements:
       path: App/iOS/un-bien.entitlements
       properties:
@@ -115,8 +115,8 @@ targets:
         # the archive without the category UTI. Matches the ASC record's
         # primary category (Developer Tools).
         LSApplicationCategoryType: public.app-category.developer-tools
-        CFBundleShortVersionString: "1.0"
-        CFBundleVersion: "3"
+        CFBundleShortVersionString: "1.1"
+        CFBundleVersion: "4"
     entitlements:
       path: App/macOS/un-bien.entitlements
       properties:
