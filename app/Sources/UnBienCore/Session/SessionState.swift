@@ -20,14 +20,26 @@ public struct SessionState: Equatable, Sendable {
     /// or `nil` when idle. This is the `target_id` a `cancel` should carry.
     public private(set) var activeTurnID: String?
 
-    /// LIVE-arrival version for transcript bottom-following (scroll design):
-    /// bumped by every LIVE reducer mutation (applyRPC item changes,
-    /// appendNotice) and NEVER by `applyEntries` (get_entries backfill) or
-    /// dedup no-ops. The view follows new content to the bottom ONLY on a
-    /// change here — so replayed/restored history can never yank a reader,
-    /// while streamed deltas, new rows, and tool updates do follow (when the
-    /// reader is at the bottom). Int-based: `.onChange(of:)` needs Equatable.
+    /// VISIBLE-arrival version for transcript bottom-following (scroll
+    /// design): bumped ONLY when a reader-visible mutation happened — a row
+    /// was inserted (appendNotice, replay included), streaming text grew, a
+    /// tool card was opened/filled, or a bubble settled. NOT bumped for
+    /// invisible arrivals: thinking deltas while thinking is hidden
+    /// (`hideReasoning`), toolcall lifecycle events, toolResult `message_end`s
+    /// (no row — the card fills via its own frame), dedup no-op replays, and
+    /// idempotent card re-opens. "The turn is running" is not "something was
+    /// output": phantom bumps during a quiet thinking phase would pin a
+    /// bottom reader — each phantom follow re-pins the bottom sentinel inside
+    /// the 150 ms unpin debounce (the "…" lock). The anti-yank guarantee for
+    /// replayed history is the VIEW's gates (atBottom pin + restore-wait),
+    /// not this counter. Int-based: `.onChange(of:)` needs Equatable.
     public private(set) var liveArrivals: Int = 0
+
+    /// Thinking-visibility pref (app-threaded; see EnvelopeReducer
+    /// .setHideReasoning): when true, reasoning deltas still fold (the pref
+    /// can flip back mid-session) but do NOT bump `liveArrivals` — a hidden
+    /// row is not new output and must not pin the reader to the bottom.
+    public var hideReasoning: Bool = false
 
     /// Set once the paired pi session has shut down (`rpc:session_shutdown`).
     /// The UI shows a "session ended" banner and refuses further input.
@@ -102,10 +114,12 @@ public struct SessionState: Equatable, Sendable {
 
     /// Append a non-chunk row. Closes the open streaming bubble first, so the
     /// next chunk starts a new bubble AFTER this row (mid-turn interleaving).
-    private mutating func append(_ item: TranscriptItem) {
-        guard appendedIDs.insert(item.id).inserted else { return }
+    /// Returns false on a dedup no-op (id already present — replayed frame).
+    private mutating func append(_ item: TranscriptItem) -> Bool {
+        guard appendedIDs.insert(item.id).inserted else { return false }
         closeOpenAssistant()
         items.append(item)
+        return true
     }
 
     /// Mark any currently-open streaming block (assistant text or reasoning)
@@ -154,13 +168,18 @@ public struct SessionState: Equatable, Sendable {
         activeTurnID = inReplyTo
     }
 
-    private mutating func openToolCard(toolCallID: String, tool: String, args: [String: JSONValue]) {
+    /// Open (or idempotently re-open) a tool card. Returns true only when a
+    /// NEW card was inserted — a re-open of a known card is a re-sync no-op
+    /// and must not count as a visible arrival.
+    @discardableResult
+    private mutating func openToolCard(toolCallID: String, tool: String, args: [String: JSONValue]) -> Bool {
         if let index = toolIndex[toolCallID] { // idempotent re-open (re-sync)
             items[index] = .tool(ToolCard(toolCallID: toolCallID, tool: tool, args: args))
-        } else {
-            append(.tool(ToolCard(toolCallID: toolCallID, tool: tool, args: args)))
-            toolIndex[toolCallID] = items.count - 1
+            return false
         }
+        let inserted = append(.tool(ToolCard(toolCallID: toolCallID, tool: tool, args: args)))
+        toolIndex[toolCallID] = items.count - 1
+        return inserted
     }
 
     /// Attach pre-rendered Edit-diff `hunks` (from the envelope `aux` sidecar) to
@@ -171,9 +190,23 @@ public struct SessionState: Equatable, Sendable {
         items[index] = .tool(card)
     }
 
+    /// Write a partial result onto an open card. Returns true only when a
+    /// visible write happened (card exists AND a partial arrived).
+    @discardableResult
+    private mutating func updateToolCard(toolCallID: String, partial: JSONValue?) -> Bool {
+        guard let index = toolIndex[toolCallID], case var .tool(card) = items[index] else { return false }
+        guard let partial else { return false }
+        card.result = partial
+        items[index] = .tool(card)
+        return true
+    }
+
+    /// Fill an open card with its settled result. Returns true only when the
+    /// card exists (an unknown-id fill is a replay straggler, not output).
+    @discardableResult
     private mutating func fillToolCard(toolCallID: String, result: JSONValue?, error: String?,
-                                       images: [WireImage] = []) {
-        guard let index = toolIndex[toolCallID], case var .tool(card) = items[index] else { return }
+                                       images: [WireImage] = []) -> Bool {
+        guard let index = toolIndex[toolCallID], case var .tool(card) = items[index] else { return false }
         card.result = result
         card.error = error
         card.state = error == nil ? .ok : .failed
@@ -184,12 +217,14 @@ public struct SessionState: Equatable, Sendable {
         card.output = ToolOutputClassifier.classify(tool: card.tool, result: result,
                                                     args: .object(card.args))
         items[index] = .tool(card)
+        return true
     }
 
-    private mutating func appendCompaction(summary: String, tokensBefore: Int) {
+    @discardableResult
+    private mutating func appendCompaction(summary: String, tokensBefore: Int) -> Bool {
         compactionSeq += 1
-        append(.compaction(CompactionMarker(id: "\(compactionSeq)", summary: summary,
-                                            tokensBefore: tokensBefore)))
+        return append(.compaction(CompactionMarker(id: "\(compactionSeq)", summary: summary,
+                                                   tokensBefore: tokensBefore)))
     }
 
     // MARK: - RPC (rpc-envelope) reduction
@@ -216,31 +251,33 @@ public struct SessionState: Equatable, Sendable {
         case "turn_end":
             closeOpenAssistant()
         case "message_end":
-            applyRPCMessageEnd(frame["message"])
-            liveArrivals += 1
+            if applyRPCMessageEnd(frame["message"]) { liveArrivals += 1 }
         case "message_update":
-            applyRPCDelta(frame["assistantMessageEvent"])
-            liveArrivals += 1
+            if applyRPCDelta(frame["assistantMessageEvent"]) { liveArrivals += 1 }
         case "tool_execution_start":
-            openToolCard(toolCallID: frame["toolCallId"]?.stringValue ?? "",
-                         tool: frame["toolName"]?.stringValue ?? "",
-                         args: frame["args"]?.objectValue ?? [:])
-            liveArrivals += 1
+            if openToolCard(toolCallID: frame["toolCallId"]?.stringValue ?? "",
+                           tool: frame["toolName"]?.stringValue ?? "",
+                           args: frame["args"]?.objectValue ?? [:]) {
+                liveArrivals += 1
+            }
         case "tool_execution_update":
-            updateToolCard(toolCallID: frame["toolCallId"]?.stringValue ?? "",
-                           partial: frame["partialResult"])
-            liveArrivals += 1
+            if updateToolCard(toolCallID: frame["toolCallId"]?.stringValue ?? "",
+                              partial: frame["partialResult"]) {
+                liveArrivals += 1
+            }
         case "tool_execution_end":
             let isError = frame["isError"]?.boolValue ?? false
-            fillToolCard(toolCallID: frame["toolCallId"]?.stringValue ?? "",
-                         result: frame["result"], error: isError ? "error" : nil,
-                         images: Self.imagesFromToolResult(frame["result"]))
-            liveArrivals += 1
+            if fillToolCard(toolCallID: frame["toolCallId"]?.stringValue ?? "",
+                           result: frame["result"], error: isError ? "error" : nil,
+                           images: Self.imagesFromToolResult(frame["result"])) {
+                liveArrivals += 1
+            }
         case "compaction_end":
             if let result = frame["result"], result != .null {
-                appendCompaction(summary: result["summary"]?.stringValue ?? "",
-                                 tokensBefore: result["tokensBefore"]?.intValue ?? 0)
-                liveArrivals += 1
+                if appendCompaction(summary: result["summary"]?.stringValue ?? "",
+                                    tokensBefore: result["tokensBefore"]?.intValue ?? 0) {
+                    liveArrivals += 1
+                }
             }
         case "agent_settled":
             if let turn = rpcTurn, activeTurnID == turn { activeTurnID = nil }
@@ -264,37 +301,42 @@ public struct SessionState: Equatable, Sendable {
             noticeSeq += 1
             let action = frame["action"]?.stringValue ?? "action"
             let err = frame["error"]?.stringValue ?? "failed"
-            append(.notice(NoticeItem(id: "act\(noticeSeq)", code: "action_error",
-                                      message: "\(action) failed: \(err)")))
-            liveArrivals += 1
+            if append(.notice(NoticeItem(id: "act\(noticeSeq)", code: "action_error",
+                                         message: "\(action) failed: \(err)"))) {
+                liveArrivals += 1
+            }
         case "error":
             // Enveloped error reply (e.g. malformed models.json on list_models):
             // same notice surface as a provider error.
             noticeSeq += 1
-            append(.notice(NoticeItem(id: "n\(noticeSeq)", code: frame["code"]?.stringValue ?? "error",
-                                      message: frame["message"]?.stringValue ?? "")))
-            liveArrivals += 1
+            if append(.notice(NoticeItem(id: "n\(noticeSeq)", code: frame["code"]?.stringValue ?? "error",
+                                         message: frame["message"]?.stringValue ?? ""))) {
+                liveArrivals += 1
+            }
         default:
             break
         }
     }
 
-    private mutating func applyRPCMessageEnd(_ message: JSONValue?) {
-        guard let role = message?["role"]?.stringValue else { return }
+    /// Fold one settled message. Returns true only when a VISIBLE mutation
+    /// happened (row inserted, or the streaming bubble settled/re-keyed) —
+    /// drives the liveArrivals bump. toolResult / display:false custom → false.
+    private mutating func applyRPCMessageEnd(_ message: JSONValue?) -> Bool {
+        guard let role = message?["role"]?.stringValue else { return false }
         let turn = rpcTurn ?? "t0"
         switch role {
         case "user":
             // Stable, message-intrinsic id (identify): a later session_sync replay
             // of the same user message resolves to the same id and dedups via
             // appendedIDs. Pi messages carry no id — see design 01M15FMQ.
-            append(.user(UserBubble(id: Self.identify(message),
-                                    text: message?["content"]?.joinedText() ?? "",
-                                    images: Self.imagesFromContent(message?["content"]))))
+            return append(.user(UserBubble(id: Self.identify(message),
+                                           text: message?["content"]?.joinedText() ?? "",
+                                           images: Self.imagesFromContent(message?["content"]))))
         case "assistant":
             if message?["stopReason"]?.stringValue == "error" {
                 // Forward a failed turn as a notice (mirrors the fork's `error`).
-                append(.notice(NoticeItem(id: "err\(Self.identify(message))", code: "provider_error",
-                                          message: message?["errorMessage"]?.stringValue ?? "Provider error")))
+                return append(.notice(NoticeItem(id: "err\(Self.identify(message))", code: "provider_error",
+                                                 message: message?["errorMessage"]?.stringValue ?? "Provider error")))
             } else {
                 // Re-key the delta-built bubble to its stable {identify}-a id at
                 // settle so a session_sync replay of the same message dedups; on
@@ -310,14 +352,14 @@ public struct SessionState: Equatable, Sendable {
                     // stealing the live bubble's identity.
                     reidOpenAssistant(to: bubbleID, images: images)
                     closeOpenAssistant()
+                    return true // settle is visible (streaming→false, images attach)
                 } else {
                     let text = message?["content"]?.joinedText() ?? ""
-                    if !text.isEmpty || !images.isEmpty {
-                        append(.assistant(AssistantBubble(id: bubbleID, inReplyTo: turn,
-                                                          text: text, streaming: false,
-                                                          usage: nil, images: images,
-                                                          replayStable: true)))
-                    }
+                    guard !text.isEmpty || !images.isEmpty else { return false }
+                    return append(.assistant(AssistantBubble(id: bubbleID, inReplyTo: turn,
+                                                             text: text, streaming: false,
+                                                             usage: nil, images: images,
+                                                             replayStable: true)))
                 }
             }
         case "custom":
@@ -328,25 +370,34 @@ public struct SessionState: Equatable, Sendable {
             // live sessions AND the fixture-replayed demo ("Mesh name:
             // tmp.XXXXXX" et al). Absent/true still renders (other
             // extensions' display-intended custom messages).
-            if message?["display"]?.boolValue == false { break }
+            if message?["display"]?.boolValue == false { return false }
             noticeSeq += 1
-            append(.notice(NoticeItem(id: "custom\(noticeSeq)", code: "custom",
-                                      message: message?["content"]?.joinedText() ?? "")))
+            return append(.notice(NoticeItem(id: "custom\(noticeSeq)", code: "custom",
+                                             message: message?["content"]?.joinedText() ?? "")))
         default:
-            break  // toolResult is rendered via tool_execution_*, not as a row
+            return false  // toolResult is rendered via tool_execution_*, not as a row
         }
     }
 
-    private mutating func applyRPCDelta(_ event: JSONValue?) {
-        guard let type = event?["type"]?.stringValue else { return }
+    /// Fold one streaming delta. Returns true only when a VISIBLE mutation
+    /// happened — text growth always; a reasoning row only when reasoning is
+    /// shown (`hideReasoning`); toolcall_* / *_start / *_end never (no row).
+    /// Drives the liveArrivals bump: a hidden thinking stream is NOT output,
+    /// else a quiet thinking phase pins a bottom reader (the "…" lock).
+    private mutating func applyRPCDelta(_ event: JSONValue?) -> Bool {
+        guard let type = event?["type"]?.stringValue else { return false }
         let turn = rpcTurn ?? "t0"
         switch type {
         case "text_delta":
             appendChunk(inReplyTo: turn, delta: event?["delta"]?.stringValue ?? "")
+            return true
         case "thinking_delta":
+            // ALWAYS fold (the pref can flip back mid-session) — visibility only
+            // decides whether it counts as an arrival.
             appendReasoning(inReplyTo: turn, delta: event?["delta"]?.stringValue ?? "")
+            return !hideReasoning
         default:
-            break  // *_start/_end + toolcall_*: bubbles open lazily; cards via tool_execution_*
+            return false  // *_start/_end + toolcall_*: bubbles open lazily; cards via tool_execution_*
         }
     }
 
@@ -501,13 +552,13 @@ public extension SessionState {
     static func demo(turns: Int = 140) -> SessionState {
         var state = SessionState()
         for turn in 0..<turns {
-            state.append(.user(UserBubble(id: "u\(turn)",
+            _ = state.append(.user(UserBubble(id: "u\(turn)",
                 text: "Question \(turn): explain the thing in some detail.")))
-            state.append(.assistant(AssistantBubble(
+            _ = state.append(.assistant(AssistantBubble(
                 id: "a\(turn)", inReplyTo: "u\(turn)",
                 text: "Answer \(turn): some **markdown** with a list\n\n- one\n- two\n\nand code:\n\n```swift\nlet value = \(turn)\nprint(value)\n```\n",
                 streaming: false)))
-            state.append(.tool(ToolCard(
+            _ = state.append(.tool(ToolCard(
                 toolCallID: "t\(turn)", tool: "bash",
                 args: ["command": .string("echo \(turn)")],
                 result: .string("output line \(turn)"), state: .ok)))

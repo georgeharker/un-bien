@@ -206,6 +206,7 @@ extension AppModel {
         // fold via the reducer as a frame — its inner `.type` drives
         // applyRPC, exactly like an rpc-plane frame.
         var reducer = envelopeReducers[key] ?? EnvelopeReducer()
+        reducer.setHideReasoning(!showThinking)
         reducer.apply(EnvelopeMessage(rpc: ub))
         envelopeReducers[key] = reducer
         transcripts[key] = reducer.session
@@ -267,6 +268,7 @@ extension AppModel {
     private func handleEnvelopeContent(env: EnvelopeMessage, key: String,
                                        envelope: RoutedEnvelope, relayID: UUID) {
         var reducer = envelopeReducers[key] ?? EnvelopeReducer()
+        reducer.setHideReasoning(!showThinking)
         reducer.apply(env)
         envelopeReducers[key] = reducer
         transcripts[key] = reducer.session
@@ -422,6 +424,7 @@ extension AppModel {
     func appendSessionNotice(key: String, code: String, message: String) {
         guard !message.isEmpty else { return }
         var reducer = envelopeReducers[key] ?? EnvelopeReducer()
+        reducer.setHideReasoning(!showThinking)
         reducer.appendNotice(code: code, message: message)
         envelopeReducers[key] = reducer
         transcripts[key] = reducer.session

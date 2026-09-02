@@ -86,6 +86,16 @@ public struct EnvelopeReducer {
         session.appendNotice(code: code, message: message)
     }
 
+    /// Thread the app's thinking-visibility pref into the transcript reducer:
+    /// the follow counter (liveArrivals) must only count arrivals the reader
+    /// can SEE — a hidden reasoning delta is not "new output" and must not
+    /// pin a bottom reader during a quiet thinking phase (the "…" lock).
+    /// Re-applied by the app at every fold, so a mid-session pref change takes
+    /// effect on the next frame.
+    public mutating func setHideReasoning(_ hide: Bool) {
+        session.hideReasoning = hide
+    }
+
     // MARK: - rpc plane
 
     private mutating func applyRpc(_ rpc: JSONValue, aux: JSONValue? = nil) {

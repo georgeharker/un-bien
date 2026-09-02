@@ -57,6 +57,84 @@ final class SessionStateTests: XCTestCase {
         XCTAssertEqual(state.items[settledIdx].id, "assistant:rresp_1-a")
     }
 
+    // liveArrivals (scroll follow counter) must count only VISIBLE mutations —
+    // "the turn is running" is not "something was output". A quiet thinking
+    // phase streams thinking_delta frames; when thinking is hidden they must
+    // bump NOTHING, else each phantom follow re-pins the bottom sentinel inside
+    // the 150 ms unpin debounce and the reader is LOCKED at the bottom for the
+    // whole "…" phase (user report 2026-09-17).
+    func testLiveArrivalsCountsOnlyVisibleMutations() {
+        var state = SessionState()
+
+        // turn_start is liveness, not output.
+        state.applyRPC(.object(["type": .string("turn_start")]))
+        XCTAssertEqual(state.liveArrivals, 0)
+
+        // Hidden thinking delta: still folds (the pref can flip back) but is NOT
+        // counted.
+        state.hideReasoning = true
+        state.applyRPC(.object(["type": .string("message_update"),
+                                "assistantMessageEvent": .object(["type": .string("thinking_delta"),
+                                                                  "delta": .string("hm")])]))
+        XCTAssertEqual(state.liveArrivals, 0)
+        guard let last = state.items.last, case .reasoning = last else {
+            return XCTFail("hidden reasoning row must still fold")
+        }
+
+        // Visible thinking delta: counted.
+        state.hideReasoning = false
+        state.applyRPC(.object(["type": .string("message_update"),
+                                "assistantMessageEvent": .object(["type": .string("thinking_delta"),
+                                                                  "delta": .string("hm2")])]))
+        XCTAssertEqual(state.liveArrivals, 1)
+
+        // Text delta: counted.
+        state.applyRPC(.object(["type": .string("message_update"),
+                                "assistantMessageEvent": .object(["type": .string("text_delta"),
+                                                                  "delta": .string("hi")])]))
+        XCTAssertEqual(state.liveArrivals, 2)
+
+        // toolcall_* lifecycle event: no row, no count.
+        state.applyRPC(.object(["type": .string("message_update"),
+                                "assistantMessageEvent": .object(["type": .string("toolcall_start"),
+                                                                  "id": .string("tc9"),
+                                                                  "toolName": .string("bash")])]))
+        XCTAssertEqual(state.liveArrivals, 2)
+
+        // toolResult message_end: no row (cards fill via tool_execution_*) — no count.
+        state.applyRPC(.object(["type": .string("message_end"),
+                                "message": .object(["role": .string("toolResult"),
+                                                    "toolCallId": .string("tc9"),
+                                                    "content": .array([])])]))
+        XCTAssertEqual(state.liveArrivals, 2)
+
+        // User row inserted: counted. Replayed (dedup no-op) user message: NOT.
+        let user: JSONValue = .object(["type": .string("message_end"),
+                                       "message": .object(["role": .string("user"), "timestamp": .number(1),
+                                                           "content": .string("hello")])])
+        state.applyRPC(user)
+        XCTAssertEqual(state.liveArrivals, 3)
+        state.applyRPC(user)
+        XCTAssertEqual(state.liveArrivals, 3)
+
+        // Tool card: NEW open counted; unknown-id end NOT (replay straggler);
+        // known-id end counted; idempotent re-open NOT; partial-less update NOT.
+        state.applyRPC(.object(["type": .string("tool_execution_start"), "toolCallId": .string("tc1"),
+                                "toolName": .string("bash"), "args": .object([:])]))
+        XCTAssertEqual(state.liveArrivals, 4)
+        state.applyRPC(.object(["type": .string("tool_execution_end"), "toolCallId": .string("tc-x"),
+                                "result": .string("ok")]))
+        XCTAssertEqual(state.liveArrivals, 4)
+        state.applyRPC(.object(["type": .string("tool_execution_end"), "toolCallId": .string("tc1"),
+                                "result": .string("ok")]))
+        XCTAssertEqual(state.liveArrivals, 5)
+        state.applyRPC(.object(["type": .string("tool_execution_start"), "toolCallId": .string("tc1"),
+                                "toolName": .string("bash"), "args": .object([:])]))
+        XCTAssertEqual(state.liveArrivals, 5)
+        state.applyRPC(.object(["type": .string("tool_execution_update"), "toolCallId": .string("tc1")]))
+        XCTAssertEqual(state.liveArrivals, 5)
+    }
+
     // The capture walk (design 01M1B9F6): given the bottom-most visible row's
     // index, anchor to the nearest replay-stable row at-or-above.
     func testStableAnchorAtOrAboveWalksToNearestStableRow() {
