@@ -11,6 +11,13 @@ public final class AppModel: ObservableObject {
     @Published public var syncsToICloud: Bool
     @Published public var relayHealth: [UUID: RelayHealth] = [:]
     @Published public var sessions: [String: LiveSession] = [:]
+    /// Manually-dismissed ENDED chats (plan 01M18X3B): keyed by LiveSession.id,
+    /// value kept so roomEnded can still resolve the ROUTING tuple after the
+    /// row left `sessions`. A pin hides the row; the relay's lingering room
+    /// snapshot or a re-announce does NOT re-add it — only PROOF OF LIFE does
+    /// (a fresh instance's `ub hello`: the resume flow) or the room genuinely
+    /// ending (roomEnded). Internal: AppModel+Inbound consults it.
+    @Published public var dismissedSessions: [String: LiveSession] = [:]
     @Published public var transcripts: [String: SessionState] = [:]
     /// Per-session rpc-envelope reducers, keyed like `transcripts`. Populated
     /// when a fork speaks the `{rpc|evt}` route; each fold updates the matching
@@ -288,6 +295,70 @@ public final class AppModel: ObservableObject {
         transcripts[session.id]?.ended ?? false
     }
 
+    /// Whether a row may be REMOVED from the list (plan 01M18X3B). Two classes:
+    /// a session the app watched END (`session_shutdown` → ended banner), and a
+    /// subagent whose PULLED lifecycle status is terminal (done/failed — design
+    /// 01M18PCM). A done subagent's room LINGERS at the relay by design (the
+    /// keeper pattern) and never delivers session_shutdown to the app, so the
+    /// ended flag alone would make done subagents permanently un-removable.
+    /// Anything else (live root, running subagent, status not yet pulled) stays
+    /// put — a live chat's destructive action is Terminate (own plan item),
+    /// never a local hide.
+    public func isRemovable(_ session: LiveSession) -> Bool {
+        hasEnded(session) || session.isTerminalSubagent
+    }
+
+    /// Manually dismiss a chat that already ENDED on the machine (plan
+    /// 01M18X3B): client-side ONLY — no wire command, nothing sent, on-disk pi
+    /// history untouched. Drops the row from `sessions` and pins it in
+    /// `dismissedSessions` so the relay's lingering room snapshot doesn't
+    /// immediately re-add it. The in-memory transcript is KEPT: if the session
+    /// proves live again (a fresh instance's `ub hello`), the row resurrects
+    /// with its history and the ended banner retracts.
+    /// Manually dismiss a chat that already ENDED on the machine (plan
+    /// 01M18X3B): client-side ONLY — no wire command, nothing sent, on-disk pi
+    /// history untouched. Drops the row from `sessions` and pins it in
+    /// `dismissedSessions` so the relay's lingering room snapshot doesn't
+    /// immediately re-add it. The in-memory transcript is KEPT: if the session
+    /// proves live again (a fresh instance's `ub hello`), the row resurrects
+    /// with its history and the ended banner retracts.
+    public func removeEndedSession(_ session: LiveSession) {
+        guard !isDemo(session) else { return }  // demo fixtures never persist pins
+        guard isRemovable(session) else { return }  // a live row gets Terminate, never Remove
+        sessions[session.id] = nil
+        dismissedSessions[session.id] = session
+        // Room-kill best-effort (plan [lifecycle][send]): a done subagent's
+        // room LINGERS at the relay by design (keeper), so without this the
+        // row resurrects on every app restart. Ask the PARENT to close the
+        // child room — the relay's room_ended then purges + un-pins us.
+        // Fire-and-forget: the local pin is optimistic; room_ended confirms.
+        if session.isSubagent {
+            sendCloseChildRoom(for: session)
+        }
+        forgetSession(key: session.id)
+        log.notice("removed ended chat key=\(String(session.id.suffix(12)), privacy: .public)")
+    }
+
+    /// `close_child_room` to the PARENT of a (done) subagent — the only
+    /// holder of a finished child's room. Best-effort: no parent row / parent
+    /// lacking the cap => local pin only (the interim-resurrection path).
+    private func sendCloseChildRoom(for child: LiveSession) {
+        guard let connection = connections[child.relayID],
+              let parent = sessions.values.first(where: {
+                  $0.sessionID == child.parentSessionID
+                      && $0.relayID == child.relayID
+                      && $0.peerEPK == child.peerEPK
+              }) else { return }
+        let peerEPK = parent.peerEPK
+        let parentRoomID = parent.roomID
+        let childRoomID = child.roomID
+        let rid = UUID().uuidString
+        Task {
+            try? await connection.send(.closeChildRoom(id: rid, roomID: childRoomID),
+                                       toPeer: peerEPK, room: parentRoomID)
+        }
+    }
+
     public func sendMessage(_ text: String, to session: LiveSession) async {
         guard !isDemo(session) else { return }  // read-only fixture playback
         guard !hasEnded(session) else { return }
@@ -303,6 +374,27 @@ public final class AppModel: ObservableObject {
         try? await connection.send(
             .userMessage(id: UUID().uuidString, text: text, images: nil, streamingBehavior: "steer"),
             toPeer: session.peerEPK, room: session.roomID)
+    }
+
+    /// App-driven terminate (plan [lifecycle][send]): kill a LIVE chat —
+    /// red trash + confirm on the Home row. The fork shuts its host down
+    /// gracefully (pi session_shutdown → ended banner), the process exits,
+    /// the relay fires room_ended, and the existing roomEnded path purges
+    /// the row. Gated on the fork's advertised `remote_terminate` cap
+    /// (config `allow_remote_terminate`, default on) — older forks simply
+    /// never show the affordance.
+    public func terminate(_ session: LiveSession) {
+        guard !isDemo(session) else { return }
+        guard supports("remote_terminate", session: session) else { return }
+        guard let connection = connections[session.relayID] else { return }
+        let peerEPK = session.peerEPK
+        let roomID = session.roomID
+        let rid = UUID().uuidString
+        Task {
+            try? await connection.send(.terminate(id: rid, reason: "app"),
+                                       toPeer: peerEPK, room: roomID)
+        }
+        log.notice("terminate requested key=\(String(session.id.suffix(12)), privacy: .public)")
     }
 
     /// `target_id` of the turn currently streaming for a session, if any.

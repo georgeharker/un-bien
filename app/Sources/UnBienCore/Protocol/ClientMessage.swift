@@ -41,7 +41,22 @@ public enum ClientMessage: Equatable, Sendable {
     /// Native pi `clear_queue` rpc — drop the steering/follow-up queue. Used by
     /// the queued-chip X: pi has no per-item delete, so the app clears the whole
     /// queue then reissues the survivors (design: delete-queued = clear+reissue).
+    /// Native pi `clear_queue` rpc — drop the steering/follow-up queue. Used by
+    /// the queued-chip X: pi has no per-item delete, so the app clears the whole
+    /// queue then reissues the survivors (design: delete-queued = clear+reissue).
     case clearQueue(id: String)
+    /// un-bien app-driven terminate (plan [lifecycle][send]): kill the session
+    /// THIS room serves. Root room: graceful host shutdown (pi fires
+    /// session_shutdown → app marks ended → process exits → relay
+    /// room_ended → row purges). Child room: stop serving + tombstone.
+    /// Config-gated on the fork (`allow_remote_terminate`); the app confirms
+    /// (red trash + dialog) and gates on the `remote_terminate` cap.
+    case terminate(id: String, reason: String?)
+    /// un-bien close_child_room: ask a PARENT session to permanently close
+    /// one of its child rooms (the app's Remove on a done subagent — the room
+    /// otherwise lingers at the relay by design). Fork tombstones + disposes;
+    /// room_ended purges the app row.
+    case closeChildRoom(id: String, roomID: String)
 
     public enum ToolDecision: String, Codable, Sendable {
         case allow, deny
@@ -65,6 +80,8 @@ public enum ClientMessage: Equatable, Sendable {
         case .sessionLaunch: return "session_launch"
         case .presenceStatus: return "presence_status"
         case .getSessionInfo: return "get_session_info"
+        case .terminate: return "terminate"
+        case .closeChildRoom: return "close_child_room"
         case .extensionUiResponse: return "extension_ui_response"
         case .clearQueue: return "clear_queue"
         }

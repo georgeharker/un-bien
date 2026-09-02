@@ -30,6 +30,8 @@ extension ClientMessage: Codable {
         static let cancelled = CodingKeys("cancelled")
         static let ask = CodingKeys("ask")
         static let since = CodingKeys("since")
+        static let roomID = CodingKeys("room_id")
+        static let reason = CodingKeys("reason")
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -84,6 +86,13 @@ extension ClientMessage: Codable {
             try container.encode(id, forKey: .id)
         case let .clearQueue(id):
             try container.encode(id, forKey: .id)
+        case let .terminate(id, reason):
+            try container.encode(id, forKey: .id)
+            try container.encodeIfPresent(reason, forKey: .reason)
+            try container.encode(id, forKey: .id)
+        case let .closeChildRoom(id, roomID):
+            try container.encode(id, forKey: .id)
+            try container.encode(roomID, forKey: .roomID)
         case let .extensionUiResponse(response):
             try container.encode(response.id, forKey: .id)
             try container.encodeIfPresent(response.value, forKey: .value)
@@ -144,6 +153,13 @@ extension ClientMessage: Codable {
             self = .listModels(id: try string(.id))
         case "clear_queue":
             self = .clearQueue(id: try string(.id))
+        case "terminate":
+            self = .terminate(
+                id: try string(.id),
+                reason: try container.decodeIfPresent(String.self, forKey: .reason)
+            )
+        case "close_child_room":
+            self = .closeChildRoom(id: try string(.id), roomID: try string(.roomID))
         case "extension_ui_response":
             self = .extensionUiResponse(ExtensionUiResponse(
                 id: try string(.id),

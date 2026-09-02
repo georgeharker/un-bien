@@ -15,6 +15,16 @@ struct HomeView: View {
     /// Parents whose subagent children are folded away in the Home list. A parent
     /// is EXPANDED unless listed here, so children show by default.
     @State private var collapsed: Set<String> = []
+    /// The session row currently under the pointer (macOS/iPad-trackpad
+    /// hover), driving the Mail-pattern trailing trash on ENDED rows. See
+    /// `sessionRow` — the guarded clear avoids the enter-B/exit-A race when
+    /// moving the pointer directly between rows.
+    @State private var hoverSessionID: String?
+    /// Terminate confirm (plan [lifecycle][send]): the LIVE row whose RED
+    /// trash was tapped, pending confirmation. The dialog guards the kill —
+    /// a root-terminate exits the host process (the user's own Ctrl-C,
+    /// fired remotely).
+    @State private var killTarget: LiveSession?
     /// Nav stack path, so a subagents-panel tap (from a sheet over a pushed
     /// TranscriptView) can push the child session onto THIS stack.
     @State private var path = NavigationPath()
@@ -171,6 +181,27 @@ struct HomeView: View {
         // Drag-to-refresh: re-issue rooms_check on every connected relay so a
         // session whose room_announced push was missed still surfaces.
         .refreshable { await model.refreshRooms() }
+        // Terminate confirm (plan [lifecycle][send]): ONE dialog at the List
+        // level, keyed on killTarget — a per-row dialog inside List rows
+        // fights the row gestures and duplicates N times. Presented by the
+        // red hover trash (macOS), "End Chat…" (context menu, both
+        // platforms), and the iOS swipe action on live rows.
+        .confirmationDialog(
+            killTarget.map { "End “\($0.name)”?" } ?? "",
+            isPresented: Binding(
+                get: { killTarget != nil },
+                set: { if !$0 { killTarget = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("End Chat", role: .destructive) {
+                if let target = killTarget { model.terminate(target) }
+                killTarget = nil
+            }
+            Button("Cancel", role: .cancel) { killTarget = nil }
+        } message: {
+            Text("This sends quit to the session on the machine. Its process exits and the chat leaves this list.")
+        }
     }
 
     /// Probe each paired machine's presence daemon until it answers, regardless
@@ -217,6 +248,12 @@ struct HomeView: View {
                         .imageScale(.small)
                         .foregroundStyle(theme.secondaryText)
                         .frame(width: 16)
+                } else {
+                    // Reserve the slot on childless top-level rows too — without
+                    // this, a fold-out row's chevron shifts its title 16pt right
+                    // of its siblings, which reads as nesting under the row above
+                    // (real children always carry the ↳ marker on top of it).
+                    Color.clear.frame(width: 16)
                 }
                 SessionRow(session: session)
                 // A pending extension_ui ask for this session: the ask sheet only
@@ -239,12 +276,128 @@ struct HomeView: View {
                         .foregroundStyle(subagentStatusColor(status))
                         .accessibilityLabel("Subagent status: \(status)")
                 }
+                // Row remove/terminate (plan 01M18X3B + [lifecycle][send]).
+                // macOS-only hover trash (user: don't register hover on iOS —
+                // it's dead weight on touch and can only fight the scroll/
+                // swipe recognizers; iOS surfaces are swipe + context menu).
+                // ONE trash, TWO behaviors (user UX directive 2026-09-01):
+                //   removable (ended / terminal subagent) -> quiet remove
+                //     (secondaryText);
+                //   LIVE + `remote_terminate` cap -> RED trash, tap asks for
+                //     confirmation, then sends the terminate command (older
+                //     forks without the cap show nothing).
+                // Pinned to the TRAILING edge (user ask 2026-09-01): without
+                // the spacer it sits right after the text, which crowds
+                // mid-row and varies with the title. The slot is reserved
+                // whenever either applies (opacity, not presence) so the row
+                // doesn't reflow on hover.
+                #if os(macOS)
+                Spacer(minLength: 8)
+                if model.isRemovable(session) {
+                    hoverTrash(session, systemName: "trash",
+                               color: theme.secondaryText, a11y: "Remove from list") {
+                        model.removeEndedSession(session)
+                    }
+                } else if model.supports("remote_terminate", session: session) {
+                    // LIVE row with a terminate-capable fork: RED kill trash —
+                    // the tap asks before killing (root-terminate exits the
+                    // host process; the user's own Ctrl-C, fired remotely).
+                    hoverTrash(session, systemName: "trash.fill",
+                               color: theme.error, a11y: "End this chat") {
+                        killTarget = session
+                    }
+                }
+                #endif
                 // NOTE: no per-session launch chip — launch is MACHINE-level
                 // only (user UX decision 2026-08-31): the affordance lives on
                 // the machine row, gated on its presence daemon.
             }
             .padding(.leading, indented ? 16 : 0)
+#if os(macOS)
+            // Whole-ROW hover tracking (drives the trailing trash above):
+            // attached to the row CONTENT, not the NavigationLink — macOS
+            // doesn't reliably deliver onHover to NavigationLink rows in a
+            // List, while the label HStack spans the row and does. Guarded
+            // clear: SwiftUI can fire the next row's enter BEFORE this
+            // row's exit, and an unguarded `= nil` would kill the fresh
+            // hover. macOS only: on iOS this would fight the scroll/swipe
+            // recognizers (user: don't register hover on iOS).
+            .onHover { over in
+                if over {
+                    hoverSessionID = session.id
+                } else if hoverSessionID == session.id {
+                    hoverSessionID = nil
+                }
+            }
+#endif
         }
+        // Manual dismiss (plan 01M18X3B) + terminate ([lifecycle][send]).
+        // Offered on a REMOVABLE row (watched-end / terminal subagent) as a
+        // quiet remove, or on a LIVE row with a terminate-capable fork as
+        // "End Chat…" (killTarget -> confirm dialog at the List level).
+        // Never on a live row without the cap — a local hide would vanish a
+        // running chat. Reappears only if the session proves live again
+        // (fresh `ub hello` → resurrection in AppModel).
+        // NOTE: swipe BEFORE contextMenu — on iOS the menu's long-press
+        // recognizer otherwise wins over the horizontal drag and the swipe
+        // reads as scrolling (user report 2026-09-01).
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            if model.isRemovable(session) {
+                Button(role: .destructive) {
+                    model.removeEndedSession(session)
+                } label: {
+                    Label("Remove", systemImage: "trash")
+                }
+            } else if model.supports("remote_terminate", session: session) {
+                // Kill needs an explicit tap (no full-swipe on a kill).
+                Button(role: .destructive) {
+                    killTarget = session
+                } label: {
+                    Label("End Chat…", systemImage: "trash.fill")
+                }
+            }
+        }
+        .contextMenu {
+            if model.isRemovable(session) {
+                Button(role: .destructive) {
+                    model.removeEndedSession(session)
+                } label: {
+                    Label("Remove from List", systemImage: "trash")
+                }
+            } else if model.supports("remote_terminate", session: session) {
+                Button(role: .destructive) {
+                    killTarget = session
+                } label: {
+                    Label("End Chat…", systemImage: "trash.fill")
+                }
+            }
+        }
+    }
+
+    /// The macOS hover-reveal trash (one helper, two variants — kills the
+    /// jscpd duplicate the two inline buttons tripped): identical
+    /// slot/fade/hit-target mechanics, differing glyph + color + action.
+    /// Quiet remove (secondaryText) vs kill (red — caller routes through the
+    /// List-level confirm dialog before terminating).
+    private func hoverTrash(_ session: LiveSession, systemName: String,
+                            color: Color, a11y: String,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .imageScale(.small)
+                .foregroundStyle(color)
+                // Roomier symmetric slot: air between the row text and the
+                // can, a larger hit target, and an explicit frame keeps the
+                // glyph centered — the borderless button's own content insets
+                // otherwise sit it slightly off the row's optical center.
+                .frame(width: 26, height: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)  // else the tap navigates too
+        .opacity(hoverSessionID == session.id ? 1 : 0)
+        .animation(.easeIn(duration: 0.12).delay(0.05),
+                   value: hoverSessionID == session.id)
+        .accessibilityLabel(a11y)
     }
 
     private func toggleFold(_ id: String) {

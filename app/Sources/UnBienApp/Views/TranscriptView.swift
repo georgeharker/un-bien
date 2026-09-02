@@ -41,6 +41,9 @@ struct TranscriptView: View {
     @State private var selectedPanelKey: String?
     @Environment(\.appTheme) private var theme
     @Environment(\.typography) private var typography
+    /// Pops the transcript (navigationDestination push) — used by the ended
+    /// banner's Remove, which deletes the row it is displayed from.
+    @Environment(\.dismiss) private var dismiss
 
     /// Restore runs once per view lifetime, after items first populate.
     @State private var didRestoreScroll = false
@@ -488,6 +491,17 @@ struct TranscriptView: View {
             Image(systemName: "moon.zzz.fill")
             Text("Session ended")
             Spacer(minLength: 0)
+            // Manual dismiss (plan 01M18X3B): clear this ended chat from the
+            // Home list straight from the banner. Client-side only — history
+            // and on-disk pi logs untouched; a session that comes back live
+            // resurrects its row (fresh `ub hello`). Pops the transcript.
+            Button {
+                model.removeEndedSession(session)
+                dismiss()
+            } label: {
+                Text("Remove")
+            }
+            .buttonStyle(.bordered)
         }
         .font(.caption.weight(.semibold))
         .foregroundStyle(theme.background)

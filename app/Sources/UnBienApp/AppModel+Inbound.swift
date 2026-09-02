@@ -143,237 +143,275 @@ extension AppModel {
     func handle(frame: InboundFrame, relayID: UUID) {
         switch frame {
         case let .routed(envelope):
-            // Envelope route ({rpc|evt}): a fork advertising `rpc_envelope`
-            // carries the transcript as pi rpc frames inside `ct`. Discriminate
-            // by SHAPE — a stock ServerMessage decodes to an EnvelopeMessage with
-            // both fields nil. The reducer owns the transcript for this key;
-            // stock session-content is suppressed in `route`.
-            if let env = try? envelope.decodeEnvelope() {
-                // Key per-session state on the pi sessionId (wire identity); the
-                // outer room is mesh/relay ROUTING only.
-                let key = "\(relayID.uuidString):\(envelope.peer):\(env.sessionId ?? envelope.room)"
-                // Envelope-native capability handshake: learn caps here (not just
-                // from stock session_history) so the {rpc|evt} route + stock
-                // suppression turn on before any session content arrives.
-                // Envelope-native capability handshake on the un-bien plane: a
-                // {type:"ub", ub:{type:"hello", caps, sessionId}} frame the APP
-                // acts on (learn caps + session identity) so the {rpc|evt} route
-                // + stock suppression turn on before any session content arrives.
-                if env.type == "ub", let ub = env.ub, ub["type"]?.stringValue == "hello" {
-                    // Last NON-EMPTY wins: re-hellos (session_sync/attach, N clients)
-                    // carry the pi's current caps; a legit change is still a
-                    // non-empty set. But an empty/degraded hello must NOT clobber a
-                    // good set — that silently gates off thinking/models/panels.
-                    let caps = ub["caps"]?.arrayValue?.compactMap { $0.stringValue }
-                    log.notice("ub hello: key=\(String(key.suffix(12)), privacy: .public) sid=\(env.sessionId ?? "nil", privacy: .public) caps=\(caps?.count ?? -1, privacy: .public)")
-                    if let caps, !caps.isEmpty {
-                        capabilities[key] = Set(caps)
-                    } else if capabilities[key] == nil {
-                        capabilities[key] = []
-                    }
-                    // The key IS the pi sessionId now, so a replaced session is
-                    // simply a NEW key with fresh state — no reset needed here.
-                    if envelopeReducers[key] == nil { envelopeReducers[key] = EnvelopeReducer() }
-                    // A hello is proof of life from the (re-)attached extension: a
-                    // resumed session's fresh instance greets on room re-join. If
-                    // this key's transcript was marked ended (the OUTGOING
-                    // instance's session_shutdown, e.g. reason "resume"), retract.
-                    markResumed(key: key)
-                    return
-                }
-                // Daemon caps PULL response (design 01M1813Q): a DAEMON-SPECIFIC
-                // {type:"presence_status", caps, hostname, backend} frame. Store
-                // machine/daemon status SEPARATELY from per-session capabilities
-                // (this describes an idle machine, not a session) — do NOT fold
-                // it into the transcript reducer. Keyed by the control-room key.
-                if env.type == "ub", let ub = env.ub,
-                   ub["type"]?.stringValue == "presence_status" {
-                    let caps = ub["caps"]?.arrayValue?.compactMap { $0.stringValue } ?? []
-                    // MACHINE-caps entry: key by the MACHINE (relay + canonical
-                    // epk), NOT the control room. The room is only transport.
-                    let mkey = machineCapsKey(relayID: relayID, epk: envelope.peer)
-                    daemonPresence[mkey] = DaemonPresence(
-                        caps: Set(caps),
-                        hostname: ub["hostname"]?.stringValue,
-                        backend: ub["backend"]?.stringValue)
-                    return
-                }
-                // Response to a `get_session_info` PULL: a subagent reporting its
-                // own lifecycle status over its connection (design 01M18PCM). Set
-                // it on the child LiveSession, keyed by the child's pi sessionId,
-                // so the home-row checkmark reads it WITHOUT the parent's panel.
-                if env.type == "ub", let ub = env.ub,
-                   ub["type"]?.stringValue == "session_info" {
-                    if var s = sessions[key] {
-                        s.status = ub["status"]?.stringValue
-                        sessions[key] = s
-                    }
-                    return
-                }
-                // Other un-bien-plane frames (the session_sync_end terminator):
-                // fold via the reducer as a frame — its inner `.type` drives
-                // applyRPC, exactly like an rpc-plane frame.
-                if env.type == "ub", let ub = env.ub {
-                    var reducer = envelopeReducers[key] ?? EnvelopeReducer()
-                    reducer.apply(EnvelopeMessage(rpc: ub))
-                    envelopeReducers[key] = reducer
-                    transcripts[key] = reducer.session
-                    // Ask-reconciliation backstop (AskSyncWindow): the sync
-                    // reply replays the bridge's FULL activeFlows set to the
-                    // sender ahead of this terminator, so a stored prompt whose
-                    // flow wasn't replayed is stale — its resolution happened
-                    // while the dismissal notify was dropped. Retire it. Fail-open:
-                    // no window in flight (sync never sent / terminator dropped)
-                    // keeps the prompt; the next open or reconnect retries.
-                    if ub["type"]?.stringValue == "session_sync_end",
-                       let window = askSyncWindows.removeValue(forKey: key),
-                       let prompt = prompts[key],
-                       !window.replayedAskIDs.contains(prompt.id) {
-                        prompts[key] = nil
-                        log.notice("ask reconcile: stale prompt retired key=\(String(key.suffix(12)), privacy: .public) flow=\(String(prompt.id.suffix(8)), privacy: .public)")
-                    }
-                    return
-                }
-                if env.rpc != nil || env.evt != nil {
-                    var reducer = envelopeReducers[key] ?? EnvelopeReducer()
-                    reducer.apply(env)
-                    envelopeReducers[key] = reducer
-                    transcripts[key] = reducer.session
-                    // A shut-down session's pending ask is dead by construction
-                    // (the bridge is disposed and pi-ask emits no `completed` for
-                    // disposed flows) — drop the modal so a stale ask can't pop
-                    // on the next open (or across a resume, before pi-ask's
-                    // re-open lands).
-                    if reducer.session.ended { prompts[key] = nil }
-                    // Panels are envelope-only: {evt channel:"panel"} carries a
-                    // panel_update; decode it with the stock decoder and route it
-                    // into the panel store (reuses PanelState + the panel UI).
-                    if let evt = env.evt, evt.channel == "panel",
-                       let pdata = try? JSONEncoder().encode(evt.data),
-                       let pline = String(data: pdata, encoding: .utf8),
-                       let pmsg = try? Codec.decodeServer(pline) {
-                        route(pmsg, relayID: relayID, peer: envelope.peer,
-                              sessionID: env.sessionId ?? envelope.room)
-                    }
-                    // extension_ui is envelope-only: the {rpc} extension_ui_request
-                    // frame is the same JSON as the stock ServerMessage, so reuse
-                    // the stock decoder to surface it in the existing prompt UI.
-                    // pi-ask dismissal contract (extension_ui_bridge): a `notify`
-                    // whose id matches the open interactive request means "that
-                    // flow resolved — dismiss it" (e.g. answered on the desktop
-                    // TUI). It used to REPLACE the prompt, so an already-resolved
-                    // ask re-presented a sheet ("Clarification resolved.") the
-                    // next time the transcript was opened. Routing now:
-                    //   warning notify  → inline transcript notice (actionable:
-                    //                    answer rejected / bridge TTL expired);
-                    //                    any open ask STAYS open as the retry
-                    //                    surface — never clobbered, never a modal.
-                    //   notify, id matches our open ask → dismiss the sheet.
-                    //   notify, no match → drop (a pure resolution ack, e.g.
-                    //                    completed after we answered ourselves —
-                    //                    nothing to dismiss, a row would be noise).
-                    if let rpc = env.rpc, rpc["type"]?.stringValue == "extension_ui_request",
-                       let data = try? JSONEncoder().encode(rpc),
-                       let line = String(data: data, encoding: .utf8),
-                       let decoded = try? Codec.decodeServer(line),
-                       case let .extensionUiRequest(request) = decoded {
-                        if request.method == .notify {
-                            if request.notifyType == "warning" {
-                                appendSessionNotice(key: key, code: "ask_warning",
-                                                    message: request.message ?? request.title ?? "")
-                            } else if prompts[key]?.id == request.id {
-                                prompts[key] = nil
-                            }
-                        } else {
-                            prompts[key] = request
-                            // Ask-reconciliation window: collect this ask id —
-                            // replayed (session_sync) or live — so the
-                            // session_sync_end handler can tell a still-pending
-                            // flow from a stale one.
-                            if askSyncWindows[key] != nil {
-                                askSyncWindows[key]?.replayedAskIDs.insert(request.id)
-                            }
-                        }
-                    }
-                    // rpc RESPONSE plane (general): the extension answers every
-                    // rpc command with a {type:"response", command, success,
-                    // data|error} envelope. The reducer above already folded the
-                    // transcript-relevant ones (get_state / get_entries); this
-                    // route owns the APP-side per-session effects the reducer
-                    // can't see (model roster, current model). Replaces the old
-                    // stock `models_list` handling — the extension retired that
-                    // frame when list_models migrated to `get_available_models`.
-                    if let rpc = env.rpc, rpc["type"]?.stringValue == "response" {
-                        resumeAwaitedReply(rpc) // request/reply correlation, by id
-                        handleRpcResponse(rpc, key: key) // side effects, by command
-                        // get_entries backfill PAGING (design 01M1BANZ): the
-                        // reply is ONE budget-bounded page of a possibly
-                        // multi-MB entry log. The frame stays pi-faithful
-                        // ({entries, leafId}, no extra fields) — the loop is
-                        // implied by pi's own since-cursor semantics: keep
-                        // fetching with the page's leafId until an empty page
-                        // (or an error / nil leaf). Folding is idempotent
-                        // (identify dedup), so pages + live frames interleave
-                        // freely. The terminal page also marks the session
-                        // backfilled so TranscriptView's scroll-restore can stop
-                        // WAITING for the remembered row (paged-backfill ×
-                        // restore interaction, designs 01M1BANZ + 01M1B9F6).
-                        if let page = rpc["data"],
-                           rpc["command"]?.stringValue == "get_entries",
-                           rpc["success"]?.boolValue == true {
-                            if let entries = page["entries"]?.arrayValue, !entries.isEmpty,
-                               let leaf = page["leafId"]?.stringValue,
-                               let conn = connections[relayID] {
-                                backfilledSessions.remove(key) // pages still streaming
-                                let peer = envelope.peer, room = envelope.room
-                                let n = entries.count
-                                let leafTail = String(leaf.suffix(8))
-                                let keyTail = String(key.suffix(12))
-                                log.notice("get_entries page key=\(keyTail, privacy: .public) n=\(n, privacy: .public) leaf=\(leafTail, privacy: .public) — fetching next page")
-                                Task { try? await conn.send(.getEntries(id: UUID().uuidString, since: leaf),
-                                                             toPeer: peer, room: room) }
-                            } else {
-                                // Terminal page (empty entries / nil leaf): the
-                                // walk is over — the transcript is complete.
-                                backfilledSessions.insert(key)
-                            }
-                        } else if rpc["command"]?.stringValue == "get_entries" {
-                            // Error response: the walk can't continue — mark
-                            // complete so a waiting restore doesn't hang forever.
-                            backfilledSessions.insert(key)
-                        }
-                    }
-                    // Queue display is APP-OWNED. pi never delivers queue_update
-                    // to extensions — it's routed only to the host subscribe stream,
-                    // never to pi.on / the ExtensionAPI (which exposes just
-                    // hasPendingMessages():Bool, no queue text) — so the fork can't
-                    // send us a queue snapshot. Instead: an optimistic pending chip
-                    // on Queue submit, RESOLVED when the MODEL consumes the message.
-                    // The model "saw the post" when pi dequeues + runs it, which
-                    // surfaces as a user message_end here; correlate by TEXT only
-                    // (timestamp / send-id don't persist) and clear that chip. The
-                    // queueMessage timeout is the backstop. Design 01M158S7.
-                    if let rpc = env.rpc, rpc["type"]?.stringValue == "message_end",
-                       rpc["message"]?["role"]?.stringValue == "user" {
-                        let text = rpc["message"]?["content"]?.joinedText() ?? ""
-                        if !text.isEmpty {
-                            let norm = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                            // ONE consumption clears ONE pending chip. If the same
-                            // text was queued twice, each run clears the FIRST
-                            // (oldest / FIFO — pi delivers in order) match, not all
-                            // identical-in-flight copies.
-                            if let idx = queued[key]?.firstIndex(where: {
-                                $0.pending && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == norm
-                            }) {
-                                queued[key]?.remove(at: idx)
-                            }
-                        }
-                    }
-                    return
-                }
-            }
+            handleRouted(envelope, relayID: relayID)
         case let .control(event):
             handle(control: event, relayID: relayID)
+        }
+    }
+
+    /// Envelope route ({rpc|evt}): a fork advertising `rpc_envelope`
+    /// carries the transcript as pi rpc frames inside `ct`. Discriminate
+    /// by SHAPE — a stock ServerMessage decodes to an EnvelopeMessage with
+    /// both fields nil. The reducer owns the transcript for this key;
+    /// stock session-content is suppressed in `route`.
+    private func handleRouted(_ envelope: RoutedEnvelope, relayID: UUID) {
+        guard let env = try? envelope.decodeEnvelope() else { return }
+        // Key per-session state on the pi sessionId (wire identity); the
+        // outer room is mesh/relay ROUTING only.
+        let key = "\(relayID.uuidString):\(envelope.peer):\(env.sessionId ?? envelope.room)"
+        if env.type == "ub", let ub = env.ub {
+            handleUbFrame(ub: ub, key: key, relayID: relayID, peer: envelope.peer,
+                          sid: env.sessionId ?? "nil")
+        } else if env.rpc != nil || env.evt != nil {
+            handleEnvelopeContent(env: env, key: key, envelope: envelope, relayID: relayID)
+        }
+    }
+
+    /// The un-bien control plane (`{type:"ub"}` frames), dispatched on the
+    /// inner `ub.type`.
+    private func handleUbFrame(ub: JSONValue, key: String, relayID: UUID,
+                               peer: String, sid: String) {
+        if ub["type"]?.stringValue == "hello" {
+            handleUbHello(ub: ub, key: key, sid: sid)
+            return
+        }
+        // Daemon caps PULL response (design 01M1813Q): a DAEMON-SPECIFIC
+        // {type:"presence_status", caps, hostname, backend} frame. Store
+        // machine/daemon status SEPARATELY from per-session capabilities
+        // (this describes an idle machine, not a session) — do NOT fold
+        // it into the transcript reducer. Keyed by the control-room key.
+        if ub["type"]?.stringValue == "presence_status" {
+            let caps = ub["caps"]?.arrayValue?.compactMap { $0.stringValue } ?? []
+            // MACHINE-caps entry: key by the MACHINE (relay + canonical
+            // epk), NOT the control room. The room is only transport.
+            let mkey = machineCapsKey(relayID: relayID, epk: peer)
+            daemonPresence[mkey] = DaemonPresence(
+                caps: Set(caps),
+                hostname: ub["hostname"]?.stringValue,
+                backend: ub["backend"]?.stringValue)
+            return
+        }
+        // Response to a `get_session_info` PULL: a subagent reporting its
+        // own lifecycle status over its connection (design 01M18PCM). Set
+        // it on the child LiveSession, keyed by the child's pi sessionId,
+        // so the home-row checkmark reads it WITHOUT the parent's panel.
+        if ub["type"]?.stringValue == "session_info" {
+            if var s = sessions[key] {
+                s.status = ub["status"]?.stringValue
+                sessions[key] = s
+            }
+            return
+        }
+        // Other un-bien-plane frames (the session_sync_end terminator):
+        // fold via the reducer as a frame — its inner `.type` drives
+        // applyRPC, exactly like an rpc-plane frame.
+        var reducer = envelopeReducers[key] ?? EnvelopeReducer()
+        reducer.apply(EnvelopeMessage(rpc: ub))
+        envelopeReducers[key] = reducer
+        transcripts[key] = reducer.session
+        // Ask-reconciliation backstop (AskSyncWindow): the sync
+        // reply replays the bridge's FULL activeFlows set to the
+        // sender ahead of this terminator, so a stored prompt whose
+        // flow wasn't replayed is stale — its resolution happened
+        // while the dismissal notify was dropped. Retire it. Fail-open:
+        // no window in flight (sync never sent / terminator dropped)
+        // keeps the prompt; the next open or reconnect retries.
+        if ub["type"]?.stringValue == "session_sync_end",
+           let window = askSyncWindows.removeValue(forKey: key),
+           let prompt = prompts[key],
+           !window.replayedAskIDs.contains(prompt.id) {
+            prompts[key] = nil
+            log.notice("ask reconcile: stale prompt retired key=\(String(key.suffix(12)), privacy: .public) flow=\(String(prompt.id.suffix(8)), privacy: .public)")
+        }
+        return
+    }
+
+    /// `ub hello`: capability handshake + session identity, and PROOF OF
+    /// LIFE — a dismissed ended chat resurrects here (plan 01M18X3B).
+    private func handleUbHello(ub: JSONValue, key: String, sid: String) {
+        // Envelope-native capability handshake: learn caps here (not just
+        // from stock session_history) so the {rpc|evt} route + stock
+        // suppression turn on before any session content arrives.
+        // {type:"ub", ub:{type:"hello", caps, sessionId}} frame the APP
+        // acts on (learn caps + session identity).
+        // Last NON-EMPTY wins: re-hellos (session_sync/attach, N clients)
+        // carry the pi's current caps; a legit change is still a
+        // non-empty set. But an empty/degraded hello must NOT clobber a
+        // good set — that silently gates off thinking/models/panels.
+        let caps = ub["caps"]?.arrayValue?.compactMap { $0.stringValue }
+        log.notice("ub hello: key=\(String(key.suffix(12)), privacy: .public) sid=\(sid, privacy: .public) caps=\(caps?.count ?? -1, privacy: .public)")
+        if let caps, !caps.isEmpty {
+            capabilities[key] = Set(caps)
+        } else if capabilities[key] == nil {
+            capabilities[key] = []
+        }
+        // The key IS the pi sessionId now, so a replaced session is
+        // simply a NEW key with fresh state — no reset needed here.
+        if envelopeReducers[key] == nil { envelopeReducers[key] = EnvelopeReducer() }
+        // Manual dismissal (plan 01M18X3B): a hello is PROOF OF
+        // LIFE from this session's (fresh) instance — if the user
+        // had removed the ended row, resurrect it. Clear the pin
+        // and re-sync the relay snapshot so the row (with fresh
+        // room meta) comes back instead of waiting for the next
+        // connect/refresh.
+        if dismissedSessions.removeValue(forKey: key) != nil {
+            log.notice("resurrecting dismissed chat on hello key=\(String(key.suffix(12)), privacy: .public)")
+            Task { await refreshRooms() }
+        }
+        markResumed(key: key)
+    }
+
+    /// {rpc|evt} content: fold the transcript via the reducer, then the
+    /// app-side side effects the reducer can't see (panels, asks,
+    /// responses, queue chips).
+    private func handleEnvelopeContent(env: EnvelopeMessage, key: String,
+                                       envelope: RoutedEnvelope, relayID: UUID) {
+        var reducer = envelopeReducers[key] ?? EnvelopeReducer()
+        reducer.apply(env)
+        envelopeReducers[key] = reducer
+        transcripts[key] = reducer.session
+        // A shut-down session's pending ask is dead by construction
+        // (the bridge is disposed and pi-ask emits no `completed` for
+        // disposed flows) — drop the modal so a stale ask can't pop
+        // on the next open (or across a resume, before pi-ask's
+        // re-open lands).
+        if reducer.session.ended { prompts[key] = nil }
+        // Panels are envelope-only: {evt channel:"panel"} carries a
+        // panel_update; decode it with the stock decoder and route it
+        // into the panel store (reuses PanelState + the panel UI).
+        if let evt = env.evt, evt.channel == "panel",
+           let pdata = try? JSONEncoder().encode(evt.data),
+           let pline = String(data: pdata, encoding: .utf8),
+           let pmsg = try? Codec.decodeServer(pline) {
+            route(pmsg, relayID: relayID, peer: envelope.peer,
+                  sessionID: env.sessionId ?? envelope.room)
+        }
+        handleExtensionUi(env: env, key: key)
+        handleRpcResponses(env: env, key: key, envelope: envelope, relayID: relayID)
+        handleUserMessageEnd(env: env, key: key)
+    }
+
+    /// extension_ui asks (the ask sheet + notify dismissal contract).
+    private func handleExtensionUi(env: EnvelopeMessage, key: String) {
+        // extension_ui is envelope-only: the {rpc} extension_ui_request
+        // frame is the same JSON as the stock ServerMessage, so reuse
+        // the stock decoder to surface it in the existing prompt UI.
+        // pi-ask dismissal contract (extension_ui_bridge): a `notify`
+        // whose id matches the open interactive request means "that
+        // flow resolved — dismiss it" (e.g. answered on the desktop
+        // TUI). It used to REPLACE the prompt, so an already-resolved
+        // ask re-presented a sheet ("Clarification resolved.") the
+        // next time the transcript was opened. Routing now:
+        //   warning notify  → inline transcript notice (actionable:
+        //                    answer rejected / bridge TTL expired);
+        //                    any open ask STAYS open as the retry
+        //                    surface — never clobbered, never a modal.
+        //   notify, id matches our open ask → dismiss the sheet.
+        //   notify, no match → drop (a pure resolution ack, e.g.
+        //                    completed after we answered ourselves —
+        //                    nothing to dismiss, a row would be noise).
+        if let rpc = env.rpc, rpc["type"]?.stringValue == "extension_ui_request",
+           let data = try? JSONEncoder().encode(rpc),
+           let line = String(data: data, encoding: .utf8),
+           let decoded = try? Codec.decodeServer(line),
+           case let .extensionUiRequest(request) = decoded {
+            if request.method == .notify {
+                if request.notifyType == "warning" {
+                    appendSessionNotice(key: key, code: "ask_warning",
+                                        message: request.message ?? request.title ?? "")
+                } else if prompts[key]?.id == request.id {
+                    prompts[key] = nil
+                }
+            } else {
+                prompts[key] = request
+                // Ask-reconciliation window: collect this ask id —
+                // replayed (session_sync) or live — so the
+                // session_sync_end handler can tell a still-pending
+                // flow from a stale one.
+                if askSyncWindows[key] != nil {
+                    askSyncWindows[key]?.replayedAskIDs.insert(request.id)
+                }
+            }
+        }
+    }
+
+    /// rpc RESPONSE plane (general): correlation + per-command side effects.
+    private func handleRpcResponses(env: EnvelopeMessage, key: String,
+                                    envelope: RoutedEnvelope, relayID: UUID) {
+        guard let rpc = env.rpc, rpc["type"]?.stringValue == "response" else { return }
+        resumeAwaitedReply(rpc) // request/reply correlation, by id
+        handleRpcResponse(rpc, key: key) // side effects, by command
+        handleGetEntriesPaging(rpc: rpc, key: key, envelope: envelope, relayID: relayID)
+    }
+
+    /// get_entries backfill PAGING walk (design 01M1BANZ).
+    private func handleGetEntriesPaging(rpc: JSONValue, key: String,
+                                       envelope: RoutedEnvelope, relayID: UUID) {
+        // get_entries backfill PAGING (design 01M1BANZ): the
+        // reply is ONE budget-bounded page of a possibly
+        // multi-MB entry log. The frame stays pi-faithful
+        // ({entries, leafId}, no extra fields) — the loop is
+        // implied by pi's own since-cursor semantics: keep
+        // fetching with the page's leafId until an empty page
+        // (or an error / nil leaf). Folding is idempotent
+        // (identify dedup), so pages + live frames interleave
+        // freely. The terminal page also marks the session
+        // backfilled so TranscriptView's scroll-restore can stop
+        // WAITING for the remembered row (paged-backfill ×
+        // restore interaction, designs 01M1BANZ + 01M1B9F6).
+        if let page = rpc["data"],
+           rpc["command"]?.stringValue == "get_entries",
+           rpc["success"]?.boolValue == true {
+            if let entries = page["entries"]?.arrayValue, !entries.isEmpty,
+               let leaf = page["leafId"]?.stringValue,
+               let conn = connections[relayID] {
+                backfilledSessions.remove(key) // pages still streaming
+                let peer = envelope.peer, room = envelope.room
+                let n = entries.count
+                let leafTail = String(leaf.suffix(8))
+                let keyTail = String(key.suffix(12))
+                log.notice("get_entries page key=\(keyTail, privacy: .public) n=\(n, privacy: .public) leaf=\(leafTail, privacy: .public) — fetching next page")
+                Task { try? await conn.send(.getEntries(id: UUID().uuidString, since: leaf),
+                                             toPeer: peer, room: room) }
+            } else {
+                // Terminal page (empty entries / nil leaf): the
+                // walk is over — the transcript is complete.
+                backfilledSessions.insert(key)
+            }
+        } else if rpc["command"]?.stringValue == "get_entries" {
+            // Error response: the walk can't continue — mark
+            // complete so a waiting restore doesn't hang forever.
+            backfilledSessions.insert(key)
+        }
+    }
+
+    /// Queue chip resolution on user message_end (design 01M158S7).
+    private func handleUserMessageEnd(env: EnvelopeMessage, key: String) {
+        // Queue display is APP-OWNED. pi never delivers queue_update
+        // to extensions — it's routed only to the host subscribe stream,
+        // never to pi.on / the ExtensionAPI (which exposes just
+        // hasPendingMessages():Bool, no queue text) — so the fork can't
+        // send us a queue snapshot. Instead: an optimistic pending chip
+        // on Queue submit, RESOLVED when the MODEL consumes the message.
+        // The model "saw the post" when pi dequeues + runs it, which
+        // surfaces as a user message_end here; correlate by TEXT only
+        // (timestamp / send-id don't persist) and clear that chip. The
+        // queueMessage timeout is the backstop. Design 01M158S7.
+        if let rpc = env.rpc, rpc["type"]?.stringValue == "message_end",
+           rpc["message"]?["role"]?.stringValue == "user" {
+            let text = rpc["message"]?["content"]?.joinedText() ?? ""
+            if !text.isEmpty {
+                let norm = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                // ONE consumption clears ONE pending chip. If the same
+                // text was queued twice, each run clears the FIRST
+                // (oldest / FIFO — pi delivers in order) match, not all
+                // identical-in-flight copies.
+                if let idx = queued[key]?.firstIndex(where: {
+                    $0.pending && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == norm
+                }) {
+                    queued[key]?.remove(at: idx)
+                }
+            }
         }
     }
 
@@ -441,6 +479,13 @@ extension AppModel {
                 sessions[k] = nil
                 forgetSession(key: k)
             }
+            // Also un-pin any DISMISSED session on this routing tuple (plan
+            // 01M18X3B): the room truly ended, so a later same-session-id
+            // announce is a real resume, not the lingering snapshot.
+            for (k, s) in dismissedSessions
+            where s.relayID == relayID && s.peerEPK == peer && s.roomID == roomID {
+                dismissedSessions[k] = nil
+            }
         case let .roomMetaUpdated(peer, roomID, model, parent, parentSessionID):
             if let k = sessionKey(relayID: relayID, peer: peer, roomID: roomID),
                var session = sessions[k] {
@@ -482,6 +527,11 @@ extension AppModel {
                                   name: room.name, cwd: room.cwd, model: nil,
                                   parentSessionID: room.parentSessionID,
                                   parentRoomID: room.parent, subagentID: room.subagentID)
+        // Manual dismissal (plan 01M18X3B): an ended chat the user removed
+        // stays hidden — a snapshot re-listing or re-announce is the room
+        // LINGERING at the relay, not liveness. Only proof of life (a fresh
+        // `ub hello`) or a genuine roomEnded clears the pin.
+        if dismissedSessions[session.id] != nil { return }
         // Carry a known status across re-announce (reconnect/relaunch replays
         // room_announced); the pull below refreshes it.
         session.status = sessions[session.id]?.status

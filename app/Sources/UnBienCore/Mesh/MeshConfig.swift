@@ -17,6 +17,7 @@ public struct RelayConfig: Codable, Equatable, Sendable, Identifiable {
     public var webSocketURL: URL? {
         var value = url.trimmingCharacters(in: .whitespaces)
         if value.hasPrefix("https://") { value = "wss://" + value.dropFirst(8) }
+        // pi-lens-ignore: detect-insecure-websocket
         // Plaintext ws:// is intentional: relays commonly run over a private
         // Tailnet/LAN on http:// (e.g. http://host.ts.net:3000), where TLS is
         // neither present nor needed. Mirrors the reference app's mapping.

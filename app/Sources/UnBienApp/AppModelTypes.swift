@@ -37,6 +37,17 @@ public struct LiveSession: Identifiable, Equatable, Hashable, Sendable {
     /// Identity = pi sessionId, NOT the routing roomId.
     public var id: String { "\(relayID.uuidString):\(peerEPK):\(sessionID)" }
     public var isSubagent: Bool { parentSessionID != nil }
+
+    /// A subagent whose PULLED lifecycle status (get_session_info, design
+    /// 01M18PCM) is terminal: it finished (or failed) — nothing more will
+    /// happen in it, but its room lingers at the relay by design (keeper), so
+    /// the app treats it as removable clutter, not a live chat. nil status
+    /// (pull not answered yet) is NOT terminal.
+    public var isTerminalSubagent: Bool {
+        guard isSubagent, let status else { return false }
+        return ["done", "completed", "failed", "error", "aborted", "stopped"]
+            .contains(status)
+    }
 }
 
 /// Ask-reconciliation window (robustness backstop for dropped dismissal
