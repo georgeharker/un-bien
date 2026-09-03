@@ -31,7 +31,11 @@ public actor EntryCacheStore {
     /// Bump on ANY format/content change (line layout, meta shape, keying) —
     /// an unknown version discards wholesale (a memo's regeneration is always
     /// safe; the max cost is one slow open, never correctness).
-    public static let cacheVersion = 1
+    /// v1 (2026-09-18): initial, pre-release — no identity fields in meta.
+    /// v2: + key/relayID/peer/roomID — the rooms-check reconcile matches on
+    /// the ROOM the cache was filled from (the cache KEY is the pi session
+    /// id, which the relay's room set can't speak to).
+    public static let cacheVersion = 2
 
     public struct CachedEntries: Sendable {
         public let entries: [JSONValue]
@@ -40,6 +44,16 @@ public actor EntryCacheStore {
 
     private struct Meta: Codable {
         var v: Int
+        /// Raw sessionKey (relayUUID:peer:piSessionId) — filenames are
+        /// sanitized; this is the authoritative key.
+        var key: String
+        /// Identity for the rooms-check reconcile: the relay + peer + the
+        /// ROOM this cache was filled from (captured at append, from the
+        /// envelope — the key's pi session id is NOT derivable from a room
+        /// id, which is a one-way hash of it).
+        var relayID: String
+        var peer: String
+        var roomID: String
         var leafId: String
         var count: Int
         var at: Date
@@ -118,7 +132,8 @@ public actor EntryCacheStore {
             // Truncate to the good prefix: rewrite file + meta from what
             // parsed; the cursor moves BACK to the last good entry.
             rewrite(file: file, entries: entries)
-            write(metaFile: metaFile, leafId: lastId, count: entries.count)
+            write(metaFile: metaFile, key: key, roomID: meta.roomID,
+                  leafId: lastId, count: entries.count)
             log.notice("cache truncated at \(entries.count, privacy: .public) good entries (corrupt tail) key=\(String(key.suffix(12)), privacy: .public)")
         }
         knownIds[key] = ids
@@ -127,15 +142,23 @@ public actor EntryCacheStore {
 
     // MARK: - append
 
-    /// Append one get_entries page's entries + the response cursor. OVERLAP
-    /// GUARD: a response whose FIRST entry is already cached is a straggler /
-    /// re-walk page — skipped whole; the next delta from the trusted cursor
-    /// re-covers any hole (identify dedup makes the re-fetch harmless).
+    /// Append one get_entries page's entries + the response cursor.
+    /// `roomID` is the relay room the page arrived on — captured for the
+    /// rooms-check reconcile (see Meta.roomID). OVERLAP GUARD: a response
+    /// whose FIRST entry is already cached is a straggler / re-walk page —
+    /// skipped whole; the next delta from the trusted cursor re-covers any
+    /// hole (identify dedup makes the re-fetch harmless).
     @discardableResult
-    public func append(key: String, entries: [JSONValue], leafId: String) -> Bool {
+    public func append(key: String, roomID: String, entries: [JSONValue], leafId: String) -> Bool {
         guard !entries.isEmpty else { return false }
         let ids = idsForKey(key)
         if let firstId = entries.first?["id"]?.stringValue, ids.contains(firstId) {
+            // Overlap — but the room association must stay CURRENT: a rename
+            // re-keys the relay ROOM while the cache key (the pi session id)
+            // is stable, and every subsequent page is an overlap-skip — so
+            // refresh meta.roomID here or a later reconcile would trash a
+            // LIVE session's cache over its stale room.
+            refreshRoomIDIfStale(key: key, roomID: roomID)
             return false
         }
         var body = Data()
@@ -166,9 +189,34 @@ public actor EntryCacheStore {
         // the next delta re-covers).
         var merged = ids
         for entry in entries { if let id = entry["id"]?.stringValue { merged.insert(id) } }
-        write(metaFile: metaURL(key), leafId: leafId, count: merged.count)
+        write(metaFile: metaURL(key), key: key, roomID: roomID, leafId: leafId, count: merged.count)
         knownIds[key] = merged
         return true
+    }
+
+    /// Room-set reconcile (user 2026-09-18: "we might not be open when the
+    /// room end is published"): on each relay rooms_check for a peer, trash
+    /// cached files whose ROOM is not in the published live set — orphaned
+    /// caches from rooms that ended while the app was dead (a dead room never
+    /// materializes as a session, so the in-memory purge + forgetSession
+    /// never fire for it). NO signal (a peer that never publishes a room set)
+    /// → keep: indistinguishable from temporarily-offline, never false-purge.
+    /// Renamed sessions self-heal — appends refresh meta.roomID (see append).
+    public func reconcile(relayID: String, peer: String, liveRoomIDs: Set<String>) {
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: nil) else { return }
+        var trashed = 0
+        for url in files where url.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: url),
+                  let meta = try? decoder.decode(Meta.self, from: data),
+                  meta.relayID == relayID, meta.peer == peer,
+                  !liveRoomIDs.contains(meta.roomID) else { continue }
+            remove(key: meta.key)
+            trashed += 1
+        }
+        if trashed > 0 {
+            log.notice("cache reconcile: trashed \(trashed) orphaned room(s) for peer \(String(peer.suffix(8)), privacy: .public)")
+        }
     }
 
     /// Trash the cache for a session (room gone / removal). No-op when absent.
@@ -189,11 +237,34 @@ public actor EntryCacheStore {
         return knownIds[key] ?? []
     }
 
-    private func write(metaFile: URL, leafId: String, count: Int) {
-        let meta = Meta(v: Self.cacheVersion, leafId: leafId, count: count, at: Date())
+    private func write(metaFile: URL, key: String, roomID: String, leafId: String, count: Int) {
+        let identity = identity(of: key)
+        let meta = Meta(v: Self.cacheVersion, key: key,
+                        relayID: identity?.relayID ?? "", peer: identity?.peer ?? "",
+                        roomID: roomID, leafId: leafId, count: count, at: Date())
         if let data = try? encoder.encode(meta) {
             try? data.write(to: metaFile, options: .atomic)
         }
+    }
+
+    private func refreshRoomIDIfStale(key: String, roomID: String) {
+        let metaFile = metaURL(key)
+        guard let data = try? Data(contentsOf: metaFile),
+              var meta = try? decoder.decode(Meta.self, from: data),
+              meta.roomID != roomID else { return }
+        meta.roomID = roomID
+        meta.at = Date()
+        if let out = try? encoder.encode(meta) {
+            try? out.write(to: metaFile, options: .atomic)
+        }
+    }
+
+    /// sessionKey = "relayUUID:peerBase64:piSessionId" — the peer is base64
+    /// (no ":"), so maxSplits 2 keeps any exotic session id intact.
+    private func identity(of key: String) -> (relayID: String, peer: String)? {
+        let parts = key.split(separator: ":", maxSplits: 2)
+        guard parts.count == 3 else { return nil }
+        return (String(parts[0]), String(parts[1]))
     }
 
     private func rewrite(file: URL, entries: [JSONValue]) {

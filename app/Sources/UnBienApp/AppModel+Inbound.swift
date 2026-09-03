@@ -160,25 +160,37 @@ extension AppModel {
         env.rpc?["type"]?.stringValue == "message_update"
     }
 
+    /// A get_entries response page WITH entries (the walk's non-terminal
+    /// pages). Coalesced with stream deltas — same fold semantics, one
+    /// publish per flush. A TERMINAL page (empty entries / nil leaf) is NOT
+    /// coalescable: it must act as the barrier that flushes every pending
+    /// page before endWalk replays buffered live frames.
+    private func isBackfillPage(_ env: EnvelopeMessage) -> Bool {
+        guard env.rpc?["type"]?.stringValue == "response",
+              env.rpc?["command"]?.stringValue == "get_entries",
+              env.rpc?["success"]?.boolValue == true else { return false }
+        return !(env.rpc?["data"]?["entries"]?.arrayValue ?? []).isEmpty
+    }
+
     /// ~15fps fold cadence — fast enough that text arrival looks continuous,
     /// slow enough to cut re-parse/publish work 3-4×. (The stored state lives
     /// on AppModel — extensions can't hold stored properties.)
 
-    private func scheduleStreamDeltaFlush() {
-        guard !streamDeltaFlushScheduled else { return }
-        streamDeltaFlushScheduled = true
+    private func scheduleFoldFlush() {
+        guard !foldFlushScheduled else { return }
+        foldFlushScheduled = true
         Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: Self.streamDeltaFlushNanos)
+            try? await Task.sleep(nanoseconds: Self.foldFlushNanos)
             guard let self else { return }
-            self.streamDeltaFlushScheduled = false
-            self.flushAllStreamDeltas()
+            self.foldFlushScheduled = false
+            self.flushAllFoldFrames()
         }
     }
 
-    /// Flush one session's pending deltas — ONE reducer fetch, N applies,
+    /// Flush one session's pending frames — ONE reducer fetch, N applies,
     /// ONE publish (the batch lands as a single transcripts update).
-    private func flushStreamDeltas(for key: String) {
-        guard let pending = pendingStreamDeltas.removeValue(forKey: key),
+    private func flushFoldFrames(for key: String) {
+        guard let pending = pendingFoldFrames.removeValue(forKey: key),
               !pending.isEmpty else { return }
         var reducer = envelopeReducers[key] ?? EnvelopeReducer()
         reducer.setHideReasoning(!showThinking)
@@ -189,9 +201,9 @@ extension AppModel {
         transcripts[key] = reducer.session
     }
 
-    private func flushAllStreamDeltas() {
-        for key in Array(pendingStreamDeltas.keys) {
-            flushStreamDeltas(for: key)
+    private func flushAllFoldFrames() {
+        for key in Array(pendingFoldFrames.keys) {
+            flushFoldFrames(for: key)
         }
     }
 
@@ -322,12 +334,27 @@ extension AppModel {
         // during a full walk everything already defers to the terminal replay,
         // and the replayed deltas pass back through here and coalesce too.
         if isStreamDelta(env), fullWalkInFlight[key] == nil {
-            pendingStreamDeltas[key, default: []].append(
+            pendingFoldFrames[key, default: []].append(
                 (env: env, envelope: envelope, relayID: relayID))
-            scheduleStreamDeltaFlush()
+            scheduleFoldFlush()
             return
         }
-        flushStreamDeltas(for: key)   // barrier: order-preserving flush first
+        // BACKFILL PAGE COALESCER (perf #2, device repro 2026-09-18: per-page
+        // publish → window recompute → attach/detach flap — visible rows
+        // cycling blank/render/blank during slow walks): non-terminal walk
+        // pages fold into the SAME arrival-ordered buffer as stream deltas —
+        // one flush, N applies, ONE publish. The PAGING side effects (next
+        // page request, cache append, stall alive-signal, repeated-leaf
+        // breaker) run IMMEDIATELY via handleRpcResponses — they don't depend
+        // on the fold, and the walk must keep moving at network speed.
+        if isBackfillPage(env) {
+            pendingFoldFrames[key, default: []].append(
+                (env: env, envelope: envelope, relayID: relayID))
+            scheduleFoldFlush()
+            handleRpcResponses(env: env, key: key, envelope: envelope, relayID: relayID)
+            return
+        }
+        flushFoldFrames(for: key)   // barrier: order-preserving flush first
 
         var reducer = envelopeReducers[key] ?? EnvelopeReducer()
         reducer.setHideReasoning(!showThinking)
@@ -470,7 +497,9 @@ extension AppModel {
                 /// stragglers and re-walk pages.
                 if !isDemoKey(key) {
                     let page = entries
-                    Task { await entryCache.append(key: key, entries: page, leafId: leaf) }
+                    let room = envelope.room
+                    Task { await entryCache.append(key: key, roomID: room,
+                                                   entries: page, leafId: leaf) }
                 }
                 let peer = envelope.peer, room = envelope.room
                 let n = entries.count
@@ -629,6 +658,14 @@ extension AppModel {
                 sessions[key] = nil
                 forgetSession(key: key)
             }
+            // DISK reconcile (design 01M1M4N8RZZANDX6NWY7FCSBT5, retention
+            /// append 3): trash orphaned entry-cache files for rooms that
+            /// ended while the app was dead — the in-memory purge above can't
+            /// see them (a dead room never materializes as a session, so
+            /// forgetSession never fires for it). No room set from a peer →
+            /// no signal → its files stay (never false-purge an offline peer).
+            Task { await entryCache.reconcile(relayID: relayID.uuidString, peer: peer,
+                                              liveRoomIDs: liveRoomIDs) }
             for room in rooms { upsertSession(relayID: relayID, peer: peer, room: room) }
         case let .roomAnnounced(peer, room):
             upsertSession(relayID: relayID, peer: peer, room: room)

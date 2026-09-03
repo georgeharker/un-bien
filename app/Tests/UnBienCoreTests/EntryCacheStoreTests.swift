@@ -42,8 +42,8 @@ final class EntryCacheStoreTests: XCTestCase {
     }
 
     func testRoundTrip() async {
-        await store.append(key: "r:peer:room", entries: [entry("e1"), entry("e2")], leafId: "e2")
-        await store.append(key: "r:peer:room", entries: [entry("e3")], leafId: "e3")
+        await store.append(key: "r:peer:room", roomID: "roomX", entries: [entry("e1"), entry("e2")], leafId: "e2")
+        await store.append(key: "r:peer:room", roomID: "roomX", entries: [entry("e3")], leafId: "e3")
         let cached = await store.load(key: "r:peer:room")
         XCTAssertNotNil(cached)
         XCTAssertEqual(cached?.entries.count, 3)
@@ -59,8 +59,8 @@ final class EntryCacheStoreTests: XCTestCase {
     func testOverlapPageSkipped() async {
         // A straggler / re-walk page: its FIRST entry is already cached —
         // skipped whole (the next delta from the trusted cursor re-covers).
-        await store.append(key: "k", entries: [entry("e1"), entry("e2")], leafId: "e2")
-        let appended = await store.append(key: "k", entries: [entry("e2"), entry("e3")], leafId: "e3")
+        await store.append(key: "k", roomID: "roomK", entries: [entry("e1"), entry("e2")], leafId: "e2")
+        let appended = await store.append(key: "k", roomID: "roomK", entries: [entry("e2"), entry("e3")], leafId: "e3")
         XCTAssertFalse(appended)
         let cached = await store.load(key: "k")
         XCTAssertEqual(cached?.entries.count, 2, "overlap page must not land")
@@ -69,10 +69,10 @@ final class EntryCacheStoreTests: XCTestCase {
 
     func testVersionMismatchDiscardsWholesale() async {
         let key = "k"
-        await store.append(key: key, entries: [entry("e1")], leafId: "e1")
+        await store.append(key: key, roomID: "roomK", entries: [entry("e1")], leafId: "e1")
         // Hand-write a future-version meta (what an upgraded-then-downgraded
         // install leaves behind).
-        let futureMeta = "{\"v\":99,\"leafId\":\"e1\",\"count\":1,\"at\":0}"
+        let futureMeta = "{\"v\":99,\"key\":\"k\",\"relayID\":\"r\",\"peer\":\"p\",\"roomID\":\"roomK\",\"leafId\":\"e1\",\"count\":1,\"at\":0}"
         try? futureMeta.data(using: .utf8)!.write(to: metaURL(forKey: key))
         let cached = await store.load(key: key)
         XCTAssertNil(cached)
@@ -82,7 +82,7 @@ final class EntryCacheStoreTests: XCTestCase {
 
     func testCorruptTailTruncatesToLastGoodEntry() async {
         let key = "k"
-        await store.append(key: key, entries: [entry("e1")], leafId: "e1")
+        await store.append(key: key, roomID: "roomK", entries: [entry("e1")], leafId: "e1")
         // Corrupt the tail with a garbage line after a good second entry:
         // file = e1, garbage → load keeps only e1, cursor moves BACK to e1.
         let garbage = "{\"type\":\"message_end\",\"id\":"
@@ -101,7 +101,7 @@ final class EntryCacheStoreTests: XCTestCase {
         // And the truncated state is LOADABLE and continues cleanly.
         let again = await store.load(key: key)
         XCTAssertEqual(again?.entries.count, 1)
-        await store.append(key: key, entries: [entry("e2")], leafId: "e2")
+        await store.append(key: key, roomID: "roomK", entries: [entry("e2")], leafId: "e2")
         let final = await store.load(key: key)
         XCTAssertEqual(final?.entries.count, 2, "append continues from the truncated prefix")
         XCTAssertEqual(final?.leafId, "e2")
@@ -109,7 +109,7 @@ final class EntryCacheStoreTests: XCTestCase {
 
     func testRemoveTrashesBothFiles() async {
         let key = "k"
-        await store.append(key: key, entries: [entry("e1")], leafId: "e1")
+        await store.append(key: key, roomID: "roomK", entries: [entry("e1")], leafId: "e1")
         await store.remove(key: key)
         XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL(forKey: key).path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: metaURL(forKey: key).path))
@@ -123,14 +123,14 @@ final class EntryCacheStoreTests: XCTestCase {
         // ids — a retry page whose first entry is already cached is skipped,
         // not double-appended.
         let key = "k"
-        await store.append(key: key, entries: [entry("e1"), entry("e2")], leafId: "e2")
+        await store.append(key: key, roomID: "roomK", entries: [entry("e1"), entry("e2")], leafId: "e2")
 
         let relaunched = EntryCacheStore(directory: dir)
         let skipped = await relaunched.append(
-            key: key, entries: [entry("e2"), entry("e3")], leafId: "e3")
+            key: key, roomID: "roomK", entries: [entry("e2"), entry("e3")], leafId: "e3")
         XCTAssertFalse(skipped, "fresh launch must detect the overlap via the lazy id scan")
 
-        let appended = await relaunched.append(key: key, entries: [entry("e3")], leafId: "e3")
+        let appended = await relaunched.append(key: key, roomID: "roomK", entries: [entry("e3")], leafId: "e3")
         XCTAssertTrue(appended)
         let cached = await relaunched.load(key: key)
         XCTAssertEqual(cached?.entries.count, 3)
@@ -138,12 +138,48 @@ final class EntryCacheStoreTests: XCTestCase {
     }
 
     func testKeysAreIsolatedFiles() async {
-        await store.append(key: "r1:peer:roomA", entries: [entry("e1")], leafId: "e1")
-        await store.append(key: "r2:peer:roomB", entries: [entry("f1")], leafId: "f1")
-        let a = await store.load(key: "r1:peer:roomA")
-        let b = await store.load(key: "r2:peer:roomB")
+        await store.append(key: "r1:peer:sessA", roomID: "roomA", entries: [entry("e1")], leafId: "e1")
+        await store.append(key: "r2:peer:sessB", roomID: "roomB", entries: [entry("f1")], leafId: "f1")
+        let a = await store.load(key: "r1:peer:sessA")
+        let b = await store.load(key: "r2:peer:sessB")
         XCTAssertEqual(a?.entries.count, 1)
         XCTAssertEqual(a?.entries.last?["id"]?.stringValue, "e1")
         XCTAssertEqual(b?.entries.last?["id"]?.stringValue, "f1")
+    }
+
+    // MARK: - rooms-check reconcile (design 01M1M4N8RZZANDX6NWY7FCSBT5)
+
+    func testReconcileTrashesOrphanedRoomsOnly() async {
+        // Three caches: a LIVE room, a DEAD room (ended while the app was
+        // gone — its session never materializes, forgetSession never fires),
+        // and another peer's (no signal — must stay).
+        await store.append(key: "r1:peer:sessA", roomID: "roomA", entries: [entry("e1")], leafId: "e1")
+        await store.append(key: "r1:peer:sessB", roomID: "roomB", entries: [entry("f1")], leafId: "f1")
+        await store.append(key: "r1:other:sessC", roomID: "roomC", entries: [entry("g1")], leafId: "g1")
+
+        await store.reconcile(relayID: "r1", peer: "peer", liveRoomIDs: ["roomA"])
+
+        let live = await store.load(key: "r1:peer:sessA")
+        let dead = await store.load(key: "r1:peer:sessB")
+        let otherPeer = await store.load(key: "r1:other:sessC")
+        XCTAssertNotNil(live, "live room's cache stays")
+        XCTAssertNil(dead, "dead room's cache is trashed")
+        XCTAssertNotNil(otherPeer, "no-signal peer's cache stays")
+    }
+
+    func testReconcileSparesRenamedSessionWithRefreshedRoom() async {
+        // A rename re-keys the relay ROOM while the cache key (the pi session
+        // id) is stable. Post-rename pages are overlap-skips — but append must
+        // REFRESH meta.roomID, or reconcile would trash the live session's
+        // cache over its stale room.
+        await store.append(key: "r1:peer:sess", roomID: "oldRoom", entries: [entry("e1")], leafId: "e1")
+        let skipped = await store.append(key: "r1:peer:sess", roomID: "newRoom",
+                                         entries: [entry("e1"), entry("e2")], leafId: "e2")
+        XCTAssertFalse(skipped, "overlap page is still skipped")
+
+        await store.reconcile(relayID: "r1", peer: "peer", liveRoomIDs: ["newRoom"])
+        let survived = await store.load(key: "r1:peer:sess")
+        XCTAssertNotNil(survived,
+                        "renamed session's cache survives the reconcile")
     }
 }

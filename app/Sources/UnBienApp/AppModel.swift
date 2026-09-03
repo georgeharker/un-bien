@@ -201,14 +201,16 @@ public final class AppModel: ObservableObject {
     var scrollCaptureHandlers: [String: @MainActor () -> LifecycleCapture] = [:]
     /// LIVE DELTA COALESCER state (perf, run 2026-09-18 — driven from
     /// AppModel+Inbound; stored here because extensions can't hold stored
-    /// properties): pending `message_update` frames per session + the
-    /// flush-scheduled flag. ~15fps fold cadence — see
+    /// properties): pending COALESCED fold frames per session — streamed
+    /// `message_update` deltas AND non-terminal backfill pages, in arrival
+    /// order — plus the flush-scheduled flag. ~15fps fold cadence (one
+    /// reducer pass + ONE publish per flush) — see
     /// AppModel+Inbound.handleEnvelopeContent for the design note.
-    static let streamDeltaFlushNanos: UInt64 = 66_000_000
-    var pendingStreamDeltas: [String: [(env: EnvelopeMessage,
-                                        envelope: RoutedEnvelope,
-                                        relayID: UUID)]] = [:]
-    var streamDeltaFlushScheduled = false
+    static let foldFlushNanos: UInt64 = 66_000_000
+    var pendingFoldFrames: [String: [(env: EnvelopeMessage,
+                                      envelope: RoutedEnvelope,
+                                      relayID: UUID)]] = [:]
+    var foldFlushScheduled = false
     /// Connection generation per relay (run 2026-09-18 duplicate-delivery
     /// fix): incremented by every connect(); event loops carry their
     /// generation and refuse to tear down state when superseded — two
