@@ -1,0 +1,33 @@
+name: SpikeHarnessiOS
+options:
+  bundleIdPrefix: com.georgeharker.un-bien
+  deploymentTarget:
+    iOS: "18.0"
+targets:
+  SpikeHarnessiOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/SpikeHarnessiOS
+    dependencies:
+      - package: SwiftStreamingMarkdown
+      - package: swift-markdown-ui
+        product: MarkdownUI
+    settings:
+      base:
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: true
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: true
+        INFOPLIST_KEY_UILaunchScreen_Generation: true
+        PRODUCT_BUNDLE_IDENTIFIER: com.georgeharker.un-bien.spike
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "Apple Development"
+        DEVELOPMENT_TEAM: B8V3694RNX
+packages:
+  SwiftStreamingMarkdown:
+    url: https://github.com/microsoft/SwiftStreamingMarkdown
+    revision: 95bb755a9b23a1aea8682b9ebc912cb72b176c95
+  swift-markdown-ui:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    from: 2.4.0

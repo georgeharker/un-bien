@@ -29,6 +29,8 @@ store-screenshots/
 
 # Xcode build products (iOS/mac device builds)
 app/build/
+app/Prototypes/*/build*/
+app/Prototypes/*/*.xcodeproj
 
 /.quarto/
 **/*.quarto_ipynb
