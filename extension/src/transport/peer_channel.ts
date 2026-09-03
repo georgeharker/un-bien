@@ -107,6 +107,34 @@ export class PlainPeerChannel implements PeerChannel {
    * uncaught exception out of the SDK event callback that drives it.
    */
   sendEnvelope(env: EnvelopeMessage): void {
+    try {
+      this.relay.send(this.envelopeLine(env))
+    } catch {
+      /* relay down — drop this frame; reconnect + session_sync will recover */
+    }
+  }
+
+  /**
+   * Teardown-path variant of `sendEnvelope`: resolves once the frame has been
+   * HANDED TO THE SOCKET (the ws send-completion callback), not merely
+   * enqueued — the flush-before-socket-teardown guarantee. Always resolves
+   * (error / relay down included): the frame is gone either way, and teardown
+   * must never hang on a wedged socket — the caller bounds the wait anyway.
+   */
+  sendEnvelopeFlushed(env: EnvelopeMessage): Promise<void> {
+    const line = this.envelopeLine(env)
+    return new Promise((resolve) => {
+      try {
+        this.relay.send(line, () => resolve())
+      } catch {
+        resolve() // relay down — frame dropped; nothing left to wait for
+      }
+    })
+  }
+
+  /** The outbound wire for an envelope frame: inner stamps (type/ts/sessionId
+   *  at the single outbound choke) → base64 `ct` → outer routing envelope. */
+  private envelopeLine(env: EnvelopeMessage): string {
     // Stamp the wrapper kind + timestamp at the single outbound choke.
     const wire: EnvelopeMessage = {
       ...env,
@@ -126,11 +154,7 @@ export class PlainPeerChannel implements PeerChannel {
     }
     const ct = Buffer.from(JSON.stringify(wire)).toString("base64")
     const outer: OuterEnvelope = { peer: this.remotePeerId, ct }
-    try {
-      this.relay.send(JSON.stringify(outer))
-    } catch {
-      /* relay down — drop this frame; reconnect + session_sync will recover */
-    }
+    return JSON.stringify(outer)
   }
 
   /** Detaches from relay (does not close the relay itself). */

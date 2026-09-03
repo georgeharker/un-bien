@@ -129,6 +129,7 @@ import {
   CTRL_PREFIX,
   _anyPeerActive,
   _broadcastEnvelope,
+  _broadcastEnvelopeFlushed,
   _controlCtx,
   _detachPeerChannel,
   _emitRelayState,
@@ -2372,7 +2373,17 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       // producer dispose below: `_rpcEnvelope` gates on its `disposed` flag,
       // so once disposed it can no longer build/broadcast this frame.
       if (_anyPeerActive(relayDeps)) {
-        _broadcastEnvelope(relayDeps, { rpc: { type: "session_shutdown" } })
+        // FLUSH-BEFORE-TEARDOWN: await the frame's ws send-completion
+        // (bounded — a wedged socket can't hang the shutdown) BEFORE _goIdle
+        // closes the relay below. Fire-and-forget only beat close() by
+        // incidental FIFO luck; the switch flow (/resume: old instance
+        // broadcasts shutdown, fresh instance takes the new room) NEEDS the
+        // app to reliably mark the old session ended, or it lingers live
+        // forever (the app has no disconnect-implies-ended backstop, by
+        // design).
+        await _broadcastEnvelopeFlushed(relayDeps, {
+          rpc: { type: "session_shutdown" },
+        })
       }
       _extensionUiBridge?.dispose()
       _extensionUiBridge = null

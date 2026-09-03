@@ -267,6 +267,39 @@ export function _broadcastEnvelope(
 }
 
 /**
+ * Teardown-path variant of `_broadcastEnvelope`: awaits each channel's ws
+ * send-completion (frame handed to the socket) — bounded by `timeoutMs` so a
+ * wedged socket can never hang a shutdown. The `session_shutdown` broadcast
+ * MUST use this: its handler tears the relay down immediately after, and a
+ * fire-and-forget send only beats `close()` by incidental FIFO luck.
+ */
+export async function _broadcastEnvelopeFlushed(
+  deps: RelayLifecycleDeps,
+  env: EnvelopeMessage,
+  timeoutMs = 1_000,
+): Promise<void> {
+  {
+    const kind = env.rpc
+      ? `rpc:${(env.rpc as { type?: string }).type ?? "?"}`
+      : `evt:${env.evt?.channel ?? "?"}`
+    envLog(`envelope -> ${deps.activePeers.size} peer(s), flushed: ${kind}`)
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      Promise.all(
+        [...deps.activePeers.values()].map((ch) => ch.sendEnvelopeFlushed(env)),
+      ),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+/**
  * Adds an owner's channel to `_activePeers`. Also updates the UX hint
  * `_peerShort` (last-attached shortid) so the footer + status can pick
  * a representative device when only one is connected.

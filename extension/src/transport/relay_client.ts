@@ -196,12 +196,15 @@ export class RelayClient extends EventEmitter {
     return this.ws?.readyState === WebSocket.OPEN
   }
 
-  /** Sends a raw line to the relay (caller is responsible for framing). */
-  send(line: string): void {
+  /** Sends a raw line to the relay (caller is responsible for framing).
+   *  `onWritten`, when given, is the ws send-completion callback: it fires
+   *  once the frame is handed to the socket (or with an error) — the
+   *  flush-before-teardown guarantee for teardown-path frames. */
+  send(line: string, onWritten?: (err?: Error) => void): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("relay: not connected")
     }
-    this.ws.send(line)
+    this.ws.send(line, onWritten)
   }
 
   /**

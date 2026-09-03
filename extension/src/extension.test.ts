@@ -45,7 +45,12 @@ class MockRelay extends EventEmitter {
   connect = vi
     .fn()
     .mockImplementation((opts?: unknown) => _defaultConnectImpl(opts))
-  send = vi.fn()
+  // Callback-faithful mock of RelayClient.send: real ws invokes the optional
+  // send-completion callback (flush-before-teardown path) — the mock must
+  // too, or every flushed send parks on its 1s timeout race in tests.
+  send = vi.fn((_line: string, cb?: (err?: Error) => void) => {
+    cb?.()
+  })
   sendControl = vi.fn()
   close = vi.fn(() => {
     this.readyState = 3
@@ -2546,6 +2551,15 @@ describe("session_shutdown teardown", () => {
           reason: "resume",
         }),
       )
+      // The shutdown broadcast is FLUSHED before teardown (the send is
+      // awaited so the frame beats the relay close — see
+      // _broadcastEnvelopeFlushed): the handler parks a microtask at the
+      // flush, so leave() is reached a beat later, not synchronously. The
+      // INVARIANT under test is what leave OBSERVES (already idle, relay
+      // already closed, mesh node already gone), not when it is called.
+      await vi.waitFor(() => {
+        if (stateAtLeave === undefined) throw new Error("leave not reached")
+      })
       expect(stateAtLeave).toBe("idle")
       expect(relayClosedAtLeave).toBe(true)
       expect(_hasMeshNodeForTest()).toBe(false)
