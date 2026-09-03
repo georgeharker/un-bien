@@ -61,7 +61,7 @@ struct TranscriptRow: View, Equatable {
                 }
             }
             if !bubble.text.isEmpty {
-                Markdown(bubble.text)
+                Markdown(displayText(bubble.text))
                     .markdownCodeSyntaxHighlighter(.highlightr(
                         style: theme.codeHighlightStyle,
                         font: typography.monoPlatformFont()))
@@ -95,7 +95,7 @@ struct TranscriptRow: View, Equatable {
                             align: HorizontalAlignment) -> some View {
         VStack(alignment: align, spacing: 4) {
             Text(role).font(.caption.weight(.semibold)).foregroundStyle(tint)
-            Text(text).foregroundStyle(theme.text)
+            Text(displayText(text)).foregroundStyle(theme.text)
                 .font(typography.bodyFont())
                 .textSelection(.enabled)
                 .padding(10)
@@ -228,6 +228,22 @@ private struct SVGWebView: UIViewRepresentable {
 #endif
 #endif
 
+/// Display budget for one row's rendered text (characters). The transcript
+/// is a READING surface, not a fidelity viewer — real logs contain 400KB+
+/// message entries (whole-file dumps ride inside assistant messages), and
+/// MarkdownUI + Highlightr on such a blob blocks the main thread for ~a
+/// minute (STALL 53716ms between scroll frames, run 2026-09-17). Truncate
+/// what we RENDER; the full text stays in the session log. An expand
+/// affordance is future work.
+private let rowDisplayBudget = 8_000
+
+private func displayText(_ text: String, budget: Int = rowDisplayBudget) -> String {
+    guard text.count > budget else { return text }
+    let omitted = text.count - budget
+    return text.prefix(budget)
+        + "\n\n… \(omitted) more characters truncated for display — full text in the session log"
+}
+
 private struct ReasoningBlockView: View {
     let block: ReasoningBlock
     let theme: AppTheme
@@ -236,7 +252,7 @@ private struct ReasoningBlockView: View {
 
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
-            Text(block.text)
+            Text(displayText(block.text))
                 .font(typography.monoFont(size: typography.codeSize))
                 .foregroundStyle(theme.secondaryText)
                 .textSelection(.enabled)
@@ -439,7 +455,7 @@ private struct ToolCardView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label.uppercased()).font(.system(size: 9, weight: .bold))
                 .foregroundStyle(theme.secondaryText)
-            Text(value).foregroundStyle(theme.text).textSelection(.enabled)
+            Text(displayText(value)).foregroundStyle(theme.text).textSelection(.enabled)
         }
     }
 
@@ -460,6 +476,9 @@ private struct ToolCardView: View {
     @ViewBuilder
     private func codeView(_ text: String, lang: String?) -> some View {
         let font = typography.monoPlatformFont()
+        // Budget BEFORE highlighting — Highlightr/highlight.js on a huge blob
+        // is the dominant main-thread cost (see rowDisplayBudget).
+        let text = displayText(text)
         if let highlighted = HighlightEngine.shared.highlighted(
             text, language: lang, style: theme.codeHighlightStyle, font: font) {
             Text(highlighted).textSelection(.enabled)

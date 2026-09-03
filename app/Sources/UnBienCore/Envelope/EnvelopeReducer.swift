@@ -96,6 +96,13 @@ public struct EnvelopeReducer {
         session.hideReasoning = hide
     }
 
+    /// Full-walk reset (ordering fix — see SessionState.resetTranscript): the
+    /// app calls this BEFORE folding a since==nil get_entries response,
+    /// correlated by request id (AppModel.pendingFullReplay).
+    public mutating func resetTranscript() {
+        session.resetTranscript()
+    }
+
     // MARK: - rpc plane
 
     private mutating func applyRpc(_ rpc: JSONValue, aux: JSONValue? = nil) {

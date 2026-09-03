@@ -13,6 +13,9 @@ private actor ScriptedChannel: WebSocketChannel {
         return inbound.removeFirst()
     }
     nonisolated func close() {}
+    func ping(timeout: TimeInterval) async throws {
+        // Fake channels never die silently (see RelayConnectionTests).
+    }
     func sentFrames() -> [String] { sent }
 }
 

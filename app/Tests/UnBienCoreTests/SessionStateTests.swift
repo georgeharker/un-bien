@@ -19,7 +19,9 @@ final class SessionStateTests: XCTestCase {
                                                                   "delta": .string("hel")])]))
         // While streaming: positional id, transient — not an anchor.
         XCTAssertEqual(state.items.count, 2)
-        XCTAssertNotNil(state.items[0].anchorID, "user rows anchor")
+        // v2: a LIVE-born user row is PENDING (seq synthetic, no entry id yet) —
+        // not anchorable until the delta re-keys it to the durable entry id.
+        XCTAssertNil(state.items[0].anchorID, "pending live user rows must NOT anchor")
         guard case let .assistant(streaming) = state.items[1] else { return XCTFail("no bubble") }
         XCTAssertTrue(streaming.streaming)
         XCTAssertNil(state.items[1].anchorID, "streaming assistant rows must NOT anchor")
@@ -41,20 +43,33 @@ final class SessionStateTests: XCTestCase {
                                 "toolName": .string("bash"), "args": .object([:])]))
         XCTAssertNotNil(state.items[3].anchorID, "tool cards anchor")
 
-        // Settle (message_end with responseId): the appended identify-keyed
-        // bubble is replay-stable and anchors on its own id.
+        // Settle (live message_end with responseId): v2 births the row with the
+        // identify FALLBACK id and registers it PENDING (the open bubble was
+        // closed by the interleaved reasoning) — still transient, not anchorable.
         state.applyRPC(.object(["type": .string("message_end"),
                                 "message": .object(["role": .string("assistant"), "timestamp": .number(2),
                                                     "responseId": .string("resp_1"),
                                                     "content": .array([.object(["type": .string("text"),
                                                                                 "text": .string("hello")])])])]))
-        guard let settledIdx = state.items.indices.first(where: {
-            if case let .assistant(b) = state.items[$0] { return b.replayStable }
-            return false
-        }) else { return XCTFail("no replay-stable bubble after message_end") }
-        XCTAssertEqual(state.items[settledIdx].anchorID, state.items[settledIdx].id,
-                       "a settled replay-stable row anchors on its own id")
-        XCTAssertEqual(state.items[settledIdx].id, "assistant:rresp_1-a")
+        XCTAssertEqual(state.items[4].id, "assistant:rresp_1-a")
+        XCTAssertNil(state.items[4].anchorID, "pending live settle must NOT anchor")
+
+        // The message_end-triggered delta lands (applyEntries MATCH LOOP): both
+        // pending rows re-key to their durable ENTRY ids — NOW anchorable.
+        state.applyEntries([
+            .object(["type": .string("message"), "id": .string("eu1"),
+                     "message": .object(["role": .string("user"), "timestamp": .number(1),
+                                         "content": .string("hi")])]),
+            .object(["type": .string("message"), "id": .string("ea1"),
+                     "message": .object(["role": .string("assistant"), "timestamp": .number(2),
+                                         "responseId": .string("resp_1"),
+                                         "content": .array([.object(["type": .string("text"),
+                                                                     "text": .string("hello")])])])]),
+        ])
+        XCTAssertEqual(state.items[0].id, "user:eu1")
+        XCTAssertEqual(state.items[0].anchorID, "user:eu1", "re-keyed rows anchor on their entry id")
+        XCTAssertEqual(state.items[4].id, "assistant:ea1")
+        XCTAssertEqual(state.items[4].anchorID, "assistant:ea1")
     }
 
     // liveArrivals (scroll follow counter) must count only VISIBLE mutations —
@@ -261,13 +276,73 @@ final class SessionStateTests: XCTestCase {
         XCTAssertEqual(liveIDs.count, 2)
 
         // REOPEN: reconstruct from get_entries — the SAME two messages as raw
-        // entries. identify(msg) matches the live ids -> appendedIDs dedups.
+        // entries carrying their durable ids. The MATCH LOOP finds the live
+        // PENDING rows (identify bridge) and RE-KEYS them to the entry ids:
+        // same rows, same content, upgraded ids — never duplicates.
         state.applyEntries([
             entry(role: "user", text: "hi", ts: 100),
             entry(role: "assistant", text: "hello", ts: 200, responseId: "resp_1"),
         ])
-        XCTAssertEqual(state.items.map(\.id), liveIDs,
-                       "get_entries reconstruction must dedup to the identical transcript")
+        XCTAssertEqual(state.items.count, 2, "match-loop re-key must not duplicate rows")
+        XCTAssertEqual(state.items.map(\.id), ["user:entry-100.0", "assistant:entry-200.0"],
+                       "pending live rows re-key to their durable entry ids")
+        XCTAssertEqual(state.items.map(\.anchorID),
+                       ["user:entry-100.0", "assistant:entry-200.0"],
+                       "re-keyed rows are anchorable (id-scheme v2)")
+    }
+
+    // FULL-WALK RESET (ordering fix): live rows folded into a FRESH reducer
+    // before a full walk (app relaunch mid-conversation) used to strand the
+    // newest exchange at the TOP — the walk appended history AFTER them. The
+    // walk's first page now resets, and the rebuild lands in LOG order.
+    func testFullWalkResetRebuildsInLogOrder() {
+        var state = SessionState()
+        // The misplaced scenario: live tail folded first (fresh reducer).
+        state.applyRPC(.object(["type": .string("message_end"),
+                                "message": .object(["role": .string("user"), "timestamp": .number(300),
+                                                    "content": .string("newest")])]))
+        XCTAssertEqual(state.items.map(\.id), ["user:u1"], "live birth is a pending seq synthetic")
+        // The walk's first page arrives → reset → entries fold in log order.
+        state.resetTranscript()
+        state.applyEntries([
+            .object(["type": .string("message"), "id": .string("e1"),
+                     "message": .object(["role": .string("user"), "timestamp": .number(100),
+                                         "content": .string("oldest")])]),
+            .object(["type": .string("message"), "id": .string("e2"),
+                     "message": .object(["role": .string("user"), "timestamp": .number(300),
+                                         "content": .string("newest")])]),
+        ])
+        XCTAssertEqual(state.items.map(\.id), ["user:e1", "user:e2"],
+                       "post-reset walk rebuilds in LOG order, newest last")
+    }
+
+    // ARRIVAL ORDER ≠ LOG ORDER (ordering tightening, user report 2026-09-17):
+    // a fresh entry birth whose live frame was never seen (reconnect gap,
+    // delta lag) is OLDER than any pending row — it must INSERT BEFORE the live
+    // tail, never append after a newer pending. And a matched re-key keeps its
+    // position (the folded region grows contiguously through the tail's head).
+    func testLateEntryBirthInsertsBeforeLiveTail() {
+        var state = SessionState()
+        // A pending live row (settled, entry not yet folded) sits in the tail.
+        state.applyRPC(.object(["type": .string("message_end"),
+                                "message": .object(["role": .string("user"), "timestamp": .number(500),
+                                                    "content": .string("newest live")])]))
+        XCTAssertEqual(state.items.map(\.id), ["user:u1"])
+
+        // A delta arrives carrying an OLDER gap entry (its live frame was never
+        // seen) PLUS the pending's own entry, in log order — the exact shape a
+        // reconnect gap produces. The gap entry must insert BEFORE the pending;
+        // the pending's entry must MATCH + re-key it in place (after the gap).
+        state.applyEntries([
+            .object(["type": .string("message"), "id": .string("e-old"),
+                     "message": .object(["role": .string("user"), "timestamp": .number(100),
+                                         "content": .string("older gap")])]),
+            .object(["type": .string("message"), "id": .string("e-new"),
+                     "message": .object(["role": .string("user"), "timestamp": .number(500),
+                                         "content": .string("newest live")])]),
+        ])
+        XCTAssertEqual(state.items.map(\.id), ["user:e-old", "user:e-new"],
+                       "older gap entry inserts before the pending; the pending re-keys in place after it — log order, not arrival order")
     }
 
     // A fresh get_entries reconstruction (no prior live stream) builds the
@@ -450,5 +525,77 @@ final class SessionStateTests: XCTestCase {
         } else {
             XCTFail("expected an open assistant bubble")
         }
+    }
+}
+
+// MARK: - Entry-born provider errors ride log position (run 2026-09-17:
+// historical out-of-credit errors floated below the live tail on every
+// reconnect delta walk)
+
+final class EntryBornErrorNoticeTests: XCTestCase {
+    /// A replayed error entry, folded while a LIVE pending tail exists, must
+    /// land in the HISTORY region (before the live tail) — not at the end.
+    func testEntryBornErrorInsertsBeforeLiveTail() {
+        var s = SessionState()
+        // History: one settled user row.
+        _ = s.applyRPC(.object([
+            "type": .string("message_end"),
+            "message": .object(["role": .string("user"), "content": .string("hi")]),
+            "entryId": .string("e1"),
+        ]))
+        // LIVE pending tail: a live-born user row (no entryId ⇒ pending).
+        _ = s.applyRPC(.object([
+            "type": .string("message_end"),
+            "message": .object(["role": .string("user"), "content": .string("live question")]),
+        ]))
+        // A replayed provider-error entry (entryId present ⇒ entry-born).
+        _ = s.applyRPC(.object([
+            "type": .string("message_end"),
+            "message": .object(["role": .string("assistant"),
+                                "stopReason": .string("error"),
+                                "errorMessage": .string("out of credit")]),
+            "entryId": .string("e99"),
+        ]))
+        // The error notice must sit BEFORE the live pending row, not after it.
+        let ids = s.items.map(\.id)
+        let liveIdx = ids.firstIndex(of: "user:u1")   // live pending (second user row)
+        let errorIdx = s.items.lastIndex { if case .notice = $0 { return true } else { return false } }
+        XCTAssertNotNil(liveIdx)
+        XCTAssertNotNil(errorIdx)
+        if let live = liveIdx, let error = errorIdx {
+            XCTAssertLessThan(error, live,
+                "entry-born error must insert before the live tail (history region)")
+        }
+    }
+
+    /// A LIVE error and its later ENTRY replay are the same row (content-identity
+    /// id collision dedup) — no duplicate.
+    func testLiveErrorAndEntryReplayDedup() {
+        var s = SessionState()
+        let errorMsg: JSONValue = .object(["role": .string("assistant"),
+                                           "stopReason": .string("error"),
+                                           "errorMessage": .string("out of credit")])
+        _ = s.applyRPC(.object(["type": .string("message_end"), "message": errorMsg]))
+        _ = s.applyRPC(.object(["type": .string("message_end"), "message": errorMsg,
+                                "entryId": .string("e1")]))
+        let noticeCount = s.items.filter { if case .notice = $0 { return true } else { return false } }.count
+        XCTAssertEqual(noticeCount, 1, "live error + entry replay = one row")
+    }
+
+    /// Two DIFFERENT errors stay two rows.
+    func testDistinctErrorsBothBirth() {
+        var s = SessionState()
+        _ = s.applyRPC(.object(["type": .string("message_end"),
+                                "message": .object(["role": .string("assistant"),
+                                                    "stopReason": .string("error"),
+                                                    "errorMessage": .string("out of credit")]),
+                                "entryId": .string("e1")]))
+        _ = s.applyRPC(.object(["type": .string("message_end"),
+                                "message": .object(["role": .string("assistant"),
+                                                    "stopReason": .string("error"),
+                                                    "errorMessage": .string("rate limited")]),
+                                "entryId": .string("e2")]))
+        let noticeCount = s.items.filter { if case .notice = $0 { return true } else { return false } }.count
+        XCTAssertEqual(noticeCount, 2)
     }
 }

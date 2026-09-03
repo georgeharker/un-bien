@@ -23,12 +23,15 @@ public enum TranscriptItem: Equatable, Sendable, Identifiable {
 
     /// The id consumers may PERSIST for position anchoring (scroll memory,
     /// design 01M1B9F6). nil on rows whose ids are not replay-stable:
-    /// streaming/positional assistant bubbles (re-keyed to `{identify}-a` at
-    /// settle), live-only reasoning segments, and ephemeral notices. NEVER
-    /// persist a raw `id` for anchoring — only `anchorID`.
+    /// streaming/positional assistant bubbles and PENDING live rows (seq
+    /// synthetics awaiting their pi entry id — id-scheme v2: the entry id IS
+    /// the row id, so stability is a fact of the id, not a flag), live-only
+    /// reasoning segments, and ephemeral notices. NEVER persist a raw `id` for
+    /// anchoring — only `anchorID`.
     public var anchorID: String? {
         switch self {
-        case .user, .tool, .compaction: return id
+        case let .user(bubble): return bubble.replayStable ? id : nil
+        case .tool, .compaction: return id
         case let .assistant(bubble): return bubble.replayStable ? id : nil
         case .reasoning, .notice: return nil
         }
@@ -52,10 +55,16 @@ public struct UserBubble: Equatable, Sendable {
     public let id: String
     public var text: String
     public var images: [WireImage]
-    public init(id: String, text: String, images: [WireImage] = []) {
+    /// True when `id` is a durable pi ENTRY id (anchorable — id-scheme v2: the
+    /// entry id IS the row id). False while PENDING: a live-born seq synthetic
+    /// (`u{n}`) awaiting the message_end-triggered delta that re-keys it.
+    public var replayStable: Bool
+    public init(id: String, text: String, images: [WireImage] = [],
+                replayStable: Bool = true) {
         self.id = id
         self.text = text
         self.images = images
+        self.replayStable = replayStable
     }
 }
 

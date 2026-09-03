@@ -3,8 +3,8 @@ name: UnBien
 options:
   bundleIdPrefix: com.georgeharker.un-bien
   deploymentTarget:
-    iOS: "17.0"
-    macOS: "14.0"
+    iOS: "18.0"
+    macOS: "15.0"
   createIntermediateGroups: true
 
 packages:

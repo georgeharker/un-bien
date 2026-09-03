@@ -269,6 +269,17 @@ extension AppModel {
                                        envelope: RoutedEnvelope, relayID: UUID) {
         var reducer = envelopeReducers[key] ?? EnvelopeReducer()
         reducer.setHideReasoning(!showThinking)
+        // Full-walk BUFFERING (ordering fix): while a full walk pages in, live
+        // frames must NOT fold — they would interleave BETWEEN the walk's
+        // pages. Buffer everything except RESPONSES (the walk's own pages +
+        // command replies); the terminal page replays them through this same
+        // path. The flag + buffer clear BEFORE replay, so it can't re-buffer.
+        if env.rpc?["type"]?.stringValue != "response", fullWalkInFlight[key] != nil {
+            liveFrameBuffer[key, default: []].append((env: env, envelope: envelope, relayID: relayID))
+            envelopeReducers[key] = reducer
+            transcripts[key] = reducer.session
+            return
+        }
         reducer.apply(env)
         envelopeReducers[key] = reducer
         transcripts[key] = reducer.session
@@ -291,6 +302,7 @@ extension AppModel {
         handleExtensionUi(env: env, key: key)
         handleRpcResponses(env: env, key: key, envelope: envelope, relayID: relayID)
         handleUserMessageEnd(env: env, key: key)
+        handleEntryIDSync(env: env, key: key, envelope: envelope, relayID: relayID)
     }
 
     /// extension_ui asks (the ask sheet + notify dismissal contract).
@@ -368,6 +380,7 @@ extension AppModel {
                let leaf = page["leafId"]?.stringValue,
                let conn = connections[relayID] {
                 backfilledSessions.remove(key) // pages still streaming
+                walkLastActivity[key] = Date() // the watchdog's alive-signal
                 let peer = envelope.peer, room = envelope.room
                 let n = entries.count
                 let leafTail = String(leaf.suffix(8))
@@ -379,11 +392,13 @@ extension AppModel {
                 // Terminal page (empty entries / nil leaf): the
                 // walk is over — the transcript is complete.
                 backfilledSessions.insert(key)
+                replayLiveBuffer(key: key)
             }
         } else if rpc["command"]?.stringValue == "get_entries" {
             // Error response: the walk can't continue — mark
             // complete so a waiting restore doesn't hang forever.
             backfilledSessions.insert(key)
+            replayLiveBuffer(key: key)
         }
     }
 
@@ -414,6 +429,40 @@ extension AppModel {
                     queued[key]?.remove(at: idx)
                 }
             }
+        }
+    }
+
+    /// entryID acquisition (id-scheme v2): a live `message_end` means pi has
+    /// (or is one synchronous beat from) persisting that message as an entry —
+    /// the wire round trip IS the lag, so a delta `get_entries` issued here
+    /// always sees it. The entries fold through applyEntries' MATCH LOOP: live
+    /// PENDING rows re-key to their durable entry ids (never twins). toolResult
+    /// settles skip it (cards are toolCallId-keyed, never pending).
+    private func handleEntryIDSync(env: EnvelopeMessage, key: String,
+                                   envelope: RoutedEnvelope, relayID: UUID) {
+        guard env.rpc?["type"]?.stringValue == "message_end",
+              let role = env.rpc?["message"]?["role"]?.stringValue,
+              role == "user" || role == "assistant",
+              let since = envelopeReducers[key]?.leafId,
+              let conn = connections[relayID] else { return }
+        Task { try? await conn.send(.getEntries(id: UUID().uuidString, since: since),
+                                     toPeer: envelope.peer, room: envelope.room) }
+    }
+
+    /// Unbuffer + fold the live frames held during a full walk (terminal page,
+    /// walk error, or a stale walk superseded). Flag + buffer clear FIRST so
+    /// the replay can't re-buffer. Frames replay through the normal fold path —
+    /// messages the walk already birthed are skipped by the reducer's
+    /// duplicate-delivery guard (identifyIndex); messages that settled after
+    /// the walk's last page birth as pendings (appended at the tail — correct,
+    /// they are the newest) and re-key on the next delta.
+    func replayLiveBuffer(key: String) {
+        guard fullWalkInFlight[key] != nil else { return }
+        fullWalkInFlight.removeValue(forKey: key)
+        let frames = liveFrameBuffer.removeValue(forKey: key) ?? []
+        for frame in frames {
+            handleEnvelopeContent(env: frame.env, key: key,
+                                  envelope: frame.envelope, relayID: frame.relayID)
         }
     }
 

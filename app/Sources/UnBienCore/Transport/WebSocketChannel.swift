@@ -8,6 +8,11 @@ public protocol WebSocketChannel: Sendable {
     /// Await the next inbound text frame. Throws on close/error.
     func receive() async throws -> String
     func close()
+    /// Liveness probe (URLSessionWebSocketTask.sendPing). Throws promptly on
+    /// a dead/failed task — the SILENT socket death after an iOS background
+    /// cycle leaves send/receive hanging but ping fails fast, which is what
+    /// makes the foreground heal (AppModel+Relays) able to detect it.
+    func ping(timeout: TimeInterval) async throws
 }
 
 /// `URLSessionWebSocketTask`-backed channel. Works on iOS and macOS.
@@ -46,4 +51,37 @@ public final class URLSessionWebSocketChannel: WebSocketChannel, @unchecked Send
     public func close() {
         task.cancel(with: .goingAway, reason: nil)
     }
+
+    public func ping(timeout: TimeInterval) async throws {
+        let task = self.task
+        let state = PingRace()
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            // Race the ping against a deadline; the loser's late completion
+            // is ignored (one-shot guard under the box's lock).
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                if state.finish() { cont.resume(throwing: TimeoutError.timedOut) }
+            }
+            task.sendPing { error in
+                if state.finish() {
+                    if let error { cont.resume(throwing: error) } else { cont.resume() }
+                }
+            }
+        }
+    }
 }
+
+/// One-shot race flag for the ping deadline (thread-safe: sendPing's
+/// completion and the dispatch timer can land from any queue).
+private final class PingRace: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    /// Returns true for exactly ONE caller.
+    func finish() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if done { return false }
+        done = true
+        return true
+    }
+}
+
+private enum TimeoutError: Error { case timedOut }

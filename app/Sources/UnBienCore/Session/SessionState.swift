@@ -29,9 +29,9 @@ public struct SessionState: Equatable, Sendable {
     /// (no row — the card fills via its own frame), dedup no-op replays, and
     /// idempotent card re-opens. "The turn is running" is not "something was
     /// output": phantom bumps during a quiet thinking phase would pin a
-    /// bottom reader — each phantom follow re-pins the bottom sentinel inside
-    /// the 150 ms unpin debounce (the "…" lock). The anti-yank guarantee for
-    /// replayed history is the VIEW's gates (atBottom pin + restore-wait),
+    /// bottom reader — each phantom follow re-binds the bottom sentinel
+    /// (the "…" lock). The anti-yank guarantee for
+    /// replayed history is the VIEW's gates (pin policy + restore-wait),
     /// not this counter. Int-based: `.onChange(of:)` needs Equatable.
     public private(set) var liveArrivals: Int = 0
 
@@ -58,6 +58,28 @@ public struct SessionState: Equatable, Sendable {
     /// deltas. Closed by the following text/tool row, like the assistant tail.
     private var openReasoningIndex: Int?
     private var toolIndex: [String: Int] = [:]       // toolCallID → items index
+    /// Row id → items index (id-scheme v2: rows keyed by their pi ENTRY id once
+    /// known; pendings by seq synthetic). Maintained by `append`/`rekeyRow`;
+    /// rows are append-only today so entries never go stale.
+    private var rowIndex: [String: Int] = [:]
+    /// Content identity (`identify`) → row id, for EVERY user/assistant row —
+    /// BOTH the matcher's index (an entry re-keys its already-born row in
+    /// place, never a twin) AND the duplicate-delivery guard (a live frame for
+    /// an already-born message — pre-walk pending or walk-born entry row — is a
+    /// redelivery, not a new message; this is what lets buffered live frames
+    /// REPLAY after a full walk without duplicating walk-born rows). Cards
+    /// (toolCallId-keyed) never register. A fetch that never lands leaves
+    /// pendings here for the next successful delta/backfill — the matcher
+    /// assumes ordering, not promptness.
+    private var identifyIndex: [String: String] = [:]
+    /// PENDING row ids (live-settled, awaiting their entry id). With the open
+    /// streaming rows they define the LIVE TAIL — every tail row is NEWER than
+    /// every unfolded entry (a pending's entry settles after everything before
+    /// it), so a fresh entry birth must INSERT BEFORE the tail: arrival order
+    /// never defines position, the log does (user report 2026-09-17: an older
+    /// gap entry appended after a newer pending → inverted order).
+    private var pendingRowIDs: Set<String> = []
+    private var userSeq = 0    // live user-row synthetics (u1, u2, …)
     private var compactionSeq = 0
     private var reasoningSeq = 0
     private var noticeSeq = 0
@@ -83,14 +105,55 @@ public struct SessionState: Equatable, Sendable {
         ended = false
     }
 
+    /// FULL-WALK RESET (ordering fix): a since==nil get_entries walk is the
+    /// AUTHORITATIVE history in log order. Live rows that folded into a fresh
+    /// reducer BEFORE the walk (app relaunch mid-conversation) strand at the
+    /// TOP of `items` — without a reset the walk appends the older history
+    /// AFTER them and the newest exchange sits above everything. Resetting
+    /// first re-births every settled row from its entry, in order — the live
+    /// rows' messages are all persisted by walk time (the message_end cadence
+    /// guarantees it). Residual edge: a stream IN FLIGHT during the walk has
+    /// no entry yet and re-strands until the next full walk. KEPT: ended /
+    /// sessionStartedAt (session-level), liveArrivals (view counter),
+    /// activeTurnID (cancel targeting).
+    public mutating func resetTranscript() {
+        items.removeAll()
+        appendedIDs.removeAll()
+        rowIndex.removeAll()
+        identifyIndex.removeAll()
+        pendingRowIDs.removeAll()
+        toolIndex.removeAll()
+        openAssistantIndex = nil
+        openReasoningIndex = nil
+        userSeq = 0
+        assistantSeq = 0
+        reasoningSeq = 0
+    }
+
     /// Append a one-off informational notice row. Used by the APP-side routing
     /// of extension_ui `notify` frames (AppModel+Inbound): a warning notify is
     /// actionable (answer rejected / bridge TTL expired) but must not own a
     /// modal — it lands inline in the transcript instead.
     public mutating func appendNotice(code: String, message: String) {
+        // CONTENT-KEYED DEDUP: notices have no entry-log anchoring (live-only
+        // ephemera by design), so a re-delivered warning after relaunch would
+        // otherwise DUPLICATE at the tail — historical warns clustering below
+        // the normal messages (run 2026-09-17: "warning messages still drift
+        // to below"). Identical (code, message) already present ⇒ skip.
+        if items.contains(where: { if case let .notice(existing) = $0 {
+            existing.code == code && existing.message == message
+        } else { false } }) {
+            #if DEBUG
+            // The re-delivery source is identifiable from the code+message —
+            // logged so a relaunch capture shows exactly which warns re-fire.
+            print("[notice] dedup-skip \(code): \(message)")
+            #endif
+            return
+        }
         noticeSeq += 1
-        append(.notice(NoticeItem(id: "ext\(noticeSeq)", code: code, message: message)))
-        liveArrivals += 1
+        if append(.notice(NoticeItem(id: "ext\(noticeSeq)", code: code, message: message))) {
+            liveArrivals += 1
+        }
     }
 
     /// Usage from the most recent assistant turn that reported it (for a status
@@ -119,6 +182,45 @@ public struct SessionState: Equatable, Sendable {
         guard appendedIDs.insert(item.id).inserted else { return false }
         closeOpenAssistant()
         items.append(item)
+        rowIndex[item.id] = items.count - 1
+        return true
+    }
+
+    /// The LIVE TAIL's start index: the first pending row, or the open
+    /// streaming bubble/reasoning block, whichever is earliest. Fast path when
+    /// no tail exists (mid-walk: everything buffered/reset → boundary == end).
+    private func liveTailStartIndex() -> Int {
+        if pendingRowIDs.isEmpty, openAssistantIndex == nil, openReasoningIndex == nil {
+            return items.count
+        }
+        var idx = items.count
+        if let o = openAssistantIndex { idx = min(idx, o) }
+        if let r = openReasoningIndex { idx = min(idx, r) }
+        if !pendingRowIDs.isEmpty {
+            for (i, item) in items.enumerated() where pendingRowIDs.contains(item.id) {
+                if i < idx { idx = i }
+                if idx == 0 { break }
+            }
+        }
+        return idx
+    }
+
+    /// Insert an ENTRY-born row at the log-order boundary: after every folded
+    /// entry, BEFORE any pending/live row — an older entry must never land
+    /// after a newer pending (arrival-order correction). Unlike `append`, this
+    /// does NOT close the open streaming bubble (history inserting above the
+    /// tail must not settle it). O(n) reindex; only entry births take this path.
+    private mutating func insertBeforeLiveTail(_ item: TranscriptItem) -> Bool {
+        guard appendedIDs.insert(item.id).inserted else { return false }
+        let at = liveTailStartIndex()
+        items.insert(item, at: at)
+        if at < items.count - 1 {
+            rowIndex = rowIndex.mapValues { $0 >= at ? $0 + 1 : $0 }
+            toolIndex = toolIndex.mapValues { $0 >= at ? $0 + 1 : $0 }
+            if let o = openAssistantIndex, o >= at { openAssistantIndex = o + 1 }
+            if let r = openReasoningIndex, r >= at { openReasoningIndex = r + 1 }
+        }
+        rowIndex[item.id] = at
         return true
     }
 
@@ -147,7 +249,7 @@ public struct SessionState: Equatable, Sendable {
             items[index] = .reasoning(block)
         } else {
             reasoningSeq += 1
-            append(.reasoning(ReasoningBlock(id: "\(reasoningSeq)", text: delta, streaming: true)))
+            _ = append(.reasoning(ReasoningBlock(id: "\(reasoningSeq)", text: delta, streaming: true)))
             openReasoningIndex = items.count - 1
         }
         activeTurnID = inReplyTo
@@ -161,7 +263,7 @@ public struct SessionState: Equatable, Sendable {
             items[index] = .assistant(bubble)
         } else {
             assistantSeq += 1
-            append(.assistant(AssistantBubble(id: "a\(assistantSeq)", inReplyTo: inReplyTo,
+            _ = append(.assistant(AssistantBubble(id: "a\(assistantSeq)", inReplyTo: inReplyTo,
                                               text: delta, streaming: true)))
             openAssistantIndex = items.count - 1
         }
@@ -172,13 +274,19 @@ public struct SessionState: Equatable, Sendable {
     /// NEW card was inserted — a re-open of a known card is a re-sync no-op
     /// and must not count as a visible arrival.
     @discardableResult
-    private mutating func openToolCard(toolCallID: String, tool: String, args: [String: JSONValue]) -> Bool {
+    private mutating func openToolCard(toolCallID: String, tool: String, args: [String: JSONValue],
+                                        fromEntry: Bool = false) -> Bool {
         if let index = toolIndex[toolCallID] { // idempotent re-open (re-sync)
             items[index] = .tool(ToolCard(toolCallID: toolCallID, tool: tool, args: args))
             return false
         }
-        let inserted = append(.tool(ToolCard(toolCallID: toolCallID, tool: tool, args: args)))
-        toolIndex[toolCallID] = items.count - 1
+        // Entry-synthesized cards ride their message's log position (insert
+        // before the live tail, right after the message that just birthed
+        // there); LIVE cards belong to the streaming turn (append at the end).
+        let inserted = fromEntry
+            ? insertBeforeLiveTail(.tool(ToolCard(toolCallID: toolCallID, tool: tool, args: args)))
+            : append(.tool(ToolCard(toolCallID: toolCallID, tool: tool, args: args)))
+        toolIndex[toolCallID] = rowIndex["tool:\(toolCallID)"] ?? items.count - 1
         return inserted
     }
 
@@ -221,9 +329,19 @@ public struct SessionState: Equatable, Sendable {
     }
 
     @discardableResult
-    private mutating func appendCompaction(summary: String, tokensBefore: Int) -> Bool {
-        compactionSeq += 1
-        return append(.compaction(CompactionMarker(id: "\(compactionSeq)", summary: summary,
+    private mutating func appendCompaction(summary: String, tokensBefore: Int,
+                                            entryID: String? = nil) -> Bool {
+        // Entry-born markers key on the entry id (replay dedup — a replayed
+        // live marker used to DUPLICATE the row); live ones keep the seq id.
+        if entryID == nil { compactionSeq += 1 }
+        let id = entryID ?? "\(compactionSeq)"
+        // Entry-born markers ride the log position (before the live tail);
+        // live ones append (a "now" event).
+        if let entryID {
+            return insertBeforeLiveTail(.compaction(CompactionMarker(id: id, summary: summary,
+                                                                     tokensBefore: tokensBefore)))
+        }
+        return append(.compaction(CompactionMarker(id: id, summary: summary,
                                                    tokensBefore: tokensBefore)))
     }
 
@@ -251,13 +369,19 @@ public struct SessionState: Equatable, Sendable {
         case "turn_end":
             closeOpenAssistant()
         case "message_end":
-            if applyRPCMessageEnd(frame["message"]) { liveArrivals += 1 }
+            // `entryId` rides only frames SYNTHESIZED by applyEntries (fresh
+            // births from the entry log); live frames carry none — a live
+            // settle leaves the row PENDING (id-scheme v2).
+            if applyRPCMessageEnd(frame["message"], entryID: frame["entryId"]?.stringValue) {
+                liveArrivals += 1
+            }
         case "message_update":
             if applyRPCDelta(frame["assistantMessageEvent"]) { liveArrivals += 1 }
         case "tool_execution_start":
             if openToolCard(toolCallID: frame["toolCallId"]?.stringValue ?? "",
                            tool: frame["toolName"]?.stringValue ?? "",
-                           args: frame["args"]?.objectValue ?? [:]) {
+                           args: frame["args"]?.objectValue ?? [:],
+                           fromEntry: frame["fromEntry"]?.boolValue ?? false) {
                 liveArrivals += 1
             }
         case "tool_execution_update":
@@ -275,7 +399,8 @@ public struct SessionState: Equatable, Sendable {
         case "compaction_end":
             if let result = frame["result"], result != .null {
                 if appendCompaction(summary: result["summary"]?.stringValue ?? "",
-                                    tokensBefore: result["tokensBefore"]?.intValue ?? 0) {
+                                    tokensBefore: result["tokensBefore"]?.intValue ?? 0,
+                                    entryID: frame["entryId"]?.stringValue) {
                     liveArrivals += 1
                 }
             }
@@ -318,48 +443,108 @@ public struct SessionState: Equatable, Sendable {
         }
     }
 
-    /// Fold one settled message. Returns true only when a VISIBLE mutation
-    /// happened (row inserted, or the streaming bubble settled/re-keyed) —
-    /// drives the liveArrivals bump. toolResult / display:false custom → false.
-    private mutating func applyRPCMessageEnd(_ message: JSONValue?) -> Bool {
+    /// Fold one settled message (id-scheme v2: the pi ENTRY id IS the row id
+    /// wherever one exists). `entryID` is present only on frames synthesized by
+    /// `applyEntries` (fresh births from the entry log) — such rows are born
+    /// durable and anchorable. LIVE settles (no entry id) birth PENDING rows
+    /// (seq synthetic, registered in `identifyIndex`) that the
+    /// message_end-triggered delta re-keys in place via the matcher.
+    /// Returns true only on a VISIBLE mutation (drives the liveArrivals bump).
+    private mutating func applyRPCMessageEnd(_ message: JSONValue?, entryID: String? = nil) -> Bool {
         guard let role = message?["role"]?.stringValue else { return false }
         let turn = rpcTurn ?? "t0"
+        // Duplicate LIVE delivery guard (v1's identify dedup, kept as defense):
+        // a live message_end for a message already born — a live pending OR a
+        // walk-born entry row (the full-walk buffer REPLAY case) — is a
+        // redelivery, not a new message. The relay never redelivers, but a
+        // stray duplicate or a replayed buffer must not double-render.
+        // Entry-born frames (entryID) bypass: the MATCH LOOP owns those.
+        if entryID == nil, role == "user" || role == "assistant",
+           identifyIndex[Self.identify(message)] != nil {
+            return false
+        }
         switch role {
         case "user":
-            // Stable, message-intrinsic id (identify): a later session_sync replay
-            // of the same user message resolves to the same id and dedups via
-            // appendedIDs. Pi messages carry no id — see design 01M15FMQ.
-            return append(.user(UserBubble(id: Self.identify(message),
-                                           text: message?["content"]?.joinedText() ?? "",
-                                           images: Self.imagesFromContent(message?["content"]))))
+            let text = message?["content"]?.joinedText() ?? ""
+            let images = Self.imagesFromContent(message?["content"])
+            if let entryID {
+                let rowID = "user:\(entryID)"
+                let inserted = insertBeforeLiveTail(.user(UserBubble(id: entryID, text: text, images: images,
+                                                                    replayStable: true)))
+                if inserted { identifyIndex[Self.identify(message)] = rowID }
+                return inserted
+            }
+            // LIVE birth: pending seq synthetic until the delta lands the id.
+            userSeq += 1
+            let synthetic = "u\(userSeq)"
+            identifyIndex[Self.identify(message)] = "user:\(synthetic)"
+            pendingRowIDs.insert("user:\(synthetic)")
+            return append(.user(UserBubble(id: synthetic, text: text, images: images,
+                                           replayStable: false)))
         case "assistant":
             if message?["stopReason"]?.stringValue == "error" {
                 // Forward a failed turn as a notice (mirrors the fork's `error`).
-                return append(.notice(NoticeItem(id: "err\(Self.identify(message))", code: "provider_error",
-                                                 message: message?["errorMessage"]?.stringValue ?? "Provider error")))
+                // BOTH paths key the row id on the message's content identity —
+                // insertBeforeLiveTail's appendedIDs guard then dedups a LIVE
+                // error against its later ENTRY replay (and vice versa), the
+                // same collision-based dedup as before this change.
+                // ENTRY-BORN (replayed) errors ride the log position —
+                // inserted BEFORE the live tail, like every message birth and
+                // compaction marker — instead of appending at the very end:
+                // appending floated historical errors (out-of-credit etc.)
+                // below the live tail whenever a reconnect's delta walk folded
+                // them with live rows present (run 2026-09-17: "warnings drift
+                // to below the normal messages"). LIVE errors append (a "now"
+                // event belongs at the tail).
+                let text = message?["errorMessage"]?.stringValue ?? "Provider error"
+                let errorID = "err\(Self.identify(message))\(Self.stableHash(text))"
+                if entryID != nil {
+                    return insertBeforeLiveTail(.notice(NoticeItem(id: errorID, code: "provider_error",
+                                                                   message: text)))
+                }
+                noticeSeq += 1
+                return append(.notice(NoticeItem(id: errorID, code: "provider_error",
+                                                 message: text)))
             } else {
-                // Re-key the delta-built bubble to its stable {identify}-a id at
-                // settle so a session_sync replay of the same message dedups; on
-                // replay (no deltas) build it directly with the same id. Inline
-                // graphics settle here (the live stream is text deltas only).
-                let bubbleID = "\(Self.identify(message))-a"
                 let images = Self.imagesFromContent(message?["content"])
                 if openAssistantIndex != nil, !isReplayingEntries {
-                    // Finalize WITHOUT clobbering delta-built interleaving; keep
-                    // activeTurnID (turn isn't done until agent_settled). During a
-                    // replay walk this branch is OFF: a replayed settled message
-                    // is NOT the open live bubble — append it directly instead of
-                    // stealing the live bubble's identity.
-                    reidOpenAssistant(to: bubbleID, images: images)
+                    // LIVE settle: KEEP the positional id — the row is PENDING;
+                    // the entry id arrives with the message_end-triggered delta
+                    // and the matcher re-keys it (never a twin). Finalize without
+                    // clobbering delta-built interleaving; keep activeTurnID
+                    // (turn isn't done until agent_settled). During a replay walk
+                    // this branch is OFF: a replayed settled message is NOT the
+                    // open live bubble — append it directly instead.
+                    if let rowID = settleOpenAssistant(images: images) {
+                        identifyIndex[Self.identify(message)] = rowID
+                        pendingRowIDs.insert(rowID)
+                    }
                     closeOpenAssistant()
                     return true // settle is visible (streaming→false, images attach)
                 } else {
+                    // Replay/fresh birth: the ENTRY id when present (durable,
+                    // anchorable); the identify fallback exists only for id-less
+                    // entries (defensive — pi entries always carry ids) and
+                    // registers as PENDING so a later id-carrying replay re-keys it.
                     let text = message?["content"]?.joinedText() ?? ""
                     guard !text.isEmpty || !images.isEmpty else { return false }
-                    return append(.assistant(AssistantBubble(id: bubbleID, inReplyTo: turn,
-                                                             text: text, streaming: false,
-                                                             usage: nil, images: images,
-                                                             replayStable: true)))
+                    let key = Self.identify(message)
+                    let bubbleID = entryID ?? "\(key)-a"
+                    let rowID = "assistant:\(bubbleID)"
+                    let inserted = entryID != nil
+                        ? insertBeforeLiveTail(.assistant(AssistantBubble(id: bubbleID, inReplyTo: turn,
+                                                                         text: text, streaming: false,
+                                                                         usage: nil, images: images,
+                                                                         replayStable: true)))
+                        : append(.assistant(AssistantBubble(id: bubbleID, inReplyTo: turn,
+                                                            text: text, streaming: false,
+                                                            usage: nil, images: images,
+                                                            replayStable: false)))
+                    if inserted {
+                        identifyIndex[key] = rowID
+                        if entryID == nil { pendingRowIDs.insert(rowID) }
+                    }
+                    return inserted
                 }
             }
         case "custom":
@@ -402,12 +587,15 @@ public struct SessionState: Equatable, Sendable {
     }
 
     /// Reduce a batch of raw pi session ENTRIES (from the native `get_entries`
-    /// rpc) into the transcript. Each message entry is fed through the SAME
-    /// identify-based `message_end`/`tool_execution_*` path the live stream
-    /// uses, so a get_entries (re)fetch DEDUPS against live frames instead of
-    /// duplicating (design 01M15FMQ). Tool cards are reconstructed from
-    /// `toolCall` content + `toolResult` entries (keyed by toolCallId). Applied
-    /// to the LIVE reducer — not a reset — so it merges idempotently.
+    /// rpc) into the transcript (id-scheme v2: the pi ENTRY id IS the row id).
+    /// Each message entry runs the MATCH LOOP: a live-built PENDING row for the
+    /// same message (matched by content identity — the only bridge between the
+    /// id-less live frame and the id-carrying entry) is RE-KEYD in place to the
+    /// entry id; a miss births the row WITH the durable id (fresh backfill).
+    /// Tool cards are reconstructed from `toolCall` content on fresh births
+    /// (matched rows opened them live; idempotent re-open would no-op). Applied
+    /// to the LIVE reducer — not a reset — so it merges idempotently (replayed
+    /// entry ids dedup via `appendedIDs`).
     public mutating func applyEntries(_ entries: [JSONValue]) {
         // Guard the walk: replayed history must not disturb live-stream state
         // (see isReplayingEntries). Cleared even on early exit via defer.
@@ -416,23 +604,44 @@ public struct SessionState: Equatable, Sendable {
         for entry in entries {
             switch entry["type"]?.stringValue {
             case "compaction":
+                // Entry-born markers key on the entry id (dedup — a replayed
+                // live marker used to duplicate the row).
                 applyRPC(.object(["type": .string("compaction_end"),
                                   "result": .object(["summary": entry["summary"] ?? .string(""),
-                                                     "tokensBefore": entry["tokensBefore"] ?? .number(0)])]))
+                                                     "tokensBefore": entry["tokensBefore"] ?? .number(0)]),
+                                  "entryId": entry["id"] ?? .null]))
             case "message":
                 guard let msg = entry["message"] else { continue }
                 switch msg["role"]?.stringValue {
                 case "user", "assistant":
-                    applyRPC(.object(["type": .string("message_end"), "message": msg]))
-                    // Reconstruct tool cards from the assistant's toolCall blocks
-                    // (the live stream opens them via separate tool_execution_start
-                    // frames; here they ride the message content).
-                    if msg["role"]?.stringValue == "assistant", let content = msg["content"]?.arrayValue {
-                        for block in content where block["type"]?.stringValue == "toolCall" {
-                            applyRPC(.object(["type": .string("tool_execution_start"),
-                                              "toolCallId": block["id"] ?? .string(""),
-                                              "toolName": block["name"] ?? .string(""),
-                                              "args": block["arguments"] ?? .object([:])]))
+                    let entryID = entry["id"]?.stringValue
+                    let key = Self.identify(msg)
+                    if let existingRowID = identifyIndex[key], let entryID {
+                        // MATCH: this entry IS an already-born row (a live
+                        // pending or a prior entry birth) — re-key it to the
+                        // durable id. Never append: the content is already on
+                        // screen. (A batched delta re-keys several at once; a
+                        // same-id re-key no-ops via the appendedIDs guard.)
+                        if let newRowID = rekeyRow(rowID: existingRowID, toEntryID: entryID) {
+                            identifyIndex[key] = newRowID
+                        }
+                    } else {
+                        // Fresh birth FROM the entry (backfill / no live row):
+                        // born durable + anchorable. The id-less fallback is
+                        // defensive only — pi entries always carry ids.
+                        applyRPC(.object(["type": .string("message_end"), "message": msg,
+                                          "entryId": entry["id"] ?? .null]))
+                        // Reconstruct tool cards from the assistant's toolCall blocks
+                        // (the live stream opens them via separate tool_execution_start
+                        // frames; here they ride the message content).
+                        if msg["role"]?.stringValue == "assistant", let content = msg["content"]?.arrayValue {
+                            for block in content where block["type"]?.stringValue == "toolCall" {
+                                applyRPC(.object(["type": .string("tool_execution_start"),
+                                                  "toolCallId": block["id"] ?? .string(""),
+                                                  "toolName": block["name"] ?? .string(""),
+                                                  "args": block["arguments"] ?? .object([:]),
+                                                  "fromEntry": .bool(true)]))
+                            }
                         }
                     }
                 case "toolResult":
@@ -462,19 +671,58 @@ public struct SessionState: Equatable, Sendable {
         items[index] = .assistant(bubble)
     }
 
-    /// Re-key the open (delta-built) assistant bubble to its stable `identify`
-    /// id at message_end, so a later session_sync replay of the same message
-    /// dedups via `appendedIDs`. Keeps the streamed text (authoritative for the
-    /// live bubble) and attaches settled images.
-    private mutating func reidOpenAssistant(to bubbleID: String, images: [WireImage]) {
-        guard let index = openAssistantIndex, case let .assistant(old) = items[index] else { return }
-        appendedIDs.remove(items[index].id)
-        items[index] = .assistant(AssistantBubble(id: bubbleID, inReplyTo: old.inReplyTo,
+    /// Settle the open (delta-built) assistant bubble at message_end: attach
+    /// settled images, stop streaming — and KEEP its positional id (id-scheme
+    /// v2: the row is PENDING; `pendingByIdentify` maps the matcher to it and
+    /// `rekeyRow` swaps in the pi entry id when the delta lands). Returns the
+    /// settled row's id (for the pending registration), nil if no open bubble.
+    @discardableResult
+    private mutating func settleOpenAssistant(images: [WireImage]) -> String? {
+        guard let index = openAssistantIndex, case let .assistant(old) = items[index] else { return nil }
+        items[index] = .assistant(AssistantBubble(id: old.id, inReplyTo: old.inReplyTo,
                                                   text: old.text, streaming: false,
                                                   usage: old.usage,
                                                   images: images.isEmpty ? old.images : images,
-                                                  replayStable: true))
-        appendedIDs.insert(items[index].id)
+                                                  replayStable: false))
+        return items[index].id
+    }
+
+    /// Re-key a PENDING live row to its real pi ENTRY id (id-scheme v2: the
+    /// entry id IS the row id) — the matcher found it by content identity when
+    /// the entries replay landed. Keeps content/position; swaps identity so
+    /// anchors, the bounds registry, and future replays all key on the durable
+    /// id. The view sees remove-husk + insert-husk: a near row re-measures via
+    /// its probe; a far row falls back until revisited. No bump — no new content.
+    private mutating func rekeyRow(rowID: String, toEntryID entryID: String) -> String? {
+        guard let index = rowIndex[rowID] else { return nil }
+        switch items[index] {
+        case let .user(old):
+            let newRowID = "user:\(entryID)"
+            guard !appendedIDs.contains(newRowID) else { return nil }
+            appendedIDs.remove(rowID)
+            rowIndex.removeValue(forKey: rowID)
+            pendingRowIDs.remove(rowID)
+            items[index] = .user(UserBubble(id: entryID, text: old.text,
+                                            images: old.images, replayStable: true))
+            appendedIDs.insert(newRowID)
+            rowIndex[newRowID] = index
+            return newRowID
+        case let .assistant(old):
+            let newRowID = "assistant:\(entryID)"
+            guard !appendedIDs.contains(newRowID) else { return nil }
+            appendedIDs.remove(rowID)
+            rowIndex.removeValue(forKey: rowID)
+            pendingRowIDs.remove(rowID)
+            items[index] = .assistant(AssistantBubble(id: entryID, inReplyTo: old.inReplyTo,
+                                                      text: old.text, streaming: old.streaming,
+                                                      usage: old.usage, images: old.images,
+                                                      replayStable: true))
+            appendedIDs.insert(newRowID)
+            rowIndex[newRowID] = index
+            return newRowID
+        default:
+            return nil
+        }
     }
 
     /// A stable, message-INTRINSIC identity derived from the pi message's own

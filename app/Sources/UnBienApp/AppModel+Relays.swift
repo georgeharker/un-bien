@@ -1,5 +1,8 @@
 import Foundation
+import os
 import UnBienCore
+
+private let log = Logger(subsystem: "un-bien", category: "relay")
 
 // Relay + daemon control split out of AppModel.swift (its 1000-line cap):
 // relay add/remove/edit, connect + event loop + reconnect backoff, rooms
@@ -101,6 +104,33 @@ extension AppModel {
             relayHealth[relayID] = .offline
             connections[relayID] = nil
             scheduleReconnect(relay)
+        }
+    }
+
+    /// FOREGROUND HEAL (iOS silent socket death): backgrounding the app
+    /// kills its WebSockets WITHOUT ending the receive stream — the event
+    /// loop never notices, `relayHealth` stays `.online`, no reconnect
+    /// fires, and an in-flight get_entries walk orphans ("backfill timed
+    /// out", blank rows — run 2026-09-17). On scenePhase .active, PING every
+    /// online relay: a failed/timed-out ping tears the connection down and
+    /// schedules a reconnect (whose `connect` re-runs reconstruction for
+    /// every open session — the walk completes from the cursor).
+    public func healConnectionsOnForeground() {
+        for (relayID, connection) in connections {
+            guard relayHealth[relayID] == .online,
+                  let relay = mesh.config.relays.first(where: { $0.id == relayID }) else { continue }
+            Task { @MainActor [weak self] in
+                do {
+                    try await connection.ping(timeout: 5)
+                } catch {
+                    guard let self else { return }
+                    log.notice("foreground heal: relay ping failed — reconnecting (\(relay.name, privacy: .public))")
+                    await connection.close()
+                    self.relayHealth[relayID] = .offline
+                    self.connections[relayID] = nil
+                    self.scheduleReconnect(relay)
+                }
+            }
         }
     }
 

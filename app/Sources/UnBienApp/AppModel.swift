@@ -25,6 +25,23 @@ public final class AppModel: ObservableObject {
     /// Internal (not private): the AppModel+Inbound extension file — same
     /// module — folds envelope frames through these reducers.
     var envelopeReducers: [String: EnvelopeReducer] = [:]
+    /// FULL walks in flight: session key → walk request id. While one pages in,
+    /// live {rpc|evt} frames are QUEUED in `liveFrameBuffer` (never dropped —
+    /// replay at terminal page / walk error / stale unblock; the only true loss
+    /// is process death, covered by the log's durability net). A watchdog
+    /// unblocks a LOST request AND RETRIES the walk from the cursor (a lost
+    /// response — e.g. a silently-dead socket after an iOS background cycle —
+    /// orphaned the response-driven paging loop forever, run 2026-09-17).
+    /// NOTE: NO reset-at-first-page anymore — the boundary INSERTION (entries
+    /// insert before the live tail) fixes the stranding without destroying
+    /// anything; a reset collapsed the content mid-walk and blanked the view
+    /// until the pages regrew it (user report 2026-09-17).
+    var fullWalkInFlight: [String: String] = [:]
+    /// Last page-arrival time per walk-in-flight session — the watchdog's STALL
+    /// signal (a walk still receiving pages is alive; only a silent one retries).
+    var walkLastActivity: [String: Date] = [:]
+    var liveFrameBuffer: [String: [(env: EnvelopeMessage, envelope: RoutedEnvelope,
+                                   relayID: UUID)]] = [:]
     /// Pending interactive prompt per session (extension_ui_request).
     @Published public var prompts: [String: ExtensionUiRequest] = [:]
     /// Sessions whose get_entries backfill WALK has reached its terminal page
@@ -160,6 +177,36 @@ public final class AppModel: ObservableObject {
     /// scrolling, so the write must not land per-settle (v1 persisted on every
     /// scroll settle).
     var scrollPersistTask: Task<Void, Never>?
+    /// Per-session scroll-position CAPTURE closures, registered by open
+    /// TranscriptViews — the driver state that determines the visible anchor
+    /// is VIEW-LOCAL, unreachable from here. Capture is LIFECYCLE-ONLY (user
+    /// 2026-09-17: "don't save on scroll — just quit and view exit / bg"):
+    /// the flush points call these, so the store updates only at view exit,
+    /// background, and terminate — never per-scroll-flip.
+    var scrollCaptureHandlers: [String: @MainActor () -> LifecycleCapture] = [:]
+    /// Per-session retained row heights (persistence tier, design: transcript
+    /// row-geometry): captured at the same lifecycle moments as scroll memory,
+    /// seeded into the view's driver at open so a relaunch's restore lands on
+    /// EXACT geometry instead of the fallback-estimate cascade. Entries carry
+    /// a layout fingerprint (textScale/fonts/theme) — a mismatched entry is
+    /// never seeded. Not width-fingerprinted: rotation staleness self-heals as
+    /// rows re-measure on scroll-through (see RowBoundsStore.seed).
+    var heightCache: [String: HeightCacheEntry] = [:]
+
+    /// Lifecycle capture payload from an open TranscriptView: the visible
+    /// stable anchor (scroll restore) + the driver's retained heights
+    /// (geometry restore).
+    struct LifecycleCapture {
+        var anchor: String?
+        var heights: [String: Double]
+    }
+
+    /// A persisted height-cache entry (one session).
+    struct HeightCacheEntry: Codable {
+        var fingerprint: String
+        var heights: [String: Double]
+        var at: Date
+    }
 
     static let iCloudDefaultsKey = "com.georgeharker.un-bien.owner-key.icloud-sync"
     private static let themeKey = "com.georgeharker.un-bien.theme"
@@ -172,6 +219,7 @@ public final class AppModel: ObservableObject {
     private static let showSubagentsKey = "com.georgeharker.un-bien.show-subagents-home"
     private static let subagentsInteractiveKey = "com.georgeharker.un-bien.subagents-interactive"
     static let lastViewedScrollKey = "com.georgeharker.un-bien.last-viewed-scroll"
+    static let heightCacheKey = "com.georgeharker.un-bien.height-cache"
     /// The demo mesh's transient relay id (AppModel+Demo). Hex-stable so the
     /// session-id namespace is deterministic across launches.
     public static let demoRelayID = UUID(uuidString: "D3A0DE00-0000-4000-8000-000000000001")!
@@ -208,6 +256,7 @@ public final class AppModel: ObservableObject {
         if let data = UserDefaults.standard.data(forKey: Self.lastViewedScrollKey),
            let saved = try? JSONDecoder().decode([String: String].self, from: data) {
             self.lastViewedScroll = saved
+            log.notice("scroll memory loaded (\(saved.count, privacy: .public) sessions)")
         }
         self.identityStore = identityStore
             ?? KeychainOwnerIdentityStore(syncsToICloud: syncOn)
@@ -216,6 +265,9 @@ public final class AppModel: ObservableObject {
         // initialization (loadDemoSessions touches published state).
         self.demoMode = (UserDefaults.standard.object(forKey: Self.demoModeKey) as? Bool)
             ?? mesh.config.relays.isEmpty
+        // Height cache loads after full initialization (it touches stored
+        // state; the scroll-memory load above is a direct property set).
+        loadHeightCache()
         if demoMode { loadDemoSessions() }
     }
 
@@ -271,6 +323,9 @@ public final class AppModel: ObservableObject {
     /// panel ns-merge), so re-issuing them freely is safe.
     func requestReconstruction(_ session: LiveSession, connection: RelayConnection) async {
         let since = envelopeReducers[session.id]?.leafId
+        // A previous full walk died mid-flight (connection drop): unblock its
+        // buffered live frames before this walk proceeds.
+        if fullWalkInFlight[session.id] != nil { replayLiveBuffer(key: session.id) }
         // A fresh walk is starting: the restore waiter must not treat a stale
         // terminal flag as "the remembered row will never come" until this
         // walk's terminal page lands. A delta refetch (warm reconnect, since
@@ -283,10 +338,57 @@ public final class AppModel: ObservableObject {
         // Reset-at-send keeps a late terminator from an older sync reconciling
         // against a stale set (a still-pending flow re-replays every sync).
         askSyncWindows[session.id] = AskSyncWindow()
-        try? await connection.send(.getEntries(id: UUID().uuidString, since: since),
+        let walkID = UUID().uuidString
+        // A FULL walk (no cursor) is authoritative history in log order — mark
+        // it so the first page's fold RESETS the transcript first (ordering fix).
+        if since == nil {
+            fullWalkInFlight[session.id] = walkID
+            walkLastActivity[session.id] = Date()
+            scheduleWalkWatchdog(session: session, walkID: walkID)
+        }
+        try? await connection.send(.getEntries(id: walkID, since: since),
                                    toPeer: session.peerEPK, room: session.roomID)
         try? await connection.send(.sessionSync(id: UUID().uuidString, limit: nil),
                                    toPeer: session.peerEPK, room: session.roomID)
+    }
+
+    /// Walk-stall watchdog: a LOST walk response (a silently-dead socket — an
+    /// iOS background/foreground cycle kills the WebSocket without ending the
+    /// receive stream, so no reconnect ever fires — or a dropped frame)
+    /// orphans the response-driven paging loop forever: no page arrives, no
+    /// request is re-issued, history stays incomplete (run 2026-09-17: the
+    /// walk died at "fetching next page" through a socket reset). After the
+    /// stall window with NO page activity: unblock the buffered live frames,
+    /// then RETRY the walk from the cursor (idempotent fold — a first-request
+    /// loss retries as a fresh full walk). Two retries max; the next
+    /// reconnect/open completes the walk regardless.
+    private func scheduleWalkWatchdog(session: LiveSession, walkID: String, attempt: Int = 0) {
+        let sid = session.id
+        Task { @MainActor [weak self] in
+            while let self {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                // Completed or superseded meanwhile — stand down.
+                guard self.fullWalkInFlight[sid] == walkID else { return }
+                // A page arrived recently: the walk is ALIVE (huge log, slow
+                // pages) — keep waiting, never kill a progressing walk.
+                if let last = self.walkLastActivity[sid],
+                   Date().timeIntervalSince(last) < 30 { continue }
+                // Genuinely stalled: unblock live content, then retry.
+                self.replayLiveBuffer(key: sid)
+                guard attempt < 2, let conn = self.connections[session.relayID] else { return }
+                let since = self.envelopeReducers[sid]?.leafId
+                let retryID = UUID().uuidString
+                if since == nil { self.fullWalkInFlight[sid] = retryID }
+                let sinceTail = since == nil ? "nil" : String(since!.suffix(8))
+                self.log.notice("get_entries walk stalled — retry \(attempt + 1) from cursor (since=\(sinceTail, privacy: .public))")
+                try? await conn.send(.getEntries(id: retryID, since: since),
+                                     toPeer: session.peerEPK, room: session.roomID)
+                if since == nil {
+                    self.scheduleWalkWatchdog(session: session, walkID: retryID, attempt: attempt + 1)
+                }
+                return
+            }
+        }
     }
 
     /// Whether the paired pi session has shut down (`rpc:session_shutdown`).

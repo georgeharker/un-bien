@@ -24,6 +24,13 @@ public actor RelayConnection {
         self.appRoomID = appRoomID
     }
 
+    /// Liveness probe — see WebSocketChannel.ping. Exposed so the app's
+    /// foreground heal can detect a silently-dead socket (iOS background
+    /// cycles kill the socket without ending the receive stream).
+    public func ping(timeout: TimeInterval = 5) async throws {
+        try await channel.ping(timeout: timeout)
+    }
+
     /// Run the handshake. Sends `hello`, awaits `challenge`, replies `auth`.
     /// The relay starts routing silently after `auth` (no explicit ack).
     public func authenticate() async throws {

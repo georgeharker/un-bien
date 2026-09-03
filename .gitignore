@@ -25,7 +25,7 @@ data/
 
 # App Store screenshot/video capture OUTPUT (scripts/appstore-screenshots.sh)
 # — submission assets live in App Store Connect, not the repo.
-store-screensshots/
+store-screenshots/
 
 # Xcode build products (iOS/mac device builds)
 app/build/

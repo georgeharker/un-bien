@@ -19,6 +19,11 @@ private actor FakeChannel: WebSocketChannel {
 
     nonisolated func close() {}
 
+    func ping(timeout: TimeInterval) async throws {
+        // Fake channels never die silently — ping always succeeds. (The
+        // ping-timeout path is exercised by the real URLSession channel.)
+    }
+
     func push(_ line: String) {
         if !waiters.isEmpty { waiters.removeFirst().resume(returning: line) } else { inbound.append(line) }
     }
