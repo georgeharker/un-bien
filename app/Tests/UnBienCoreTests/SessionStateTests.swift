@@ -57,15 +57,15 @@ final class SessionStateTests: XCTestCase {
         // The message_end-triggered delta lands (applyEntries MATCH LOOP): both
         // pending rows re-key to their durable ENTRY ids — NOW anchorable.
         state.applyEntries([
-            .object(["type": .string("message"), "id": .string("eu1"),
+            .object(["type": .string("message"), "id": .string("eu1"), "parentId": .string(""),
                      "message": .object(["role": .string("user"), "timestamp": .number(1),
                                          "content": .string("hi")])]),
-            .object(["type": .string("message"), "id": .string("ea1"),
+            .object(["type": .string("message"), "id": .string("ea1"), "parentId": .string("eu1"),
                      "message": .object(["role": .string("assistant"), "timestamp": .number(2),
                                          "responseId": .string("resp_1"),
                                          "content": .array([.object(["type": .string("text"),
                                                                      "text": .string("hello")])])])]),
-        ])
+        ], leafId: "ea1")
         XCTAssertEqual(state.items[0].id, "user:eu1")
         XCTAssertEqual(state.items[0].anchorID, "user:eu1", "re-keyed rows anchor on their entry id")
         XCTAssertEqual(state.items[4].id, "assistant:ea1")
@@ -254,7 +254,8 @@ final class SessionStateTests: XCTestCase {
         let simple: (String) -> JSONValue = { .object(["type": .string($0)]) }
         // A raw pi ENTRY (type:"message") wrapping an AgentMessage — what
         // get_entries returns; the entry.id is intentionally NOT the bubble id.
-        func entry(role: String, text: String, ts: Double, responseId: String? = nil) -> JSONValue {
+        func entry(role: String, text: String, ts: Double, responseId: String? = nil,
+                        parent: String = "") -> JSONValue {
             var msg: [String: JSONValue] = [
                 "role": .string(role),
                 "content": .array([.object(["type": .string("text"), "text": .string(text)])]),
@@ -262,6 +263,7 @@ final class SessionStateTests: XCTestCase {
             ]
             if let rid = responseId { msg["responseId"] = .string(rid) }
             return .object(["type": .string("message"), "id": .string("entry-\(ts)"),
+                            "parentId": .string(parent),
                             "message": .object(msg)])
         }
 
@@ -281,8 +283,9 @@ final class SessionStateTests: XCTestCase {
         // same rows, same content, upgraded ids — never duplicates.
         state.applyEntries([
             entry(role: "user", text: "hi", ts: 100),
-            entry(role: "assistant", text: "hello", ts: 200, responseId: "resp_1"),
-        ])
+            entry(role: "assistant", text: "hello", ts: 200, responseId: "resp_1",
+                  parent: "entry-100.0"),
+        ], leafId: "entry-200.0")
         XCTAssertEqual(state.items.count, 2, "match-loop re-key must not duplicate rows")
         XCTAssertEqual(state.items.map(\.id), ["user:entry-100.0", "assistant:entry-200.0"],
                        "pending live rows re-key to their durable entry ids")
@@ -305,13 +308,13 @@ final class SessionStateTests: XCTestCase {
         // The walk's first page arrives → reset → entries fold in log order.
         state.resetTranscript()
         state.applyEntries([
-            .object(["type": .string("message"), "id": .string("e1"),
+            .object(["type": .string("message"), "id": .string("e1"), "parentId": .string(""),
                      "message": .object(["role": .string("user"), "timestamp": .number(100),
                                          "content": .string("oldest")])]),
-            .object(["type": .string("message"), "id": .string("e2"),
+            .object(["type": .string("message"), "id": .string("e2"), "parentId": .string("e1"),
                      "message": .object(["role": .string("user"), "timestamp": .number(300),
                                          "content": .string("newest")])]),
-        ])
+        ], leafId: "e2")
         XCTAssertEqual(state.items.map(\.id), ["user:e1", "user:e2"],
                        "post-reset walk rebuilds in LOG order, newest last")
     }
@@ -334,13 +337,13 @@ final class SessionStateTests: XCTestCase {
         // reconnect gap produces. The gap entry must insert BEFORE the pending;
         // the pending's entry must MATCH + re-key it in place (after the gap).
         state.applyEntries([
-            .object(["type": .string("message"), "id": .string("e-old"),
+            .object(["type": .string("message"), "id": .string("e-old"), "parentId": .string(""),
                      "message": .object(["role": .string("user"), "timestamp": .number(100),
                                          "content": .string("older gap")])]),
-            .object(["type": .string("message"), "id": .string("e-new"),
+            .object(["type": .string("message"), "id": .string("e-new"), "parentId": .string("e-old"),
                      "message": .object(["role": .string("user"), "timestamp": .number(500),
                                          "content": .string("newest live")])]),
-        ])
+        ], leafId: "e-new")
         XCTAssertEqual(state.items.map(\.id), ["user:e-old", "user:e-new"],
                        "older gap entry inserts before the pending; the pending re-keys in place after it — log order, not arrival order")
     }
@@ -359,15 +362,16 @@ final class SessionStateTests: XCTestCase {
             ]),
         ])
         state.applyEntries([
-            .object(["type": .string("message"), "id": .string("e1"),
+            .object(["type": .string("message"), "id": .string("e1"), "parentId": .string(""),
                      "message": .object(["role": .string("user"), "timestamp": .number(1),
                                          "content": .string("list files")])]),
-            .object(["type": .string("message"), "id": .string("e2"), "message": asstMsg]),
-            .object(["type": .string("message"), "id": .string("e3"),
+            .object(["type": .string("message"), "id": .string("e2"), "parentId": .string("e1"),
+                     "message": asstMsg]),
+            .object(["type": .string("message"), "id": .string("e3"), "parentId": .string("e2"),
                      "message": .object(["role": .string("toolResult"), "timestamp": .number(2),
                                          "toolCallId": .string("tc1"), "isError": .bool(false),
                                          "content": .string("a\nb")])]),
-        ])
+        ], leafId: "e3")
         // user bubble, assistant bubble, filled tool card.
         XCTAssertEqual(state.items.count, 3)
         guard case let .tool(card) = state.items[2] else { return XCTFail("no tool card") }
@@ -390,10 +394,10 @@ final class SessionStateTests: XCTestCase {
         // Backfill of the ended session's history: replay frames only — the
         // session is still dead, we're just refetching the entry log.
         state.applyEntries([
-            .object(["type": .string("message"), "id": .string("e1"),
+            .object(["type": .string("message"), "id": .string("e1"), "parentId": .string(""),
                      "message": .object(["role": .string("user"), "timestamp": .number(1),
                                          "content": .string("hi")])]),
-        ])
+        ], leafId: "e1")
         XCTAssertTrue(state.ended, "get_entries backfill must not retract ended")
 
         // A live turn: the session is running again — banner drops.
@@ -474,7 +478,8 @@ final class SessionStateTests: XCTestCase {
                      "assistantMessageEvent": .object(["type": .string("text_delta"), "delta": .string(s)])])
         }
         let simple: (String) -> JSONValue = { .object(["type": .string($0)]) }
-        func entry(role: String, text: String, ts: Double, responseId: String? = nil) -> JSONValue {
+        func entry(role: String, text: String, ts: Double, responseId: String? = nil,
+                        parent: String = "") -> JSONValue {
             var msg: [String: JSONValue] = [
                 "role": .string(role),
                 "content": .array([.object(["type": .string("text"), "text": .string(text)])]),
@@ -482,6 +487,7 @@ final class SessionStateTests: XCTestCase {
             ]
             if let rid = responseId { msg["responseId"] = .string(rid) }
             return .object(["type": .string("message"), "id": .string("entry-\(ts)"),
+                            "parentId": .string(parent),
                             "message": .object(msg)])
         }
 
@@ -504,8 +510,9 @@ final class SessionStateTests: XCTestCase {
         // appends BELOW the open bubble — the open bubble must survive intact.
         state.applyEntries([
             entry(role: "user", text: "first", ts: 100),
-            entry(role: "assistant", text: "earlier", ts: 200, responseId: "resp_1"),
-        ])
+            entry(role: "assistant", text: "earlier", ts: 200, responseId: "resp_1",
+                  parent: "entry-100.0"),
+        ], leafId: "entry-200.0")
 
         // The stream continues after the reconnect.
         state.applyRPC(delta(", and more"))

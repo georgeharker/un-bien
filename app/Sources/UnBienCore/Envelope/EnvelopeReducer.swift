@@ -107,8 +107,10 @@ public struct EnvelopeReducer {
     /// as a get_entries response fold, fed from the local entry cache instead
     /// of the wire — idempotent via identify, log-ordered, and the leaf cursor
     /// advances so the following delta fetch continues from the cache tail.
+    /// The cache's leafId is the COMPLETING walk's active leaf — a TRUSTED
+    /// beacon for Stage 0's path derivation (derive + render in one shot).
     public mutating func applyEntries(_ entries: [JSONValue], leafId: String?) {
-        session.applyEntries(entries)
+        session.applyEntries(entries, leafId: leafId)
         if let leafId { self.leafId = leafId }
     }
 
@@ -123,7 +125,19 @@ public struct EnvelopeReducer {
         case "response" where rpc["command"]?.stringValue == "get_entries":
             // Native pi get_entries: reduce the raw entry log into the transcript
             // (idempotent via identify) + keep the leaf cursor for a delta refetch.
-            if let entries = rpc["data"]?["entries"]?.arrayValue { session.applyEntries(entries) }
+            // STAGE 0 leaf beacon: a PARTIAL page's leafId is its last entry's
+            // id (the resume CURSOR) — deriving from it would build a partial
+            // path. Trust leafId as the ACTIVE LEAF only when the page
+            // COMPLETES the log: entries empty (the walk terminal —
+            // unambiguous), or leafId != the page's last entry id (a
+            // completing page whose active leaf isn't the log's final entry —
+            // the branchy case; the rare corner where the moved leaf IS the
+            // final entry resolves on the next empty terminal).
+            if let entries = rpc["data"]?["entries"]?.arrayValue {
+                let leaf = rpc["data"]?["leafId"]?.stringValue
+                let trusted = entries.isEmpty || leaf != entries.last?["id"]?.stringValue
+                session.applyEntries(entries, leafId: trusted ? leaf : nil)
+            }
             if let leaf = rpc["data"]?["leafId"]?.stringValue { leafId = leaf }
         case "response":
             break   // other command responses carry no transcript/side effect here

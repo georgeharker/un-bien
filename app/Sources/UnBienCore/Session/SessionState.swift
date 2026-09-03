@@ -79,6 +79,35 @@ public struct SessionState: Equatable, Sendable {
     /// never defines position, the log does (user report 2026-09-17: an older
     /// gap entry appended after a newer pending → inverted order).
     private var pendingRowIDs: Set<String> = []
+    // STAGE 0 — branch-aware fold (design 01M1FTV2, user 2026-09-18): the
+    // entry log is a TREE — append-order storage of every entry ever written,
+    // INCLUDING abandoned branches. The linear transcript is a DERIVED view:
+    // the parentId chain from the ACTIVE LEAF. Pull (cache load + walk pages)
+    // accumulates entries and NOTHING renders until the BACKWALK
+    // (derivePath); thereafter the path changes ONLY via a trusted leaf
+    // beacon (walk terminal / cache meta / a completing refetch page — fires
+    // every turn end), which re-derives on mismatch (the leaf MOVED — TUI
+    // edit-resubmit or /tree). Live frames are untouched: they render via the
+    // live plane and re-key when their entry arrives (existing machinery) —
+    // the gate only ever withholds ENTRY-BORN rows.
+    /// id → parentId for EVERY folded entry (retention: branch data for the
+    /// future branch UI + local re-derivation on leaf moves). Root entries
+    /// index with "" (pi's first entry has no parent).
+    private var entryParent: [String: String] = [:]
+    /// id → payload for every folded entry. Memory trade (the full log in
+    /// RAM — the same order as the rendered rows it replaces): re-derivation
+    /// replays from here with no refetch. A later optimization may evict
+    /// off-path payloads and re-pull from the entry cache on leaf moves.
+    private var entriesById: [String: JSONValue] = [:]
+    /// The active path's ids, root→leaf order (the backwalk's chain
+    /// reversed). nil until the first beacon — nothing renders before it.
+    private var pathOrder: [String]?
+    private var pathIds: Set<String> = []
+    /// Path entries already birthed (cursor into pathOrder).
+    private var renderedPathCount = 0
+    /// Last trusted ACTIVE leaf. A beacon leafId differing from this = the
+    /// path moved → derivePath re-derives + replays.
+    private var activeLeafId: String?
     private var userSeq = 0    // live user-row synthetics (u1, u2, …)
     private var compactionSeq = 0
     private var reasoningSeq = 0
@@ -635,65 +664,126 @@ public struct SessionState: Equatable, Sendable {
     /// (matched rows opened them live; idempotent re-open would no-op). Applied
     /// to the LIVE reducer — not a reset — so it merges idempotently (replayed
     /// entry ids dedup via `appendedIDs`).
-    public mutating func applyEntries(_ entries: [JSONValue]) {
-        // Guard the walk: replayed history must not disturb live-stream state
-        // (see isReplayingEntries). Cleared even on early exit via defer.
+    public mutating func applyEntries(_ entries: [JSONValue], leafId: String? = nil) {
+        // STAGE 0 (see the state block): index + retain EVERYTHING (the
+        /// abandoned branches stay in entryParent/entriesById — the cache and
+        /// the future branch UI keep the full tree); render only the derived
+        /// active path. `leafId` is the ACTIVE-LEAF BEACON when trusted —
+        /// cache loads carry it; wire folds trust it per the completing-page
+        /// rule in EnvelopeReducer.applyRpc (a partial page's leafId is just
+        /// the resume cursor — deriving from it would build a partial path).
         isReplayingEntries = true
         defer { isReplayingEntries = false }
         for entry in entries {
-            switch entry["type"]?.stringValue {
-            case "compaction":
-                // Entry-born markers key on the entry id (dedup — a replayed
-                // live marker used to duplicate the row).
-                applyRPC(.object(["type": .string("compaction_end"),
-                                  "result": .object(["summary": entry["summary"] ?? .string(""),
-                                                     "tokensBefore": entry["tokensBefore"] ?? .number(0)]),
-                                  "entryId": entry["id"] ?? .null]))
-            case "message":
-                guard let msg = entry["message"] else { continue }
-                switch msg["role"]?.stringValue {
-                case "user", "assistant":
-                    let entryID = entry["id"]?.stringValue
-                    let key = Self.identify(msg)
-                    if let existingRowID = identifyIndex[key], let entryID {
-                        // MATCH: this entry IS an already-born row (a live
-                        // pending or a prior entry birth) — re-key it to the
-                        // durable id. Never append: the content is already on
-                        // screen. (A batched delta re-keys several at once; a
-                        // same-id re-key no-ops via the appendedIDs guard.)
-                        if let newRowID = rekeyRow(rowID: existingRowID, toEntryID: entryID) {
-                            identifyIndex[key] = newRowID
-                        }
-                    } else {
-                        // Fresh birth FROM the entry (backfill / no live row):
-                        // born durable + anchorable. The id-less fallback is
-                        // defensive only — pi entries always carry ids.
-                        applyRPC(.object(["type": .string("message_end"), "message": msg,
-                                          "entryId": entry["id"] ?? .null]))
-                        // Reconstruct tool cards from the assistant's toolCall blocks
-                        // (the live stream opens them via separate tool_execution_start
-                        // frames; here they ride the message content).
-                        if msg["role"]?.stringValue == "assistant", let content = msg["content"]?.arrayValue {
-                            for block in content where block["type"]?.stringValue == "toolCall" {
-                                applyRPC(.object(["type": .string("tool_execution_start"),
-                                                  "toolCallId": block["id"] ?? .string(""),
-                                                  "toolName": block["name"] ?? .string(""),
-                                                  "args": block["arguments"] ?? .object([:]),
-                                                  "fromEntry": .bool(true)]))
-                            }
+            guard let id = entry["id"]?.stringValue else { continue }
+            entriesById[id] = entry
+            entryParent[id] = entry["parentId"]?.stringValue ?? ""
+        }
+        if let beacon = leafId, beacon != activeLeafId, entriesById[beacon] != nil {
+            derivePath(from: beacon)
+        }
+        renderPendingPathEntries()
+    }
+
+    /// The BACKWALK: from the active leaf, walk parentId links rootward; the
+    /// reversed chain is the active path in render order. An unchanged path
+    /// no-ops (beacon repeated). A CHANGED path after rendering began resets
+    /// the rows and replays from the retained entries — the old path's rows
+    /// go, the new path renders (the user-visible correctness fix for TUI
+    /// edit-resubmit / /tree).
+    private mutating func derivePath(from leaf: String) {
+        var chain: [String] = []
+        var seen = Set<String>()
+        var cursor = leaf
+        while !cursor.isEmpty, seen.insert(cursor).inserted,
+              let parent = entryParent[cursor] {
+            chain.append(cursor)
+            if parent.isEmpty { break }
+            cursor = parent
+        }
+        activeLeafId = leaf
+        let newOrder = Array(chain.reversed())
+        guard Set(newOrder) != pathIds else { return }
+        let firstDerivation = pathOrder == nil
+        pathOrder = newOrder
+        pathIds = Set(newOrder)
+        if !firstDerivation {
+            // The path MOVED under a rendered transcript. resetTranscript
+            // clears ROW state only — the tree state above survives and is
+            // exactly what the replay reads.
+            resetTranscript()
+        }
+        renderedPathCount = 0
+    }
+
+    /// Birth rows for path entries not yet rendered, in path order. This is
+    /// the whole membership gate: an entry not on the derived path is
+    /// retained silently (an abandoned branch — data only, no row).
+    private mutating func renderPendingPathEntries() {
+        guard let order = pathOrder, renderedPathCount < order.count else { return }
+        for id in order[renderedPathCount...] {
+            renderedPathCount += 1
+            guard let entry = entriesById[id] else { continue }
+            birthEntry(entry)
+        }
+    }
+
+    /// Birth ONE entry's rows — the pre-Stage-0 fold body, verbatim: compaction
+    /// markers, user/assistant messages (identify match → in-place re-key;
+    /// miss → durable birth + tool-card reconstruction), toolResults.
+    private mutating func birthEntry(_ entry: JSONValue) {
+        switch entry["type"]?.stringValue {
+        case "compaction":
+            // Entry-born markers key on the entry id (dedup — a replayed
+            // live marker used to duplicate the row).
+            applyRPC(.object(["type": .string("compaction_end"),
+                              "result": .object(["summary": entry["summary"] ?? .string(""),
+                                                 "tokensBefore": entry["tokensBefore"] ?? .number(0)]),
+                              "entryId": entry["id"] ?? .null]))
+        case "message":
+            guard let msg = entry["message"] else { return }
+            switch msg["role"]?.stringValue {
+            case "user", "assistant":
+                let entryID = entry["id"]?.stringValue
+                let key = Self.identify(msg)
+                if let existingRowID = identifyIndex[key], let entryID {
+                    // MATCH: this entry IS an already-born row (a live
+                    // pending or a prior entry birth) — re-key it to the
+                    // durable id. Never append: the content is already on
+                    // screen. (A batched delta re-keys several at once; a
+                    // same-id re-key no-ops via the appendedIDs guard.)
+                    if let newRowID = rekeyRow(rowID: existingRowID, toEntryID: entryID) {
+                        identifyIndex[key] = newRowID
+                    }
+                } else {
+                    // Fresh birth FROM the entry (backfill / no live row):
+                    // born durable + anchorable. The id-less fallback is
+                    // defensive only — pi entries always carry ids.
+                    applyRPC(.object(["type": .string("message_end"), "message": msg,
+                                      "entryId": entry["id"] ?? .null]))
+                    // Reconstruct tool cards from the assistant's toolCall blocks
+                    // (the live stream opens them via separate tool_execution_start
+                    // frames; here they ride the message content).
+                    if msg["role"]?.stringValue == "assistant", let content = msg["content"]?.arrayValue {
+                        for block in content where block["type"]?.stringValue == "toolCall" {
+                            applyRPC(.object(["type": .string("tool_execution_start"),
+                                              "toolCallId": block["id"] ?? .string(""),
+                                              "toolName": block["name"] ?? .string(""),
+                                              "args": block["arguments"] ?? .object([:]),
+                                              "fromEntry": .bool(true)]))
                         }
                     }
-                case "toolResult":
-                    applyRPC(.object(["type": .string("tool_execution_end"),
-                                      "toolCallId": msg["toolCallId"] ?? .string(""),
-                                      "result": msg["content"] ?? .null,
-                                      "isError": msg["isError"] ?? .bool(false)]))
-                default:
-                    break
                 }
+            case "toolResult":
+                applyRPC(.object(["type": .string("tool_execution_end"),
+                                  "toolCallId": msg["toolCallId"] ?? .string(""),
+                                  "result": msg["content"] ?? .null,
+                                  "isError": msg["isError"] ?? .bool(false)]))
             default:
-                break  // model_change / thinking_level_change / label / ... : not transcript rows
+                break
             }
+        default:
+            break  // model_change / thinking_level_change / label / ... : not transcript rows
         }
     }
 
