@@ -422,8 +422,12 @@ struct TranscriptView: View {
         // — no public API puts a live control beside the centered window
         // title; a .principal toolbar item renders as its own glass chip
         // beside it). iOS shows name+spinner via the principal toolbar item.
+        // Bare ellipsis (user 2026-09-18: "cleaner and more language
+        // independent"): 2 chars instead of 11, so a long session name
+        // truncates it far later — and the leading space distinguishes it
+        // from a truncated title.
         .navigationTitle(model.backfilledSessions.contains(session.id)
-                         ? session.name : "\(session.name)  (loading…)")
+                         ? session.name : "\(session.name) …")
         #else
         .navigationTitle(session.name)
         .navigationBarTitleDisplayMode(.inline)
@@ -463,7 +467,7 @@ struct TranscriptView: View {
             // PRINCIPAL placement replaces the inline nav-bar title with
             // name + spinner as one centered unit. (macOS: see the
             // navigationTitle comment — the indicator is the title-text
-            // "(loading…)" suffix instead; a principal item would render as
+            // "…" suffix instead; a principal item would render as
             // its own glass chip, not beside the name.)
             #if os(iOS)
             ToolbarItem(placement: .principal) {
