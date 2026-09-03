@@ -61,7 +61,8 @@ struct TranscriptRow: View, Equatable {
                 }
             }
             if !bubble.text.isEmpty {
-                Markdown(displayText(bubble.text))
+                BudgetedContent(text: bubble.text, budget: markdownBudget) { budgeted in
+                    Markdown(budgeted)
                     .markdownCodeSyntaxHighlighter(.highlightr(
                         style: theme.codeHighlightStyle,
                         font: typography.monoPlatformFont()))
@@ -83,6 +84,7 @@ struct TranscriptRow: View, Equatable {
                         .markdownMargin(top: 8, bottom: 8)
                     }
                     .textSelection(.enabled)
+                }
             }
             ForEach(Array(bubble.images.enumerated()), id: \.offset) { _, image in
                 WireImageView(image: image, theme: theme)
@@ -95,11 +97,13 @@ struct TranscriptRow: View, Equatable {
                             align: HorizontalAlignment) -> some View {
         VStack(alignment: align, spacing: 4) {
             Text(role).font(.caption.weight(.semibold)).foregroundStyle(tint)
-            Text(displayText(text)).foregroundStyle(theme.text)
-                .font(typography.bodyFont())
-                .textSelection(.enabled)
-                .padding(10)
-                .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
+            BudgetedContent(text: text, budget: markdownBudget) { budgeted in
+                Text(budgeted).foregroundStyle(theme.text)
+                    .font(typography.bodyFont())
+                    .textSelection(.enabled)
+                    .padding(10)
+                    .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
+            }
         }
         .frame(maxWidth: .infinity, alignment: align == .trailing ? .trailing : .leading)
     }
@@ -228,20 +232,47 @@ private struct SVGWebView: UIViewRepresentable {
 #endif
 #endif
 
-/// Display budget for one row's rendered text (characters). The transcript
-/// is a READING surface, not a fidelity viewer — real logs contain 400KB+
-/// message entries (whole-file dumps ride inside assistant messages), and
-/// MarkdownUI + Highlightr on such a blob blocks the main thread for ~a
-/// minute (STALL 53716ms between scroll frames, run 2026-09-17). Truncate
-/// what we RENDER; the full text stays in the session log. An expand
-/// affordance is future work.
-private let rowDisplayBudget = 8_000
+// MARK: - Display budgets (tiered, with an in-place SHOW ALL affordance)
 
-private func displayText(_ text: String, budget: Int = rowDisplayBudget) -> String {
-    guard text.count > budget else { return text }
-    let omitted = text.count - budget
-    return text.prefix(budget)
-        + "\n\n… \(omitted) more characters truncated for display — full text in the session log"
+/// Display budgets per row KIND (characters) — the transcript is a READING
+/// surface, not a fidelity viewer, and MarkdownUI + Highlightr on an
+/// unbounded blob blocks the main thread (STALL 53716ms on a 437KB entry,
+/// run 2026-09-17). Tiers (user, 2026-09-18: flat 8K bit normal long
+/// messages): assistant markdown is READING material — generous; reasoning
+/// is collapsed-by-default — moderate; tool results / code are the
+/// pathological dump carriers AND the expensive highlight path — tight.
+/// Parse cost scales ~linearly: 32K ≈ 4ms/row worst-case device.
+private let markdownBudget = 32_000
+private let reasoningBudget = 16_000
+private let toolBudget = 8_000
+
+/// Budgeted content with an in-place expand: truncated rows render the
+/// prefix + a SHOW ALL button (one user-initiated full parse — rare and
+/// deliberate); everything else renders verbatim. Expanded state is
+/// view-local: a husk rebirth (re-key) re-collapses — accepted.
+private struct BudgetedContent<Content: View>: View {
+    let text: String
+    let budget: Int
+    @ViewBuilder let render: (String) -> Content
+    @State private var expanded = false
+
+    var body: some View {
+        if text.count > budget, !expanded {
+            render(String(text.prefix(budget)))
+            Button {
+                expanded = true
+            } label: {
+                Label("Show all — \(text.count - budget) more characters",
+                      systemImage: "chevron.down")
+                    .font(.caption)
+                    .foregroundStyle(.tint)
+            }
+            .buttonStyle(.borderless)
+            .padding(.top, 2)
+        } else {
+            render(text)
+        }
+    }
 }
 
 private struct ReasoningBlockView: View {
@@ -252,12 +283,14 @@ private struct ReasoningBlockView: View {
 
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
-            Text(displayText(block.text))
-                .font(typography.monoFont(size: typography.codeSize))
-                .foregroundStyle(theme.secondaryText)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 4)
+            BudgetedContent(text: block.text, budget: reasoningBudget) { budgeted in
+                Text(budgeted)
+                    .font(typography.monoFont(size: typography.codeSize))
+                    .foregroundStyle(theme.secondaryText)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 4)
+            }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "brain").foregroundStyle(theme.secondaryText)
@@ -455,7 +488,9 @@ private struct ToolCardView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label.uppercased()).font(.system(size: 9, weight: .bold))
                 .foregroundStyle(theme.secondaryText)
-            Text(displayText(value)).foregroundStyle(theme.text).textSelection(.enabled)
+            BudgetedContent(text: value, budget: toolBudget) { budgeted in
+                Text(budgeted).foregroundStyle(theme.text).textSelection(.enabled)
+            }
         }
     }
 
@@ -477,15 +512,16 @@ private struct ToolCardView: View {
     private func codeView(_ text: String, lang: String?) -> some View {
         let font = typography.monoPlatformFont()
         // Budget BEFORE highlighting — Highlightr/highlight.js on a huge blob
-        // is the dominant main-thread cost (see rowDisplayBudget).
-        let text = displayText(text)
-        if let highlighted = HighlightEngine.shared.highlighted(
-            text, language: lang, style: theme.codeHighlightStyle, font: font) {
-            Text(highlighted).textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            Text(text).foregroundStyle(theme.text).textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        // is the dominant main-thread cost (see toolBudget).
+        BudgetedContent(text: text, budget: toolBudget) { budgeted in
+            if let highlighted = HighlightEngine.shared.highlighted(
+                budgeted, language: lang, style: theme.codeHighlightStyle, font: font) {
+                Text(highlighted).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text(budgeted).foregroundStyle(theme.text).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 
