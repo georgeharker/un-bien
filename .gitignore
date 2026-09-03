@@ -35,3 +35,4 @@ app/Prototypes/*/*.xcodeproj
 /.quarto/
 **/*.quarto_ipynb
 /_site/
+app/build-mac/
