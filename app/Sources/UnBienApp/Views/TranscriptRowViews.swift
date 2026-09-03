@@ -275,6 +275,41 @@ private struct BudgetedContent<Content: View>: View {
     }
 }
 
+/// Tool-card code block with the OFF-MAIN highlight miss path (perf #5,
+/// corrected 2026-09-18). Cache HIT renders synchronously (the repeat
+/// case); a MISS renders plain mono for one frame while the highlight
+/// evaluates on the engine's serial background queue. The `.task` IS the
+/// queue entry's lifetime: SwiftUI cancels it when this view leaves the
+/// hierarchy (row scrolled offscreen / husk detached), the engine's ticket
+/// flips, and the queue drain DROPS the entry before the expensive part —
+/// the "mutable queue" (user: "remove them again if offscreen by the time
+/// we get to them"). Onscreen rows get the queue sooner.
+private struct AsyncCodeBlock: View {
+    let code: String
+    let lang: String?
+    let theme: AppTheme
+    let font: PlatformFont
+    @State private var landed: AttributedString?
+
+    var body: some View {
+        if let hit = HighlightEngine.shared.cached(code, language: lang,
+                                                   style: theme.codeHighlightStyle, font: font)
+            ?? landed {
+            Text(hit).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            Text(code).foregroundStyle(theme.text).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .task {
+                    landed = await HighlightEngine.shared.highlightOffMain(
+                        code, language: lang,
+                        style: theme.codeHighlightStyle,
+                        fontName: font.fontName, fontSize: font.pointSize)
+                }
+        }
+    }
+}
+
 private struct ReasoningBlockView: View {
     let block: ReasoningBlock
     let theme: AppTheme
@@ -505,23 +540,21 @@ private struct ToolCardView: View {
     }
 
     // `code` block: plain output text syntax-highlighted via the shared
-    // HighlightEngine (HighlighterSwift/highlight.js, cached + theme-matched, same path
-    // as assistant-bubble code blocks). `lang` may be nil → highlight.js
-    // auto-detects; a highlighter miss falls back to plain mono Text.
+    // HighlightEngine (HighlighterSwift/highlight.js, cached + theme-matched,
+    // same path as assistant-bubble code blocks). `lang` may be nil →
+    // highlight.js auto-detects. PERF (#5 corrected, 2026-09-18): the MISS
+    // path no longer blocks main — AsyncCodeBlock renders plain mono for one
+    // frame while the highlight evaluates on the engine's serial background
+    // queue (queue-confined engines, ticket cancellation — offscreen rows'
+    // work drops at drain). Cache hits (the repeat case) stay synchronous.
+    // Budget applies BEFORE highlighting (see toolBudget). Assistant-bubble
+    // fences stay sync-on-miss: MarkdownUI's CodeSyntaxHighlighter protocol
+    // is synchronous — bounded by markdownBudget, cache-covered after.
     @ViewBuilder
     private func codeView(_ text: String, lang: String?) -> some View {
         let font = typography.monoPlatformFont()
-        // Budget BEFORE highlighting — Highlightr/highlight.js on a huge blob
-        // is the dominant main-thread cost (see toolBudget).
         BudgetedContent(text: text, budget: toolBudget) { budgeted in
-            if let highlighted = HighlightEngine.shared.highlighted(
-                budgeted, language: lang, style: theme.codeHighlightStyle, font: font) {
-                Text(highlighted).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                Text(budgeted).foregroundStyle(theme.text).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+            AsyncCodeBlock(code: budgeted, lang: lang, theme: theme, font: font)
         }
     }
 
