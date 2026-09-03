@@ -45,7 +45,16 @@ final class TranscriptWindowDriver {
     /// row-count: heights run from 2pt notices to screen-filling dumps, so an
     /// index window would swing between 20 screens and half a screen of render
     /// budget; pages are predictable budget + prefetch margin.
-    var pages: Double = 2
+    /// Attach pages — the near window's normal spread around the anchor.
+    var attachPages: Double = 2
+    /// Detach pages — HYSTERESIS (proven in the L3 harness, P2): a row that
+    /// is ALREADY NEAR is retained while within this wider band, even when a
+    /// recompute (measurement cascades landing real heights after the seed
+    /// invalidation — run 2026-09-18 "big bubble flaking") pushes it outside
+    /// the attach band. New rows attach only within `attachPages`. True
+    /// hysteresis = attach ∪ (near ∩ keep), NOT a plain union (a plain union
+    /// is just a wider window — it flaps at its own edge).
+    var detachPages: Double = 3
     /// Inter-row spacing — MUST match the stack's `VStack(spacing:)`.
     var spacing: Double = 12
     /// Reserved height for never-measured rows. Deliberately SMALL:
@@ -274,34 +283,41 @@ final class TranscriptWindowDriver {
 
     /// The near window by ANCHOR (rendered-state truth) with the geometric
     /// mapping as fallback — see WindowAnchor.
-    private func computeWindow(viewportHeight: Double) -> Range<Int>? {
+    private func computeWindow(viewportHeight: Double) -> Set<Int>? {
+        let center: Int
         switch anchor {
         case .row(let id):
-            if let center = order.firstIndex(of: id) {
-                return bounds.windowRangeAroundIndex(order: order, center: center,
-                                                     viewportHeight: viewportHeight,
-                                                     pages: pages, spacing: spacing,
-                                                     fallbackHeight: fallbackHeight)
+            guard let c = order.firstIndex(of: id) else {
+                // Anchored row vanished (compaction/filter) — KEEP the last
+                // window rather than silently falling back to the global
+                // mapping; the readout names a valid row on its next change.
+                return nil
             }
-            // Anchored row vanished (compaction/filter) — KEEP the last
-            // window rather than silently falling back to the global mapping;
-            // the readout names a valid row on its next change and re-centers.
-            return nil
+            center = c
         case .tail:
             guard let last = order.indices.last else { return nil }
-            return bounds.windowRangeAroundIndex(order: order, center: last,
-                                                 viewportHeight: viewportHeight,
-                                                 pages: pages, spacing: spacing,
-                                                 fallbackHeight: fallbackHeight)
+            center = last
         case .none:
-            return geometricWindow(viewportHeight: viewportHeight)
+            guard let range = geometricWindow(viewportHeight: viewportHeight) else { return nil }
+            return Set(range)
         }
+        let attach = bounds.windowRangeAroundIndex(order: order, center: center,
+                                                    viewportHeight: viewportHeight,
+                                                    pages: attachPages, spacing: spacing,
+                                                    fallbackHeight: fallbackHeight)
+        let keep = bounds.windowRangeAroundIndex(order: order, center: center,
+                                                 viewportHeight: viewportHeight,
+                                                 pages: detachPages, spacing: spacing,
+                                                 fallbackHeight: fallbackHeight)
+        // TRUE HYSTERESIS: attach band ∪ (already-near ∩ keep band). A plain
+        // union would just be a wider window that flaps at its own edge.
+        return Set(attach).union(near.intersection(Set(keep)))
     }
 
     private func geometricWindow(viewportHeight: Double) -> Range<Int>? {
         guard let scrollY else { return nil }
         return bounds.windowRange(order: order, scrollY: scrollY,
-                                  viewportHeight: viewportHeight, pages: pages,
+                                  viewportHeight: viewportHeight, pages: attachPages,
                                   spacing: spacing, fallbackHeight: fallbackHeight,
                                   contentInset: contentInset)
     }
