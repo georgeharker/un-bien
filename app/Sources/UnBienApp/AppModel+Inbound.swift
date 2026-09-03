@@ -263,6 +263,21 @@ extension AppModel {
         reducer.apply(EnvelopeMessage(rpc: ub))
         envelopeReducers[key] = reducer
         transcripts[key] = reducer.session
+        // NAME PULL (pre-release 2026-09-18, user: "both should do a session
+        /// name sync"): the sync terminator carries the session's CURRENT
+        /// display name — the AUTHORITATIVE name path for BOTH platforms, so
+        /// the name converges on every open + reconnect no matter what was
+        /// missed (an iOS backgrounded socket misses the live
+        /// session_info_changed push; the relay's stored meta is stale until
+        /// the extension's next hello, so no other reconnect path can carry
+        /// it). The live forward stays as the instant-update path. Old
+        /// extensions omit the field → no-op.
+        if ub["type"]?.stringValue == "session_sync_end",
+           let name = ub["session_name"]?.stringValue, !name.isEmpty,
+           var session = sessions[key], session.name != name {
+            session.name = name
+            sessions[key] = session
+        }
         // Ask-reconciliation backstop (AskSyncWindow): the sync
         // reply replays the bridge's FULL activeFlows set to the
         // sender ahead of this terminator, so a stored prompt whose
@@ -381,6 +396,18 @@ extension AppModel {
         // Panels are envelope-only: {evt channel:"panel"} carries a
         // panel_update; decode it with the stock decoder and route it
         // into the panel store (reuses PanelState + the panel UI).
+        if let evt = env.evt, evt.channel == "session_info",
+           let name = evt.data["name"]?.stringValue, !name.isEmpty {
+            // RENAME forward (extension session_info_changed, pre-release
+            // 2026-09-18): live name update — covers TUI /name, RPC, and the
+            // app's own set_session_name command (which confirms via this
+            // forward; the extension's next hello re-announces the fresh name
+            /// so reconnects stay consistent).
+            if var session = sessions[key] {
+                session.name = name
+                sessions[key] = session
+            }
+        }
         if let evt = env.evt, evt.channel == "panel",
            let pdata = try? JSONEncoder().encode(evt.data),
            let pline = String(data: pdata, encoding: .utf8),
@@ -473,7 +500,9 @@ extension AppModel {
                 // is spinning — it would never terminate (spinner forever,
                 // live frames buffered behind the walk). Treat as terminal.
                 if lastWalkLeaf[key] == leaf {
-                    log.error("get_entries page leaf REPEATED (no advance) key=\(String(key.suffix(12)), privacy: .public) leaf=\(String(leaf.suffix(8)), privacy: .public) — paging loop broken, treating as terminal")
+                    let keyTail = String(key.suffix(12))
+                    let leafTail = String(leaf.suffix(8))
+                    log.error("get_entries page leaf REPEATED (no advance) key=\(keyTail, privacy: .public) leaf=\(leafTail, privacy: .public) — paging loop broken, treating as terminal")
                     endWalk(key: key)
                     backfilledSessions.insert(key)
                     return

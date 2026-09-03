@@ -45,6 +45,12 @@ public enum ClientMessage: Equatable, Sendable {
     /// the queued-chip X: pi has no per-item delete, so the app clears the whole
     /// queue then reissues the survivors (design: delete-queued = clear+reissue).
     case clearQueue(id: String)
+    /// Native pi `set_session_name` rpc — remote rename (pre-release
+    /// 2026-09-18). Rides the rpc plane VERBATIM (pi's own verb name, so no
+    /// RelayConnection mapping needed); the reply is pi's standard response,
+    /// and the extension's session_info_changed forward confirms the new
+    /// name live (optimistic update + revert on failure/timeout app-side).
+    case setSessionName(id: String, name: String)
     /// un-bien app-driven terminate (plan [lifecycle][send]): kill the session
     /// THIS room serves. Root room: graceful host shutdown (pi fires
     /// session_shutdown → app marks ended → process exits → relay
@@ -82,6 +88,7 @@ public enum ClientMessage: Equatable, Sendable {
         case .getSessionInfo: return "get_session_info"
         case .terminate: return "terminate"
         case .closeChildRoom: return "close_child_room"
+        case .setSessionName: return "set_session_name"
         case .extensionUiResponse: return "extension_ui_response"
         case .clearQueue: return "clear_queue"
         }

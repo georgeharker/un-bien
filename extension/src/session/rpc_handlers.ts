@@ -264,6 +264,16 @@ export function createRpcHandlers(
       if (!deps.pi) throw new Error("agent session not bound")
       deps.pi.setThinkingLevel(level as ThinkingLevel)
     },
+    setSessionName: async (name?: string) => {
+      // Native pi set_session_name (remote rename, pre-release 2026-09-18):
+      // pi's own rpc verb — the reply rides the standard response plane, and
+      // pi's session_info_changed (forwarded in index.ts) confirms the new
+      // name to the app live.
+      if (!deps.pi) throw new Error("agent session not bound")
+      if (typeof name !== "string" || name.length === 0)
+        throw new Error("set_session_name: name required")
+      deps.pi.setSessionName(name)
+    },
     getAvailableModels: async () => {
       const actionCtx = (deps.lastEventCtx ?? deps.lastCtx) as ActionCtx | null
       const reg = actionCtx?.modelRegistry ?? ensureModelRegistry(actionCtx)

@@ -25,6 +25,8 @@ struct HomeView: View {
     /// a root-terminate exits the host process (the user's own Ctrl-C,
     /// fired remotely).
     @State private var killTarget: LiveSession?
+    @State private var renameTarget: LiveSession?
+    @State private var renameText = ""
     /// Nav stack path, so a subagents-panel tap (from a sheet over a pushed
     /// TranscriptView) can push the child session onto THIS stack.
     @State private var path = NavigationPath()
@@ -202,6 +204,30 @@ struct HomeView: View {
         } message: {
             Text("This sends quit to the session on the machine. Its process exits and the chat leaves this list.")
         }
+        // Remote rename (pre-release 2026-09-18): ONE alert at the List level
+        // (same pattern as the terminate dialog) — prefilled with the current
+        // name; pi's native set_session_name rpc carries it, the
+        // session_info_changed forward confirms it live, and failure/timeout
+        // snaps the name back (AppModel.renameSession).
+        .alert(
+            "Rename Session",
+            isPresented: Binding(
+                get: { renameTarget != nil },
+                set: { if !$0 { renameTarget = nil } }
+            )
+        ) {
+            TextField("Name", text: $renameText)
+            Button("Rename") {
+                if let target = renameTarget {
+                    let name = renameText
+                    Task { await model.renameSession(target, to: name) }
+                }
+                renameTarget = nil
+            }
+            Button("Cancel", role: .cancel) { renameTarget = nil }
+        } message: {
+            Text("Sets the session's display name on the machine (pi /name).")
+        }
     }
 
     /// Probe each paired machine's presence daemon until it answers, regardless
@@ -358,6 +384,14 @@ struct HomeView: View {
             }
         }
         .contextMenu {
+            if !model.isRemovable(session) {
+                Button {
+                    renameText = session.name
+                    renameTarget = session
+                } label: {
+                    Label("Rename…", systemImage: "pencil")
+                }
+            }
             if model.isRemovable(session) {
                 Button(role: .destructive) {
                     model.removeEndedSession(session)

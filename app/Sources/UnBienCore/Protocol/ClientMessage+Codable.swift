@@ -93,6 +93,9 @@ extension ClientMessage: Codable {
         case let .closeChildRoom(id, roomID):
             try container.encode(id, forKey: .id)
             try container.encode(roomID, forKey: .roomID)
+        case let .setSessionName(id, name):
+            try container.encode(id, forKey: .id)
+            try container.encode(name, forKey: .name)
         case let .extensionUiResponse(response):
             try container.encode(response.id, forKey: .id)
             try container.encodeIfPresent(response.value, forKey: .value)
@@ -160,6 +163,8 @@ extension ClientMessage: Codable {
             )
         case "close_child_room":
             self = .closeChildRoom(id: try string(.id), roomID: try string(.roomID))
+        case "set_session_name":
+            self = .setSessionName(id: try string(.id), name: try string(.name))
         case "extension_ui_response":
             self = .extensionUiResponse(ExtensionUiResponse(
                 id: try string(.id),

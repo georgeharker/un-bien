@@ -381,7 +381,9 @@ public final class AppModel: ObservableObject {
                 envelopeReducers[session.id] = reducer
                 transcripts[session.id] = reducer.session
                 since = cached.leafId
-                log.notice("entry cache hit: \(cached.entries.count, privacy: .public) entries folded in \(Int(-t0.timeIntervalSinceNow * 1000), privacy: .public)ms — delta walk from leaf=\(String(cached.leafId.suffix(8)), privacy: .public)")
+                let foldMs = Int(-t0.timeIntervalSinceNow * 1000)
+                let leafTail = String(cached.leafId.suffix(8))
+                log.notice("entry cache hit: \(cached.entries.count, privacy: .public) entries folded in \(foldMs, privacy: .public)ms — delta walk from leaf=\(leafTail, privacy: .public)")
             } else {
                 log.notice("entry cache miss — full walk key=\(String(session.id.suffix(12)), privacy: .public)")
             }
@@ -522,6 +524,27 @@ public final class AppModel: ObservableObject {
         }
         forgetSession(key: session.id)
         log.notice("removed ended chat key=\(String(session.id.suffix(12)), privacy: .public)")
+    }
+
+    /// Remote rename (pre-release 2026-09-18): pi's NATIVE `set_session_name`
+    /// rpc — standard reply plane, no bespoke ack. Optimistic update; revert on
+    /// failure/timeout (an old extension drops the command → nil reply → the
+    /// name snaps back). The extension's session_info_changed forward confirms
+    /// the new name live, and its next hello re-announces it (relay meta
+    /// self-heals). Demo sessions have no real connection → no-op.
+    func renameSession(_ session: LiveSession, to name: String) async {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let connection = connections[session.relayID] else { return }
+        let old = session.name
+        if var s = sessions[session.id] { s.name = trimmed; sessions[session.id] = s }
+        let rid = UUID().uuidString
+        let reply = await sendAwaitingReply(.setSessionName(id: rid, name: trimmed),
+                                            reqID: rid, to: session, over: connection)
+        if reply?["success"]?.boolValue != true, var s = sessions[session.id] {
+            s.name = old
+            sessions[session.id] = s
+        }
     }
 
     /// `close_child_room` to the PARENT of a (done) subagent — the only

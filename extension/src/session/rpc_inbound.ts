@@ -120,6 +120,10 @@ export interface RpcCommandHandlers {
    *  does NOT replay them. An unknown `since` must throw `Entry not found:`
    *  (pi-faithful error semantics, not a silent restart). */
   getEntries?(since?: string): Promise<GetEntriesResult>
+  /** Native pi set_session_name (remote rename): sets the session display
+   *  name — pi fires session_info_changed, which index.ts forwards to the
+   *  app; the standard rpc reply is the app's success signal. */
+  setSessionName?(name: string): Promise<void>
 }
 
 function str(v: unknown): string {
@@ -217,6 +221,14 @@ export async function dispatchRpcCommand(
           success: true,
           data,
         })
+      }
+      case "set_session_name": {
+        // Native pi rpc (remote rename, pre-release 2026-09-18): pi replies on
+        // the standard response plane; the extension's session_info_changed
+        // forward (index.ts) confirms the new name to the app live.
+        if (!handlers.setSessionName) return null
+        await handlers.setSessionName(str(frame.name))
+        return rpcResponse("set_session_name", id, { success: true })
       }
       case "get_entries": {
         if (!handlers.getEntries) return null

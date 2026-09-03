@@ -1147,12 +1147,18 @@ function _routeUnBienPlaneFrom(
     )
     // Terminator/ack on the ub plane; carries the session clock so the app can
     // detect a pi restart. `truncated`/`limit` are gone (a replay concern;
-    // get_entries is unbounded / since-delta).
+    // get_entries is unbounded / since-delta). `session_name` (pre-release
+    // 2026-09-18): the NAME PULL — heals a missed session_info_changed push
+    // (an iOS backgrounded socket misses live frames; the relay's stored meta
+    // is stale until our next hello, so reconnects can't carry it either).
+    // session_sync is issued on EVERY open + reconnect, so the name heals on
+    // every natural cycle. Old apps ignore the field; old extensions omit it.
     sender.sendEnvelope({
       ub: {
         type: "session_sync_end",
         ...(typeof f.id === "string" ? { in_reply_to: f.id } : {}),
         session_started_at: _sessionStartedAt ?? 0,
+        ...(deps.sessionName ? { session_name: deps.sessionName } : {}),
       } as EnvelopeMessage["ub"],
     })
     return
@@ -2174,6 +2180,27 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // and the persisted CompactionEntry surfaces natively via get_entries. Only
     // the working=false bracket remains here — the ROOT room's, so guard it.
     if (!_isNonRootSid(_sidOf(ctx))) _publishWorking(false)
+  })
+
+  // RENAME FORWARD (pre-release 2026-09-18): the session display name
+  // changed — via /name in the TUI, RPC, or the app's own set_session_name
+  // command (pi's native verb; the reply IS the standard rpc response). Two
+  // effects: (1) forward to the app over the relay-OPAQUE envelope plane
+  // (works on every deployed relay — the relay's room_meta_update patch only
+  // merges its typed fields, so the control plane CANNOT carry a name); (2)
+  // refresh the local announce state so the NEXT hello re-announces the fresh
+  // name — the relay's stored meta self-heals at the extension's next connect.
+  // Root sessions only (v1): a subagent child's rename gets its own forward
+  // when child renames matter.
+  pi.on("session_info_changed", (event, ctx) => {
+    const name = (event as { name?: string } | undefined)?.name
+    if (typeof name !== "string" || name.length === 0) return
+    if (_isNonRootSid(_sidOf(ctx))) return
+    _sessionName = name
+    if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, name }
+    _broadcastEnvelope(relayDeps, {
+      evt: { channel: "session_info", data: { name } },
+    })
   })
 
   // Re-capture the freshest base ctx on every session replacement so compact
