@@ -214,4 +214,24 @@ final class EnvelopeReducerTests: XCTestCase {
         XCTAssertEqual(notices[0].code, "ask_warning")
         XCTAssertEqual(notices[0].message, "Answer was not accepted")
     }
+    /// LIVE aux sidecar (run 2026-09-18, "never see the sidecar even live"):
+    /// a tool_execution_start envelope carrying `aux.hunks` must land the
+    /// pre-rendered Edit diff on the card — the whole app fold chain
+    /// (decode → apply(env) → applyRpc(aux:) → card.hunks) in one test.
+    func testLiveAuxHunksAttachToToolCard() throws {
+        let lines = [
+            #"{"rpc":{"type":"tool_execution_start","toolCallId":"tcA","toolName":"edit","args":{"path":"a.swift","edits":[{"oldText":"x","newText":"y"}]}},"aux":{"hunks":[{"lines":[{"kind":"remove","oldLine":1,"text":"x"},{"kind":"add","newLine":1,"text":"y"}]}]}}"#,
+        ]
+        let decoder = JSONDecoder()
+        let messages = try lines.map { try decoder.decode(EnvelopeMessage.self, from: Data($0.utf8)) }
+        var reducer = EnvelopeReducer()
+        reducer.apply(messages)
+
+        let card = try XCTUnwrap(toolCards(reducer.session).first)
+        XCTAssertEqual(card.hunks?.count, 1, "live aux.hunks must attach to the card")
+        let hunkLines = try XCTUnwrap(card.hunks?.first?["lines"]?.arrayValue)
+        XCTAssertEqual(hunkLines.count, 2)
+        XCTAssertEqual(hunkLines[0]["kind"]?.stringValue, "remove")
+        XCTAssertEqual(hunkLines[1]["kind"]?.stringValue, "add")
+    }
 }

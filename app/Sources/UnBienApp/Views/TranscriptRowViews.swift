@@ -374,7 +374,40 @@ private struct ToolCardView: View {
         for key in ["content", "contents", "text", "new_string", "new_str", "newText"] {
             if let value = card.args[key]?.stringValue, !value.isEmpty { return true }
         }
+        // edits[]-shaped edit tools (run 2026-09-18: cards rendered as raw
+        // JSON — the new text nests inside edits[].newText, which none of the
+        // top-level keys above can see).
+        if !editPairs(card.args).isEmpty { return true }
         return false
+    }
+
+    /// First non-empty string arg among `keys` (static: shared by isRich and
+    /// the instance views).
+    static func stringArg(_ dict: [String: JSONValue], _ keys: [String]) -> String? {
+        for key in keys {
+            if let s = dict[key]?.stringValue, !s.isEmpty { return s }
+        }
+        return nil
+    }
+
+    /// The edit args' old/new pairs — BOTH shapes: a single edit at the top
+    /// level (camelCase + snake_case variants) and the `edits[]` array of
+    /// pairs. Empty when the args aren't edit-shaped.
+    static func editPairs(_ args: [String: JSONValue]) -> [(old: String?, new: String?)] {
+        var pairs: [(old: String?, new: String?)] = []
+        func pair(_ dict: [String: JSONValue]) -> (String?, String?)? {
+            let old = stringArg(dict, ["oldText", "old_text", "old_string", "oldString"])
+            let new = stringArg(dict, ["newText", "new_text", "new_string", "newString"])
+            return (old != nil || new != nil) ? (old, new) : nil
+        }
+        if case .array(let edits)? = args["edits"] {
+            for case .object(let e) in edits {
+                if let p = pair(e) { pairs.append(p) }
+            }
+        } else if let p = pair(args) {
+            pairs.append(p)
+        }
+        return pairs
     }
 
     var body: some View {
@@ -440,19 +473,42 @@ private struct ToolCardView: View {
         .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
     }
 
-    // Input Edit diff (best-effort LIVE aux.hunks); nil when absent (e.g. replay).
+    // Input Edit diff: LIVE aux.hunks when present; otherwise DERIVED from
+    // the persisted args (replay never carries sidecars — and run 2026-09-18
+    // the live wire didn't either). The derivation shows the edit's substance
+    // (− old / + new) without the on-disk context lines the extension adds.
     private var inputHunks: [JSONValue]? {
         if let hunks = card.hunks, !hunks.isEmpty { return hunks }
-        return nil
+        var hunks: [JSONValue] = []
+        for pair in Self.editPairs(card.args) {
+            var lines: [JSONValue] = []
+            if let old = pair.old, !old.isEmpty {
+                lines += old.split(separator: "\n", omittingEmptySubsequences: false).map {
+                    JSONValue.object(["kind": .string("remove"), "text": .string(String($0))])
+                }
+            }
+            if let new = pair.new, !new.isEmpty {
+                lines += new.split(separator: "\n", omittingEmptySubsequences: false).map {
+                    JSONValue.object(["kind": .string("add"), "text": .string(String($0))])
+                }
+            }
+            if !lines.isEmpty { hunks.append(.object(["lines": .array(lines)])) }
+        }
+        return hunks.isEmpty ? nil : hunks
     }
 
     // The new text an edit/write is applying, from persisted args — the Content
-    // view / replay floor. `lang` inferred from the target file path.
+    // view / replay floor. `lang` inferred from the target file path. For
+    // edits[]-shaped tools the new texts nest inside the array — join them.
     private var contentText: (text: String, lang: String?)? {
         for key in ["content", "contents", "text", "new_string", "new_str", "newText"] {
             if let text = card.args[key]?.stringValue, !text.isEmpty {
                 return (text, contentLang)
             }
+        }
+        let newTexts = Self.editPairs(card.args).compactMap { $0.new }
+        if !newTexts.isEmpty {
+            return (newTexts.joined(separator: "\n"), contentLang)
         }
         return nil
     }

@@ -30,6 +30,7 @@
 // fixtures together when bumping the pinned pi version.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
+import { envLog } from "./debug_log.js"
 
 /**
  * One mesh-envelope wrapper message (docs/rpc-envelope.md). `type` is the
@@ -339,6 +340,17 @@ export function createRpcEnvelope(
         const enriched = opts.enrichArgs(p.toolName as string, p.args)
         if (enriched && Array.isArray(enriched.hunks)) {
           env = { ...env, aux: { hunks: enriched.hunks } }
+          envLog(
+            `aux.hunks attached: ${String(p.toolName)} (${enriched.hunks.length} hunk(s))`,
+          )
+        } else {
+          // Run 2026-09-18 ("never see the sidecar even live"): enrichment
+          // returning NOTHING is silent — usually the target-file read failed
+          // (wrong cwd) or the arg shape didn't match. Log it so the log file
+          // attributes the gap in one glance.
+          envLog(
+            `aux.hunks ABSENT: ${String(p.toolName)} — enrichment returned nothing`,
+          )
         }
       }
       // OUTPUT enrichment is app-side (design 01M177AF): the app classifies the
