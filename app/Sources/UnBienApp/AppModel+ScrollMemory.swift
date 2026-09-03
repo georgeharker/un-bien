@@ -136,6 +136,11 @@ extension AppModel {
     func forgetSession(key: String) {
         lastViewedScroll[key] = nil
         heightCache[key] = nil
+        // Entry cache follows the ROOM's lifecycle (design
+        // 01M1M4N8RZZANDX6NWY7FCSBT5, append 3): trashed when the room goes
+        // away — this fires on room_ended / rooms_check purge / removal.
+        // NO LRU — retention is the feature.
+        Task { await entryCache.remove(key: key) }
         // Flush immediately — the didSet only schedules a debounced write.
         scrollPersistTask?.cancel()
         persistScrollAndHeights()

@@ -103,6 +103,15 @@ public struct EnvelopeReducer {
         session.resetTranscript()
     }
 
+    /// CACHE-REPLAY FOLD (design 01M1M4N8RZZANDX6NWY7FCSBT5): the same effect
+    /// as a get_entries response fold, fed from the local entry cache instead
+    /// of the wire — idempotent via identify, log-ordered, and the leaf cursor
+    /// advances so the following delta fetch continues from the cache tail.
+    public mutating func applyEntries(_ entries: [JSONValue], leafId: String?) {
+        session.applyEntries(entries)
+        if let leafId { self.leafId = leafId }
+    }
+
     // MARK: - rpc plane
 
     private mutating func applyRpc(_ rpc: JSONValue, aux: JSONValue? = nil) {

@@ -37,6 +37,11 @@ public final class AppModel: ObservableObject {
     /// anything; a reset collapsed the content mid-walk and blanked the view
     /// until the pages regrew it (user report 2026-09-17).
     var fullWalkInFlight: [String: String] = [:]
+    /// Local entry-stream cache (design 01M1M4N8RZZANDX6NWY7FCSBT5). Actor —
+    /// loads awaited at reconstruction, appends fire-and-forget from the
+    /// paging handler, trashed on room-gone (forgetSession). NO LRU — the
+    /// cache lives exactly as long as the room does.
+    let entryCache = EntryCacheStore()
     /// Last page-arrival time per walk-in-flight session — the watchdog's STALL
     /// signal (a walk still receiving pages is alive; only a silent one retries).
     var walkLastActivity: [String: Date] = [:]
@@ -241,6 +246,12 @@ public final class AppModel: ObservableObject {
     /// The demo mesh's transient relay id (AppModel+Demo). Hex-stable so the
     /// session-id namespace is deterministic across launches.
     public static let demoRelayID = UUID(uuidString: "D3A0DE00-0000-4000-8000-000000000001")!
+
+    /// Demo session keys' prefix ("<demoRelayID>:") — demo content is
+    /// in-memory only and never touches the entry cache.
+    func isDemoKey(_ key: String) -> Bool {
+        key.hasPrefix(Self.demoRelayID.uuidString + ":")
+    }
     private static let demoModeKey = "com.georgeharker.un-bien.demo-mode"
     /// Backstop grace for an UNCONSUMED optimistic queued chip (design 01M158S7).
     /// Long by design: consumption (user message_end) is the primary clear, so
@@ -340,7 +351,29 @@ public final class AppModel: ObservableObject {
     /// panels + pending extension_ui. Both are idempotent (identify dedup /
     /// panel ns-merge), so re-issuing them freely is safe.
     func requestReconstruction(_ session: LiveSession, connection: RelayConnection) async {
-        let since = envelopeReducers[session.id]?.leafId
+        var since = envelopeReducers[session.id]?.leafId
+        // CACHE-FIRST (design 01M1M4N8RZZANDX6NWY7FCSBT5): with no in-memory
+        /// cursor (cold launch), consult the local entry cache BEFORE the
+        /// walk. A hit folds the cached history prefix locally (log-ordered,
+        /// identify-idempotent — the SAME fold a page performs), and the walk
+        /// becomes a DELTA from the cached leaf: one round trip that confirms
+        /// new content or none. The cache NEVER replaces the network check.
+        /// Version mismatch → discard → ordinary full walk. Demo sessions
+        /// are in-memory only — never cached.
+        if since == nil, !isDemoKey(session.id) {
+            let t0 = Date()
+            if let cached = await entryCache.load(key: session.id) {
+                var reducer = envelopeReducers[session.id] ?? EnvelopeReducer()
+                reducer.setHideReasoning(!showThinking)
+                reducer.applyEntries(cached.entries, leafId: cached.leafId)
+                envelopeReducers[session.id] = reducer
+                transcripts[session.id] = reducer.session
+                since = cached.leafId
+                log.notice("entry cache hit: \(cached.entries.count, privacy: .public) entries folded in \(Int(-t0.timeIntervalSinceNow * 1000), privacy: .public)ms — delta walk from leaf=\(String(cached.leafId.suffix(8)), privacy: .public)")
+            } else {
+                log.notice("entry cache miss — full walk key=\(String(session.id.suffix(12)), privacy: .public)")
+            }
+        }
         // A previous full walk died mid-flight (connection drop): unblock its
         // buffered live frames before this walk proceeds.
         if fullWalkInFlight[session.id] != nil { replayLiveBuffer(key: session.id) }

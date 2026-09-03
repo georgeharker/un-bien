@@ -450,6 +450,17 @@ extension AppModel {
                 // re-issued mid-flight) arriving after its terminal re-armed
                 // the spinner with no walk left to complete it — stuck ON.
                 walkLastActivity[key] = Date() // the watchdog's alive-signal
+                // CACHE APPEND (design 01M1M4N8RZZANDX6NWY7FCSBT5, append 5):
+                /// EVERY get_entries response funnels here — walk pages AND
+                /// message_end refetch entries (the authoritative log versions
+                /// that replace the streamed fragments + the out-of-band
+                /// compaction/model entries) — so the cache tracks the LIVE
+                /// frontier. Fire-and-forget: the store's overlap guard skips
+                /// stragglers and re-walk pages.
+                if !isDemoKey(key) {
+                    let page = entries
+                    Task { await entryCache.append(key: key, entries: page, leafId: leaf) }
+                }
                 let peer = envelope.peer, room = envelope.room
                 let n = entries.count
                 let leafTail = String(leaf.suffix(8))
