@@ -184,6 +184,24 @@ public final class AppModel: ObservableObject {
     /// the flush points call these, so the store updates only at view exit,
     /// background, and terminate — never per-scroll-flip.
     var scrollCaptureHandlers: [String: @MainActor () -> LifecycleCapture] = [:]
+    /// LIVE DELTA COALESCER state (perf, run 2026-09-18 — driven from
+    /// AppModel+Inbound; stored here because extensions can't hold stored
+    /// properties): pending `message_update` frames per session + the
+    /// flush-scheduled flag. ~15fps fold cadence — see
+    /// AppModel+Inbound.handleEnvelopeContent for the design note.
+    static let streamDeltaFlushNanos: UInt64 = 66_000_000
+    var pendingStreamDeltas: [String: [(env: EnvelopeMessage,
+                                        envelope: RoutedEnvelope,
+                                        relayID: UUID)]] = [:]
+    var streamDeltaFlushScheduled = false
+    /// Connection generation per relay (run 2026-09-18 duplicate-delivery
+    /// fix): incremented by every connect(); event loops carry their
+    /// generation and refuse to tear down state when superseded — two
+    /// racing connect() paths previously left two live subscribed sockets
+    /// for one relay (every room frame delivered twice → every streamed
+    /// chunk folded twice). Stored here (extensions can't hold properties);
+    /// driven from AppModel+Relays.
+    var connectionGeneration: [UUID: Int] = [:]
     /// Per-session retained row heights (persistence tier, design: transcript
     /// row-geometry): captured at the same lifecycle moments as scroll memory,
     /// seeded into the view's driver at open so a relaunch's restore lands on

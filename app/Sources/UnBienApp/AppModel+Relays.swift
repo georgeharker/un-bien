@@ -68,6 +68,20 @@ extension AppModel {
         guard let owner, let url = relay.webSocketURL else { return }
         reconnectTasks[relay.id]?.cancel()
         reconnectTasks[relay.id] = nil
+        // SUPERSDE any previous connection/loop (run 2026-09-18: "every
+        // chunk repeats"): two racing connect() paths (stream-end reconnect
+        // × ping-heal × bootstrap) could leave TWO authenticated, subscribed
+        // sockets live for the same relay — both event loops received the
+        // same room frames → every delta folded TWICE. Now: the previous
+        // connection is closed explicitly, its loop's stream ends, and the
+        // loop's teardown guard (below) refuses to act for a superseded
+        // connection. The generation token makes staleness decidable.
+        connectionGeneration[relay.id, default: 0] += 1
+        let generation = connectionGeneration[relay.id]!
+        if let old = connections[relay.id] {
+            connections[relay.id] = nil
+            Task { await old.close() }
+        }
         relayHealth[relay.id] = .connecting
         let channel = URLSessionWebSocketChannel(url: url)
         let connection = RelayConnection(channel: channel, identity: owner)
@@ -75,10 +89,16 @@ extension AppModel {
             try await connection.authenticate()
             let peers = mesh.config.machines(onRelay: relay.id).map(\.epk)
             try await connection.subscribe(peers: peers)
+            // A newer connect() won while we authenticated — abandon this
+        // connection (it would otherwise resurrect as a second live loop).
+            guard connectionGeneration[relay.id] == generation else {
+                Task { await connection.close() }
+                return
+            }
             connections[relay.id] = connection
             relayHealth[relay.id] = .online
             reconnectAttempts[relay.id] = 0
-            startEventLoop(relayID: relay.id, connection: connection)
+            startEventLoop(relayID: relay.id, connection: connection, generation: generation)
             // Recover every open session on this relay after a (re)connect: the
             // transcript (get_entries) + panels (session_sync). Idempotent, so a
             // first connect where nothing is open yet is a no-op.
@@ -91,14 +111,18 @@ extension AppModel {
         }
     }
 
-    private func startEventLoop(relayID: UUID, connection: RelayConnection) {
+    private func startEventLoop(relayID: UUID, connection: RelayConnection, generation: Int) {
         Task { @MainActor in
             let stream = await connection.events()
             for await frame in stream {
                 handle(frame: frame, relayID: relayID)
             }
-            // Stream ended = socket dropped. Only retry if the relay is still
-            // known and we didn't tear it down deliberately (health cleared).
+            // Stream ended = socket dropped. SUPERSEDED loops (a newer
+            // connect() replaced this connection) must NOT tear down state
+            // or schedule a reconnect — that would kill the LIVE connection's
+            // registration and spawn duplicate loops (the doubling root
+            // cause, run 2026-09-18).
+            guard connectionGeneration[relayID] == generation else { return }
             guard relayHealth[relayID] != nil,
                   let relay = mesh.config.relays.first(where: { $0.id == relayID }) else { return }
             relayHealth[relayID] = .offline

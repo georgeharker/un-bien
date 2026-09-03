@@ -83,6 +83,12 @@ public struct SessionState: Equatable, Sendable {
     private var compactionSeq = 0
     private var reasoningSeq = 0
     private var noticeSeq = 0
+    /// LAST message_update frame applied — FULL-FRAME delta dedup (run
+    /// 2026-09-18): a redelivered frame is byte-identical including its
+    /// usage metrics; a real event's usage.output increments, so identical
+    /// frames are redeliveries and distinct frames are real. See the
+    /// message_update case in applyRPC.
+    private var lastMessageUpdateFrame: JSONValue?
     private var assistantSeq = 0
     // rpc-envelope reduction state
     private var rpcTurn: String?
@@ -376,6 +382,19 @@ public struct SessionState: Equatable, Sendable {
                 liveArrivals += 1
             }
         case "message_update":
+            // FULL-FRAME DEDUP (user, 2026-09-18 — pi docs: message_update
+            // carries usage metrics): a REAL repeated-word event increments
+            // usage.output → its frame DIFFERS from the previous one →
+            // applies; a REDELIVERY is byte-identical including usage →
+            // skipped. The earlier (kind, contentIndex, delta) inner-event key
+            // could drop a genuine repeated word; the whole frame cannot.
+            // Mirrors message_end's identify guard for the delta plane (the
+            // transport's "never redelivers" assumption broke under
+            // overlapping reconnects — run 2026-09-18 "every chunk repeats").
+            if let last = lastMessageUpdateFrame, last == frame {
+                return   // redelivery — no fold, no arrival bump
+            }
+            lastMessageUpdateFrame = frame
             if applyRPCDelta(frame["assistantMessageEvent"]) { liveArrivals += 1 }
         case "tool_execution_start":
             if openToolCard(toolCallID: frame["toolCallId"]?.stringValue ?? "",
@@ -569,6 +588,15 @@ public struct SessionState: Equatable, Sendable {
     /// shown (`hideReasoning`); toolcall_* / *_start / *_end never (no row).
     /// Drives the liveArrivals bump: a hidden thinking stream is NOT output,
     /// else a quiet thinking phase pins a bottom reader (the "…" lock).
+    /// DELTA DEDUP (run 2026-09-18: "every chunk repeats" in the live
+    /// stream): the wire's delta events carry NO id, and the design assumed
+    /// "the relay never redelivers" — but duplicate delivery (reconnect /
+    /// subscription paths) doubled every chunk, and the doubled pending text
+    /// then failed the identify match at completion → duplicate births (the
+    /// whole double-words family). Content dedup: an EXACT immediate repeat
+    /// (same kind + same delta string) is a redelivery — real consecutive
+    /// deltas are distinct by construction (each carries new content). This
+    /// mirrors message_end's identify guard for the delta plane.
     private mutating func applyRPCDelta(_ event: JSONValue?) -> Bool {
         guard let type = event?["type"]?.stringValue else { return false }
         let turn = rpcTurn ?? "t0"

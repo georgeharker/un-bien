@@ -154,6 +154,47 @@ extension AppModel {
     /// by SHAPE — a stock ServerMessage decodes to an EnvelopeMessage with
     /// both fields nil. The reducer owns the transcript for this key;
     /// stock session-content is suppressed in `route`.
+    /// A streamed delta: rpc `message_update` frames only — everything else
+    /// (message_end, tool events, asks, errors…) is a barrier.
+    private func isStreamDelta(_ env: EnvelopeMessage) -> Bool {
+        env.rpc?["type"]?.stringValue == "message_update"
+    }
+
+    /// ~15fps fold cadence — fast enough that text arrival looks continuous,
+    /// slow enough to cut re-parse/publish work 3-4×. (The stored state lives
+    /// on AppModel — extensions can't hold stored properties.)
+
+    private func scheduleStreamDeltaFlush() {
+        guard !streamDeltaFlushScheduled else { return }
+        streamDeltaFlushScheduled = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: Self.streamDeltaFlushNanos)
+            guard let self else { return }
+            self.streamDeltaFlushScheduled = false
+            self.flushAllStreamDeltas()
+        }
+    }
+
+    /// Flush one session's pending deltas — ONE reducer fetch, N applies,
+    /// ONE publish (the batch lands as a single transcripts update).
+    private func flushStreamDeltas(for key: String) {
+        guard let pending = pendingStreamDeltas.removeValue(forKey: key),
+              !pending.isEmpty else { return }
+        var reducer = envelopeReducers[key] ?? EnvelopeReducer()
+        reducer.setHideReasoning(!showThinking)
+        for frame in pending {
+            reducer.apply(frame.env)
+        }
+        envelopeReducers[key] = reducer
+        transcripts[key] = reducer.session
+    }
+
+    private func flushAllStreamDeltas() {
+        for key in Array(pendingStreamDeltas.keys) {
+            flushStreamDeltas(for: key)
+        }
+    }
+
     private func handleRouted(_ envelope: RoutedEnvelope, relayID: UUID) {
         guard let env = try? envelope.decodeEnvelope() else { return }
         // Key per-session state on the pi sessionId (wire identity); the
@@ -267,6 +308,27 @@ extension AppModel {
     /// responses, queue chips).
     private func handleEnvelopeContent(env: EnvelopeMessage, key: String,
                                        envelope: RoutedEnvelope, relayID: UUID) {
+        // LIVE DELTA COALESCER (perf, run 2026-09-18: "streamed content seems
+        // choppier … keeps cpu busy"): streamed `message_update` frames arrive
+        // at token-batch rate (10-40/s), and each fold re-parses the ENTIRE
+        // streaming message (MarkdownUI parse is O(full text)) + publishes
+        // transcripts — the streaming chop + CPU burn, while scroll stayed
+        // fast (settled rows never re-parse). Consecutive deltas coalesce:
+        // fold at most once per flush window (~15/s — 3-4× less work, text
+        // lands in slightly larger chunks, no semantic change). ORDER is
+        // sacred: any NON-delta frame is a BARRIER — pending deltas flush
+        // first (in arrival order), then the barrier folds; the reducer never
+        // sees out-of-order frames. The walk buffer (below) takes precedence:
+        // during a full walk everything already defers to the terminal replay,
+        // and the replayed deltas pass back through here and coalesce too.
+        if isStreamDelta(env), fullWalkInFlight[key] == nil {
+            pendingStreamDeltas[key, default: []].append(
+                (env: env, envelope: envelope, relayID: relayID))
+            scheduleStreamDeltaFlush()
+            return
+        }
+        flushStreamDeltas(for: key)   // barrier: order-preserving flush first
+
         var reducer = envelopeReducers[key] ?? EnvelopeReducer()
         reducer.setHideReasoning(!showThinking)
         // Full-walk BUFFERING (ordering fix): while a full walk pages in, live
@@ -624,3 +686,5 @@ extension AppModel {
         }?.id
     }
 }
+
+// probe
