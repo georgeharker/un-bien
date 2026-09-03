@@ -54,6 +54,11 @@ final class SessionStateTests: XCTestCase {
         XCTAssertEqual(state.items[4].id, "assistant:rresp_1-a")
         XCTAssertNil(state.items[4].anchorID, "pending live settle must NOT anchor")
 
+        // Settle the turn FIRST (Stage 0 mid-turn deferral: a beacon under an
+        // active turn parks until agent_settled — the real cadence re-keys by
+        // settle, never under the in-flight stream).
+        state.applyRPC(.object(["type": .string("agent_settled")]))
+
         // The message_end-triggered delta lands (applyEntries MATCH LOOP): both
         // pending rows re-key to their durable ENTRY ids — NOW anchorable.
         state.applyEntries([
@@ -604,5 +609,43 @@ final class EntryBornErrorNoticeTests: XCTestCase {
                                 "entryId": .string("e2")]))
         let noticeCount = s.items.filter { if case .notice = $0 { return true } else { return false } }.count
         XCTAssertEqual(noticeCount, 2)
+    }
+    /// REGRESSION (run 2026-09-18: "stream ended without finish"): a beacon
+    /// arriving MID-TURN must NOT reset the in-flight rows — the re-path
+    /// defers to the settle point (agent_settled), which replays including
+    /// the finished turn's entries. The replay invariant: nothing disturbs
+    /// live-stream continuation state.
+    func testMidTurnBeaconDefersRepath() {
+        var state = SessionState()
+        state.applyEntries([
+            .object(["type": .string("message"), "id": .string("a1"), "parentId": .string(""),
+                     "message": .object(["role": .string("user"), "timestamp": .number(1),
+                                         "content": .string("start")])]),
+            .object(["type": .string("message"), "id": .string("b1"), "parentId": .string("a1"),
+                     "message": .object(["role": .string("assistant"), "timestamp": .number(2),
+                                         "responseId": .string("r1"),
+                                         "content": .array([.object(["type": .string("text"),
+                                                                     "text": .string("answer")])])])]),
+        ], leafId: "b1")
+        XCTAssertEqual(state.items.count, 2)
+
+        // A turn streams (turn_start sets the active turn).
+        state.applyRPC(.object(["type": .string("turn_start")]))
+
+        // MID-TURN: the branch entry indexes (a page fold — no beacon), then
+        // the beacon leaf arrives. The re-path MUST DEFER — no reset under
+        // the in-flight turn.
+        state.applyEntries([
+            .object(["type": .string("message"), "id": .string("c1"), "parentId": .string("b1"),
+                     "message": .object(["role": .string("user"), "timestamp": .number(3),
+                                         "content": .string("branched")])]),
+        ])
+        state.applyEntries([], leafId: "c1")
+        XCTAssertEqual(state.items.count, 2, "mid-turn beacon must NOT reset the rows")
+
+        // Settle: the deferred re-path applies — the new path renders.
+        state.applyRPC(.object(["type": .string("agent_settled")]))
+        XCTAssertEqual(state.items.count, 3, "settle applies the parked re-path")
+        XCTAssertEqual(state.items.map(\.id).last, "user:c1")
     }
 }

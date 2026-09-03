@@ -108,6 +108,22 @@ public struct SessionState: Equatable, Sendable {
     /// Last trusted ACTIVE leaf. A beacon leafId differing from this = the
     /// path moved → derivePath re-derives + replays.
     private var activeLeafId: String?
+    /// A beacon that arrived MID-TURN (run 2026-09-18: "stream ended without
+    /// finish" — the reset raced the in-flight bubble). The re-path is DEFERRED
+    /// to the settle point (agent_settled / shutdown), preserving the replay
+    /// invariant: nothing ever disturbs live-stream continuation state. The
+    /// settle's own fold indexes the finished turn's entries first, so the
+    /// deferred replay includes the turn's full text.
+    private var pendingRepathLeaf: String?
+
+    /// Apply a deferred re-path at a SETTLE point (no turn in flight — the
+    /// reset is safe). No-op when no beacon parked.
+    private mutating func applyPendingRepath() {
+        guard let leaf = pendingRepathLeaf else { return }
+        pendingRepathLeaf = nil
+        derivePath(from: leaf)
+        renderPendingPathEntries()
+    }
     private var userSeq = 0    // live user-row synthetics (u1, u2, …)
     private var compactionSeq = 0
     private var reasoningSeq = 0
@@ -466,10 +482,12 @@ public struct SessionState: Equatable, Sendable {
         case "agent_settled":
             if let turn = rpcTurn, activeTurnID == turn { activeTurnID = nil }
             closeOpenAssistant()
+            applyPendingRepath()
         case "session_shutdown":
             ended = true
             activeTurnID = nil
             closeOpenAssistant()
+            applyPendingRepath()
         case "session_sync_end":
             // Envelope-native terminator for a session_sync replay: carries the
             // session clock (stock bundled it on `session_history`). `truncated`
@@ -692,6 +710,16 @@ public struct SessionState: Equatable, Sendable {
     /// go, the new path renders (the user-visible correctness fix for TUI
     /// edit-resubmit / /tree).
     private mutating func derivePath(from leaf: String) {
+        // MID-TURN DEFERRAL: a re-path RESETS + replays the rows — never while
+        // a turn is streaming (the open bubble is live-stream continuation
+        // state the replay machinery exists to protect; resetting under it
+        // fragments the bubble and truncates streamed text). Park the beacon;
+        // the settle point applies it.
+        if activeTurnID != nil || openAssistantIndex != nil || openReasoningIndex != nil {
+            pendingRepathLeaf = leaf
+            activeLeafId = leaf
+            return
+        }
         var chain: [String] = []
         var seen = Set<String>()
         var cursor = leaf
