@@ -393,17 +393,33 @@ public final class AppModel: ObservableObject {
                    Date().timeIntervalSince(last) < 30 { continue }
                 // Genuinely stalled: unblock live content, then retry.
                 self.replayLiveBuffer(key: sid)
-                guard attempt < 2, let conn = self.connections[session.relayID] else { return }
+                guard attempt < 2, let conn = self.connections[session.relayID] else {
+                    // Give-up (retries exhausted / connection gone): the walk
+                    // is over, incomplete. Mark the session backfilled so the
+                    // TranscriptView spinner + restore waiter unblock, and the
+                    // stall bookkeeping is already cleared by replayLiveBuffer.
+                    // The next reconnect/open re-walks from the cursor
+                    // regardless. Previously this returned SILENTLY: spinner
+                    // stuck ON forever, live frames buffered behind a dead
+                    // walk flag.
+                    self.backfilledSessions.insert(sid)
+                    return
+                }
                 let since = self.envelopeReducers[sid]?.leafId
                 let retryID = UUID().uuidString
-                if since == nil { self.fullWalkInFlight[sid] = retryID }
+                // Re-mark under the retry id for BOTH retry kinds. A delta
+                // retry (since != nil — any walk past its first applied page)
+                // used to stay unmarked and UNCOVERED — no watchdog re-armed —
+                // so a lost retry response orphaned the walk: spinner stuck
+                // ON, live frames buffered forever. Re-marking re-buffers live
+                // behind the retry (same ordering semantics as the original
+                // walk) and lets the re-armed watchdog's guard match.
+                self.fullWalkInFlight[sid] = retryID
                 let sinceTail = since == nil ? "nil" : String(since!.suffix(8))
                 self.log.notice("get_entries walk stalled — retry \(attempt + 1) from cursor (since=\(sinceTail, privacy: .public))")
                 try? await conn.send(.getEntries(id: retryID, since: since),
                                      toPeer: session.peerEPK, room: session.roomID)
-                if since == nil {
-                    self.scheduleWalkWatchdog(session: session, walkID: retryID, attempt: attempt + 1)
-                }
+                self.scheduleWalkWatchdog(session: session, walkID: retryID, attempt: attempt + 1)
                 return
             }
         }

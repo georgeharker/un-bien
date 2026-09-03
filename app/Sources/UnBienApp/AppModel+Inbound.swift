@@ -441,7 +441,14 @@ extension AppModel {
             if let entries = page["entries"]?.arrayValue, !entries.isEmpty,
                let leaf = page["leafId"]?.stringValue,
                let conn = connections[relayID] {
-                backfilledSessions.remove(key) // pages still streaming
+                // NOTE: no backfilledSessions.remove here. The walk START
+                // (requestReconstruction) owns the remove; the terminal/error
+                // page owns the insert. A per-page remove meant (a) every
+                // message_end delta refetch — a get_entries round trip on each
+                // turn end — BLIPPED the title spinner on→off per round trip,
+                // and (b) a straggler page from a superseded walk (reconnect
+                // re-issued mid-flight) arriving after its terminal re-armed
+                // the spinner with no walk left to complete it — stuck ON.
                 walkLastActivity[key] = Date() // the watchdog's alive-signal
                 let peer = envelope.peer, room = envelope.room
                 let n = entries.count
@@ -521,6 +528,10 @@ extension AppModel {
     func replayLiveBuffer(key: String) {
         guard fullWalkInFlight[key] != nil else { return }
         fullWalkInFlight.removeValue(forKey: key)
+        // Drop the dead walk's alive-signal too: a stale timestamp makes the
+        // NEXT walk's watchdog treat the first 30s as "alive" — delaying its
+        // stall handling (and give-up cleanup) by a full window.
+        walkLastActivity.removeValue(forKey: key)
         let frames = liveFrameBuffer.removeValue(forKey: key) ?? []
         for frame in frames {
             handleEnvelopeContent(env: frame.env, key: key,
