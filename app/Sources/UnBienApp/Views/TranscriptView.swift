@@ -417,8 +417,15 @@ struct TranscriptView: View {
             }
         }
         .background(theme.background)
+        #if os(macOS)
+        // macOS backfill indicator: IN THE TITLE TEXT (Finder/Mail precedent
+        // — no public API puts a live control beside the centered window
+        // title; a .principal toolbar item renders as its own glass chip
+        // beside it). iOS shows name+spinner via the principal toolbar item.
+        .navigationTitle(model.backfilledSessions.contains(session.id)
+                         ? session.name : "\(session.name)  (loading…)")
+        #else
         .navigationTitle(session.name)
-        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .onAppear {
@@ -450,6 +457,24 @@ struct TranscriptView: View {
         }
         .task { await model.openSession(session) }
         .toolbar {
+            // Backfill indicator IN the title (iOS only): the get_entries walk
+            // is active — backfilledSessions is removed at walk start, marked
+            // complete by the terminal/error page or watchdog give-up.
+            // PRINCIPAL placement replaces the inline nav-bar title with
+            // name + spinner as one centered unit. (macOS: see the
+            // navigationTitle comment — the indicator is the title-text
+            // "(loading…)" suffix instead; a principal item would render as
+            // its own glass chip, not beside the name.)
+            #if os(iOS)
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 6) {
+                    Text(session.name).font(.headline)
+                    if !model.backfilledSessions.contains(session.id) {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+            }
+            #endif
             ToolbarItemGroup(placement: .primaryAction) {
                 controlMenu
                 ForEach(model.panels(for: session)) { panel in

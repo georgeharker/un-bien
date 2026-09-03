@@ -330,6 +330,38 @@ public struct AppTheme: Sendable {
         codeHighlightStyle: "rose-pine-dawn",
         isDark: false
     )
+
+    /// GitHub Light — Primer primitives (github.github.com/primer, verified):
+    /// canvas #FFFFFF, fg.default #1F2328, fg.muted #656D76, accent #0969DA,
+    /// success #1A7F37, danger #CF222E, done #8250DF, subtle #F6F8FA.
+    public static let githubLight = AppTheme(
+        background: Color(hex: 0xFFFFFF),
+        surface: Color(hex: 0xF6F8FA),
+        text: Color(hex: 0x1F2328),
+        secondaryText: Color(hex: 0x656D76),
+        accent: Color(hex: 0x0969DA),
+        toolAccent: Color(hex: 0x8250DF),
+        error: Color(hex: 0xCF222E),
+        success: Color(hex: 0x1A7F37),
+        codeHighlightStyle: "github",
+        isDark: false
+    )
+
+    /// One Light — Atom One Light (github.com/atom/one-light-syntax, verified):
+    /// bg #FAFAFA, fg #383A42, guide #A0A1A7, blue #0184BC, purple #A626A4,
+    /// green #50A14F, red #E45649.
+    public static let oneLight = AppTheme(
+        background: Color(hex: 0xFAFAFA),
+        surface: Color(hex: 0xF2F2F2),
+        text: Color(hex: 0x383A42),
+        secondaryText: Color(hex: 0xA0A1A7),
+        accent: Color(hex: 0x0184BC),
+        toolAccent: Color(hex: 0xA626A4),
+        error: Color(hex: 0xE45649),
+        success: Color(hex: 0x50A14F),
+        codeHighlightStyle: "atom-one-light",
+        isDark: false
+    )
 }
 
 /// Selectable theme identity (persisted as its raw value). The curated set for
@@ -339,6 +371,7 @@ public enum ThemeID: String, CaseIterable, Sendable, Identifiable {
     case catppuccinMocha, catppuccinFrappe, catppuccinMacchiato, catppuccinLatte
     case dracula, oneDark, jellybeans, rosePine, rosePineMoon, rosePineDawn
     case monokai, kanagawa, everforest, ayuDark, melange, modusVivendi
+    case githubLight, oneLight
 
     public var id: String { rawValue }
 
@@ -364,6 +397,8 @@ public enum ThemeID: String, CaseIterable, Sendable, Identifiable {
         case .ayuDark: return "Ayu Dark"
         case .melange: return "Melange"
         case .modusVivendi: return "Modus Vivendi"
+        case .githubLight: return "GitHub Light"
+        case .oneLight: return "One Light"
         }
     }
 
@@ -389,6 +424,8 @@ public enum ThemeID: String, CaseIterable, Sendable, Identifiable {
         case .ayuDark: return .ayuDark
         case .melange: return .melange
         case .modusVivendi: return .modusVivendi
+        case .githubLight: return .githubLight
+        case .oneLight: return .oneLight
         }
     }
 }

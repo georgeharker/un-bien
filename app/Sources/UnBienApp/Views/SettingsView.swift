@@ -48,6 +48,7 @@ struct SettingsView: View {
 
     private var appearanceSection: some View {
         Section("Appearance") {
+            #if os(iOS)
             Picker("Theme", selection: $model.themeID) {
                 ForEach(ThemeID.allCases) { id in
                     HStack(spacing: 8) {
@@ -57,8 +58,54 @@ struct SettingsView: View {
                     .tag(id)
                 }
             }
+            // 21 themes overflow the iOS menu popup with no scrolling —
+            // navigationLink pushes a scrollable selection list instead.
+            // (Unavailable on macOS — see themeNavigationRow below.)
+            .pickerStyle(.navigationLink)
+            #else
+            themeNavigationRow
+            #endif
         }
     }
+
+    #if os(macOS)
+    /// macOS theme picker: the menu popup strips custom rows to text-only
+    /// (no swatches) and .pickerStyle(.navigationLink) is iOS-only — so this
+    /// is the same push-a-selection-list pattern, hand-rolled: a Form row
+    /// showing the current theme (swatch + name) that pushes the scrollable
+    /// swatch list.
+    private var themeNavigationRow: some View {
+        NavigationLink {
+            List(ThemeID.allCases) { id in
+                Button {
+                    model.themeID = id
+                } label: {
+                    HStack(spacing: 8) {
+                        swatch(id.theme)
+                        Text(id.displayName)
+                            .foregroundStyle(theme.text)
+                        Spacer()
+                        if id == model.themeID {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(theme.accent)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            .navigationTitle("Theme")
+        } label: {
+            HStack(spacing: 8) {
+                Text("Theme")
+                Spacer()
+                swatch(model.themeID.theme)
+                Text(model.themeID.displayName)
+                    .foregroundStyle(theme.secondaryText)
+            }
+        }
+    }
+    #endif
 
     private func swatch(_ palette: AppTheme) -> some View {
         HStack(spacing: 2) {
