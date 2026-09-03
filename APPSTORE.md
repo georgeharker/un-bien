@@ -212,7 +212,7 @@ macOS platform. ASC accepts the native simulator dimensions directly.
   > mode so you can look around without any setup.
   >
   > Get started (self-hosting in ~5 minutes):
-  > https://docs.georgeharker.com/un-bien/main/docs/install.html
+  > <https://docs.georgeharker.com/un-bien/main/docs/install.html>
 - **What's new (1.0):** Initial release.
 - **Privacy nutrition labels:** mirror the manifest — Data Not Collected,
   no tracking. Category answers: everything "none".
@@ -226,7 +226,8 @@ macOS platform. ASC accepts the native simulator dimensions directly.
   attribution preserved in `extension/LICENSE` and the README.
 - Settings → Acknowledgements → **Licenses** (drill-down screen, `LicensesView`):
   the FULL agreement text for every bundled part — Un Bien, remote-pi,
-  Highlightr, highlight.js (notice from the minified bundle + BSD-3),
+  HighlighterSwift (MIT; credits the original Highlightr author), highlight.js
+  (notice from the minified bundle + BSD-3),
   swift-markdown-ui, NetworkImage, swift-cmark — selectable, monospaced,
   rendered verbatim. Texts are vendored into `app/App/Shared/Licenses/`
   (bundled as resources) and guarded by `scripts/sync-licenses.sh`, which

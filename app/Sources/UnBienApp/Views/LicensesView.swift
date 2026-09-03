@@ -20,8 +20,8 @@ struct LicensesView: View {
     private static let parts: [LicensePart] = [
         .init(name: "Un Bien", kind: "MIT", resource: "un-bien"),
         .init(name: "remote-pi (derivation origin)", kind: "MIT", resource: "remote-pi"),
-        .init(name: "Highlightr", kind: "MIT", resource: "highlightr"),
-        .init(name: "highlight.js (bundled in Highlightr)", kind: "BSD-3", resource: "highlightjs"),
+        .init(name: "HighlighterSwift", kind: "MIT", resource: "highlightr"),
+        .init(name: "highlight.js (bundled in HighlighterSwift)", kind: "BSD-3", resource: "highlightjs"),
         .init(name: "swift-markdown-ui", kind: "MIT", resource: "swift-markdown-ui"),
         .init(name: "NetworkImage", kind: "MIT", resource: "networkimage"),
         .init(name: "swift-cmark (cmark-gfm)", kind: "BSD-2", resource: "cmark"),

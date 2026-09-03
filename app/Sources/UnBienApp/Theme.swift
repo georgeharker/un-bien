@@ -1,4 +1,4 @@
-import Highlightr
+import Highlighter
 import MarkdownUI
 import SwiftUI
 #if os(macOS)
@@ -21,7 +21,7 @@ public struct AppTheme: Sendable {
     public let toolAccent: Color
     public let error: Color
     public let success: Color
-    /// highlight.js style name used by Highlightr for code blocks.
+    /// highlight.js style name used by HighlighterSwift for code blocks.
     public let codeHighlightStyle: String
     /// Drives `preferredColorScheme` so system controls match the palette.
     public let isDark: Bool
@@ -79,7 +79,7 @@ public struct AppTheme: Sendable {
     )
 
     // MARK: - Neovim-space themes (user 2026-09-17). Code-highlight styles map
-    // to the nearest style BUNDLED with Highlightr — catppuccin and jellybeans
+    // to the nearest style BUNDLED with HighlighterSwift — catppuccin and jellybeans
     // have no bundled highlight.js style, so they borrow the closest dark
     // pastel/warm style until custom CSS injection lands.
 
@@ -95,7 +95,7 @@ public struct AppTheme: Sendable {
         error: Color(hex: 0xF38BA8),
         success: Color(hex: 0xA6E3A1),
         // No bundled catppuccin style — tokyo-night-dark is the nearest soft
-        // pastel dark.
+        // pastel dark (HighlighterSwift bundles the same style set).
         codeHighlightStyle: "tokyo-night-dark",
         isDark: true
     )
@@ -256,8 +256,8 @@ public struct AppTheme: Sendable {
         error: Color(hex: 0xFF5F59),
         success: Color(hex: 0x44BC44),
         // No bundled modus style — vs-dark is the nearest flat high-contrast
-        // dark.
-        codeHighlightStyle: "vs",
+        // dark (HighlighterSwift's bundle has no bare "vs").
+        codeHighlightStyle: "vs-dark",
         isDark: true
     )
 
@@ -418,16 +418,16 @@ public extension Color {
     }
 }
 
-/// Bridges Highlightr (highlight.js, 180+ languages) into swift-markdown-ui's
-/// `CodeSyntaxHighlighter` (DESIGN §7). Agents emit arbitrary languages, so a
-/// general highlighter is the right fit.
-public struct HighlightrCodeSyntaxHighlighter: CodeSyntaxHighlighter {
+/// Bridges HighlighterSwift (highlight.js, 180+ languages) into
+/// swift-markdown-ui's `CodeSyntaxHighlighter` (DESIGN §7). Agents emit
+/// arbitrary languages, so a general highlighter is the right fit.
+public struct HighlighterCodeSyntaxHighlighter: CodeSyntaxHighlighter {
     private let style: String
     private let font: PlatformFont?
 
     // Cheap to construct (swift-markdown-ui rebuilds this per render): the JS
     // runtime + highlight results live in the shared bounded `HighlightEngine`,
-    // so no Highlightr is spun up here and repeated blocks hit the cache.
+    // so no Highlighter is spun up here and repeated blocks hit the cache.
     public init(style: String, font: PlatformFont? = nil) {
         self.style = style
         self.font = font
@@ -442,8 +442,8 @@ public struct HighlightrCodeSyntaxHighlighter: CodeSyntaxHighlighter {
     }
 }
 
-public extension CodeSyntaxHighlighter where Self == HighlightrCodeSyntaxHighlighter {
-    static func highlightr(style: String, font: PlatformFont? = nil) -> HighlightrCodeSyntaxHighlighter {
-        HighlightrCodeSyntaxHighlighter(style: style, font: font)
+public extension CodeSyntaxHighlighter where Self == HighlighterCodeSyntaxHighlighter {
+    static func highlighter(style: String, font: PlatformFont? = nil) -> HighlighterCodeSyntaxHighlighter {
+        HighlighterCodeSyntaxHighlighter(style: style, font: font)
     }
 }

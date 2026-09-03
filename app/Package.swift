@@ -14,7 +14,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/gonzalezreal/swift-markdown-ui", from: "2.4.0"),
-        .package(url: "https://github.com/raspu/Highlightr", from: "2.2.0"),
+        .package(url: "https://github.com/smittytone/HighlighterSwift", from: "3.1.0"),
     ],
     targets: [
         .target(
@@ -25,7 +25,7 @@ let package = Package(
             dependencies: [
                 "UnBienCore",
                 .product(name: "MarkdownUI", package: "swift-markdown-ui"),
-                .product(name: "Highlightr", package: "Highlightr"),
+                .product(name: "Highlighter", package: "HighlighterSwift"),
             ],
             resources: [.copy("Resources/Fonts")]
         ),

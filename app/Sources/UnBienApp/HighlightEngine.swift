@@ -1,16 +1,18 @@
 import Foundation
-import Highlightr
+import Highlighter
 
 /// Shared, bounded cache for syntax-highlighted code.
 ///
-/// Highlightr runs highlight.js via JavaScriptCore (tens of ms per block), and
-/// swift-markdown-ui re-invokes the highlighter every time a row re-enters the
-/// `LazyVStack` viewport — so without a cache, scrolling re-highlights every
+/// HighlighterSwift (smittytone — the maintained successor to the archived
+/// raspu/Highlightr; same architecture: highlight.js via JavaScriptCore,
+/// synchronous NSAttributedString) runs tens of ms per block, and
+/// swift-markdown-ui re-invokes the highlighter every time a row re-enters
+/// the near window — so without a cache, scrolling re-highlights every
 /// visible block on every appearance (the scroll jank). This caches the result
 /// keyed by (code, language, style, font): a theme/font change yields new keys
-/// and the stale entries LRU-evict. Highlightr engine instances are reused per
-/// (style, font) rather than re-created per render (each init spins up a JS
-/// runtime). The cache bound is a configurable option (`cacheLimit`).
+/// and the stale entries LRU-evict. Highlighter engine instances are reused
+/// per (style, font) rather than re-created per render (each init spins up a
+/// JS runtime). The cache bound is a configurable option (`cacheLimit`).
 ///
 /// Thread-safe by construction (NSCache is thread-safe; the engine dict is
 /// guarded by `lock`), hence `@unchecked Sendable`.
@@ -18,7 +20,7 @@ public final class HighlightEngine: @unchecked Sendable {
     public static let shared = HighlightEngine()
 
     private let cache = NSCache<NSString, NSAttributedString>()
-    private var engines: [String: Highlightr] = [:]
+    private var engines: [String: Highlighter] = [:]
     private let lock = NSLock()
 
     /// Max cached highlighted blocks. Configurable (Settings); default 400.
@@ -43,17 +45,17 @@ public final class HighlightEngine: @unchecked Sendable {
         if let hit = cache.object(forKey: key) { return AttributedString(hit) }  // double-check under lock
 
         let engineKey = "\(style)\u{1}\(fontKey)"
-        let engine: Highlightr?
+        let engine: Highlighter?
         if let existing = engines[engineKey] {
             engine = existing
         } else {
-            let instance = Highlightr()
-            instance?.setTheme(to: style)
+            let instance = Highlighter()
+            _ = instance?.setTheme(style)
             if let font { instance?.theme.setCodeFont(font) }
             engines[engineKey] = instance
             engine = instance
         }
-        guard let engine, let result = engine.highlight(code, as: language, fastRender: true) else {
+        guard let engine, let result = engine.highlight(code, as: language) else {
             return nil
         }
         cache.setObject(result, forKey: key)
@@ -68,3 +70,5 @@ public final class HighlightEngine: @unchecked Sendable {
         lock.unlock()
     }
 }
+
+// rebuild-probe

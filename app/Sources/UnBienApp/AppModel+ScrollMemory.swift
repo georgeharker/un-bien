@@ -63,7 +63,15 @@ extension AppModel {
     func layoutFingerprint() -> String {
         let body = bodyFontName ?? "-"
         let mono = monoFontName ?? "-"
-        return "\(themeID.rawValue)|\(body)|\(mono)|\(String(format: "%.2f", textScale))"
+        // SCHEMA VERSION — bump when anything that changes RENDERED HEIGHTS
+        // swaps out from under the cache: rendering-engine changes
+        // (Highlightr → HighlighterSwift 3.1.0, run 2026-09-18: seeded
+        // Highlightr-era heights fought the new measurements — the "…"
+        // bounced on every relaunch instead of settling once), budget changes,
+        // row-structure changes. Stale entries then fail to seed and are
+        // overwritten at the first flush.
+        let schema = "hs3.1.0"
+        return "\(themeID.rawValue)|\(body)|\(mono)|\(String(format: "%.2f", textScale))|\(schema)"
     }
 
     /// IMMEDIATE persistence (no debounce) — call when the app leaves the

@@ -9,9 +9,12 @@
 # honest: upstream LICENSE/COPYING -> vendored copy, byte-for-byte.
 #
 # highlightjs.txt is NOT synced: upstream (highlight.js, bundled inside
-# Highlightr's minified asset) ships no standalone license file — the notice is
-# carried in highlight.min.js; our copy preserves that notice + the BSD-3 text.
-# Re-check it when Highlightr's version bumps.
+# HighlighterSwift's minified asset) ships no standalone license file — the
+# notice is carried in highlight.min.js; our copy preserves that notice + the
+# BSD-3 text. Re-check it when HighlighterSwift's bundled highlight.js bumps.
+# NOTE: vendored filename kept as highlightr.txt for now (resource-name churn
+# across LicensesView + bundle resources); its CONTENT is HighlighterSwift's
+# LICENSE (MIT) — sync handles it via the mapping above.
 #
 # Usage: scripts/sync-licenses.sh          (sync + drift-check)
 #        scripts/sync-licenses.sh --check  (drift-check only, no writes)
@@ -24,17 +27,32 @@ DEST="$ROOT/app/App/Shared/Licenses"
 
 # Checkouts live under <derived>/SourcePackages/checkouts (xcodebuild with the
 # repo-pinned -derivedDataPath app/build) or <pkg>/.build/checkouts (plain
-# swift build). Probe both.
+# swift build). Probe both — preferring a dir that contains the CURRENT
+# dependency set (HighlighterSwift present); an xcodebuild dir from before a
+# dependency swap is stale and must not win over the fresh swift-build one.
 CHECKOUTS=""
 for candidate in \
     "$ROOT/app/build/SourcePackages/checkouts" \
     "$ROOT/.build/checkouts" \
     "$ROOT/app/.build/checkouts"; do
-    if [ -d "$candidate/swift-markdown-ui" ]; then
+    if [ -d "$candidate/HighlighterSwift" ] && [ -d "$candidate/swift-markdown-ui" ]; then
         CHECKOUTS="$candidate"
         break
     fi
 done
+if [ -z "$CHECKOUTS" ]; then
+    # Fallback: the pre-HighlighterSwift layout (xcodebuild dir with the old
+    # dependency set) — keeps the script working on stale checkouts.
+    for candidate in \
+        "$ROOT/app/build/SourcePackages/checkouts" \
+        "$ROOT/.build/checkouts" \
+        "$ROOT/app/.build/checkouts"; do
+        if [ -d "$candidate/swift-markdown-ui" ]; then
+            CHECKOUTS="$candidate"
+            break
+        fi
+    done
+fi
 if [ -z "$CHECKOUTS" ]; then
     echo "ERROR: no resolved SPM checkouts found — run a build first (xcodebuild or swift build)."
     exit 1
@@ -44,7 +62,7 @@ echo "==> checkouts: $CHECKOUTS"
 # map: vendored file -> upstream source file
 upstream_for() {
     case "$1" in
-    highlightr.txt) echo "$CHECKOUTS/Highlightr/LICENSE" ;;
+    highlightr.txt) echo "$CHECKOUTS/HighlighterSwift/LICENCE.md" ;;
     swift-markdown-ui.txt) echo "$CHECKOUTS/swift-markdown-ui/LICENSE" ;;
     networkimage.txt) echo "$CHECKOUTS/NetworkImage/LICENSE" ;;
     cmark.txt) echo "$CHECKOUTS/swift-cmark/COPYING" ;;

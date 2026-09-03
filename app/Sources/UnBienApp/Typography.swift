@@ -45,7 +45,7 @@ public struct Typography: Sendable, Equatable {
     }
 
     #if os(macOS)
-    /// Platform monospaced font for NSTextView / Highlightr.
+    /// Platform monospaced font for NSTextView / HighlighterSwift.
     public func monoPlatformFont(size: CGFloat? = nil) -> NSFont {
         let pt = size ?? codeSize
         if let name = monoFontName, !name.isEmpty, let font = NSFont(name: name, size: pt) {
@@ -54,7 +54,7 @@ public struct Typography: Sendable, Equatable {
         return .monospacedSystemFont(ofSize: pt, weight: .regular)
     }
     #else
-    /// Platform monospaced font for UITextView / Highlightr.
+    /// Platform monospaced font for UITextView / HighlighterSwift.
     public func monoPlatformFont(size: CGFloat? = nil) -> UIFont {
         let pt = size ?? codeSize
         if let name = monoFontName, !name.isEmpty, let font = UIFont(name: name, size: pt) {

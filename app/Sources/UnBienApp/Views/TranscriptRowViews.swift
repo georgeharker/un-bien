@@ -63,7 +63,7 @@ struct TranscriptRow: View, Equatable {
             if !bubble.text.isEmpty {
                 BudgetedContent(text: bubble.text, budget: markdownBudget) { budgeted in
                     Markdown(budgeted)
-                    .markdownCodeSyntaxHighlighter(.highlightr(
+                    .markdownCodeSyntaxHighlighter(.highlighter(
                         style: theme.codeHighlightStyle,
                         font: typography.monoPlatformFont()))
                     .markdownTextStyle {
@@ -235,7 +235,7 @@ private struct SVGWebView: UIViewRepresentable {
 // MARK: - Display budgets (tiered, with an in-place SHOW ALL affordance)
 
 /// Display budgets per row KIND (characters) — the transcript is a READING
-/// surface, not a fidelity viewer, and MarkdownUI + Highlightr on an
+/// surface, not a fidelity viewer, and MarkdownUI + HighlighterSwift on an
 /// unbounded blob blocks the main thread (STALL 53716ms on a 437KB entry,
 /// run 2026-09-17). Tiers (user, 2026-09-18: flat 8K bit normal long
 /// messages): assistant markdown is READING material — generous; reasoning
@@ -505,7 +505,7 @@ private struct ToolCardView: View {
     }
 
     // `code` block: plain output text syntax-highlighted via the shared
-    // HighlightEngine (Highlightr/highlight.js, cached + theme-matched, same path
+    // HighlightEngine (HighlighterSwift/highlight.js, cached + theme-matched, same path
     // as assistant-bubble code blocks). `lang` may be nil → highlight.js
     // auto-detects; a highlighter miss falls back to plain mono Text.
     @ViewBuilder
