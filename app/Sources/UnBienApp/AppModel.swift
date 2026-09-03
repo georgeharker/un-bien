@@ -37,6 +37,16 @@ public final class AppModel: ObservableObject {
     /// anything; a reset collapsed the content mid-walk and blanked the view
     /// until the pages regrew it (user report 2026-09-17).
     var fullWalkInFlight: [String: String] = [:]
+    /// EVERY active get_entries walk (full OR delta), walkID-valued — the
+    /// WATCHDOG's lifecycle guard (run 2026-09-18: delta walks — warm reopens,
+    /// reconnect refetches — had NO coverage: a lost response orphaned the
+    /// spinner until the next reconnect/open). fullWalkInFlight stays the
+    /// live-BUFFERING + ordering marker for FULL walks only.
+    var activeWalks: [String: String] = [:]
+    /// The leaf cursor the current walk last ADVANCED past — the repeated-leaf
+    /// circuit breaker: a non-empty page whose leaf equals the previous one
+    /// means the paging loop is spinning and would never terminate.
+    var lastWalkLeaf: [String: String] = [:]
     /// Local entry-stream cache (design 01M1M4N8RZZANDX6NWY7FCSBT5). Actor —
     /// loads awaited at reconstruction, appends fire-and-forget from the
     /// paging handler, trashed on room-gone (forgetSession). NO LRU — the
@@ -390,12 +400,17 @@ public final class AppModel: ObservableObject {
         // against a stale set (a still-pending flow re-replays every sync).
         askSyncWindows[session.id] = AskSyncWindow()
         let walkID = UUID().uuidString
-        // A FULL walk (no cursor) is authoritative history in log order — mark
-        // it so the first page's fold RESETS the transcript first (ordering fix).
+        // EVERY walk is watchdog-covered (activeWalks — run 2026-09-18: delta
+        /// walks had none, and a lost response orphaned the spinner until the
+        /// next reconnect/open). A FULL walk (no cursor) additionally takes
+        /// the live-buffering/ordering marker — it is authoritative history in
+        /// log order, so live frames buffer behind it.
+        activeWalks[session.id] = walkID
+        walkLastActivity[session.id] = Date()
+        lastWalkLeaf[session.id] = nil
+        scheduleWalkWatchdog(session: session, walkID: walkID)
         if since == nil {
             fullWalkInFlight[session.id] = walkID
-            walkLastActivity[session.id] = Date()
-            scheduleWalkWatchdog(session: session, walkID: walkID)
         }
         try? await connection.send(.getEntries(id: walkID, since: since),
                                    toPeer: session.peerEPK, room: session.roomID)
@@ -408,9 +423,12 @@ public final class AppModel: ObservableObject {
     /// receive stream, so no reconnect ever fires — or a dropped frame)
     /// orphans the response-driven paging loop forever: no page arrives, no
     /// request is re-issued, history stays incomplete (run 2026-09-17: the
-    /// walk died at "fetching next page" through a socket reset). After the
-    /// stall window with NO page activity: unblock the buffered live frames,
-    /// then RETRY the walk from the cursor (idempotent fold — a first-request
+    /// walk died at "fetching next page" through a socket reset). Covers
+    /// EVERY walk — full (since == nil) and delta alike (run 2026-09-18:
+    /// delta walks had no coverage; a lost warm-reopen/reconnect response
+    /// stuck the spinner until the next natural trigger). After the stall
+    /// window with NO page activity: unblock any buffered live content, then
+    /// RETRY the walk from the cursor (idempotent fold — a first-request
     /// loss retries as a fresh full walk). Two retries max; the next
     /// reconnect/open completes the walk regardless.
     private func scheduleWalkWatchdog(session: LiveSession, walkID: String, attempt: Int = 0) {
@@ -419,7 +437,7 @@ public final class AppModel: ObservableObject {
             while let self {
                 try? await Task.sleep(nanoseconds: 30_000_000_000)
                 // Completed or superseded meanwhile — stand down.
-                guard self.fullWalkInFlight[sid] == walkID else { return }
+                guard self.activeWalks[sid] == walkID else { return }
                 // A page arrived recently: the walk is ALIVE (huge log, slow
                 // pages) — keep waiting, never kill a progressing walk.
                 if let last = self.walkLastActivity[sid],
@@ -429,25 +447,21 @@ public final class AppModel: ObservableObject {
                 guard attempt < 2, let conn = self.connections[session.relayID] else {
                     // Give-up (retries exhausted / connection gone): the walk
                     // is over, incomplete. Mark the session backfilled so the
-                    // TranscriptView spinner + restore waiter unblock, and the
-                    // stall bookkeeping is already cleared by replayLiveBuffer.
-                    // The next reconnect/open re-walks from the cursor
-                    // regardless. Previously this returned SILENTLY: spinner
-                    // stuck ON forever, live frames buffered behind a dead
-                    // walk flag.
+                    // TranscriptView spinner + restore waiter unblock; endWalk
+                    // clears the lifecycle bookkeeping. The next
+                    /// reconnect/open re-walks from the cursor regardless.
                     self.backfilledSessions.insert(sid)
+                    self.endWalk(key: sid)
                     return
                 }
                 let since = self.envelopeReducers[sid]?.leafId
                 let retryID = UUID().uuidString
-                // Re-mark under the retry id for BOTH retry kinds. A delta
-                // retry (since != nil — any walk past its first applied page)
-                // used to stay unmarked and UNCOVERED — no watchdog re-armed —
-                // so a lost retry response orphaned the walk: spinner stuck
-                // ON, live frames buffered forever. Re-marking re-buffers live
-                // behind the retry (same ordering semantics as the original
-                // walk) and lets the re-armed watchdog's guard match.
-                self.fullWalkInFlight[sid] = retryID
+                // Re-mark under the retry id for BOTH retry kinds — the
+                // watchdog guard is activeWalks. fullWalkInFlight is re-marked
+                /// only for full re-walks (since == nil): delta retries keep
+                /// live frames flowing (they never buffered).
+                self.activeWalks[sid] = retryID
+                if since == nil { self.fullWalkInFlight[sid] = retryID }
                 let sinceTail = since == nil ? "nil" : String(since!.suffix(8))
                 self.log.notice("get_entries walk stalled — retry \(attempt + 1) from cursor (since=\(sinceTail, privacy: .public))")
                 try? await conn.send(.getEntries(id: retryID, since: since),

@@ -441,6 +441,17 @@ extension AppModel {
             if let entries = page["entries"]?.arrayValue, !entries.isEmpty,
                let leaf = page["leafId"]?.stringValue,
                let conn = connections[relayID] {
+                // REPEATED-LEAF circuit breaker: a non-empty page whose leaf
+                // did not advance past the previous one means the paging loop
+                // is spinning — it would never terminate (spinner forever,
+                // live frames buffered behind the walk). Treat as terminal.
+                if lastWalkLeaf[key] == leaf {
+                    log.error("get_entries page leaf REPEATED (no advance) key=\(String(key.suffix(12)), privacy: .public) leaf=\(String(leaf.suffix(8)), privacy: .public) — paging loop broken, treating as terminal")
+                    endWalk(key: key)
+                    backfilledSessions.insert(key)
+                    return
+                }
+                lastWalkLeaf[key] = leaf
                 // NOTE: no backfilledSessions.remove here. The walk START
                 // (requestReconstruction) owns the remove; the terminal/error
                 // page owns the insert. A per-page remove meant (a) every
@@ -472,13 +483,13 @@ extension AppModel {
                 // Terminal page (empty entries / nil leaf): the
                 // walk is over — the transcript is complete.
                 backfilledSessions.insert(key)
-                replayLiveBuffer(key: key)
+                endWalk(key: key)
             }
         } else if rpc["command"]?.stringValue == "get_entries" {
             // Error response: the walk can't continue — mark
             // complete so a waiting restore doesn't hang forever.
             backfilledSessions.insert(key)
-            replayLiveBuffer(key: key)
+            endWalk(key: key)
         }
     }
 
@@ -527,6 +538,17 @@ extension AppModel {
               let conn = connections[relayID] else { return }
         Task { try? await conn.send(.getEntries(id: UUID().uuidString, since: since),
                                      toPeer: envelope.peer, room: envelope.room) }
+    }
+
+    /// End the active-walk bookkeeping (terminal / error / give-up / loop
+    /// break): clears the watchdog lifecycle + the loop-breaker cursor. The
+    /// live-buffer replay only applies to FULL walks (delta walks never
+    /// buffered); replayLiveBuffer no-ops when the flag is clear.
+    func endWalk(key: String) {
+        activeWalks[key] = nil
+        lastWalkLeaf[key] = nil
+        walkLastActivity.removeValue(forKey: key)
+        replayLiveBuffer(key: key)
     }
 
     /// Unbuffer + fold the live frames held during a full walk (terminal page,
