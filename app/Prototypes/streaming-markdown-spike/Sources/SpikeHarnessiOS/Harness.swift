@@ -4,7 +4,7 @@
 // screenshot. Also a visual side-by-side pane for theme inspection.
 
 import SwiftUI
-import SwiftStreamingMarkdown
+import Textual
 import MarkdownUI
 
 // MARK: - Corpus (identical to the macOS harness)
@@ -76,7 +76,19 @@ let corpusQuote = """
 > the rendered frames, or the two coordinate systems diverge.
 """
 
-let unitDocument = (corpusParagraphs + [corpusCode, corpusLists, corpusTable, corpusQuote])
+/// Experiment 2: the code block swapped for byte-equal PROSE, so the Prism
+/// JSContext path never fires and the attributed core is measured alone at
+/// the SAME document size (corpusCode.utf8.count bytes of filler prose).
+let proseCodeReplacement: String = {
+    let head = "The fenced code block was replaced by prose of identical byte count "
+        + "so the JavaScript highlighter never engages; paragraphs, lists, tables "
+        + "and quotes still exercise the full attributed pipeline. "
+    if head.utf8.count >= corpusCode.utf8.count {
+        return String(head.prefix(corpusCode.utf8.count))
+    }
+    return head + String(repeating: "w", count: corpusCode.utf8.count - head.utf8.count)
+}()
+let unitDocument = (corpusParagraphs + [corpusLists, corpusTable, corpusQuote] + [proseCodeReplacement])
     .joined(separator: "\n\n")
 
 let bigDocument: String = {
@@ -96,19 +108,10 @@ var corpusChunks: [String] {
     return out
 }
 
-// MARK: - Source + results model
-
-final class SpikeSource: StreamedMarkdownSource, ObservableObject {
-    private var continuation: AsyncStream<String>.Continuation?
-    var text: AsyncStream<String> {
-        AsyncStream { cont in self.continuation = cont }
-    }
-    func emit(_ snapshot: String) { continuation?.yield(snapshot) }
-    func finish() { continuation?.finish() }
-}
+// MARK: - Results model
 
 struct EngineResult: Identifiable {
-    let id: String            // "SSM" / "MDUI"
+    let id: String            // "TEXT" / "MDUI"
     let first: Double
     let avg: Double
     let worst: Double
@@ -127,9 +130,9 @@ enum SpikePhase: Equatable {
 struct SpikeView: View {
     @State private var phase: SpikePhase = .idle
     @State private var controlText = ""
-    @StateObject private var source = SpikeSource()
+    @State private var textualMarkup = ""
     @State private var results: [EngineResult] = []
-    @State private var ssmHeightChanges = 0
+    @State private var textHeightChanges = 0
     @State private var mduiHeightChanges = 0
     @State private var lastPaneHeight: CGFloat = 0
     @State private var runCount = 0
@@ -145,7 +148,7 @@ struct SpikeView: View {
                 livePane(engine)
             } else if results.isEmpty {
                 Spacer()
-                Text("Runs the 25KB streaming A/B\n(SSM solo, then MDUI solo,\n~74 snapshots each at 66ms cadence).\nTakes a few minutes — watch the progress line.")
+                Text("Runs the 25KB streaming A/B\n(TEXT solo, then MDUI solo,\n~74 snapshots each at 66ms cadence).\nTakes a few minutes — watch the progress line.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -181,7 +184,7 @@ struct SpikeView: View {
             Spacer()
             Button("Re-run") { Task { await runSpike() } }
                 .font(.caption)
-            Button("Visual") { phase = .visual; controlText = bigDocument; source.emit(bigDocument) }
+            Button("Visual") { phase = .visual; controlText = bigDocument; textualMarkup = bigDocument }
                 .font(.caption)
         }
     }
@@ -194,7 +197,7 @@ struct SpikeView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
                         Text(result.id).font(.system(size: 13, weight: .bold, design: .monospaced))
-                            .foregroundStyle(result.id == "SSM" ? .blue : .orange)
+                            .foregroundStyle(result.id == "TEXT" ? .blue : .orange)
                         Spacer()
                         Text("wall \(String(format: "%.1f", result.wallSeconds))s")
                             .font(.caption2.monospaced()).foregroundStyle(.secondary)
@@ -207,7 +210,7 @@ struct SpikeView: View {
                 .padding(8)
                 .background(Color.gray.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
             }
-            Text("Mac reference: SSM avg 520ms worst 5.0s | MDUI avg 1719ms worst 9.7s")
+            Text("Device ref: MDUI avg 303ms | SSM (rejected) jetsam-killed at 63/74")
                 .font(.caption2).foregroundStyle(.tertiary)
         }
         .padding(10)
@@ -219,8 +222,10 @@ struct SpikeView: View {
     private func livePane(_ engine: String) -> some View {
         ScrollView {
             Group {
-                if engine == "SSM" {
-                    StreamedMarkdownView(source: source, config: spikeConfig).padding(8)
+                if engine == "TEXT" {
+                    StructuredText(markdown: textualMarkup)
+                        .textual.structuredTextStyle(.gitHub)
+                        .padding(8)
                 } else {
                     Markdown(controlText).padding(8)
                 }
@@ -228,13 +233,13 @@ struct SpikeView: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { newHeight in
                 if newHeight != lastPaneHeight {
                     lastPaneHeight = newHeight
-                    if engine == "SSM" { ssmHeightChanges += 1 } else { mduiHeightChanges += 1 }
+                    if engine == "TEXT" { textHeightChanges += 1 } else { mduiHeightChanges += 1 }
                 }
             }
         }
         .frame(height: 300)
-        .overlay(Text(engine == "SSM" ? "SSM (live)" : "MDUI (live)")
-            .font(.caption2).foregroundStyle(engine == "SSM" ? .blue : .orange).padding(4),
+        .overlay(Text(engine == "TEXT" ? "TEXT (live)" : "MDUI (live)")
+            .font(.caption2).foregroundStyle(engine == "TEXT" ? .blue : .orange).padding(4),
             alignment: .topLeading)
         .background(Color.gray.opacity(0.08))
     }
@@ -242,9 +247,11 @@ struct SpikeView: View {
     private var visualPanes: some View {
         HStack(spacing: 1) {
             ScrollView {
-                StreamedMarkdownView(source: source, config: spikeConfig).padding(8)
+                StructuredText(markdown: textualMarkup)
+                    .textual.structuredTextStyle(.gitHub)
+                    .padding(8)
             }
-            .overlay(Text("SSM").font(.caption2).foregroundStyle(.blue).padding(4), alignment: .topLeading)
+            .overlay(Text("TEXT").font(.caption2).foregroundStyle(.blue).padding(4), alignment: .topLeading)
             ScrollView {
                 Markdown(controlText).padding(8)
             }
@@ -258,27 +265,28 @@ struct SpikeView: View {
     private func runSpike() async {
         runCount += 1
         results = []
-        ssmHeightChanges = 0
+        textHeightChanges = 0
         mduiHeightChanges = 0
         phase = .idle
         try? await Task.sleep(nanoseconds: 500_000_000)
 
-        lastPaneHeight = 0
-        let ssmTimings = await soloRun(engine: "SSM") { snapshot in
-            source.emit(snapshot)
-        }
-        source.finish()
-        results.append(makeResult("SSM", ssmTimings, ssmHeightChanges))
-        phase = .finished
-        try? await Task.sleep(nanoseconds: 300_000_000)
-
         controlText = ""
+        textualMarkup = ""
         lastPaneHeight = 0
         try? await Task.sleep(nanoseconds: 400_000_000)
         let mduiTimings = await soloRun(engine: "MDUI") { snapshot in
             controlText = snapshot
         }
         results.append(makeResult("MDUI", mduiTimings, mduiHeightChanges))
+        phase = .finished
+
+        textualMarkup = ""
+        lastPaneHeight = 0
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        let textTimings = await soloRun(engine: "TEXT") { snapshot in
+            textualMarkup = snapshot
+        }
+        results.append(makeResult("TEXT", textTimings, textHeightChanges))
         phase = .finished
     }
 
@@ -311,14 +319,6 @@ struct SpikeView: View {
             heightChanges: hChanges,
             wallSeconds: timings.reduce(0, +) / 1000)
     }
-}
-
-var spikeConfig: MarkdownRenderConfig {
-    let fgColor = Color(red: 0x75 / 255, green: 0x7a / 255, blue: 0xf5 / 255)
-    let base = MarkdownRenderConfig.defaultParagraphStyle
-    return MarkdownRenderConfig.default
-        .withParagraphStyle(value: MarkdownRenderConfig.MarkdownTextStyle(
-            textFonts: base.textFonts, textColor: fgColor))
 }
 
 @main
