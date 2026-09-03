@@ -100,14 +100,21 @@ public struct RowBoundsStore: Sendable, Equatable {
                                        spacing: Double, fallbackHeight: Double) -> Range<Int> {
         guard !order.isEmpty, viewportHeight > 0 else { return 0..<0 }
         let c = min(max(center, 0), order.count - 1)
+        // INTERSECTION semantics (run 2026-09-18: the whole-row-fits test
+        // dropped TALL rows while their bottoms were still on screen — a
+        // row taller than the page budget flipped far the moment the anchor
+        // passed below it, the position-dependent "bubble dropping out").
+        // A row is in the window if ANY part of it lies within the band:
+        // include rows whose TOP is inside the budget; a straddling row
+        // (top inside, body beyond) is INCLUDED — bounded over-inclusion,
+        // the safe direction — and the walk stops once the budget is spent.
         // Downward (toward the tail); the center row is included unconditionally.
         var last = c
         var budget = (1 + pages) * viewportHeight
         var i = c
         while i < order.count {
-            let h = (heights[order[i]] ?? fallbackHeight) + spacing
-            if i > c, budget < h { break }
-            budget -= h
+            if i > c, budget <= 0 { break }
+            budget -= (heights[order[i]] ?? fallbackHeight) + spacing
             last = i
             i += 1
         }
@@ -116,9 +123,8 @@ public struct RowBoundsStore: Sendable, Equatable {
         var upBudget = pages * viewportHeight
         i = c - 1
         while i >= 0 {
-            let h = (heights[order[i]] ?? fallbackHeight) + spacing
-            if upBudget < h { break }
-            upBudget -= h
+            if upBudget <= 0 { break }
+            upBudget -= (heights[order[i]] ?? fallbackHeight) + spacing
             first = i
             i -= 1
         }

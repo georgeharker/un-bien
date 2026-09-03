@@ -139,3 +139,64 @@ final class RowBoundsStoreSeedTests: XCTestCase {
         XCTAssertEqual(store.height(id: "user:abc"), 200)   // self-healed
     }
 }
+
+// MARK: - Tall-row intersection semantics (run 2026-09-18: whole-row-fits
+// dropped tall rows while their bottoms were on screen)
+
+final class WindowRangeTallRowTests: XCTestCase {
+    /// A row TALLER than the page budget, directly above the anchor, must
+    /// stay near — its bottom is at the viewport's bottom edge (visible).
+    func testTallRowAboveAnchorStaysNear() {
+        var store = RowBoundsStore()
+        let order = (0..<10).map { "r\($0)" }
+        for id in order { store.record(id: id, height: 50) }
+        store.record(id: "r4", height: 2500)   // 5 viewports tall (vh = 500)
+
+        let range = store.windowRangeAroundIndex(order: order, center: 5,
+                                                 viewportHeight: 500, pages: 2,
+                                                 spacing: 8, fallbackHeight: 44)
+        XCTAssertTrue(range.contains(4),
+                      "a tall row above the anchor is visible at its bottom — must stay near")
+    }
+
+    /// A tall row STRADDLING the top boundary (top inside, body beyond) is
+    /// included; the row fully beyond it is not.
+    func testStraddlingRowIncludedFullyBeyondExcluded() {
+        var store = RowBoundsStore()
+        // 24 spacer rows of 50pt (58 with spacing); tall row at index 2.
+        let order = (0..<24).map { "r\($0)" }
+        for id in order { store.record(id: id, height: 50) }
+        store.record(id: "r2", height: 2500)
+        // Anchor at the tail: spacers r23..r3 sum to 21*58 = 1218 > 1000
+        // (pages*vheight), so the budget is spent BEFORE r2's top — excluded.
+        let range = store.windowRangeAroundIndex(order: order, center: 23,
+                                                 viewportHeight: 500, pages: 2,
+                                                 spacing: 8, fallbackHeight: 44)
+        XCTAssertFalse(range.contains(2), "fully-beyond tall row stays out")
+        XCTAssertFalse(range.contains(1))
+        // Anchor nearer: r23..r4 = 20*58 = 1160... still spent. Use center 21:
+        // r20..r3 = 18*58 = 1044 >= 1000 — spent at r3. center 20: r19..r3 =
+        // 17*58 = 986 < 1000 — r2's TOP is inside the band → straddling →
+        // INCLUDED even though its body extends 2500pt beyond.
+        let nearRange = store.windowRangeAroundIndex(order: order, center: 20,
+                                                     viewportHeight: 500, pages: 2,
+                                                     spacing: 8, fallbackHeight: 44)
+        XCTAssertTrue(nearRange.contains(2), "straddling tall row (top inside band) is included")
+        XCTAssertFalse(nearRange.contains(1), "the row above the straddler stays out")
+    }
+
+    /// Symmetric downward: a tall row below the anchor whose top is inside
+    /// the downward band is included.
+    func testTallRowBelowAnchorTopInsideBand() {
+        var store = RowBoundsStore()
+        let order = (0..<10).map { "r\($0)" }
+        for id in order { store.record(id: id, height: 50) }
+        store.record(id: "r6", height: 2500)
+
+        let range = store.windowRangeAroundIndex(order: order, center: 5,
+                                                 viewportHeight: 500, pages: 2,
+                                                 spacing: 8, fallbackHeight: 44)
+        XCTAssertTrue(range.contains(6), "tall row with top inside the downward band is included")
+        XCTAssertFalse(range.contains(7), "rows beyond the straddler stay out")
+    }
+}
