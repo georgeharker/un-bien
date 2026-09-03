@@ -220,7 +220,10 @@ final class EnvelopeReducerTests: XCTestCase {
     /// (decode → apply(env) → applyRpc(aux:) → card.hunks) in one test.
     func testLiveAuxHunksAttachToToolCard() throws {
         let lines = [
-            #"{"rpc":{"type":"tool_execution_start","toolCallId":"tcA","toolName":"edit","args":{"path":"a.swift","edits":[{"oldText":"x","newText":"y"}]}},"aux":{"hunks":[{"lines":[{"kind":"remove","oldLine":1,"text":"x"},{"kind":"add","newLine":1,"text":"y"}]}]}}"#,
+            #"{"rpc":{"type":"tool_execution_start","toolCallId":"tcA","toolName":"edit","# +
+                #" "args":{"path":"a.swift","edits":[{"oldText":"x","newText":"y"}]}},"# +
+                #" "aux":{"hunks":[{"lines":[{"kind":"remove","oldLine":1,"text":"x"},"# +
+                #" {"kind":"add","newLine":1,"text":"y"}]}]}}"#,
         ]
         let decoder = JSONDecoder()
         let messages = try lines.map { try decoder.decode(EnvelopeMessage.self, from: Data($0.utf8)) }
@@ -233,5 +236,39 @@ final class EnvelopeReducerTests: XCTestCase {
         XCTAssertEqual(hunkLines.count, 2)
         XCTAssertEqual(hunkLines[0]["kind"]?.stringValue, "remove")
         XCTAssertEqual(hunkLines[1]["kind"]?.stringValue, "add")
+    }
+    /// REGRESSION (run 2026-09-18 — "never see the sidecar even live"): the
+    /// message_end refetch folds the assistant's entry seconds after the live
+    /// frame, rebirthing its tool calls fromEntry. The idempotent re-open used
+    /// to REPLACE the card — stripping the live-attached aux.hunks (and result
+    /// / output). The rebirth must preserve them.
+    func testEntryRebirthPreservesLiveHunks() throws {
+        let lines = [
+            #"{"rpc":{"type":"tool_execution_start","toolCallId":"tcR","toolName":"edit","# +
+                #" "args":{"path":"a.swift","edits":[{"oldText":"x","newText":"y"}]}},"# +
+                #" "aux":{"hunks":[{"lines":[{"kind":"remove","oldLine":1,"text":"x"},"# +
+                #" {"kind":"add","newLine":1,"text":"y"}]}]}}"#,
+            #"{"rpc":{"type":"tool_execution_end","toolCallId":"tcR","toolName":"edit","isError":false,"result":"ok"}}"#,
+        ]
+        // The entry fold: the assistant message carrying the same toolCall
+        // block (as get_entries / the message_end refetch delivers it).
+        let entry = #"{"type":"message","id":"e1","message":{"role":"assistant","# +
+            #" "content":[{"type":"toolCall","id":"tcR","name":"edit","# +
+            #" "arguments":{"path":"a.swift","edits":[{"oldText":"x","newText":"y"}]}}]}}"#
+        let decoder = JSONDecoder()
+        var messages = try lines.map { try decoder.decode(EnvelopeMessage.self, from: Data($0.utf8)) }
+        let entries = [try decoder.decode(JSONValue.self, from: Data(entry.utf8))]
+
+        var reducer = EnvelopeReducer()
+        reducer.apply(messages)
+        let liveCard = try XCTUnwrap(toolCards(reducer.session).first)
+        XCTAssertEqual(liveCard.hunks?.count, 1, "live aux.hunks attached")
+
+        var replay = reducer
+        replay.applyEntries(entries, leafId: "e1")
+        let rebornCard = try XCTUnwrap(toolCards(replay.session).first)
+        XCTAssertEqual(rebornCard.hunks?.count, 1, "entry rebirth must NOT strip live hunks")
+        XCTAssertEqual(rebornCard.hunks?.first?["lines"]?.arrayValue?.count, 2)
+        XCTAssertEqual(rebornCard.result?.stringValue, "ok", "result survives the rebirth")
     }
 }
