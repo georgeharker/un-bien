@@ -23,11 +23,11 @@ final class EntryCacheStoreTests: XCTestCase {
 
     /// A get_entries entry shape (docs/rpc-on-event-map.md):
     /// {type,id,parentId,timestamp,message}.
-    private func entry(_ id: String, text: String = "m") -> JSONValue {
+    private func entry(_ id: String, text: String = "m", parent: String = "") -> JSONValue {
         .object([
             "type": .string("message_end"),
             "id": .string(id),
-            "parentId": .string("p-\(id)"),
+            "parentId": .string(parent),
             "timestamp": .number(1),
             "message": .object(["role": .string("assistant"), "text": .string(text)]),
         ])
@@ -56,14 +56,19 @@ final class EntryCacheStoreTests: XCTestCase {
         XCTAssertNil(cached)
     }
 
-    func testOverlapPageSkipped() async {
-        // A straggler / re-walk page: its FIRST entry is already cached —
-        // skipped whole (the next delta from the trusted cursor re-covers).
-        await store.append(key: "k", roomID: "roomK", entries: [entry("e1"), entry("e2")], leafId: "e2")
-        let appended = await store.append(key: "k", roomID: "roomK", entries: [entry("e2"), entry("e3")], leafId: "e3")
-        XCTAssertFalse(appended)
+    func testPureRedeliveryNoOps() async {
+        // A fully-redelivered page (every entry already cached — straggler /
+        // re-walk replay): no-op, nothing duplicated. (A STRADDLING page —
+        // cached head, new tail — appends its suffix instead: see
+        // testStraddleAppendsOnlyUncachedSuffix, run 2026-09-18.)
+        await store.append(key: "k", roomID: "roomK",
+                           entries: [entry("e1"), entry("e2", parent: "e1")], leafId: "e2")
+        let appended = await store.append(key: "k", roomID: "roomK",
+                                          entries: [entry("e1"), entry("e2", parent: "e1")],
+                                          leafId: "e2")
+        XCTAssertFalse(appended, "a pure redelivery appends nothing")
         let cached = await store.load(key: "k")
-        XCTAssertEqual(cached?.entries.count, 2, "overlap page must not land")
+        XCTAssertEqual(cached?.entries.count, 2, "no duplicates")
         XCTAssertEqual(cached?.leafId, "e2")
     }
 
@@ -126,14 +131,16 @@ final class EntryCacheStoreTests: XCTestCase {
         await store.append(key: key, roomID: "roomK", entries: [entry("e1"), entry("e2")], leafId: "e2")
 
         let relaunched = EntryCacheStore(directory: dir)
-        let skipped = await relaunched.append(
-            key: key, roomID: "roomK", entries: [entry("e2"), entry("e3")], leafId: "e3")
-        XCTAssertFalse(skipped, "fresh launch must detect the overlap via the lazy id scan")
+        // Suffix-append (run 2026-09-18): the straddle [e2, e3] drops the
+        // already-cached e2 and appends its new tail — the no-double-append
+        // intent holds (e2 appears once), and no gap is left behind.
+        let straddled = await relaunched.append(
+            key: key, roomID: "roomK", entries: [entry("e2"), entry("e3", parent: "e2")],
+            leafId: "e3")
+        XCTAssertTrue(straddled, "the straddle's uncached tail appends")
 
-        let appended = await relaunched.append(key: key, roomID: "roomK", entries: [entry("e3")], leafId: "e3")
-        XCTAssertTrue(appended)
         let cached = await relaunched.load(key: key)
-        XCTAssertEqual(cached?.entries.count, 3)
+        XCTAssertEqual(cached?.entries.count, 3, "e1, e2, e3 — no duplicates, no gap")
         XCTAssertEqual(cached?.leafId, "e3")
     }
 
@@ -173,13 +180,62 @@ final class EntryCacheStoreTests: XCTestCase {
         // REFRESH meta.roomID, or reconcile would trash the live session's
         // cache over its stale room.
         await store.append(key: "r1:peer:sess", roomID: "oldRoom", entries: [entry("e1")], leafId: "e1")
-        let skipped = await store.append(key: "r1:peer:sess", roomID: "newRoom",
-                                         entries: [entry("e1"), entry("e2")], leafId: "e2")
-        XCTAssertFalse(skipped, "overlap page is still skipped")
+        // Post-rename pages are straddles (cached head, new tail): the suffix
+        // appends AND the append's meta write carries the FRESH room — the
+        // rename refresh survives the semantics change.
+        let appended = await store.append(key: "r1:peer:sess", roomID: "newRoom",
+                                          entries: [entry("e1"), entry("e2", parent: "e1")],
+                                          leafId: "e2")
+        XCTAssertTrue(appended, "the straddle's new tail appends")
 
         await store.reconcile(relayID: "r1", peer: "peer", liveRoomIDs: ["newRoom"])
         let survived = await store.load(key: "r1:peer:sess")
         XCTAssertNotNil(survived,
                         "renamed session's cache survives the reconcile")
+    }
+    /// REGRESSION (run 2026-09-18 — the blank branched session): a straddling
+    /// response (first entries already cached, later ones NEW — a post-branch
+    /// refetch from an older cursor) must append its uncached SUFFIX. The old
+    /// skip-whole guard dropped the tail, and the advancing cursor made the
+    /// gap permanent — a 3-entry fragment stood in for a 26-entry session and
+    /// rendered zero rows forever.
+    func testStraddleAppendsOnlyUncachedSuffix() async {
+        await store.append(key: "k", roomID: "r",
+                           entries: [entry("e1"), entry("e2", parent: "e1")], leafId: "e2")
+        // Straddle: e2 already cached, e3/e4 new.
+        let appended = await store.append(key: "k", roomID: "r",
+                                          entries: [entry("e2"), entry("e3", parent: "e2"),
+                                                    entry("e4", parent: "e3")],
+                                          leafId: "e4")
+        XCTAssertTrue(appended, "the straddle's new tail must append")
+        let cached = await store.load(key: "k")
+        XCTAssertEqual(cached?.entries.count, 4, "e1, e2, e3, e4 — no gap, no dup")
+        XCTAssertEqual(cached?.leafId, "e4")
+    }
+
+    /// REGRESSION (same run): a FRAGMENTED cache (the straddle hole's residue
+    /// — a tail-only fragment whose meta leaf sits at its end) must DISCARD at
+    /// load: the delta from that cursor re-serves nothing and the fold renders
+    /// nothing. Discard → full walk re-seeds (memo discipline).
+    func testFragmentedCacheDiscardsAtLoad() async throws {
+        // Healthy chain first: root e1 → e2 → e3.
+        await store.append(key: "k", roomID: "r",
+                           entries: [entry("e1"), entry("e2", parent: "e1"),
+                                     entry("e3", parent: "e2")], leafId: "e3")
+        // Simulate the hole: rewrite the file with ONLY the e2,e3 tail (the
+        // meta leaf stays e3 — the fragment shape from the device; e2's
+        // parent e1 is gone, so the chain can't reach a root).
+        let file = fileURL(forKey: "k")
+        let enc = JSONEncoder()
+        var body = Data()
+        for e in [entry("e2", parent: "e1"), entry("e3", parent: "e2")] {
+            body.append(try enc.encode(e)); body.append(0x0A)
+        }
+        try body.write(to: file, options: .atomic)
+
+        let cached = await store.load(key: "k")
+        XCTAssertNil(cached, "a fragment whose chain can't reach a root discards")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path),
+                       "discard trashes the fragment")
     }
 }

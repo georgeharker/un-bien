@@ -263,6 +263,66 @@ when the wrong transcript is open.
 1.0, submit per platform. Optional: launch-chip test (needs the launcher
 daemon).
 
+### 14. 🔲 Review notes copy (drafted — paste into ASC "App Review Information → Notes", per platform)
+
+> **What this app is.** Un Bien is the remote client for the Pi coding agent —
+> an open-source, self-hosted AI coding assistant. If you know the mobile
+> remote clients for hosted AI coding assistants (e.g. the Claude app): this
+> is that experience, but the agent runs on the user's own machines and there
+> is no hosted service anywhere. The target user already runs Pi in their
+> terminal; to get remote access they (1) install the un-bien extension into
+> Pi — a standard extension install, (2) run a small self-hosted relay (one
+> command; localhost, LAN, Tailnet, or any VPS), and (3) pair the phone by
+> scanning a QR code. The app then attaches to their running agent sessions:
+> live transcripts (markdown, styled edit diffs, tool results, inline images)
+> and answering the agent's clarifying questions mid-turn. There is no Un Bien
+> account and no Un Bien server — the app talks only to the user's own
+> machines, the same app class as SSH clients and home-automation companions.
+>
+> **How to review it without any infrastructure (demo mode):**
+>
+> 1. Launch the app — onboarding creates a local owner key (device keychain
+>    only; no account, no signup, nothing leaves the device).
+> 2. Open Settings → **Demo** (or the "Try the demo" affordance during
+>    onboarding). This loads an in-app, read-only demo mesh: two sessions (a
+>    main agent and a nested subagent) with canned transcripts, an edit-diff
+>    tool card, and a pending ask — the relay is literally named "Demo", so
+>    nothing needs masking. No network connection and no pairing are involved.
+> 3. From there the whole UI is exercisable: open a transcript, unroll the
+>    Edit tool card to see the diff, open the ask sheet, browse the theme
+>    picker and the third-party licenses screen.
+>
+> **Why there is no demo account to log into:** there is no Un Bien cloud, no
+> account system, and no developer-operated server — every relay and agent the
+> app talks to belongs to the user. The in-app demo mode exists precisely so
+> the binary is reviewable without provisioning anything.
+>
+> **Why App Transport Security allows arbitrary loads:** relay endpoints are
+> user-configured at runtime (QR pairing or manual entry) — the user may point
+> the app at a localhost relay, a LAN machine, a Tailscale address (100.64/10
+> CGNAT — not RFC1918, so NSAllowsLocalNetworking does not cover it), or a
+> self-hosted VPS. The endpoint set is unknowable at build time, so
+> arbitrary-loads is the honest posture for a user-configured
+> self-hosted-server client. The app makes no requests to any
+> developer-operated server; it only connects where the user directs it.
+>
+> **Camera:** used only to scan the pairing QR code (NSCameraUsageDescription
+> present).
+>
+> **Crypto:** an Ed25519 keypair generated on-device for local identity, plus
+> TLS/WebSocket transport — standard exempt crypto
+> (ITSAppUsesNonExemptEncryption = NO). No data is collected and there is no
+> tracking (privacy manifest attached; App Privacy answers are "none").
+>
+> **Video (the real flow, for completeness):** <URL — pairing, a live agent
+> turn, answering an ask from the phone> — unlisted link.
+>
+> **Contact:** <name, phone, email>
+
+(macOS record: same text, minus the Local Network paragraph; add "the app
+runs in the App Sandbox with only the network-client entitlement — outbound
+WebSocket only, no server functionality.")
+
 ## Both v1-blocking decisions are settled
 
 1. **ATS posture** (task 2) — `NSAllowsArbitraryLoads` + review-notes

@@ -59,6 +59,10 @@ public final class AppModel: ObservableObject {
                                    relayID: UUID)]] = [:]
     /// Pending interactive prompt per session (extension_ui_request).
     @Published public var prompts: [String: ExtensionUiRequest] = [:]
+    /// Composer PREFILL per session key (set by Branch From Here — mirrors the
+    /// TUI's /tree select-and-resubmit: navigate the leaf, hand the selected
+    /// message text to the composer). Consumed by ComposerBar on change.
+    @Published public var composerPrefill: [String: String] = [:]
     /// Sessions whose get_entries backfill WALK has reached its terminal page
     /// (empty page / error / nil leaf) — the transcript is complete for now.
     /// TranscriptView's scroll-restore WAITS on this while pages stream in: the
@@ -104,6 +108,18 @@ public final class AppModel: ObservableObject {
     /// onto the Home nav stack. Transient (not persisted); HomeView consumes and
     /// clears it. Lets a panel row (in a sheet) navigate the underlying stack.
     @Published public var pendingSessionNav: LiveSession?
+    /// A newly fork/clone-created session to POP-TO-ROOT then push (we were in
+    /// the source chat; the fork spawns a NEW session tile). HomeView consumes
+    /// and clears it. Distinct from `pendingSessionNav` (append-on-top for the
+    /// subagents panel) because a fork must first leave the now-dead source
+    /// chat. See `forkFromEntry` / `cloneSession` and the `forked_from_req`
+    /// linkage that resolves it.
+    @Published public var pendingRootSessionNav: LiveSession?
+    /// Fork/clone request ids we've sent and are waiting to auto-navigate to.
+    /// The extension echoes the id back as `forked_from_req` on the new
+    /// session's first `session_sync_end`; matching it here drives the pop-to-
+    /// root navigation. Consumed once per fork.
+    var pendingForkReqs: Set<String> = []
 
     // MARK: - Preferences (persisted)
 
@@ -420,6 +436,13 @@ public final class AppModel: ObservableObject {
                                    toPeer: session.peerEPK, room: session.roomID)
         try? await connection.send(.sessionSync(id: UUID().uuidString, limit: nil),
                                    toPeer: session.peerEPK, room: session.roomID)
+        // Authoritative busy check (design 01M1NFAE): reconcile a stuck local
+        // stream on EVERY reconstruction path (open/reconnect/foreground/
+        // restore) — an open streaming bubble while the peer reports
+        // isStreaming=false means we missed the terminal events (backgrounded).
+        // The response folds through EnvelopeReducer.applyState -> reconcile.
+        try? await connection.send(.getState(id: UUID().uuidString),
+                                   toPeer: session.peerEPK, room: session.roomID)
     }
 
     /// Walk-stall watchdog: a LOST walk response (a silently-dead socket — an
@@ -544,6 +567,64 @@ public final class AppModel: ObservableObject {
         if reply?["success"]?.boolValue != true, var s = sessions[session.id] {
             s.name = old
             sessions[session.id] = s
+        }
+    }
+
+    /// Fork from a conversation item (pre-release 2026-09-18). ctx.fork exists
+    /// ONLY on the command context — so the app sends the STRUCTURED
+    /// `session_fork` frame (ub plane) and the extension self-dispatches its
+    /// registered `/unbien fork` command to reach a command ctx (the slash
+    /// bootstrap is an extension implementation detail, not the app's job).
+    /// Downstream is the verified switch machinery: session_shutdown broadcast
+    /// → session_start{reason:"fork"} → the new session's room announces → a
+    /// NEW tile appears with the forked history. Demo: no connection → no-op.
+    func forkFromEntry(_ session: LiveSession, entryID: String) async {
+        guard let connection = connections[session.relayID] else { return }
+        let rid = UUID().uuidString
+        // Remember the request so the extension's `forked_from_req` echo (on the
+        // new session's first sync) auto-navigates us to the new tile.
+        pendingForkReqs.insert(rid)
+        // position "at": fork AT the tapped entry (keep up to and including it,
+        // continue in a new session). pi's default "before" REQUIRES a user
+        // message and THROWS on any other entry — but "Fork From Here" is offered
+        // on assistant rows too, so "before" silently failed there (no new
+        // session, no auto-nav). "at" is valid on any entry and matches the
+        // "from here" intent.
+        try? await connection.send(
+            .sessionFork(id: rid, entryID: entryID, position: "at"),
+            toPeer: session.peerEPK, room: session.roomID)
+    }
+
+    /// Clone a WHOLE session from the Home view (pi's `/clone`): fork AT the
+    /// session's current leaf — a duplicate that continues from the current
+    /// point in its own new session. Sources the leaf from the reducer's last
+    /// known cursor; no-op if we don't have one yet (nothing to clone from).
+    func cloneSession(_ session: LiveSession) async {
+        guard !isDemo(session) else { return }
+        guard let connection = connections[session.relayID] else { return }
+        guard let leaf = envelopeReducers[session.id]?.leafId, !leaf.isEmpty else { return }
+        let rid = UUID().uuidString
+        pendingForkReqs.insert(rid)
+        try? await connection.send(
+            .sessionFork(id: rid, entryID: leaf, position: "at"),
+            toPeer: session.peerEPK, room: session.roomID)
+    }
+
+    /// Branch from a conversation item — IN PLACE (AgentSession.navigateTree:
+    /// same session file, the leaf moves; /tree semantics). The extension
+    /// pushes the NEW leaf on the session_info channel the moment the
+    /// navigate commits — race-free (a refetch from here could round-trip
+    /// before the leaf moves) — and the app re-derives from that beacon. The
+    /// composer prefills with the row's text (what navigateTree would hand
+    /// back as editorText — sourced locally).
+    func branchFromEntry(_ session: LiveSession, entryID: String, prefill: String?) async {
+        guard let connection = connections[session.relayID] else { return }
+        let rid = UUID().uuidString
+        try? await connection.send(
+            .sessionNavigate(id: rid, entryID: entryID),
+            toPeer: session.peerEPK, room: session.roomID)
+        if let prefill, !prefill.isEmpty {
+            composerPrefill[session.id] = prefill
         }
     }
 

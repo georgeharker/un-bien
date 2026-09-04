@@ -120,6 +120,7 @@ import {
   _deployAgentNetworkSkill,
 } from "./commands/housekeeping.js"
 import { registerUnbienCommands } from "./commands/register.js"
+import { takeForkLink } from "./commands/fork_link.js"
 import { createTestHooks } from "./test_hooks.js"
 import {
   createRpcHandlers,
@@ -1153,12 +1154,32 @@ function _routeUnBienPlaneFrom(
     // is stale until our next hello, so reconnects can't carry it either).
     // session_sync is issued on EVERY open + reconnect, so the name heals on
     // every natural cycle. Old apps ignore the field; old extensions omit it.
+    //
+    // SOURCE = the room's DISPLAY name (myRoomMeta.name), NOT deps.sessionName:
+    // the latter is `_sessionName`, which `_cmdJoin` sets to the mesh session
+    // id LOCAL_SESSION_NAME ("local"). Sending that here clobbered the tile
+    // label with "local" on every reconnect (the flaky-name bug) — the
+    // non-live pull disagreed with the live session_info push. myRoomMeta.name
+    // is the same value pair_ok sends (deps.displayName) and tracks live
+    // renames (session_info_changed updates it), so pull == push now.
+    const displayName = deps.myRoomMeta?.name
+    // Fork auto-nav: a fork-born session's FIRST sync echoes the app's
+    // originating fork request id (design: fork switch). take = read+unlink,
+    // so it fires once (the app navigates on first receipt; later reconnects
+    // must not re-jump). Keyed by the session id, so it survives the extension
+    // module re-eval that ctx.fork triggers.
+    const forkSm = _rootState().sessionManager
+    const forkedFromReq =
+      forkSm && typeof forkSm.getSessionDir === "function"
+        ? takeForkLink(forkSm.getSessionDir(), forkSm.getSessionId())
+        : undefined
     sender.sendEnvelope({
       ub: {
         type: "session_sync_end",
         ...(typeof f.id === "string" ? { in_reply_to: f.id } : {}),
         session_started_at: _sessionStartedAt ?? 0,
-        ...(deps.sessionName ? { session_name: deps.sessionName } : {}),
+        ...(displayName ? { session_name: displayName } : {}),
+        ...(forkedFromReq ? { forked_from_req: forkedFromReq } : {}),
       } as EnvelopeMessage["ub"],
     })
     return
@@ -1248,6 +1269,44 @@ function _routeUnBienPlaneFrom(
       typeof f.name === "string" ? f.name : undefined,
     )
     if (launchError) envLog(`session_launch(ub) error: ${launchError}`)
+    return
+  }
+
+  if (type === "session_fork" || type === "session_navigate") {
+    // app->ext: fork a NEW session / branch IN PLACE from a conversation entry.
+    // ctx.fork / ctx.navigateTree live ONLY on the command ctx, so we can't act
+    // here (this is the peer-channel dispatch, not a command). Self-dispatch the
+    // registered `/unbien fork|branch` command via sendUserMessage — pi runs it
+    // with a real ExtensionCommandContext. No stashed ctx, no startup bootstrap:
+    // the command ctx lives exactly as long as the op that needs it. Not gated
+    // beyond being paired — these are no more privileged than a prompt on this
+    // same room (which the app can already send).
+    const f = frame as Record<string, unknown>
+    const entryId = typeof f.entry_id === "string" ? f.entry_id : ""
+    if (!entryId) {
+      envLog(`${String(type)}(ub): missing entry_id — ignored`)
+      return
+    }
+    if (type === "session_fork") {
+      // Thread the request id (reqId) so the new session can echo it back as
+      // forked_from_req on its first sync — the app's auto-nav correlation.
+      // Order: `<entryId> <reqId> [pos]` (see _cmdFork's parse).
+      const reqId = typeof f.id === "string" ? f.id : ""
+      const posArg =
+        f.position === "at" || f.position === "before" ? ` ${f.position}` : ""
+      const reqArg = reqId ? ` ${reqId}` : ""
+      envLog(`session_fork(ub): entry=${entryId.slice(0, 8)}${posArg}`)
+      _pi?.sendUserMessage(`/unbien fork ${entryId}${reqArg}${posArg}`, {
+        deliverAs: "followUp",
+        expandPromptTemplates: true,
+      })
+    } else {
+      envLog(`session_navigate(ub): entry=${entryId.slice(0, 8)}`)
+      _pi?.sendUserMessage(`/unbien branch ${entryId}`, {
+        deliverAs: "followUp",
+        expandPromptTemplates: true,
+      })
+    }
     return
   }
 }
@@ -1359,6 +1418,39 @@ async function _renameAgent(newName: string): Promise<void> {
 // session replacement (newSession/fork/switch/reload). We re-capture it via
 // `withSession` when WE drive a newSession (see the session_new dispatch).
 let _lastCtx: Pick<ExtensionContext, "ui" | "abort" | "cwd"> | null = null
+// One-shot flag for the turn-ctx surface probe (see the turn_start handler).
+let _turnCtxProbed = false
+
+/** TARGETED, PROXY-SAFE ctx probe: the ctx objects carry guarded getters
+ * (throwing on invalid/stale access — see _ctxUi), so full reflection
+ * under-reports or throws. Access each interesting member individually,
+ * catching per property. Reflection-only: never invokes anything. */
+function _probeCtx(label: string, ctx: unknown): void {
+  const names = [
+    "fork",
+    "navigateTree",
+    "newSession",
+    "switchSession",
+    "compact",
+    "shutdown",
+    "sendMessage",
+    "prompt",
+    "clearQueue",
+  ]
+  const parts: string[] = []
+  // SAFETY: per-property try/catch — a throwing getter (guarded proxy)
+  // reports "throws" instead of failing the whole probe.
+  const target = ctx as Record<string, unknown>
+  for (const name of names) {
+    try {
+      const v = target[name]
+      parts.push(`${name}=${typeof v === "function" ? "fn" : String(v)}`)
+    } catch {
+      parts.push(`${name}=throws`)
+    }
+  }
+  envLog(`${label} targeted: ${parts.join(" ")}`)
+}
 // Freshest base ExtensionContext, re-captured on EVERY `session_start`
 // (startup/new/fork/reload/resume). The session_start ctx is always bound to
 // the CURRENT session, so compact + cancel (base-ctx methods) routed through
@@ -1471,9 +1563,6 @@ const rpcDeps: RpcHandlersDeps = {
   imageDeps,
   wakeAgent: _wakeAgent,
   abortCurrentTurn: () => _abortCurrentTurn(),
-  set sessionStartedAt(v: number | null) {
-    _sessionStartedAt = v
-  },
 }
 
 // ── Relay lifecycle seam ──────────────────────────────────────────────────
@@ -2104,6 +2193,15 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // room_meta over the relay (plan/32) below — that's independent of the
   // broker and drives the app's working indicator.
   pi.on("turn_start", (_event, ctx) => {
+    // One-shot TURN CTX TARGETED PROBE (see the session_start probe note):
+    // per-property, proxy-safe. Turn ctxs fire while the agent RUNS — if
+    // they carry the session-control powers, the always-warm capture
+    // replaces the stash entirely.
+    if (!_turnCtxProbed) {
+      _turnCtxProbed = true
+      if (ctx) _probeCtx("turn ctx", ctx)
+      else envLog("turn ctx targeted: ctx is undefined at turn_start")
+    }
     const sid = _sidOf(ctx)
     const st = _stateFor(sid)
     // Each session records its OWN sessionManager (no cross-session clobber).
@@ -2203,6 +2301,25 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     })
   })
 
+  // LEAF BEACON on tree navigation (branch). pi fires session_tree AFTER a leaf
+  // move for EVERY source — TUI /tree, edit-resubmit, and our own /unbien branch
+  // (event.fromExtension) — carrying the new leaf directly. Push it so the app
+  // re-derives its active path (evt session_info leafId → SessionState.derivePath
+  // walks parentId from the new leaf over its already-cached tree; no prefetch).
+  // THE single source for all leaf moves: without it a TUI /tree only reflected
+  // on the next get_entries refetch (stale path until then). Root room only — a
+  // subagent's tree move must not re-path the app's root session.
+  pi.on("session_tree", (event, ctx) => {
+    if (_isNonRootSid(_sidOf(ctx))) return
+    const leafId = (event as { newLeafId?: string | null } | undefined)
+      ?.newLeafId
+    if (typeof leafId === "string" && leafId.length > 0) {
+      _broadcastEnvelope(relayDeps, {
+        evt: { channel: "session_info", data: { leafId } },
+      })
+    }
+  })
+
   // Re-capture the freshest base ctx on every session replacement so compact
   // never operates on a stale captured ctx — this is the fix for the
   // "stale after session replacement" crash when the app taps Compact after a
@@ -2218,6 +2335,13 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // no-cross-session-clobber rule as the per-sid sessionManager. Otherwise a
     // subagent steals the base ctx and root-scoped notifies silently drop.
     if (!_isNonRootSid(sid)) _lastEventCtx = ctx
+    // EVENT-CTX TARGETED PROBE (run 2026-09-18, round 3): the ctx objects
+    // are guarded (throwing getters — proxies), so full reflection
+    // under-reports or throws. Per-property access, each caught, is the
+    // proxy-safe probe.
+    if (!_isNonRootSid(sid) && ctx) {
+      _probeCtx("event ctx", ctx)
+    }
     if (ctx?.sessionManager) _stateFor(sid).sessionManager = ctx.sessionManager
     // session_shutdown disposes per-session pi-ask subscriptions. A host that
     // reuses this module instance does NOT re-run the factory, so rebind the

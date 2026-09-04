@@ -197,6 +197,13 @@ public struct EnvelopeReducer {
                                    isStreaming: data?["isStreaming"]?.boolValue,
                                    sessionId: data?["sessionId"]?.stringValue,
                                    messageCount: data?["messageCount"]?.intValue)
+        // Authoritative busy reconcile (design 01M1NFAE): a peer reporting NOT
+        // streaming while we still hold an open stream/turn means we missed the
+        // terminal events — clear the stuck bubble + dots. ONLY on an explicit
+        // false; nil (unknown / older extension) leaves live state untouched.
+        if data?["isStreaming"]?.boolValue == false {
+            session.reconcileBusyState(isStreaming: false)
+        }
     }
 
     // MARK: - evt plane (panels)

@@ -31,6 +31,8 @@ extension ClientMessage: Codable {
         static let ask = CodingKeys("ask")
         static let since = CodingKeys("since")
         static let roomID = CodingKeys("room_id")
+        static let entryID = CodingKeys("entry_id")
+        static let position = CodingKeys("position")
         static let reason = CodingKeys("reason")
     }
 
@@ -66,6 +68,8 @@ extension ClientMessage: Codable {
             try container.encode(id, forKey: .id)
         case let .sessionCompact(id):
             try container.encode(id, forKey: .id)
+        case let .getState(id):
+            try container.encode(id, forKey: .id)
         case let .modelSet(id, provider, modelID):
             try container.encode(id, forKey: .id)
             try container.encode(provider, forKey: .provider)
@@ -96,6 +100,13 @@ extension ClientMessage: Codable {
         case let .setSessionName(id, name):
             try container.encode(id, forKey: .id)
             try container.encode(name, forKey: .name)
+        case let .sessionFork(id, entryID, position):
+            try container.encode(id, forKey: .id)
+            try container.encode(entryID, forKey: .entryID)
+            try container.encodeIfPresent(position, forKey: .position)
+        case let .sessionNavigate(id, entryID):
+            try container.encode(id, forKey: .id)
+            try container.encode(entryID, forKey: .entryID)
         case let .extensionUiResponse(response):
             try container.encode(response.id, forKey: .id)
             try container.encodeIfPresent(response.value, forKey: .value)
@@ -146,6 +157,8 @@ extension ClientMessage: Codable {
             self = .sessionNew(id: try string(.id))
         case "session_compact":
             self = .sessionCompact(id: try string(.id))
+        case "get_state":
+            self = .getState(id: try string(.id))
         case "model_set":
             self = .modelSet(id: try string(.id), provider: try string(.provider),
                              modelID: try string(.modelID))
@@ -165,6 +178,11 @@ extension ClientMessage: Codable {
             self = .closeChildRoom(id: try string(.id), roomID: try string(.roomID))
         case "set_session_name":
             self = .setSessionName(id: try string(.id), name: try string(.name))
+        case "session_fork":
+            self = .sessionFork(id: try string(.id), entryID: try string(.entryID),
+                                position: try container.decodeIfPresent(String.self, forKey: .position))
+        case "session_navigate":
+            self = .sessionNavigate(id: try string(.id), entryID: try string(.entryID))
         case "extension_ui_response":
             self = .extensionUiResponse(ExtensionUiResponse(
                 id: try string(.id),

@@ -19,13 +19,22 @@ struct HuskRow: View {
     let typography: Typography
     let expandRich: Bool
     let hideInputRich: Bool
+    /// Fork/Branch actions (pre-release 2026-09-18): closures keep HuskRow
+    /// value-structured (no model dependency — Equatable economy preserved);
+    /// the construction site owns session/model scope. entryID is the pi
+    /// entry id of the durable row; `prefill` is the row's own text for the
+    /// Branch composer prefill (user messages).
+    var onFork: ((String) -> Void)?
+    var onBranch: ((String, String?) -> Void)?
 
     @State private var isNear: Bool
     @State private var measuredHeight: Double?
 
     init(item: TranscriptItem, index: Int, driver: TranscriptWindowDriver,
          themeID: ThemeID, theme: AppTheme, typography: Typography,
-         expandRich: Bool, hideInputRich: Bool) {
+         expandRich: Bool, hideInputRich: Bool,
+         onFork: ((String) -> Void)? = nil,
+         onBranch: ((String, String?) -> Void)? = nil) {
         self.item = item
         self.index = index
         self.driver = driver
@@ -34,7 +43,72 @@ struct HuskRow: View {
         self.typography = typography
         self.expandRich = expandRich
         self.hideInputRich = hideInputRich
+        self.onFork = onFork
+        self.onBranch = onBranch
         _isNear = State(initialValue: driver.isNear(index))
+    }
+
+    /// The row's pi entry id when the row is DURABLE (entry-keyed, anchorable)
+    /// — pendings (synthetic ids) offer no fork/branch (their entries haven't
+    /// landed). Also the row's plain text for Copy / the Branch prefill.
+    private var durableEntryID: String? {
+        // anchorID != nil IS the durable gate (id-scheme v2: pendings are
+        // anchorless; re-keyed rows carry their pi entry id). The early
+        // length heuristic was WRONG — pi entry ids are 8 chars (run
+        // 2026-09-18: "I see copy, no fork / branch" — every real id
+        // rejected). Just strip the row-kind prefix.
+        guard item.anchorID != nil else { return nil }
+        let id = item.id
+        for prefix in ["user:", "assistant:"] where id.hasPrefix(prefix) {
+            return String(id.dropFirst(prefix.count))
+        }
+        return nil
+    }
+
+    /// The /tree selection rule (run 2026-09-18): branching from a USER
+    /// message places its text in the editor (the resubmit shape); from an
+    /// assistant message the editor stays EMPTY (the continue shape).
+    private var branchPrefill: String? {
+        if case .user = item { return rowText }
+        return nil
+    }
+
+    private var rowText: String? {
+        switch item {
+        case let .user(bubble): return bubble.text
+        case let .assistant(bubble): return bubble.text
+        default: return nil
+        }
+    }
+
+    /// Long-press a message row (user 2026-09-18): Copy / Fork From Here /
+    /// Branch From Here. Fork + Branch need a DURABLE row (its pi entry);
+    /// pendings offer Copy only. Tool/reasoning rows have no menu.
+    @ViewBuilder private var rowMenu: some View {
+        if let text = rowText {
+            Button {
+                #if os(macOS)
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                #else
+                UIPasteboard.general.string = text
+                #endif
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+            if let entryID = durableEntryID {
+                Button {
+                    onFork?(entryID)
+                } label: {
+                    Label("Fork From Here", systemImage: "arrow.triangle.branch")
+                }
+                Button {
+                    onBranch?(entryID, branchPrefill)
+                } label: {
+                    Label("Branch From Here", systemImage: "arrow.triangle.turn.up.right.circle")
+                }
+            }
+        }
     }
 
     var body: some View {
@@ -45,6 +119,7 @@ struct HuskRow: View {
                               hideInputRich: hideInputRich)
                     .equatable()
                     .background(heightProbe)
+                    .contextMenu { rowMenu }
             } else {
                 // Far husk: an explicit frame IS the bounds — not self-sized,
                 // no content, no measurement. Height comes from the husk's

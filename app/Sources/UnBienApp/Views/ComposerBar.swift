@@ -38,6 +38,15 @@ struct ComposerBar: View {
                             onSend: send)
                 .padding(.horizontal, 6)
                 .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
+                // Branch From Here prefill (pre-release 2026-09-18): mirrors
+                // the TUI's /tree select-and-resubmit — the selected message
+                // lands in the composer. Consume-on-change (cleared → no-op).
+                .onChange(of: model.composerPrefill[session.id]) { _, prefill in
+                    if let prefill, !prefill.isEmpty {
+                        draft = prefill
+                        model.composerPrefill[session.id] = nil
+                    }
+                }
                 .disabled(locked)
             Button {
                 guard !trimmed.isEmpty else { return }

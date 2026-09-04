@@ -148,7 +148,7 @@ public actor RelayConnection {
             obj["type"] = .string("new_session")
             return (.rpc, .object(obj))
         case "session_sync", "session_launch", "presence_status", "get_session_info",
-             "terminate", "close_child_room":
+             "terminate", "close_child_room", "session_fork", "session_navigate":
             // un-bien's OWN protocol (reconstruction request / mesh remote-launch
             // / daemon caps pull) — the extension/daemon acts. The frame keeps its
             // inner type verbatim.

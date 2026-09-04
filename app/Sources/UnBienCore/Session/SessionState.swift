@@ -108,6 +108,9 @@ public struct SessionState: Equatable, Sendable {
     /// Last trusted ACTIVE leaf. A beacon leafId differing from this = the
     /// path moved → derivePath re-derives + replays.
     private var activeLeafId: String?
+    /// A leaf move awaiting its branch marker (appended after the replay —
+    /// see derivePath / renderPendingPathEntries).
+    private var pendingBranchNoticeLeaf: String?
     /// A beacon that arrived MID-TURN (run 2026-09-18: "stream ended without
     /// finish" — the reset raced the in-flight bubble). The re-path is DEFERRED
     /// to the settle point (agent_settled / shutdown), preserving the replay
@@ -278,8 +281,7 @@ public struct SessionState: Equatable, Sendable {
     /// Mark any currently-open streaming block (assistant text or reasoning)
     /// as settled and forget it, so the next inserted row starts fresh.
     private mutating func closeOpenAssistant() {
-        // Inert during a replay walk: history folding must not settle the
-        // in-flight live bubble (see isReplayingEntries).
+        // Inert during a replay walk (see isReplayingEntries).
         if isReplayingEntries { return }
         if let index = openAssistantIndex, case var .assistant(bubble) = items[index] {
             bubble.streaming = false
@@ -291,6 +293,14 @@ public struct SessionState: Equatable, Sendable {
         }
         openAssistantIndex = nil
         openReasoningIndex = nil
+    }
+
+    /// get_state reconcile (design 01M1NFAE): peer not streaming + local open stream/turn = missed terminal events; finalize bubble (dots stop) + clear activeTurnID; content rides get_entries.
+    public mutating func reconcileBusyState(isStreaming: Bool) {
+        guard !isStreaming, activeTurnID != nil || openAssistantIndex != nil
+            || openReasoningIndex != nil else { return }
+        closeOpenAssistant()
+        activeTurnID = nil
     }
 
     private mutating func appendReasoning(inReplyTo: String, delta: String) {
@@ -733,13 +743,19 @@ public struct SessionState: Equatable, Sendable {
         let newOrder = Array(chain.reversed())
         guard Set(newOrder) != pathIds else { return }
         let firstDerivation = pathOrder == nil
+        let oldOrder = pathOrder ?? []
         pathOrder = newOrder
         pathIds = Set(newOrder)
+        // A forward EXTENSION (old path is a prefix of the new) is a normal turn
+        // advancing the leaf, NOT a branch (fresh pi starts leaf==nil). Only a
+        // real DIVERGENCE (rendered entries abandoned: edit-resubmit / /tree /
+        // branch) marks the move; resetTranscript stays unconditional (it also
+        // reconciles live-plane rows with the entry tree every turn end).
+        let isExtension = newOrder.count >= oldOrder.count
+            && Array(newOrder.prefix(oldOrder.count)) == oldOrder
         if !firstDerivation {
-            // The path MOVED under a rendered transcript. resetTranscript
-            // clears ROW state only — the tree state above survives and is
-            // exactly what the replay reads.
             resetTranscript()
+            if !isExtension { pendingBranchNoticeLeaf = leaf }
         }
         renderedPathCount = 0
     }
@@ -753,6 +769,16 @@ public struct SessionState: Equatable, Sendable {
             renderedPathCount += 1
             guard let entry = entriesById[id] else { continue }
             birthEntry(entry)
+        }
+        // The branch marker lands AFTER the replayed rows — at the branch
+        // point, where the tail vanished. Notices are not entries: a later
+        // re-path's reset clears them, and the fresh move appends its own.
+        if let leaf = pendingBranchNoticeLeaf {
+            pendingBranchNoticeLeaf = nil
+            appendNotice(
+                code: "branch",
+                message: "Branched at …\(String(leaf.suffix(6))) — the earlier "
+                    + "continuation is preserved on its own branch")
         }
     }
 

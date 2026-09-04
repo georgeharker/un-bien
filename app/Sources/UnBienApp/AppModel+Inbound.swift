@@ -278,6 +278,22 @@ extension AppModel {
             session.name = name
             sessions[key] = session
         }
+        // FORK AUTO-NAV: this session was born from a fork/clone WE requested
+        // (the extension echoes our request id once, on the new session's first
+        // sync). Pop-to-root + navigate to the new tile. Consumed once (the
+        // extension take+unlinks its marker, and we drop the pending id).
+        if ub["type"]?.stringValue == "session_sync_end",
+           let req = ub["forked_from_req"]?.stringValue,
+           pendingForkReqs.remove(req) != nil,
+           let session = sessions[key] {
+            pendingRootSessionNav = session
+            // FULL reconstruction, like opening a session: the proactive sync
+            // that pulled this linkage only fetched panels — NOT the transcript
+            // (get_entries) or the model roster. Without this the forked tile
+            // lands EMPTY until the user manually re-opens it. openSession is
+            // idempotent, so it's safe alongside TranscriptView's own .task.
+            Task { await openSession(session) }
+        }
         // Ask-reconciliation backstop (AskSyncWindow): the sync
         // reply replays the bridge's FULL activeFlows set to the
         // sender ahead of this terminator, so a stored prompt whose
@@ -396,16 +412,27 @@ extension AppModel {
         // Panels are envelope-only: {evt channel:"panel"} carries a
         // panel_update; decode it with the stock decoder and route it
         // into the panel store (reuses PanelState + the panel UI).
-        if let evt = env.evt, evt.channel == "session_info",
-           let name = evt.data["name"]?.stringValue, !name.isEmpty {
+        if let evt = env.evt, evt.channel == "session_info" {
             // RENAME forward (extension session_info_changed, pre-release
             // 2026-09-18): live name update — covers TUI /name, RPC, and the
             // app's own set_session_name command (which confirms via this
             // forward; the extension's next hello re-announces the fresh name
             /// so reconnects stay consistent).
-            if var session = sessions[key] {
+            if let name = evt.data["name"]?.stringValue, !name.isEmpty,
+               var session = sessions[key] {
                 session.name = name
                 sessions[key] = session
+            }
+            // LEAF BEACON (Branch From Here, race-free): the extension pushes
+            // the NEW active leaf the moment AgentSession.navigateTree
+            // commits — an empty-fold derivePath re-renders the branched path
+            // immediately (the same machinery as the walk terminal's beacon;
+            // a refetch raced from the app side could beat the leaf move).
+            if let leafId = evt.data["leafId"]?.stringValue, !leafId.isEmpty {
+                var reducer = envelopeReducers[key] ?? EnvelopeReducer()
+                reducer.applyEntries([], leafId: leafId)
+                envelopeReducers[key] = reducer
+                transcripts[key] = reducer.session
             }
         }
         if let evt = env.evt, evt.channel == "panel",
@@ -495,6 +522,16 @@ extension AppModel {
             if let entries = page["entries"]?.arrayValue, !entries.isEmpty,
                let leaf = page["leafId"]?.stringValue,
                let conn = connections[relayID] {
+                // ACTIVE chip clear on backfill: a pending steer/followUp chip is
+                // normally cleared by the LIVE user message_end (the consumption
+                // signal). If that frame was missed (backgrounded), the message
+                // returns only here, entry-born — so correlate this page's user
+                // entries by text and clear matching chips, instead of leaving
+                // them to the 5-min backstop (they "time out" rather than
+                // actively disappear). Design 01M158S7 + missed-events reconcile.
+                for entry in entries where entry["message"]?["role"]?.stringValue == "user" {
+                    clearPendingChip(key: key, userText: entry["message"]?["content"]?.joinedText() ?? "")
+                }
                 // REPEATED-LEAF circuit breaker: a non-empty page whose leaf
                 // did not advance past the previous one means the paging loop
                 // is spinning — it would never terminate (spinner forever,
@@ -565,19 +602,24 @@ extension AppModel {
         // queueMessage timeout is the backstop. Design 01M158S7.
         if let rpc = env.rpc, rpc["type"]?.stringValue == "message_end",
            rpc["message"]?["role"]?.stringValue == "user" {
-            let text = rpc["message"]?["content"]?.joinedText() ?? ""
-            if !text.isEmpty {
-                let norm = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                // ONE consumption clears ONE pending chip. If the same
-                // text was queued twice, each run clears the FIRST
-                // (oldest / FIFO — pi delivers in order) match, not all
-                // identical-in-flight copies.
-                if let idx = queued[key]?.firstIndex(where: {
-                    $0.pending && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == norm
-                }) {
-                    queued[key]?.remove(at: idx)
-                }
-            }
+            clearPendingChip(key: key, userText: rpc["message"]?["content"]?.joinedText() ?? "")
+        }
+    }
+
+    /// Clear ONE oldest pending queue chip whose text matches a CONSUMED user
+    /// message (FIFO — pi delivers in order; the same text queued twice clears
+    /// the oldest match per consumption, not all copies). Shared by the LIVE
+    /// user message_end path AND the entry-born get_entries backfill: if the
+    /// live consumption frame was missed (app backgrounded), the message returns
+    /// only as a get_entries entry, so the backfill clears the chip ACTIVELY
+    /// instead of leaving it to the 5-min backstop. Design 01M158S7.
+    func clearPendingChip(key: String, userText: String) {
+        let norm = userText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !norm.isEmpty else { return }
+        if let idx = queued[key]?.firstIndex(where: {
+            $0.pending && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == norm
+        }) {
+            queued[key]?.remove(at: idx)
         }
     }
 
@@ -758,8 +800,20 @@ extension AppModel {
         if dismissedSessions[session.id] != nil { return }
         // Carry a known status across re-announce (reconnect/relaunch replays
         // room_announced); the pull below refreshes it.
+        let isNewRoom = sessions[session.id] == nil
         session.status = sessions[session.id]?.status
         sessions[session.id] = session
+        // FORK AUTO-NAV pull: a fork/clone is pending and a NEW room just
+        // appeared — it may be the fork-born session. session_sync normally
+        // fires only on openSession (view appear), which won't happen until the
+        // user opens it, so proactively sync here to pull `forked_from_req` and
+        // trigger the pop-to-root navigation without the user tapping in.
+        if isNewRoom, !pendingForkReqs.isEmpty, let connection = connections[relayID] {
+            let peerEPK = session.peerEPK
+            let roomID = session.roomID
+            Task { try? await connection.send(.sessionSync(id: UUID().uuidString, limit: nil),
+                                              toPeer: peerEPK, room: roomID) }
+        }
         // A re-advertised room means the session is live again — the resume
         // flow: the OUTGOING extension instance broadcast session_shutdown
         // (banner up), then the fresh instance re-joined the SAME room under

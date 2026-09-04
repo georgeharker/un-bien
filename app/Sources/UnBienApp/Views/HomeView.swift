@@ -65,6 +65,16 @@ struct HomeView: View {
                 model.pendingSessionNav = nil
             }
         }
+        // Fork/clone landed a NEW session: leave the (now-dead) source chat by
+        // popping to root, then push the new tile. Distinct from the append-only
+        // pendingSessionNav so we don't stack the new chat on top of the old.
+        .onChange(of: model.pendingRootSessionNav) { _, next in
+            if let next {
+                path = NavigationPath()
+                path.append(next)
+                model.pendingRootSessionNav = nil
+            }
+        }
         .sheet(isPresented: $showSettings) {
             SettingsView().environmentObject(model).environmentObject(fonts)
         }
@@ -364,26 +374,22 @@ struct HomeView: View {
         // Never on a live row without the cap — a local hide would vanish a
         // running chat. Reappears only if the session proves live again
         // (fresh `ub hello` → resurrection in AppModel).
-        // NOTE: swipe BEFORE contextMenu — on iOS the menu's long-press
-        // recognizer otherwise wins over the horizontal drag and the swipe
-        // reads as scrolling (user report 2026-09-01).
-        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-            if model.isRemovable(session) {
-                Button(role: .destructive) {
-                    model.removeEndedSession(session)
+        // Remove / End Chat live in the long-press context menu (below), NOT a
+        // swipe action. The row's contextMenu long-press recognizer fought the
+        // horizontal swipe on iOS (the swipe read as scrolling / became
+        // unreliable once the menu grew) — so we keep ONE discoverable path,
+        // the long-press menu, and drop the swipe (user 2026-09-03).
+        .contextMenu {
+            // Clone the WHOLE session at its current position (pi's /clone) —
+            // whole-session affordance lives on the Home tile; the in-chat row
+            // menu owns fork-from-a-message. Not offered on subagent children.
+            if !session.isSubagent {
+                Button {
+                    Task { await model.cloneSession(session) }
                 } label: {
-                    Label("Remove", systemImage: "trash")
-                }
-            } else if model.supports("remote_terminate", session: session) {
-                // Kill needs an explicit tap (no full-swipe on a kill).
-                Button(role: .destructive) {
-                    killTarget = session
-                } label: {
-                    Label("End Chat…", systemImage: "trash.fill")
+                    Label("Clone Session", systemImage: "plus.square.on.square")
                 }
             }
-        }
-        .contextMenu {
             if !model.isRemovable(session) {
                 Button {
                     renameText = session.name

@@ -643,9 +643,15 @@ final class EntryBornErrorNoticeTests: XCTestCase {
         state.applyEntries([], leafId: "c1")
         XCTAssertEqual(state.items.count, 2, "mid-turn beacon must NOT reset the rows")
 
-        // Settle: the deferred re-path applies — the new path renders.
+        // Settle: the deferred re-path applies — the new path renders, and
+        // (run 2026-09-18, the branch marker) a trailing notice lands at the
+        // branch point: 3 rows + the notice.
         state.applyRPC(.object(["type": .string("agent_settled")]))
-        XCTAssertEqual(state.items.count, 3, "settle applies the parked re-path")
-        XCTAssertEqual(state.items.map(\.id).last, "user:c1")
+        XCTAssertEqual(state.items.count, 4, "settle applies the parked re-path + the branch notice")
+        XCTAssertEqual(state.items.map(\.id).dropLast().last, "user:c1")
+        guard case let .notice(notice) = state.items.last else {
+            return XCTFail("expected the trailing branch notice")
+        }
+        XCTAssertEqual(notice.code, "branch")
     }
 }

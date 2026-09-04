@@ -96,8 +96,14 @@ describe("extension default export", () => {
     // 8 plan-25 + 2 install + 1 cross-PC inventory (plan-25 W D)
     // + 1 rename (plan/41) + 1 relay control (issue #119)
     // + 2 identity (`unbien identity` and its `identity show` verb alias)
-    // + 1 config.
-    expect(registeredCommands).toHaveLength(16)
+    // + 1 config + 3 internal session ops (fork/branch/new).
+    expect(registeredCommands).toHaveLength(19)
+    // Internal session ops — self-dispatched from the app's structured
+    // session_fork / session_navigate / new_session frames (ctx.fork /
+    // ctx.navigateTree / ctx.newSession are command-ctx-only).
+    expect(registeredCommands).toContain("unbien fork")
+    expect(registeredCommands).toContain("unbien branch")
+    expect(registeredCommands).toContain("unbien new")
     // `relay` is back as ONE command with verbs (start/stop/status/url), not the
     // five separate registrations plan/19 trimmed — the README documents it and
     // without it every `/unbien relay …` silently reprinted the status panel.

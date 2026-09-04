@@ -124,6 +124,12 @@ export interface RpcCommandHandlers {
    *  name — pi fires session_info_changed, which index.ts forwards to the
    *  app; the standard rpc reply is the app's success signal. */
   setSessionName?(name: string): Promise<void>
+  /** Native pi get_state: session/model snapshot. THE authoritative busy
+   *  signal (isStreaming) the app reconciles against on every reconstruction —
+   *  an open local stream while isStreaming=false means missed terminal events
+   *  (design: get_state reconcile). Resolves to
+   *  {model,provider,thinkingLevel,isStreaming,sessionId,messageCount}. */
+  getState?(): Promise<unknown>
 }
 
 function str(v: unknown): string {
@@ -229,6 +235,11 @@ export async function dispatchRpcCommand(
         if (!handlers.setSessionName) return null
         await handlers.setSessionName(str(frame.name))
         return rpcResponse("set_session_name", id, { success: true })
+      }
+      case "get_state": {
+        if (!handlers.getState) return null
+        const data = await handlers.getState()
+        return rpcResponse("get_state", id, { success: true, data })
       }
       case "get_entries": {
         if (!handlers.getEntries) return null

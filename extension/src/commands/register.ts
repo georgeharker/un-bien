@@ -17,6 +17,7 @@ import {
   _cmdStatus,
 } from "./info.js"
 import { _cmdRoot, _cmdSetup, _cmdStart, _cmdStop } from "./lifecycle.js"
+import { _cmdBranch, _cmdFork, _cmdNewSession } from "./session_ops.js"
 import { _cmdPair, _cmdRevoke, _shortidCompletions } from "./pairing.js"
 import { _cmdRelay, _cmdSetRelay } from "./relay.js"
 import { _cmdInstall, _cmdUninstall } from "./housekeeping.js"
@@ -81,6 +82,11 @@ export function registerUnbienCommands(
         "cron log",
         "install",
         "uninstall", // service install (plan/26 W3)
+        // Internal session ops (self-dispatched from the app's structured
+        // session_fork / session_navigate / new_session frames).
+        "fork",
+        "branch",
+        "new",
       ]
         .filter((o) => o.startsWith(prefix))
         .map((o) => ({ value: o, label: o }))
@@ -125,6 +131,12 @@ export function registerUnbienCommands(
         _cmdInstall(ctx, { linkCli: true })
       } else if (sub === "uninstall") {
         _cmdUninstall(ctx, { linkCli: true })
+      } else if (sub === "fork" || sub.startsWith("fork ")) {
+        await _cmdFork(deps, sub.slice("fork".length).trim(), ctx)
+      } else if (sub === "branch" || sub.startsWith("branch ")) {
+        await _cmdBranch(deps, sub.slice("branch".length).trim(), ctx)
+      } else if (sub === "new") {
+        await _cmdNewSession(deps, ctx)
       } else {
         await _cmdRoot(deps, ctx)
       }
@@ -231,6 +243,34 @@ export function registerUnbienCommands(
     handler: async (_, ctx) => {
       deps.lastCtx = ctx
       await _cmdPeers(deps, ctx)
+    },
+  })
+
+  // Internal session ops. The app never surfaces these as slash commands — it
+  // sends the structured session_fork / session_navigate / new_session frame
+  // and the extension self-dispatches these to reach a command ctx (the only
+  // ctx carrying ctx.fork / ctx.navigateTree / ctx.newSession).
+  pi.registerCommand("unbien fork", {
+    description:
+      "Fork a NEW session from a conversation entry (internal: session_fork)",
+    handler: async (args, ctx) => {
+      deps.lastCtx = ctx
+      await _cmdFork(deps, args.trim(), ctx)
+    },
+  })
+  pi.registerCommand("unbien branch", {
+    description:
+      "Branch in place from a conversation entry (internal: session_navigate)",
+    handler: async (args, ctx) => {
+      deps.lastCtx = ctx
+      await _cmdBranch(deps, args.trim(), ctx)
+    },
+  })
+  pi.registerCommand("unbien new", {
+    description: "Start a fresh session (internal: new_session)",
+    handler: async (_, ctx) => {
+      deps.lastCtx = ctx
+      await _cmdNewSession(deps, ctx)
     },
   })
 

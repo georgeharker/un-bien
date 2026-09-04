@@ -79,6 +79,13 @@ export type UbFrame =
       in_reply_to?: string
       session_started_at?: number
       truncated?: boolean
+      // The session's CURRENT display name (name pull — heals a missed
+      // session_info_changed push). Sourced from the room's display name.
+      session_name?: string
+      // Set ONLY on a fork-born session's FIRST sync: echoes the app's
+      // originating session_fork request id so the app can auto-navigate to
+      // the newly created session (design: fork switch). Consumed once.
+      forked_from_req?: string
     }
   | {
       type: "session_launch" // app->ext: mesh remote-launch (extension acts)

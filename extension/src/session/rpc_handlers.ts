@@ -13,8 +13,9 @@
  * NOT import `../index.js` (circular import).
  *
  * Moved with the handlers (only they use them): `_persistModelDefault`
- * (project-settings model write behind set_model) and `_resetSessionForNew`
- * (session clock restamp behind new_session). NOT here: `_wakeAgent` /
+ * (project-settings model write behind set_model). new_session no longer acts
+ * here — it self-dispatches the `/unbien new` command (ctx.newSession is
+ * command-ctx-only). NOT here: `_wakeAgent` /
  * `_abortCurrentTurn` (also used by the image pipeline + the stock cancel
  * router in index.ts — passed in as dep function refs) and `_resolveToolCwd`
  * (rpc-envelope enrichArgs path only — stays in index.ts entirely).
@@ -110,8 +111,6 @@ export interface RpcHandlersDeps {
   ): WakeAgentResult
   /** Abort the current turn (freshest ctx first). */
   abortCurrentTurn(): boolean
-  /** Restamp the session clock (new_session handler — `_resetSessionForNew`). */
-  set sessionStartedAt(value: number | null)
 }
 
 /**
@@ -146,22 +145,6 @@ function _persistModelDefault(provider: string, modelId: string): void {
   } catch {
     /* best-effort — model change already applied live */
   }
-}
-
-/**
- * Resets the Pi-side session view after a SUCCESSFUL `session_new`. The app's
- * New Session clears its local store on `action_ok`, but that alone isn't
- * durable: `_messageBuffer` (which answers `session_sync`) is append-only and
- * `_sessionStartedAt` is stamped once, so a later reconnect/restart would
- * replay the OLD history. We clear the buffer and restamp the clock so the
- * envelope `session_sync` reconstructs from a clean slate. The app drops the
- * stale conversation off the new-session `hello` (changed `sessionId`).
- */
-function _resetSessionForNew(deps: RpcHandlersDeps): void {
-  // Restamp the session clock so the app detects the pi restart (session_sync_end
-  // carries it). The transcript resets naturally: the app re-fetches via
-  // get_entries against the fresh session and drops the old one on the new hello.
-  deps.sessionStartedAt = Date.now()
 }
 
 /**
@@ -274,6 +257,33 @@ export function createRpcHandlers(
         throw new Error("set_session_name: name required")
       deps.pi.setSessionName(name)
     },
+    getState: async () => {
+      // Native pi get_state snapshot. THE field the app reconciles against is
+      // isStreaming (busy) — pi's authoritative AgentSession.isStreaming, the
+      // same signal the prompt handler reads. The rest mirror the app's
+      // SessionSnapshot so applyState hydrates model/thinking/session too.
+      if (!deps.pi) throw new Error("agent session not bound")
+      const streaming =
+        (deps.pi as PiStreamingInternals | null)?.isStreaming === true
+      const actionCtx = (deps.lastEventCtx ?? deps.lastCtx) as ActionCtx | null
+      const model = actionCtx?.getModel?.()
+      const sm = deps.rootState().sessionManager
+      let thinkingLevel: string | undefined
+      try {
+        thinkingLevel = deps.pi.getThinkingLevel()
+      } catch {
+        /* older SDK / no level — omit */
+      }
+      return {
+        isStreaming: streaming,
+        ...(model ? { model: { id: model.id, provider: model.provider } } : {}),
+        ...(thinkingLevel ? { thinkingLevel } : {}),
+        ...(sm ? { sessionId: sm.getSessionId() } : {}),
+        ...(sm && typeof sm.getEntries === "function"
+          ? { messageCount: sm.getEntries().length }
+          : {}),
+      }
+    },
     getAvailableModels: async () => {
       const actionCtx = (deps.lastEventCtx ?? deps.lastCtx) as ActionCtx | null
       const reg = actionCtx?.modelRegistry ?? ensureModelRegistry(actionCtx)
@@ -290,15 +300,21 @@ export function createRpcHandlers(
       return {}
     },
     newSession: async () => {
-      const actionCtx = (deps.lastEventCtx ?? deps.lastCtx) as ActionCtx | null
-      if (!actionCtx?.newSession) {
-        throw new Error("new_session unavailable (no command ctx)")
-      }
-      await actionCtx.newSession({ withSession: async () => {} })
-      // Restamp the session clock (parity with the retired stock session_new):
-      // session_sync_end carries it so the app can detect the pi restart.
-      _resetSessionForNew(deps)
-      return { cancelled: false }
+      // ctx.newSession lives ONLY on the command ctx — the rpc dispatch ctx is
+      // the base ExtensionContext, which lacks it (the old
+      // `lastEventCtx ?? lastCtx` stash NEVER worked: lastEventCtx is a base
+      // session_start ctx with no newSession, so the `??` always short-circuited
+      // to it and threw). Self-dispatch the registered `/unbien new` command;
+      // pi runs it with a real command ctx. The session clock restamp is no
+      // longer needed here — the resulting session_start → relay start restamps
+      // _sessionStartedAt naturally. The app drops the old conversation on the
+      // new hello (changed sessionId).
+      if (!deps.pi) throw new Error("agent session not bound")
+      deps.pi.sendUserMessage("/unbien new", {
+        deliverAs: "followUp",
+        expandPromptTemplates: true,
+      })
+      return { dispatched: true }
     },
     clearQueue: async () => {
       if (!deps.pi) throw new Error("agent session not bound")

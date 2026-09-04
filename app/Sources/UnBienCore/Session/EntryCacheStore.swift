@@ -136,6 +136,40 @@ public actor EntryCacheStore {
                   leafId: lastId, count: entries.count)
             log.notice("cache truncated at \(entries.count, privacy: .public) good entries (corrupt tail) key=\(String(key.suffix(12)), privacy: .public)")
         }
+        // STAGE 0 CHAIN VALIDATION (run 2026-09-18 — the blank branched
+        // session): the trusted cursor is only as good as the active-path
+        // chain it anchors. The straddle-skip hole (fixed above at append)
+        // left FRAGMENTS — a tail-only cache whose meta leaf sits at the
+        // END: the delta from it re-serves nothing, and the fold renders
+        // nothing (blank forever, device-verified: a 3-entry custom-message
+        // fragment standing in for a 26-entry session). Validate: the parent
+        // chain from the meta leaf must reach a ROOT (parentless entry)
+        // without hitting a missing id. A fragment or broken chain →
+        // DISCARD — the memo discipline: regeneration is always safe, one
+        // full walk re-seeds (and the suffix-append guarantees the re-seed
+        /// is gapless).
+        if !corrupt {
+            var entryMap = [String: JSONValue](minimumCapacity: entries.count)
+            for e in entries { if let id = e["id"]?.stringValue { entryMap[id] = e } }
+            var cursor = meta.leafId
+            var walked = Set<String>()
+            var reachedRoot = false
+            while !walked.contains(cursor) {
+                walked.insert(cursor)
+                guard let entry = entryMap[cursor] else { break }   // leaf/gap unknown
+                if let parent = entry["parentId"]?.stringValue, !parent.isEmpty {
+                    cursor = parent
+                } else {
+                    reachedRoot = true   // parentless = the root
+                    break
+                }
+            }
+            if !reachedRoot {
+                remove(key: key)
+                log.notice("cache fragmented (chain from leaf never reaches a root) — discarded, full walk re-seeds key=\(String(key.suffix(12)), privacy: .public)")
+                return nil
+            }
+        }
         knownIds[key] = ids
         return CachedEntries(entries: entries, leafId: corrupt ? lastId : meta.leafId)
     }
@@ -152,17 +186,29 @@ public actor EntryCacheStore {
     public func append(key: String, roomID: String, entries: [JSONValue], leafId: String) -> Bool {
         guard !entries.isEmpty else { return false }
         let ids = idsForKey(key)
-        if let firstId = entries.first?["id"]?.stringValue, ids.contains(firstId) {
-            // Overlap — but the room association must stay CURRENT: a rename
-            // re-keys the relay ROOM while the cache key (the pi session id)
-            // is stable, and every subsequent page is an overlap-skip — so
-            // refresh meta.roomID here or a later reconcile would trash a
-            // LIVE session's cache over its stale room.
+        // SUFFIX-APPEND (run 2026-09-18 — the straddle hole, the blank
+        // branched session): a response may STRADDLE the cached tail (first
+        // entries already cached, later ones new — a post-branch refetch from
+        // an older cursor). The old skip-whole-response guard dropped the
+        // uncached tail, leaving gaps the trusted cursor then jumped PAST —
+        // permanently (the fragment's leaf sits at the end, so no delta ever
+        // re-serves the hole). Append from the FIRST UNCACHED entry onward:
+        // normal pages append whole, pure redeliveries no-op, straddles
+        // append exactly their new tail.
+        let suffix = Array(entries.drop { entry in
+            guard let id = entry["id"]?.stringValue else { return true }
+            return ids.contains(id)
+        })
+        guard !suffix.isEmpty else {
+            // Pure redelivery — but the room association must stay CURRENT: a
+            // rename re-keys the relay ROOM while the cache key (the pi
+            // session id) is stable — refresh meta.roomID or a later
+            // reconcile would trash a LIVE session's cache over its stale room.
             refreshRoomIDIfStale(key: key, roomID: roomID)
             return false
         }
         var body = Data()
-        for entry in entries {
+        for entry in suffix {
             guard let line = try? encoder.encode(entry) else { continue }
             body.append(line)
             body.append(0x0A)
@@ -188,7 +234,7 @@ public actor EntryCacheStore {
         // the safe direction (the trusted cursor only ever lags, never leads;
         // the next delta re-covers).
         var merged = ids
-        for entry in entries { if let id = entry["id"]?.stringValue { merged.insert(id) } }
+        for entry in suffix { if let id = entry["id"]?.stringValue { merged.insert(id) } }
         write(metaFile: metaURL(key), key: key, roomID: roomID, leafId: leafId, count: merged.count)
         knownIds[key] = merged
         return true

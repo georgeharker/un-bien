@@ -19,6 +19,13 @@ public enum ClientMessage: Equatable, Sendable {
     case getEntries(id: String, since: String?)
     case sessionNew(id: String)
     case sessionCompact(id: String)
+    /// Native pi `get_state` rpc — session/model snapshot including the
+    /// AUTHORITATIVE `isStreaming` busy flag. Sent on every reconstruction so
+    /// the app can reconcile a stuck local stream: an open streaming bubble /
+    /// activeTurnID while the peer reports isStreaming=false means we missed
+    /// the terminal events (backgrounded). Answered on the rpc response plane;
+    /// folded by `EnvelopeReducer.applyState`.
+    case getState(id: String)
     case modelSet(id: String, provider: String, modelID: String)
     case thinkingSet(id: String, level: ThinkingLevel)
     case listModels(id: String)
@@ -51,6 +58,16 @@ public enum ClientMessage: Equatable, Sendable {
     /// and the extension's session_info_changed forward confirms the new
     /// name live (optimistic update + revert on failure/timeout app-side).
     case setSessionName(id: String, name: String)
+    /// un-bien session_fork: fork from a conversation item (ctx.fork — new
+    /// session file → new room → a NEW app tile; the current session ends via
+    /// the flushed session_shutdown broadcast). position "at" = the entry
+    /// stays, the new session continues from it.
+    case sessionFork(id: String, entryID: String, position: String?)
+    /// un-bien session_navigate: branch IN PLACE from a conversation item
+    /// (ctx.navigateTree — same session file, the leaf moves; /tree
+    /// semantics). The app re-derives via its refetch beacon and prefills
+    /// the composer locally.
+    case sessionNavigate(id: String, entryID: String)
     /// un-bien app-driven terminate (plan [lifecycle][send]): kill the session
     /// THIS room serves. Root room: graceful host shutdown (pi fires
     /// session_shutdown → app marks ended → process exits → relay
@@ -80,6 +97,7 @@ public enum ClientMessage: Equatable, Sendable {
         case .getEntries: return "get_entries"
         case .sessionNew: return "session_new"
         case .sessionCompact: return "session_compact"
+        case .getState: return "get_state"
         case .modelSet: return "model_set"
         case .thinkingSet: return "thinking_set"
         case .listModels: return "list_models"
@@ -89,6 +107,8 @@ public enum ClientMessage: Equatable, Sendable {
         case .terminate: return "terminate"
         case .closeChildRoom: return "close_child_room"
         case .setSessionName: return "set_session_name"
+        case .sessionFork: return "session_fork"
+        case .sessionNavigate: return "session_navigate"
         case .extensionUiResponse: return "extension_ui_response"
         case .clearQueue: return "clear_queue"
         }

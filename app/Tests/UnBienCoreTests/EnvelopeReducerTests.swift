@@ -379,4 +379,48 @@ final class EnvelopeReducerTests: XCTestCase {
         fold.applyEntries([], leafId: "e2")
         XCTAssertEqual(fold.session.items.count, 4, "a1, b1, e1, e2 — the third path")
     }
+    /// The branch marker (run 2026-09-18, the branch-at-A void): a leaf move's
+    /// subtractive redraw lands an inline notice at the branch point — the
+    /// disappearance becomes an explained state. In the A-case (nothing
+    /// renderable above the branch point) it is the ONLY row.
+    func testLeafMoveLandsBranchNotice() throws {
+        var reducer = EnvelopeReducer()
+        reducer.applyEntries(Self.branchyLog(), leafId: "d2")
+        // Move to the other branch.
+        reducer.applyEntries([], leafId: "c2")
+        guard case let .notice(notice) = try XCTUnwrap(reducer.session.items.last)
+        else { return XCTFail("expected a trailing branch notice") }
+        XCTAssertEqual(notice.code, "branch")
+        XCTAssertTrue(notice.message.contains("…d2".suffix(6)) || notice.message.contains("c2"),
+                      "the notice names the branch leaf")
+    }
+
+    /// Branch at the FIRST user message when only non-renderable setup entries
+    /// (model_change / custom) sit above it: the re-path renders zero message
+    /// rows — the notice is the transcript's entire content, which is exactly
+    /// what makes the void legible.
+    func testBranchAtFirstUserMessageRendersOnlyNotice() throws {
+        let setup: [JSONValue] = [
+            .object(["type": .string("model_change"), "id": .string("578c174a"),
+                     "parentId": .string("")]),
+            .object(["type": .string("custom"), "id": .string("a10706da"),
+                     "parentId": .string("578c174a")]),
+            .object(["type": .string("custom"), "id": .string("64a3e342"),
+                     "parentId": .string("a10706da")]),
+        ]
+        let a = Self.msgEntry("e058836f", parent: "64a3e342", role: "user", text: "A")
+        let reply = Self.msgEntry("df23de31", parent: "e058836f", role: "assistant", text: "answer")
+        var reducer = EnvelopeReducer()
+        reducer.applyEntries(setup + [a, reply], leafId: "df23de31")
+        XCTAssertEqual(reducer.session.items.count, 2, "A + its answer render")
+
+        // Branch at A: the leaf moves to A's PARENT (the custom chain) —
+        // zero renderable rows above; the notice is the only content.
+        reducer.applyEntries([], leafId: "64a3e342")
+        XCTAssertEqual(reducer.session.items.count, 1,
+                       "the void case: the branch notice is the only row")
+        guard case let .notice(notice) = try XCTUnwrap(reducer.session.items.first)
+        else { return XCTFail("expected the branch notice") }
+        XCTAssertEqual(notice.code, "branch")
+    }
 }

@@ -153,6 +153,27 @@ extension AppModel {
                     self.relayHealth[relayID] = .offline
                     self.connections[relayID] = nil
                     self.scheduleReconnect(relay)
+                    return
+                }
+                // Ping SUCCEEDED — the socket survived, but a backgrounded app
+                // can still have MISSED live frames without the socket dying,
+                // leaving the open transcript stale until the user re-enters the
+                // view. Backfill every OPEN session on this relay so it heals on
+                // reactivation, matching a reconnect (get_entries `since: leafId`
+                // — idempotent; session_sync re-pulls panels + name).
+                //
+                // INCLUDING mid-stream sessions (activeTurnID != nil), on purpose:
+                // the worst case is we dropped mid-stream and NEVER got the
+                // message_end — then the streamed bubble stays partial AND
+                // activeTurnID is stuck "running" forever (the busy state is
+                // driven off activeTurnID). A delta get_entries mid-turn is
+                // routine here (it's exactly the refetch fired on every real
+                // message_end), so it can't corrupt a genuinely-live stream, and
+                // for a dropped-end turn it pulls the AUTHORITATIVE completed
+                // entry that replaces the streamed fragments.
+                guard let self else { return }
+                for session in self.openSessions.values where session.relayID == relayID {
+                    await self.requestReconstruction(session, connection: connection)
                 }
             }
         }

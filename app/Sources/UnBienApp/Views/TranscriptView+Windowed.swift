@@ -27,7 +27,14 @@ extension TranscriptView {
                 HuskRow(item: pair.element, index: pair.offset, driver: windowDriver,
                         themeID: model.themeID, theme: theme, typography: typography,
                         expandRich: model.expandRichToolResults,
-                        hideInputRich: model.hideInputWhenRich)
+                        hideInputRich: model.hideInputWhenRich,
+                        onFork: model.isDemo(session) ? nil : { entryID in
+                            Task { await model.forkFromEntry(session, entryID: entryID) }
+                        },
+                        onBranch: model.isDemo(session) ? nil : { entryID, prefill in
+                            Task { await model.branchFromEntry(session, entryID: entryID,
+                                                               prefill: prefill) }
+                        })
             }
             bottomSentinel
         }
@@ -92,4 +99,5 @@ extension TranscriptView {
         let stableIDs = Set(items.compactMap(\.anchorID))
         return windowDriver.heightSnapshot().filter { stableIDs.contains($0.key) }
     }
+
 }
