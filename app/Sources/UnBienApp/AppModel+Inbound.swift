@@ -516,9 +516,17 @@ extension AppModel {
         // backfilled so TranscriptView's scroll-restore can stop
         // WAITING for the remembered row (paged-backfill ×
         // restore interaction, designs 01M1BANZ + 01M1B9F6).
-        if let page = rpc["data"],
-           rpc["command"]?.stringValue == "get_entries",
-           rpc["success"]?.boolValue == true {
+        guard rpc["command"]?.stringValue == "get_entries" else { return }
+        // Which paging CHAIN is this a page of? The current walk keeps
+        // activeWalks[key] == its id across pages (next-page reuses the id);
+        // a superseded/stale walk's straggler no longer matches, and a
+        // message_end delta refetch is never the current walk. Only the
+        // CURRENT walk drives walk bookkeeping (breaker→terminal, backfilled,
+        // endWalk); others fold idempotently on their OWN id and never corrupt
+        // the walk's cursor. This is the walkID tidy-up over design 01M1NKAT.
+        let pagingID = rpc["id"]?.stringValue ?? ""
+        let isCurrentWalk = !pagingID.isEmpty && activeWalks[key] == pagingID
+        if let page = rpc["data"], rpc["success"]?.boolValue == true {
             if let entries = page["entries"]?.arrayValue, !entries.isEmpty,
                let leaf = page["leafId"]?.stringValue,
                let conn = connections[relayID] {
@@ -536,15 +544,18 @@ extension AppModel {
                 // did not advance past the previous one means the paging loop
                 // is spinning — it would never terminate (spinner forever,
                 // live frames buffered behind the walk). Treat as terminal.
-                if lastWalkLeaf[key] == leaf {
-                    let keyTail = String(key.suffix(12))
-                    let leafTail = String(leaf.suffix(8))
-                    log.error("get_entries page leaf REPEATED (no advance) key=\(keyTail, privacy: .public) leaf=\(leafTail, privacy: .public) — paging loop broken, treating as terminal")
-                    endWalk(key: key)
-                    backfilledSessions.insert(key)
+                if pagingLeaf[pagingID] == leaf {
+                    pagingLeaf[pagingID] = nil
+                    if isCurrentWalk {
+                        let keyTail = String(key.suffix(12))
+                        let leafTail = String(leaf.suffix(8))
+                        log.error("get_entries page leaf REPEATED (no advance) key=\(keyTail, privacy: .public) leaf=\(leafTail, privacy: .public) — paging loop broken, treating as terminal")
+                        backfilledSessions.insert(key)
+                        endWalk(key: key)
+                    }
                     return
                 }
-                lastWalkLeaf[key] = leaf
+                pagingLeaf[pagingID] = leaf
                 // NOTE: no backfilledSessions.remove here. The walk START
                 // (requestReconstruction) owns the remove; the terminal/error
                 // page owns the insert. A per-page remove meant (a) every
@@ -553,7 +564,7 @@ extension AppModel {
                 // and (b) a straggler page from a superseded walk (reconnect
                 // re-issued mid-flight) arriving after its terminal re-armed
                 // the spinner with no walk left to complete it — stuck ON.
-                walkLastActivity[key] = Date() // the watchdog's alive-signal
+                if isCurrentWalk { walkLastActivity[key] = Date() } // watchdog alive-signal
                 // CACHE APPEND (design 01M1M4N8RZZANDX6NWY7FCSBT5, append 5):
                 /// EVERY get_entries response funnels here — walk pages AND
                 /// message_end refetch entries (the authoritative log versions
@@ -572,19 +583,34 @@ extension AppModel {
                 let leafTail = String(leaf.suffix(8))
                 let keyTail = String(key.suffix(12))
                 log.notice("get_entries page key=\(keyTail, privacy: .public) n=\(n, privacy: .public) leaf=\(leafTail, privacy: .public) — fetching next page")
-                Task { try? await conn.send(.getEntries(id: UUID().uuidString, since: leaf),
-                                             toPeer: peer, room: room) }
+                // ONLY the current walk pages on (keeping its id). A
+                // superseded/duplicate walk (reconnect storm) or a delta
+                // refetch folds its page (via handleRpcResponse) but must NOT
+                // keep paging — else concurrent chains re-fetch the SAME leaf
+                // forever (observed: 3 chains spinning on one leaf after
+                // repeated reconnects, so the walk never advanced to the tail).
+                if isCurrentWalk {
+                    Task { try? await conn.send(.getEntries(id: pagingID, since: leaf),
+                                                 toPeer: peer, room: room) }
+                }
             } else {
-                // Terminal page (empty entries / nil leaf): the
-                // walk is over — the transcript is complete.
+                // Terminal page (empty / nil leaf): THIS chain is done. Only
+                // the current walk marks the session backfilled + clears the
+                // walk lifecycle (a delta/straggler just stops).
+                pagingLeaf[pagingID] = nil
+                if isCurrentWalk {
+                    backfilledSessions.insert(key)
+                    endWalk(key: key)
+                }
+            }
+        } else {
+            // Error response: end this chain; the current walk unblocks a
+            // waiting restore so it can't hang forever.
+            pagingLeaf[pagingID] = nil
+            if isCurrentWalk {
                 backfilledSessions.insert(key)
                 endWalk(key: key)
             }
-        } else if rpc["command"]?.stringValue == "get_entries" {
-            // Error response: the walk can't continue — mark
-            // complete so a waiting restore doesn't hang forever.
-            backfilledSessions.insert(key)
-            endWalk(key: key)
         }
     }
 
@@ -645,8 +671,8 @@ extension AppModel {
     /// live-buffer replay only applies to FULL walks (delta walks never
     /// buffered); replayLiveBuffer no-ops when the flag is clear.
     func endWalk(key: String) {
+        if let walkID = activeWalks[key] { pagingLeaf[walkID] = nil }
         activeWalks[key] = nil
-        lastWalkLeaf[key] = nil
         walkLastActivity.removeValue(forKey: key)
         replayLiveBuffer(key: key)
     }

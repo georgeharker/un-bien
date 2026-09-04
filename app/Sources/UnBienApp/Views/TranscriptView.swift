@@ -340,8 +340,21 @@ struct TranscriptView: View {
             // items.count — give a waiting restore its final chance (bottom
             // fallback when the remembered row never arrived).
             .onChange(of: model.backfilledSessions.contains(session.id)) { _, complete in
-                if complete, !didRestoreScroll {
+                guard complete else { return }
+                if !didRestoreScroll {
                     _ = attemptRestore()
+                } else if shouldPin {
+                    // A (re)backfill completed for an ALREADY-restored session
+                    // — e.g. the foreground heal pulled entries missed while
+                    // backgrounded. Those fold via items.count (NOT
+                    // liveArrivals), and follow is deliberately not
+                    // count-gated, so the live-follow never fired: a pinned
+                    // reader would sit at the OLD bottom with the new tail rows
+                    // below the fold until a manual scroll (observed on device:
+                    // "scrolling down it now displays"). Reclaim the bottom via
+                    // the same nil→sentinel re-scroll live arrivals use.
+                    dbgScrollLog("backfill complete while pinned → reclaim bottom")
+                    bindBottom()
                 }
             }
             // SCROLL POSITION SOURCE (single, committed): the scroll view's

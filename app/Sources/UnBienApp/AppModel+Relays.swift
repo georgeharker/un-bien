@@ -184,7 +184,16 @@ extension AppModel {
                     // already handled by the ping-FAIL reconnect branch above.
                     // So here we only START a fresh backfill when none is
                     // running.
-                    if self.activeWalks[session.id] != nil { continue }
+                    // Skip only a LIVE walk (a page arrived recently). A walk
+                    // orphaned while backgrounded leaves activeWalks set but
+                    // never pages again; its watchdog's 30s clock only advances
+                    // in foreground (and may not survive the transition), so
+                    // deferring strands the backfill until relaunch. Supersede a
+                    // STALE walk: requestReconstruction assigns a NEW walkID, so
+                    // the old walk's stragglers are non-current (walkID-gated)
+                    // and its watchdog stands down on the id mismatch.
+                    if let last = self.walkLastActivity[session.id],
+                       Date().timeIntervalSince(last) < 15 { continue }
                     await self.requestReconstruction(session, connection: connection)
                 }
             }

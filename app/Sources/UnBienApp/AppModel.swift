@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import SwiftUI
 import UnBienCore
@@ -46,7 +47,11 @@ public final class AppModel: ObservableObject {
     /// The leaf cursor the current walk last ADVANCED past — the repeated-leaf
     /// circuit breaker: a non-empty page whose leaf equals the previous one
     /// means the paging loop is spinning and would never terminate.
-    var lastWalkLeaf: [String: String] = [:]
+    // Repeated-leaf breaker cursor, keyed by PAGING-CHAIN id (walkID/deltaID),
+    // not session key — so a superseded walk's straggler and a message_end
+    // delta refetch each page on their own cursor and can't trip the current
+    // walk's breaker (walkID tidy-up over 01M1NKAT).
+    var pagingLeaf: [String: String] = [:]
     /// Local entry-stream cache (design 01M1M4N8RZZANDX6NWY7FCSBT5). Actor —
     /// loads awaited at reconstruction, appends fire-and-forget from the
     /// paging handler, trashed on room-gone (forgetSession). NO LRU — the
@@ -177,6 +182,11 @@ public final class AppModel: ObservableObject {
     }
 
     public let mesh: MeshStore
+    // MeshStore is its OWN ObservableObject; views observe AppModel, not mesh.
+    // Forward its changes so relay add/remove/pair re-renders (else the relay
+    // list + relay-grouped session rows only refresh when a @Published session
+    // change happens to fire).
+    private var meshCancellable: AnyCancellable?
     var identityStore: OwnerIdentityStore
     var owner: Ed25519Identity?
     // Internal (not private): the AppModel+Queue / AppModel+Inbound extension
@@ -326,23 +336,31 @@ public final class AppModel: ObservableObject {
         // state; the scroll-memory load above is a direct property set).
         loadHeightCache()
         if demoMode { loadDemoSessions() }
+        meshCancellable = mesh.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
     }
 
     // MARK: - Onboarding / identity
 
     public func bootstrap() async {
+        #if DEBUG
+        // DEBUG headless harness (e.g. screenshot capture): skip onboarding on a
+        // fresh install so the demo transcript renders without UI. Its OWN key
+        // (NOT the demo-render pref unbien.demo.stream-replay — overloading that
+        // once let a stray `defaults write` silently suppress onboarding AND
+        // connecting), and CONSUMED on every startup so a leftover value can't
+        // linger. A test re-sets it per run right before launch.
+        let skipOnboarding = UserDefaults.standard.bool(forKey: "unbien.debug.skip-onboarding")
+        UserDefaults.standard.removeObject(forKey: "unbien.debug.skip-onboarding")
+        #endif
         if let existing = try? identityStore.load() {
             owner = existing
             needsOnboarding = false
             await connectAll()
         } else {
             #if DEBUG
-            if UserDefaults.standard.bool(forKey: "unbien.demo.stream-replay") {
-                // DEBUG-only headless harness: when the flag is EXPLICITLY set
-                // (the simulator diagnosis setup), skip onboarding on a fresh
-                // install so the harness reaches the demo transcript without UI
-                // interaction. No owner key — demo mode never connects, so
-                // nothing needs one.
+            if skipOnboarding {
                 needsOnboarding = false
                 return
             }
@@ -427,7 +445,6 @@ public final class AppModel: ObservableObject {
         /// log order, so live frames buffer behind it.
         activeWalks[session.id] = walkID
         walkLastActivity[session.id] = Date()
-        lastWalkLeaf[session.id] = nil
         scheduleWalkWatchdog(session: session, walkID: walkID)
         if since == nil {
             fullWalkInFlight[session.id] = walkID
