@@ -30,12 +30,18 @@ struct LaunchSessionSheet: View {
 
     var body: some View {
         NavigationStack {
+            VStack(alignment: .leading, spacing: 0) {
+                // Plain description text — NOT a Form cell. In a grouped Form a
+                // `Section { Text }` renders as a rounded cell that looks just
+                // like the editable fields below it (reads as an input). This
+                // is a caption, so it lives above the Form.
+                Text(subtitle)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.top)
             Form {
-                Section {
-                    Text(subtitle)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
                 Section("Folder") {
                     TextField("Working directory (defaults to session cwd)", text: $cwd)
                         .textFieldStyle(.plain)
@@ -53,6 +59,7 @@ struct LaunchSessionSheet: View {
                 }
             }
             .formStyle(.grouped)
+            }
             .navigationTitle("New conversation")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -69,6 +76,12 @@ struct LaunchSessionSheet: View {
                 }
             }
         }
+        #if os(iOS)
+        // Contain the controls — a full-height sheet leaves an odd blank below
+        // the two fields. A fitted height with .large as a drag-out valve if the
+        // caption wraps.
+        .presentationDetents([.height(340), .large])
+        #endif
         #if os(macOS)
         .frame(minWidth: 420, minHeight: 320)
         #endif
