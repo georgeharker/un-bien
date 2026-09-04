@@ -173,6 +173,18 @@ extension AppModel {
                 // entry that replaces the streamed fragments.
                 guard let self else { return }
                 for session in self.openSessions.values where session.relayID == relayID {
+                    // ONE backfill at a time (user 2026-09-04). If a walk is
+                    // already IN FLIGHT for this session, do NOT kick a second:
+                    // two concurrent walks share the key-based paging state, and
+                    // the repeated-leaf breaker trips and marks the session
+                    // backfilled PREMATURELY (incomplete) — the "fg race". A
+                    // walk that got DROPPED/stalled is detected + retried from
+                    // the cursor by the walk watchdog (scheduleWalkWatchdog),
+                    // which is the authoritative drop-recovery; a dead socket is
+                    // already handled by the ping-FAIL reconnect branch above.
+                    // So here we only START a fresh backfill when none is
+                    // running.
+                    if self.activeWalks[session.id] != nil { continue }
                     await self.requestReconstruction(session, connection: connection)
                 }
             }

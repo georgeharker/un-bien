@@ -26,6 +26,9 @@ struct HuskRow: View {
     /// Branch composer prefill (user messages).
     var onFork: ((String) -> Void)?
     var onBranch: ((String, String?) -> Void)?
+    /// Fork-point entry ids (>1 child) — the construction site passes the
+    /// session's set; the row annotates its own durable id.
+    let branchPointIds: Set<String>
 
     @State private var isNear: Bool
     @State private var measuredHeight: Double?
@@ -34,7 +37,8 @@ struct HuskRow: View {
          themeID: ThemeID, theme: AppTheme, typography: Typography,
          expandRich: Bool, hideInputRich: Bool,
          onFork: ((String) -> Void)? = nil,
-         onBranch: ((String, String?) -> Void)? = nil) {
+         onBranch: ((String, String?) -> Void)? = nil,
+         branchPointIds: Set<String> = []) {
         self.item = item
         self.index = index
         self.driver = driver
@@ -45,6 +49,7 @@ struct HuskRow: View {
         self.hideInputRich = hideInputRich
         self.onFork = onFork
         self.onBranch = onBranch
+        self.branchPointIds = branchPointIds
         _isNear = State(initialValue: driver.isNear(index))
     }
 
@@ -116,7 +121,8 @@ struct HuskRow: View {
             if isNear {
                 TranscriptRow(item: item, themeID: themeID, theme: theme,
                               typography: typography, expandRich: expandRich,
-                              hideInputRich: hideInputRich)
+                              hideInputRich: hideInputRich,
+                              isBranchPoint: durableEntryID.map { branchPointIds.contains($0) } ?? false)
                     .equatable()
                     .background(heightProbe)
                     .contextMenu { rowMenu }

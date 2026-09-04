@@ -31,6 +31,7 @@ struct TranscriptView: View {
     let session: LiveSession
     @EnvironmentObject var model: AppModel
     @State private var selectedPanelKey: String?
+    @State private var showTree = false
     @Environment(\.appTheme) var theme
     @Environment(\.typography) var typography
     /// Pops the transcript (navigationDestination push) — used by the ended
@@ -460,6 +461,18 @@ struct TranscriptView: View {
             model.flushScrollMemory()
         }
         .task { await model.openSession(session) }
+        // Session tree browser (design 01M1FTV2 append 8): full-screen when the
+        // session has branches; back nav / Done dismisses. Selecting a leaf
+        // navigates (session_navigate → beacon → derivePath re-paths) + dismisses.
+        #if os(iOS)
+        .fullScreenCover(isPresented: $showTree) {
+            TreeBrowserView(session: session).environmentObject(model)
+        }
+        #else
+        .sheet(isPresented: $showTree) {
+            TreeBrowserView(session: session).environmentObject(model)
+        }
+        #endif
         .toolbar {
             // Backfill indicator IN the title (iOS only): the get_entries walk
             // is active — backfilledSessions is removed at walk start, marked
@@ -481,6 +494,13 @@ struct TranscriptView: View {
             #endif
             ToolbarItemGroup(placement: .primaryAction) {
                 controlMenu
+                // Branch badge — only when the session actually has a tree.
+                if model.transcripts[session.id]?.hasBranches == true {
+                    Button { showTree = true } label: {
+                        Image(systemName: "arrow.triangle.branch")
+                    }
+                    .accessibilityLabel("Session tree")
+                }
                 ForEach(model.panels(for: session)) { panel in
                     Button {
                         model.markPanelViewed(panel.key, session: session)

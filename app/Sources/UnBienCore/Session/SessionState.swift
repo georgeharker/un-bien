@@ -93,21 +93,21 @@ public struct SessionState: Equatable, Sendable {
     /// id → parentId for EVERY folded entry (retention: branch data for the
     /// future branch UI + local re-derivation on leaf moves). Root entries
     /// index with "" (pi's first entry has no parent).
-    private var entryParent: [String: String] = [:]
+    private(set) var entryParent: [String: String] = [:]
     /// id → payload for every folded entry. Memory trade (the full log in
     /// RAM — the same order as the rendered rows it replaces): re-derivation
     /// replays from here with no refetch. A later optimization may evict
     /// off-path payloads and re-pull from the entry cache on leaf moves.
-    private var entriesById: [String: JSONValue] = [:]
+    private(set) var entriesById: [String: JSONValue] = [:]
     /// The active path's ids, root→leaf order (the backwalk's chain
     /// reversed). nil until the first beacon — nothing renders before it.
     private var pathOrder: [String]?
-    private var pathIds: Set<String> = []
+    private(set) var pathIds: Set<String> = []
     /// Path entries already birthed (cursor into pathOrder).
     private var renderedPathCount = 0
     /// Last trusted ACTIVE leaf. A beacon leafId differing from this = the
     /// path moved → derivePath re-derives + replays.
-    private var activeLeafId: String?
+    private(set) var activeLeafId: String?
     /// A leaf move awaiting its branch marker (appended after the replay —
     /// see derivePath / renderPendingPathEntries).
     private var pendingBranchNoticeLeaf: String?

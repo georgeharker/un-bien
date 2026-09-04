@@ -19,6 +19,9 @@ extension TranscriptView {
     /// children (rows + sentinel) by id.
     var transcriptStack: some View {
         let ids = items.map(\.id)
+        // Fork points (>1 child) for the branch-glyph annotation — computed
+        // ONCE per body, not per row.
+        let branchPoints = model.transcripts[session.id]?.branchPointIds ?? []
         // Body-time sync (idempotent, gated): inserted/re-keyed husks read
         // correct initial membership BEFORE the ForEach builds them.
         let _ = windowDriver.sync(order: ids)
@@ -34,7 +37,8 @@ extension TranscriptView {
                         onBranch: model.isDemo(session) ? nil : { entryID, prefill in
                             Task { await model.branchFromEntry(session, entryID: entryID,
                                                                prefill: prefill) }
-                        })
+                        },
+                        branchPointIds: branchPoints)
             }
             bottomSentinel
         }

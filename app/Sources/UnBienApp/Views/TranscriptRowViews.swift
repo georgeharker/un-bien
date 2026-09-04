@@ -24,10 +24,22 @@ struct TranscriptRow: View, Equatable {
     let typography: Typography
     let expandRich: Bool
     let hideInputRich: Bool
+    /// This row's entry is a fork point (>1 child) — annotate it. Per-row Bool
+    /// (not the whole set) so only a row whose status flips re-renders.
+    var isBranchPoint: Bool = false
 
     nonisolated static func == (lhs: TranscriptRow, rhs: TranscriptRow) -> Bool {
         lhs.item == rhs.item && lhs.themeID == rhs.themeID && lhs.typography == rhs.typography
             && lhs.expandRich == rhs.expandRich && lhs.hideInputRich == rhs.hideInputRich
+            && lhs.isBranchPoint == rhs.isBranchPoint
+    }
+
+    /// Fork-point glyph shown beside the Pi/You label (design 01M1FTV2).
+    private var branchMarker: some View {
+        Image(systemName: "arrow.triangle.branch")
+            .font(.caption2)
+            .foregroundStyle(theme.secondaryText)
+            .accessibilityLabel("Branch point — this message has other versions")
     }
 
     var body: some View {
@@ -46,8 +58,13 @@ struct TranscriptRow: View, Equatable {
                 .font(.caption).foregroundStyle(theme.secondaryText)
                 .frame(maxWidth: .infinity)
         case let .notice(notice):
-            Label(notice.message, systemImage: "exclamationmark.triangle.fill")
-                .font(.caption).foregroundStyle(theme.error)
+            // A branch marker is INFORMATIONAL, not an error — green + branch
+            // glyph. Real notices (provider_error, …) keep the red warning.
+            Label(notice.message,
+                  systemImage: notice.code == "branch"
+                      ? "arrow.triangle.branch" : "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(notice.code == "branch" ? Color.green : theme.error)
                 .frame(maxWidth: .infinity, alignment: .center)
         }
     }
@@ -59,6 +76,7 @@ struct TranscriptRow: View, Equatable {
                 if bubble.streaming {
                     ProgressView().controlSize(.mini)
                 }
+                if isBranchPoint { branchMarker }
             }
             if !bubble.text.isEmpty {
                 BudgetedContent(text: bubble.text, budget: markdownBudget) { budgeted in
@@ -96,7 +114,10 @@ struct TranscriptRow: View, Equatable {
     private func bubbleView(text: String, role: String, tint: Color,
                             align: HorizontalAlignment) -> some View {
         VStack(alignment: align, spacing: 4) {
-            Text(role).font(.caption.weight(.semibold)).foregroundStyle(tint)
+            HStack(spacing: 6) {
+                Text(role).font(.caption.weight(.semibold)).foregroundStyle(tint)
+                if isBranchPoint { branchMarker }
+            }
             BudgetedContent(text: text, budget: markdownBudget) { budgeted in
                 Text(budgeted).foregroundStyle(theme.text)
                     .font(typography.bodyFont())
