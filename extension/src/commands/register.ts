@@ -92,7 +92,6 @@ export function registerUnbienCommands(
         .map((o) => ({ value: o, label: o }))
     },
     handler: async (args, ctx) => {
-      deps.lastCtx = ctx
       const sub = args.trim()
       if (sub === "") {
         await _cmdRoot(deps, ctx)
@@ -149,21 +148,18 @@ export function registerUnbienCommands(
   pi.registerCommand("unbien setup", {
     description: "Run the setup wizard and update local config",
     handler: async (_, ctx) => {
-      deps.lastCtx = ctx
       await _cmdSetup(ctx)
     },
   })
   pi.registerCommand("unbien status", {
     description: "Show local mesh + relay status",
     handler: async (_, ctx) => {
-      deps.lastCtx = ctx
       _cmdStatus(deps, ctx)
     },
   })
   pi.registerCommand("unbien stop", {
     description: "Stop everything (leave local mesh + disconnect relay)",
     handler: async (_, ctx) => {
-      deps.lastCtx = ctx
       await _cmdStop(deps, ctx)
     },
   })
@@ -171,22 +167,19 @@ export function registerUnbienCommands(
     description:
       "Show a QR code to pair a new mobile device (optional: --ttl <seconds>)",
     handler: async (args, ctx) => {
-      deps.lastCtx = ctx
       await _cmdPair(deps, ctx, args.trim())
     },
   })
   pi.registerCommand("unbien devices", {
     description: "List paired mobile devices",
     handler: async (_, ctx) => {
-      deps.lastCtx = ctx
       await _cmdList(deps, ctx)
     },
   })
   pi.registerCommand("unbien rename", {
     description:
       "Rename this agent in the current session (updates mesh + relay room)",
-    handler: async (args, ctx) => {
-      deps.lastCtx = ctx
+    handler: async (args) => {
       await deps.renameAgent(args.trim())
     },
   })
@@ -194,21 +187,18 @@ export function registerUnbienCommands(
     description: "Revoke a paired device by its shortid",
     getArgumentCompletions: async (prefix) => _shortidCompletions(prefix),
     handler: async (args, ctx) => {
-      deps.lastCtx = ctx
       await _cmdRevoke(deps, args.trim(), ctx)
     },
   })
   pi.registerCommand("unbien set-relay", {
     description: "Persist a new relay URL to user config",
     handler: async (args, ctx) => {
-      deps.lastCtx = ctx
       _cmdSetRelay(args.trim(), ctx)
     },
   })
   pi.registerCommand("unbien config", {
     description: "Show the effective relay URL and where it came from",
     handler: async (_, ctx) => {
-      deps.lastCtx = ctx
       _cmdConfig(deps, ctx)
     },
   })
@@ -216,7 +206,6 @@ export function registerUnbienCommands(
     description:
       "Show this machine's identity: active EPK (public), backend, and source",
     handler: async (_, ctx) => {
-      deps.lastCtx = ctx
       await _cmdIdentity(ctx)
     },
   })
@@ -224,7 +213,6 @@ export function registerUnbienCommands(
     description:
       "Show this machine's identity (EPK/backend/source) — alias of `identity`",
     handler: async (_, ctx) => {
-      deps.lastCtx = ctx
       await _cmdIdentity(ctx)
     },
   })
@@ -232,7 +220,6 @@ export function registerUnbienCommands(
     description:
       "Relay control: start | stop | status | url <http(s) url> (no arg toggles)",
     handler: async (args, ctx) => {
-      deps.lastCtx = ctx
       await _cmdRelay(deps, args.trim(), ctx)
     },
   })
@@ -241,7 +228,6 @@ export function registerUnbienCommands(
   pi.registerCommand("unbien peers", {
     description: "List local + cross-PC mesh peers, grouped by PC label",
     handler: async (_, ctx) => {
-      deps.lastCtx = ctx
       await _cmdPeers(deps, ctx)
     },
   })
@@ -254,7 +240,6 @@ export function registerUnbienCommands(
     description:
       "Fork a NEW session from a conversation entry (internal: session_fork)",
     handler: async (args, ctx) => {
-      deps.lastCtx = ctx
       await _cmdFork(deps, args.trim(), ctx)
     },
   })
@@ -262,14 +247,12 @@ export function registerUnbienCommands(
     description:
       "Branch in place from a conversation entry (internal: session_navigate)",
     handler: async (args, ctx) => {
-      deps.lastCtx = ctx
       await _cmdBranch(deps, args.trim(), ctx)
     },
   })
   pi.registerCommand("unbien new", {
     description: "Start a fresh session (internal: new_session)",
     handler: async (_, ctx) => {
-      deps.lastCtx = ctx
       await _cmdNewSession(deps, ctx)
     },
   })
@@ -279,7 +262,6 @@ export function registerUnbienCommands(
     description:
       "Install the un-bien launcher daemon as a system service + link the un-bien CLI (systemd/launchd/Task Scheduler; Windows prompts for admin)",
     handler: async (_, ctx) => {
-      deps.lastCtx = ctx
       _cmdInstall(ctx, { linkCli: true })
     },
   })
@@ -287,7 +269,6 @@ export function registerUnbienCommands(
     description:
       "Remove the un-bien launcher daemon system service + the CLI shims (Windows prompts for admin)",
     handler: async (_, ctx) => {
-      deps.lastCtx = ctx
       _cmdUninstall(ctx, { linkCli: true })
     },
   })

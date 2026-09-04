@@ -380,11 +380,9 @@ export async function _cmdStart(
         const modelId = sm.getDefaultModel()
         if (modelId) {
           // SAFETY: ensureModelRegistry only reads modelRegistry/getModel off
-          // the ctx; c (and the deps.lastEventCtx/deps.lastCtx fallbacks) carry those
-          // when present, and it tolerates null.
-          const regCtx = (c ??
-            deps.lastEventCtx ??
-            deps.lastCtx) as unknown as ActionCtx | null
+          // the ctx; c and the deps.lastEventCtx fallback carry those when
+          // present, and it tolerates null.
+          const regCtx = (c ?? deps.lastEventCtx) as unknown as ActionCtx | null
           const found = provider
             ? ensureModelRegistry(regCtx).find(provider, modelId)
             : undefined

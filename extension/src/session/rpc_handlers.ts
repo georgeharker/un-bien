@@ -8,7 +8,7 @@
  *
  * Seam: index.ts (composition root) owns the mutable module state and the
  * SDK-handoff helpers these handlers touch (`_pi`, the root session record,
- * `_lastEventCtx`/`_lastCtx`, `_wakeAgent`, `_abortCurrentTurn`, the image
+ * `_lastEventCtx`, `_wakeAgent`, `_abortCurrentTurn`, the image
  * pipeline); they are threaded through `RpcHandlersDeps`. This module MUST
  * NOT import `../index.js` (circular import).
  *
@@ -91,13 +91,12 @@ export interface RpcHandlersDeps {
     turnId: string | null
     sessionManager?: RpcSessionManager | null
   }
-  /** Freshest session_start ctx (model registry / compact / newSession). */
+  /** Freshest session_start ctx (model registry / compact) — always the
+   *  current session's base ctx, re-captured on every session_start. */
   readonly lastEventCtx: Pick<
     ExtensionContext,
     "compact" | "abort" | "ui"
   > | null
-  /** Most recent command ctx (fallback when no fresh event ctx exists). */
-  readonly lastCtx: Pick<ExtensionContext, "ui" | "abort" | "cwd"> | null
   /** The image-pipeline seam index.ts builds (prompt with images). */
   readonly imageDeps: ImagePipelineDeps
 
@@ -226,7 +225,7 @@ export function createRpcHandlers(
     },
     setModel: async (provider, modelId) => {
       if (!deps.pi) throw new Error("agent session not bound")
-      const actionCtx = (deps.lastEventCtx ?? deps.lastCtx) as ActionCtx | null
+      const actionCtx = deps.lastEventCtx as ActionCtx | null
       const reg = actionCtx?.modelRegistry ?? ensureModelRegistry(actionCtx)
       reg.refresh()
       const model = reg.find(provider, modelId)
@@ -265,7 +264,7 @@ export function createRpcHandlers(
       if (!deps.pi) throw new Error("agent session not bound")
       const streaming =
         (deps.pi as PiStreamingInternals | null)?.isStreaming === true
-      const actionCtx = (deps.lastEventCtx ?? deps.lastCtx) as ActionCtx | null
+      const actionCtx = deps.lastEventCtx as ActionCtx | null
       const model = actionCtx?.getModel?.()
       const sm = deps.rootState().sessionManager
       let thinkingLevel: string | undefined
@@ -285,7 +284,7 @@ export function createRpcHandlers(
       }
     },
     getAvailableModels: async () => {
-      const actionCtx = (deps.lastEventCtx ?? deps.lastCtx) as ActionCtx | null
+      const actionCtx = deps.lastEventCtx as ActionCtx | null
       const reg = actionCtx?.modelRegistry ?? ensureModelRegistry(actionCtx)
       reg.refresh()
       const models = reg.getAvailable().map(wireFromModel)
@@ -293,7 +292,7 @@ export function createRpcHandlers(
       return { models, current: current ? wireFromModel(current) : undefined }
     },
     compact: async (customInstructions) => {
-      const actionCtx = (deps.lastEventCtx ?? deps.lastCtx) as ActionCtx | null
+      const actionCtx = deps.lastEventCtx as ActionCtx | null
       if (!actionCtx?.compact)
         throw new Error("compact unavailable (no active session ctx)")
       actionCtx.compact(customInstructions ? { customInstructions } : undefined)

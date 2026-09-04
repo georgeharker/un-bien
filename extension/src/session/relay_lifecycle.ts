@@ -118,8 +118,8 @@ export interface RelayLifecycleDeps {
   } | null
   /** Epoch ms the state machine entered 'started'. */
   readonly sessionStartedAt: number | null
-  /** Most recent command ctx (pair_request cwd fallback). */
-  readonly lastCtx: Pick<ExtensionContext, "ui" | "abort" | "cwd"> | null
+  /** Current session's cwd (sessionManager.getCwd(); process.cwd() fallback). */
+  sessionCwd(): string
   /** Set by session_shutdown; blocks listener authority until rearm. */
   readonly disposed: boolean
   /** The ROOT session's ExtensionAPI (never a subagent child's). */
@@ -721,8 +721,8 @@ function _attachOwner(
   // Drop any stale channel for this owner before re-attaching.
   if (deps.activePeers.has(appPeerId)) _detachPeerChannel(deps, appPeerId)
 
-  // Prefer always-fresh session_start ctx for async relay routing — `_lastCtx`
-  // is a captured command ctx that goes stale after session replacement (#55).
+  // Async relay routing uses the always-fresh session_start ctx (`_lastEventCtx`
+  // via _liveCtx), re-captured every session_start so it never goes stale (#55).
   const channel = new PlainPeerChannel(
     relay,
     appPeerId,
@@ -1036,10 +1036,7 @@ async function _handlePairRequest(
     return
   }
 
-  const cwd =
-    deps.lastCtx && "cwd" in deps.lastCtx
-      ? (deps.lastCtx as ExtensionCommandContext).cwd
-      : process.cwd()
+  const cwd = deps.sessionCwd()
   // Prefer the user-configured agent_name (with broker suffix when on the
   // mesh) over the legacy parent/folder path — matches what the user sees
   // in the terminal title and in /unbien status.

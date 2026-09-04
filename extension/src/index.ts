@@ -410,15 +410,16 @@ function _attachBridgeIfReady(): void {
 }
 
 /**
- * Prefer an explicit ctx, then the always-fresh session_start ctx, then the
- * last command ctx. Relay/async paths must not rely on `_lastCtx` alone —
- * the SDK marks captured command ctxs stale after session replacement.
+ * Prefer an explicit ctx, else the always-fresh session_start ctx
+ * (`_lastEventCtx`, re-captured on every session_start so it is never a stale
+ * capture). Relay/async paths reach the ctx-only surfaces (ui/abort/compact)
+ * through this, since they fire outside any live pi event.
  * @see https://github.com/jacobaraujo7/remote_pi/issues/55
  */
 function _liveCtx(
   preferred?: { ui?: unknown } | null,
 ): { ui?: unknown } | null {
-  return preferred ?? _lastEventCtx ?? _lastCtx ?? null
+  return preferred ?? _lastEventCtx ?? null
 }
 
 /**
@@ -1413,11 +1414,6 @@ async function _renameAgent(newName: string): Promise<void> {
 
 // ── Extension factory (default export) ───────────────────────────────────────
 
-// Stores most recent command context so the auto-listener can use ui.notify.
-// NOTE: this is a CAPTURED command ctx — the SDK marks it stale after a
-// session replacement (newSession/fork/switch/reload). We re-capture it via
-// `withSession` when WE drive a newSession (see the session_new dispatch).
-let _lastCtx: Pick<ExtensionContext, "ui" | "abort" | "cwd"> | null = null
 // One-shot flag for the turn-ctx surface probe (see the turn_start handler).
 let _turnCtxProbed = false
 
@@ -1456,8 +1452,9 @@ function _probeCtx(label: string, ctx: unknown): void {
 // the CURRENT session, so compact + cancel (base-ctx methods) routed through
 // here never hit a stale ctx — regardless of who triggered the replacement
 // (an app Quick Action OR a `/new` typed in the Pi TUI). It carries only
-// base-ctx methods (no newSession — that's command-ctx only), so command ops
-// keep using `_lastCtx`.
+// base-ctx methods (no newSession — that's command-ctx only); command-only ops
+// (fork/new/branch) reach a command ctx by self-dispatching a slash command
+// instead of retaining one.
 let _lastEventCtx: Pick<ExtensionContext, "compact" | "abort" | "ui"> | null =
   null
 const _noopCtx = { ui: { notify: () => undefined }, abort: () => undefined }
@@ -1557,9 +1554,6 @@ const rpcDeps: RpcHandlersDeps = {
   get lastEventCtx() {
     return _lastEventCtx
   },
-  get lastCtx() {
-    return _lastCtx
-  },
   imageDeps,
   wakeAgent: _wakeAgent,
   abortCurrentTurn: () => _abortCurrentTurn(),
@@ -1649,8 +1643,9 @@ const relayDeps: RelayLifecycleDeps = {
   get sessionStartedAt() {
     return _sessionStartedAt
   },
-  get lastCtx() {
-    return _lastCtx
+  sessionCwd: () => {
+    const sm = _rootState().sessionManager
+    return sm && typeof sm.getCwd === "function" ? sm.getCwd() : process.cwd()
   },
   get disposed() {
     return _disposed
@@ -1773,12 +1768,6 @@ const deps: CommandDeps = {
   },
   set sessionStartedAt(v) {
     _sessionStartedAt = v
-  },
-  get lastCtx() {
-    return _lastCtx
-  },
-  set lastCtx(v) {
-    _lastCtx = v
   },
   get cwdLock() {
     return _cwdLock
@@ -2546,11 +2535,9 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       _subagentRooms = null
       _releaseRootSession(pi)
     }
-    // Drop captured ctxs immediately. On module-reuse hosts the same instance
-    // survives session replacement; leaving `_lastCtx` pointing at the now-
-    // stale command ctx is what crashed pi in _refreshFooter on peer reconnect
-    // (issue #55). session_start re-binds `_lastEventCtx` for the new session.
-    _lastCtx = null
+    // Drop the captured event ctx immediately. On module-reuse hosts the same
+    // instance survives session replacement; the next session_start re-binds
+    // `_lastEventCtx` for the new session.
     _lastEventCtx = null
     // No bye reason: the process keeps running and the fresh instance re-joins
     // the SAME relay room, so an explicit offline→online flap would be wrong.
@@ -2773,7 +2760,7 @@ function _abortCurrentTurn(
   fallbackCtx?: Pick<ExtensionContext, "abort">,
 ): boolean {
   const candidates: Array<Pick<ExtensionContext, "abort"> | null | undefined> =
-    [_lastEventCtx, _lastCtx, fallbackCtx]
+    [_lastEventCtx, fallbackCtx]
 
   for (const candidate of candidates) {
     if (!candidate || candidate === _noopCtx) continue
@@ -2864,9 +2851,10 @@ export function routeClientMessage(
  * `in_reply_to`.
  */
 
-/** Resolve the base dir for tool-arg file lookups from the last command ctx. */
+/** Resolve the base dir for tool-arg file lookups from the current session. */
 function _resolveToolCwd(): string {
-  return _lastCtx && "cwd" in _lastCtx ? _lastCtx.cwd : process.cwd()
+  const sm = _rootState().sessionManager
+  return sm && typeof sm.getCwd === "function" ? sm.getCwd() : process.cwd()
 }
 
 // ── Standalone CLI ────────────────────────────────────────────────────────────

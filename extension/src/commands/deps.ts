@@ -66,8 +66,6 @@ export interface CommandDeps {
   peerShort: string
   /** Epoch of this Pi process's session (stamped on first start). */
   sessionStartedAt: number | null
-  /** Most recent command ctx (compact/notify fallback). */
-  lastCtx: Pick<ExtensionContext, "ui" | "abort" | "cwd"> | null
   /** Per-(cwd,name) singleton lock backing the mesh registration. */
   cwdLock: AcquiredLock | null
   /** Name the cwd-lock actually reserved (`name` or `name#N`). */

@@ -1779,7 +1779,9 @@ describe("routeClientMessage cancel handling", () => {
     } as Parameters<typeof _pairForTestWithCtx>[1])
 
     // Plant a command ctx whose ui GETTER throws (real SDK stale-ctx behaviour).
-    // The status handler assigns _lastCtx = ctx before touching ui.
+    // The status handler touches the passed ctx's ui (via _cmdStatus), which
+    // throws — and, post-_lastCtx-removal, the ctx is never retained, so a later
+    // reconnect can only use the always-fresh _lastEventCtx (guarded below).
     const status = captureHandler("unbien status")
     const staleCtx = {
       cwd: "/tmp/unbien-stale-ui",
