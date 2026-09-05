@@ -778,11 +778,16 @@ extension AppModel {
             where s.relayID == relayID && s.peerEPK == peer && s.roomID == roomID {
                 dismissedSessions[k] = nil
             }
-        case let .roomMetaUpdated(peer, roomID, model, parent, parentSessionID):
+        case let .roomMetaUpdated(peer, roomID, model, name, parent, parentSessionID):
             if let k = sessionKey(relayID: relayID, peer: peer, roomID: roomID),
                var session = sessions[k] {
                 let wasSubagent = session.isSubagent
                 if let model { session.model = model }
+                // Live rename fanned to room subscribers (relay >=0.6.0) — this
+                // is what updates the Home tile without opening the session
+                // (the evt-plane forward only reaches attached peers). Design
+                // 01M1SPN7.
+                if let name, !name.isEmpty { session.name = name }
                 // Last-info-wins parentage (present-only, never clears): a
                 // LATE-advertised parent (in-process subagent, after attach)
                 // re-nests the child. Reassigning sessions[k] re-derives

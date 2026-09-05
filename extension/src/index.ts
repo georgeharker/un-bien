@@ -2272,11 +2272,12 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // RENAME FORWARD (pre-release 2026-09-18): the session display name
   // changed — via /name in the TUI, RPC, or the app's own set_session_name
   // command (pi's native verb; the reply IS the standard rpc response). Two
-  // effects: (1) forward to the app over the relay-OPAQUE envelope plane
-  // (works on every deployed relay — the relay's room_meta_update patch only
-  // merges its typed fields, so the control plane CANNOT carry a name); (2)
-  // refresh the local announce state so the NEXT hello re-announces the fresh
-  // name — the relay's stored meta self-heals at the extension's next connect.
+  // effects: (1) forward to the app — over the relay-OPAQUE envelope plane (any
+  // relay, but only reaches ATTACHED peers) AND, for relay >=0.6.0, a
+  // room_meta_update the relay fans to ROOM SUBSCRIBERS (Home, pre-attach);
+  // (2) refresh the local announce state so the NEXT hello re-announces the
+  // fresh name — the relay's stored meta self-heals at the extension's next
+  // connect.
   // Root sessions only (v1): a subagent child's rename gets its own forward
   // when child renames matter.
   pi.on("session_info_changed", (event, ctx) => {
@@ -2288,6 +2289,18 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     _broadcastEnvelope(relayDeps, {
       evt: { channel: "session_info", data: { name } },
     })
+    // ALSO fan via room_meta_update so the relay pushes the rename to ROOM
+    // SUBSCRIBERS (Home apps subscribed but NOT attached) — the evt above only
+    // reaches attached peers, so pre-attach the Home tile went stale until open
+    // or reconnect. Relay >=0.6.0 merges + fans `name`; older relays drop the
+    // unknown field (harmless — attached peers still get the evt). Design 01M1SPN7.
+    if (_relay && _myRoomId) {
+      _relay.sendControl({
+        type: "room_meta_update",
+        room_id: _myRoomId,
+        meta: { name },
+      })
+    }
   })
 
   // LEAF BEACON on tree navigation (branch). pi fires session_tree AFTER a leaf

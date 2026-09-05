@@ -125,6 +125,6 @@ public enum RelayControlIn: Equatable, Sendable {
     case roomAnnounced(peer: String, room: RoomInfo)
     case roomEnded(peer: String, roomID: String, sinceTs: Int?)
     case roomMetaUpdated(
-        peer: String, roomID: String, model: String?,
+        peer: String, roomID: String, model: String?, name: String?,
         parent: String?, parentSessionID: String?)
 }

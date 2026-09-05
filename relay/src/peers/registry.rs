@@ -302,6 +302,7 @@ impl PeerRegistry {
         let (
             current_model,
             current_thinking,
+            current_name,
             current_working,
             current_parent,
             current_parent_session,
@@ -316,6 +317,9 @@ impl PeerRegistry {
                         }
                         if let Some(ref t) = patch.thinking {
                             meta.thinking = t.clone();
+                        }
+                        if let Some(ref n) = patch.name {
+                            meta.name = n.clone();
                         }
                         if let Some(w) = patch.working {
                             meta.working = w;
@@ -339,6 +343,7 @@ impl PeerRegistry {
                     (
                         head.1.model.clone(),
                         head.1.thinking.clone(),
+                        head.1.name.clone(),
                         head.1.working,
                         head.1
                             .extra
@@ -369,6 +374,9 @@ impl PeerRegistry {
             }
             if let Some(t) = &current_thinking {
                 meta_obj.insert("thinking".to_string(), serde_json::Value::String(t.clone()));
+            }
+            if let Some(n) = &current_name {
+                meta_obj.insert("name".to_string(), serde_json::Value::String(n.clone()));
             }
             // `working` is always present (non-nullable bool), so it always
             // rides along in the broadcast — subscribers can rely on it.

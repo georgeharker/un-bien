@@ -67,6 +67,7 @@ public enum InboundFrame: Equatable, Sendable {
             return .roomMetaUpdated(
                 peer: try peer(), roomID: roomID,
                 model: meta?["model"] as? String,
+                name: meta?["name"] as? String,
                 parent: meta?["parent"] as? String,
                 parentSessionID: meta?["parentSessionId"] as? String)
         default:

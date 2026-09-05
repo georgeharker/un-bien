@@ -69,6 +69,9 @@ export interface RoomMetaUpdateFrame {
     model?: string
     working?: boolean
     thinking?: ThinkingLevel
+    // Session display name (a live /name rename). Relay >=0.6.0 merges + fans
+    // it to room subscribers; older relays drop the unknown field.
+    name?: string
     // Subagent parentage re-advertised after the child attaches (set-once on
     // the relay — never overrides an already-set parent).
     parent?: string

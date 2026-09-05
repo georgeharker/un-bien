@@ -48,6 +48,11 @@ pub struct RoomMeta {
 pub struct RoomMetaPatch {
     pub model: Option<Option<String>>,
     pub thinking: Option<Option<String>>,
+    /// Session DISPLAY name (a live /name / RPC / set_session_name rename).
+    /// Patched like `model`: `None` = absent, `Some(v)` = set `meta.name` to
+    /// `v`. Rides room_meta_update so the rename fans to ROOM SUBSCRIBERS
+    /// (Home apps, pre-attach) — not just attached peers over the evt plane.
+    pub name: Option<Option<String>>,
     /// `working` is a non-nullable bool, so the patch is a single `Option`:
     /// `None` = field absent (leave current), `Some(b)` = set to `b`. There is
     /// no "clear to null" — `false` *is* the cleared state.
@@ -68,6 +73,7 @@ impl RoomMetaPatch {
     pub fn is_empty(&self) -> bool {
         self.model.is_none()
             && self.thinking.is_none()
+            && self.name.is_none()
             && self.working.is_none()
             && self.parent.is_none()
             && self.parent_session_id.is_none()

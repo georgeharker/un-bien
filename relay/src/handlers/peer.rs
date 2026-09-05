@@ -298,6 +298,9 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                     let thinking_patch = meta_obj
                                         .and_then(|m| m.get("thinking"))
                                         .map(|v| v.as_str().map(String::from));
+                                    let name_patch = meta_obj
+                                        .and_then(|m| m.get("name"))
+                                        .map(|v| v.as_str().map(String::from));
                                     let working_patch = meta_obj
                                         .and_then(|m| m.get("working"))
                                         .and_then(|v| v.as_bool());
@@ -315,6 +318,7 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                     let patch = RoomMetaPatch {
                                         model: model_patch,
                                         thinking: thinking_patch,
+                                        name: name_patch,
                                         working: working_patch,
                                         parent: parent_patch,
                                         parent_session_id: parent_session_patch,
