@@ -829,6 +829,15 @@ extension AppModel {
         let isNewRoom = sessions[session.id] == nil
         session.status = sessions[session.id]?.status
         sessions[session.id] = session
+        // Seed caps from the room announce (design 01M1SJDZ): the ub hello only
+        // arrives on ATTACH, so pre-attach (Home) this is how End Chat learns
+        // remote_terminate for a session you haven't opened. Seed-if-absent
+        // only — the hello stays authoritative once attached. (is_daemon /
+        // control rooms already returned above, so room.caps here is a session
+        // cap set.)
+        if capabilities[session.id] == nil, let caps = room.caps, !caps.isEmpty {
+            capabilities[session.id] = Set(caps)
+        }
         // FORK AUTO-NAV pull: a fork/clone is pending and a NEW room just
         // appeared — it may be the fork-born session. session_sync normally
         // fires only on openSession (view appear), which won't happen until the

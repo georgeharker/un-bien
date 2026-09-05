@@ -54,11 +54,7 @@ import {
   type EnvelopeMessage,
 } from "./rpc_envelope.js"
 import { envLog } from "./debug_log.js"
-import {
-  effectiveAllowRemoteLaunch,
-  effectiveAllowRemoteTerminate,
-  loadLocalConfig,
-} from "./local_config.js"
+import { sessionCapabilities } from "./capabilities.js"
 import { clearPendingReceivedImagePreviews } from "./received_images.js"
 import type { CommandDeps } from "../commands/deps.js"
 import { _cmdStart } from "../commands/lifecycle.js"
@@ -749,7 +745,7 @@ function _attachOwner(
   // enable the {rpc|evt} route + suppress stock before any session content
   // arrives. Additive to the stock session_history caps (parity transition).
   const _sid = deps.rootState().sessionManager?.getSessionId()
-  channel.sendEnvelope(helloEnvelope(_capabilities(), _sid))
+  channel.sendEnvelope(helloEnvelope(sessionCapabilities(), _sid))
   envLog(
     `attach: peer=${appPeerId.slice(0, 8)} hello sent (caps + sessionId=${_sid ?? "?"}); active=${deps.activePeers.size}`,
   )
@@ -925,37 +921,9 @@ const _HOSTNAME = hostname()
 const PROTOCOL_VERSION = 1
 // Features this extension supports, advertised on attach (session_history) + pair_ok.
 // `remote_launch` is conditional (added only when local config opts in) — see
-// `_capabilities()`. Passive server->app extras (images/panels) are listed so
-// the app can also gate any future *controls* it grows for them.
-const _BASE_CAPABILITIES = [
-  "thinking",
-  "models",
-  "cancel",
-  "queued_messages",
-  "images",
-  "tool_result_images",
-  "panels",
-  "rpc_envelope",
-] as const
-
-/** The capability set to advertise right now (config-dependent bits included). */
-function _capabilities(): string[] {
-  const caps: string[] = [..._BASE_CAPABILITIES]
-  // `remote_launch` is advertised ONLY when the machine opts in via local
-  // config — single choke point so the advertised set and honored behavior
-  // can't drift. Read the session cwd's config (pi runs in the session cwd).
-  if (effectiveAllowRemoteLaunch(loadLocalConfig(process.cwd()))) {
-    caps.push("remote_launch")
-  }
-  // `remote_terminate`: app-driven kill of this session (red trash + confirm
-  // on the app side). Default-ON (`!== false`) — paired owners only, and the
-  // root-terminate path exits the host, so it's the same authority as the
-  // user's own Ctrl-C, but remote.
-  if (effectiveAllowRemoteTerminate(loadLocalConfig(process.cwd()))) {
-    caps.push("remote_terminate")
-  }
-  return caps
-}
+// Capability set moved to ./capabilities.ts (sessionCapabilities) so both the
+// ub hello (here) and room_meta.caps (commands/lifecycle) advertise the SAME
+// set from one choke point.
 
 async function _handlePairRequest(
   deps: RelayLifecycleDeps,
@@ -1060,7 +1028,7 @@ async function _handlePairRequest(
     harness: _HARNESS,
     hostname: _HOSTNAME,
     protocol_version: PROTOCOL_VERSION,
-    capabilities: _capabilities(),
+    capabilities: sessionCapabilities(),
   })
 
   // Notify local RPC clients (e.g. Cockpit) that pairing completed, so they can

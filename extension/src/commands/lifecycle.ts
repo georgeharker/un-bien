@@ -35,6 +35,7 @@ import {
 } from "../session/local_config.js"
 import { runSetupWizard, type WizardUI } from "../session/setup_wizard.js"
 import { acquireCwdLock } from "../session/cwd_lock.js"
+import { sessionCapabilities } from "../session/capabilities.js"
 import {
   ensureGlobalDirs,
   LOCAL_SESSION_NAME,
@@ -412,7 +413,14 @@ export async function _cmdStart(
     model?: string
     thinking?: ThinkingLevel
     sessionId?: string
+    caps?: string[]
   } = { name: sessionName, cwd }
+  // Advertise session caps on the room announce (design 01M1SJDZ) so the app
+  // learns remote_terminate etc. on DISCOVERY — the ub hello only reaches it
+  // after attach, so Home's End Chat gating was blind until you opened the
+  // chat. Same set as the hello (sessionCapabilities), reused on reconnect via
+  // deps.myRoomMeta below.
+  roomMeta.caps = sessionCapabilities()
   const modelName = deps.currentModelName()
   if (modelName) roomMeta.model = modelName
   if (deps.currentThinking) roomMeta.thinking = deps.currentThinking
