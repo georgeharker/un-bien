@@ -733,12 +733,17 @@ public struct SessionState: Equatable, Sendable {
         var chain: [String] = []
         var seen = Set<String>()
         var cursor = leaf
+        var reachedRoot = false
         while !cursor.isEmpty, seen.insert(cursor).inserted,
               let parent = entryParent[cursor] {
             chain.append(cursor)
-            if parent.isEmpty { break }
+            if parent.isEmpty { reachedRoot = true; break }
             cursor = parent
         }
+        // Truncated walk (missing parentId, not a root): ancestry not fully
+        // backfilled — keep the rendered path, defer (avoids vanish/reappear;
+        // activeLeafId left stale so the next page's fold re-derives).
+        if !reachedRoot, pathOrder != nil { pendingRepathLeaf = leaf; return }
         activeLeafId = leaf
         let newOrder = Array(chain.reversed())
         guard Set(newOrder) != pathIds else { return }
@@ -746,11 +751,7 @@ public struct SessionState: Equatable, Sendable {
         let oldOrder = pathOrder ?? []
         pathOrder = newOrder
         pathIds = Set(newOrder)
-        // A branch = an old path entry was ABANDONED (edit-resubmit / /tree /
-        // branch). Growth keeping every old entry is NOT a branch: forward turn
-        // (append), or BACKFILL prepending ancestors. Prefix-only mis-fired on
-        // backfill (prepended ancestors → old is a SUFFIX) → spurious "Branched
-        // at …". Subset = no abandonment.
+        // Branch = an old path entry abandoned (subset false); ancestry here is complete (truncated walks returned above).
         let isExtension = Set(oldOrder).isSubset(of: Set(newOrder))
         if !firstDerivation {
             resetTranscript()
