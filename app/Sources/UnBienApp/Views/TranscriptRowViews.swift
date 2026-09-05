@@ -27,6 +27,10 @@ struct TranscriptRow: View, Equatable {
     /// This row's entry is a fork point (>1 child) — annotate it. Per-row Bool
     /// (not the whole set) so only a row whose status flips re-renders.
     var isBranchPoint: Bool = false
+    // Non-observing handle to the per-card UI-state store (seeds ToolCardView's
+    // local @State). NOT part of `==` — it's a stable env value, so the
+    // equatable perf gate is unaffected.
+    @Environment(\.cardUIState) private var cardUI
 
     nonisolated static func == (lhs: TranscriptRow, rhs: TranscriptRow) -> Bool {
         lhs.item == rhs.item && lhs.themeID == rhs.themeID && lhs.typography == rhs.typography
@@ -52,7 +56,7 @@ struct TranscriptRow: View, Equatable {
             assistantView(bubble)
         case let .tool(card):
             ToolCardView(card: card, theme: theme, typography: typography,
-                         expandRich: expandRich, hideInputRich: hideInputRich)
+                         expandRich: expandRich, hideInputRich: hideInputRich, store: cardUI)
         case let .compaction(marker):
             Label("Context compacted (\(marker.tokensBefore) tokens)", systemImage: "arrow.triangle.merge")
                 .font(.caption).foregroundStyle(theme.secondaryText)
@@ -367,24 +371,28 @@ private struct ToolCardView: View {
     let typography: Typography
     let expandRich: Bool
     let hideInputRich: Bool
-    // Expand + Diff⇄Content toggle (design 01M177AF) live in CardUIState, NOT
-    // local @State: the windowed transcript destroys this view's @State when a
-    // row scrolls out and resets it on return, so a card the user expanded /
-    // flipped to Content collapsed on scroll ("edits disappear"). The store
-    // (keyed by toolCallID, held above the ForEach) survives that round-trip.
-    @EnvironmentObject private var cardUI: CardUIState
+    let store: CardUIState
+    // Expand + Diff⇄Content toggle (design 01M177AF) are LOCAL @State for
+    // reactivity, SEEDED from CardUIState in init + written back onChange, so
+    // they survive the windowed transcript destroying this view on scroll
+    // ("edits disappear") WITHOUT making every card an @EnvironmentObject
+    // subscriber (that made scrolling jerkier — design 01M1S9ET append). Local
+    // @State keeps a toggle a card-only re-render (TranscriptRow.equatable()
+    // intact); the store is touched only on materialize (read) + toggle (write).
+    @State private var expanded: Bool
+    @State private var showContent: Bool
 
-    /// Expanded binding — default: rich cards start expanded when the pref is on.
-    private var expandedBinding: Binding<Bool> {
-        Binding(get: { cardUI.expanded(card.toolCallID,
-                                       default: expandRich && Self.isRich(card)) },
-                set: { cardUI.setExpanded(card.toolCallID, $0) })
-    }
-
-    /// Diff⇄Content toggle binding (false = Diff, the default).
-    private var showContentBinding: Binding<Bool> {
-        Binding(get: { cardUI.showContent(card.toolCallID) },
-                set: { cardUI.setShowContent(card.toolCallID, $0) })
+    init(card: ToolCard, theme: AppTheme, typography: Typography,
+         expandRich: Bool, hideInputRich: Bool, store: CardUIState) {
+        self.card = card
+        self.theme = theme
+        self.typography = typography
+        self.expandRich = expandRich
+        self.hideInputRich = hideInputRich
+        self.store = store
+        _expanded = State(initialValue: store.expanded(
+            card.toolCallID, default: expandRich && Self.isRich(card)))
+        _showContent = State(initialValue: store.showContent(card.toolCallID))
     }
 
     /// A card is "rich" when it has a renderable output block, an input diff, or
@@ -437,18 +445,18 @@ private struct ToolCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            DisclosureGroup(isExpanded: expandedBinding) {
+            DisclosureGroup(isExpanded: $expanded) {
                 VStack(alignment: .leading, spacing: 6) {
                     if let hunks = inputHunks, let content = contentText {
                         // Both present (live edit): toggle between the diff and
                         // the new text as a code block. Default Diff.
-                        Picker("view", selection: showContentBinding) {
+                        Picker("view", selection: $showContent) {
                             Text("Diff").tag(false)
                             Text("Content").tag(true)
                         }
                         .pickerStyle(.segmented)
                         .labelsHidden()
-                        if cardUI.showContent(card.toolCallID) {
+                        if showContent {
                             codeView(content.text, lang: content.lang)
                         } else {
                             diffView(hunks)
@@ -496,6 +504,10 @@ private struct ToolCardView: View {
         }
         .padding(10)
         .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
+        // Persist toggles back to the windowing-surviving store (write-only on
+        // change — never per-render).
+        .onChange(of: expanded) { _, value in store.setExpanded(card.toolCallID, value) }
+        .onChange(of: showContent) { _, value in store.setShowContent(card.toolCallID, value) }
     }
 
     // Input Edit diff: LIVE aux.hunks when present; otherwise DERIVED from

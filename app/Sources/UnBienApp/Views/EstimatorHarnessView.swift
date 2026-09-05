@@ -351,7 +351,6 @@ struct EstimatorHarnessView: View {
                         TranscriptRow(item: item, themeID: .tokyoNight, theme: theme,
                                       typography: typography, expandRich: true, hideInputRich: true)
                             .equatable()
-                            .environmentObject(CardUIState())
                             .background(
                                 GeometryReader { geo in
                                     Color.clear.onAppear { record(item.id, geo.size.height) }

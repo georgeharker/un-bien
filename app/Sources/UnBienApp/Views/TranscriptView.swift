@@ -81,8 +81,10 @@ struct TranscriptView: View {
     /// and receive flips row-targeted.
     @State var windowDriver = TranscriptWindowDriver()
     // Per-tool-card UI state (expand + Diff/Content), held ABOVE the windowed
-    // rows so it survives dematerialize/rematerialize. See CardUIState.
-    @StateObject private var cardUIState = CardUIState()
+    // rows so it survives dematerialize/rematerialize. Plain @State (not
+    // @StateObject) — CardUIState is non-observed storage; ToolCardView reads
+    // it via @Environment + local @State. See CardUIState.
+    @State private var cardUIState = CardUIState()
     /// Viewport height — the window math's input (+ the resize reclaim).
     @State var viewportHeight: Double?
     #if DEBUG
@@ -317,7 +319,7 @@ struct TranscriptView: View {
                 }
             // Per-card expand/toggle state that survives row windowing
             // (ToolCardView reads/writes it keyed by toolCallID).
-            .environmentObject(cardUIState)
+            .environment(\.cardUIState, cardUIState)
             .background(viewportProbe)
             // THE PIN (design: scroll-position pin; prototype
             // app/Prototypes/scroll-position-pin.swift): ONE binding is the
