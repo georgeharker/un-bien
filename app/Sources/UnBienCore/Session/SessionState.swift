@@ -746,13 +746,12 @@ public struct SessionState: Equatable, Sendable {
         let oldOrder = pathOrder ?? []
         pathOrder = newOrder
         pathIds = Set(newOrder)
-        // A forward EXTENSION (old path is a prefix of the new) is a normal turn
-        // advancing the leaf, NOT a branch (fresh pi starts leaf==nil). Only a
-        // real DIVERGENCE (rendered entries abandoned: edit-resubmit / /tree /
-        // branch) marks the move; resetTranscript stays unconditional (it also
-        // reconciles live-plane rows with the entry tree every turn end).
-        let isExtension = newOrder.count >= oldOrder.count
-            && Array(newOrder.prefix(oldOrder.count)) == oldOrder
+        // A branch = an old path entry was ABANDONED (edit-resubmit / /tree /
+        // branch). Growth keeping every old entry is NOT a branch: forward turn
+        // (append), or BACKFILL prepending ancestors. Prefix-only mis-fired on
+        // backfill (prepended ancestors → old is a SUFFIX) → spurious "Branched
+        // at …". Subset = no abandonment.
+        let isExtension = Set(oldOrder).isSubset(of: Set(newOrder))
         if !firstDerivation {
             resetTranscript()
             if !isExtension { pendingBranchNoticeLeaf = leaf }
