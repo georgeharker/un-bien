@@ -643,15 +643,16 @@ final class EntryBornErrorNoticeTests: XCTestCase {
         state.applyEntries([], leafId: "c1")
         XCTAssertEqual(state.items.count, 2, "mid-turn beacon must NOT reset the rows")
 
-        // Settle: the deferred re-path applies — the new path renders, and
-        // (run 2026-09-18, the branch marker) a trailing notice lands at the
-        // branch point: 3 rows + the notice.
+        // Settle: the deferred re-path applies — the new path renders (a1, b1,
+        // c1). c1.parentId == b1, so this EXTENDS the current leaf (forward) —
+        // NOT a divergence — so NO branch notice fires (a branch requires an
+        // old path entry to be abandoned; nothing was). Design 01M1FTV2.
         state.applyRPC(.object(["type": .string("agent_settled")]))
-        XCTAssertEqual(state.items.count, 4, "settle applies the parked re-path + the branch notice")
-        XCTAssertEqual(state.items.map(\.id).dropLast().last, "user:c1")
-        guard case let .notice(notice) = state.items.last else {
-            return XCTFail("expected the trailing branch notice")
+        XCTAssertEqual(state.items.count, 3, "settle applies the parked re-path (a1, b1, c1)")
+        XCTAssertEqual(state.items.last?.id, "user:c1")
+        let branchNotices = state.items.filter {
+            if case let .notice(n) = $0 { return n.code == "branch" } else { return false }
         }
-        XCTAssertEqual(notice.code, "branch")
+        XCTAssertTrue(branchNotices.isEmpty, "forward extension must NOT flag a branch")
     }
 }
