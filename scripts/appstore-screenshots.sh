@@ -5,6 +5,7 @@
 #   scripts/appstore-screenshots.sh setup iphone    — boot 6.9" sim, build+install+launch
 #   scripts/appstore-screenshots.sh setup ipad      — boot 13" sim, build+install+launch
 #   scripts/appstore-screenshots.sh shot <name>     — screenshot the booted sim
+#   scripts/appstore-screenshots.sh docshot <name>  — same, into docs/images/ (docs)
 #   scripts/appstore-screenshots.sh sizes           — destination/dimension cheatsheet
 #
 # WORKFLOW: `setup iphone`, then navigate the app in the Simulator (demo mode is
@@ -12,6 +13,10 @@
 # the owner-key shot) and run `shot <name>` after each surface. Screenshots land
 # in store-screenshots/<device>/NN-<name>.png at NATIVE simulator resolution —
 # exactly the pixel dimensions the App Store Connect slots expect.
+#
+# For docs pages use `docshot <name>` instead — same capture, written FLAT to
+# docs/images/NN-<name>.png (no per-device subdir) so Quarto pages can link
+# images/NN-<name>.png.
 #
 # Mac screenshots: run the macOS app directly and capture with the system tool
 # (Cmd-Shift-4 / Cmd-Shift-5) — no simulator involved.
@@ -27,6 +32,7 @@ ROOT="$SCRIPT_DIR/.."
 PROJECT="$ROOT/app/UnBien.xcodeproj"
 DERIVED="$ROOT/app/build"
 OUT="$ROOT/store-screenshots"
+DOCS_OUT="$ROOT/docs/images" # docshot target: flat docs image dir for Quarto links
 
 IPHONE_SIM="iPhone 17 Pro Max"   # 6.9"  — 1320 x 2864 (portrait)
 IPAD_SIM="iPad Pro 13-inch (M5)" # 13"   — 2064 x 2752
@@ -84,45 +90,41 @@ setup)
     xcrun simctl launch "$SIM" com.georgeharker.un-bien.app
     echo "OK: app running. Navigate in the Simulator, then: $0 shot <name>"
     ;;
-shot)
-    if [ $# -ge 3 ] && printf '%s' "$2" | grep -qE '^[0-9]{2}$'; then
-        # Explicit slot: `shot <number> <name>` — shoot in any order while
-        # keeping a logical filename sequence.
-        NN="$2"
-        NAME="$3"
-    else
-        NAME="${2:?usage: $0 shot <name> | $0 shot <number> <name>}"
-        # Auto-number: the next capture-order stamp.
-        DEV=$(booted_device)
-        [ -n "$DEV" ] || {
-            echo "ERROR: no booted simulator"
-            exit 1
-        }
-        DIR="$OUT/$DEV"
-        mkdir -p "$DIR"
-        NN=0
-        for f in "$DIR"/[0-9][0-9]-*.png; do
-            [ -e "$f" ] && NN=$((NN + 1))
-        done
-        NN=$((NN + 1))
-        FILE=$(printf "%s/%02d-%s.png" "$DIR" "$NN" "$NAME")
-        xcrun simctl io booted screenshot "$FILE"
-        echo "captured: $FILE"
-        exit 0
-    fi
+shot | docshot)
+    # docshot falls through the SAME capture body as shot — it only swaps the
+    # output dir to a flat docs/images/ (no per-device subdir) for doc links.
     DEV=$(booted_device)
     [ -n "$DEV" ] || {
         echo "ERROR: no booted simulator"
         exit 1
     }
-    DIR="$OUT/$DEV"
+    if [ "$1" = docshot ]; then
+        DIR="$DOCS_OUT"
+    else
+        DIR="$OUT/$DEV"
+    fi
     mkdir -p "$DIR"
+
+    if [ $# -ge 3 ] && printf '%s' "$2" | grep -qE '^[0-9]{2}$'; then
+        # Explicit slot: `<cmd> <number> <name>` — shoot in any order while
+        # keeping a logical filename sequence.
+        NN="$2"
+        NAME="$3"
+    else
+        NAME="${2:?usage: $0 $1 <name> | $0 $1 <number> <name>}"
+        # Auto-number: the next capture-order stamp in this dir.
+        NN=0
+        for f in "$DIR"/[0-9][0-9]-*.png; do
+            [ -e "$f" ] && NN=$((NN + 1))
+        done
+        NN=$((NN + 1))
+    fi
     FILE=$(printf "%s/%02d-%s.png" "$DIR" "$NN" "$NAME")
     xcrun simctl io booted screenshot "$FILE"
     echo "captured: $FILE"
     ;;
 *)
-    echo "usage: $0 [setup iphone|setup ipad|shot <name>|shot <number> <name>|sizes]"
+    echo "usage: $0 [setup iphone|setup ipad|shot <name>|shot <number> <name>|docshot <name>|docshot <number> <name>|sizes]"
     exit 1
     ;;
 esac
