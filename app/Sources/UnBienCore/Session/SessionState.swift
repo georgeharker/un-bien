@@ -409,7 +409,7 @@ public struct SessionState: Equatable, Sendable {
         let id = entryID ?? "\(compactionSeq)"
         // Entry-born markers ride the log position (before the live tail);
         // live ones append (a "now" event).
-        if let entryID {
+        if entryID != nil {
             return insertBeforeLiveTail(.compaction(CompactionMarker(id: id, summary: summary,
                                                                      tokensBefore: tokensBefore)))
         }
