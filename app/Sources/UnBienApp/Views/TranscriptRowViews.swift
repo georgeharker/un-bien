@@ -367,20 +367,24 @@ private struct ToolCardView: View {
     let typography: Typography
     let expandRich: Bool
     let hideInputRich: Bool
-    @State private var expanded: Bool
-    /// Edit-family Diff⇄Content toggle (design 01M177AF). false = Diff (default,
-    /// most informative live); true = Content (the new text as a code block).
-    @State private var showContent = false
+    // Expand + Diff⇄Content toggle (design 01M177AF) live in CardUIState, NOT
+    // local @State: the windowed transcript destroys this view's @State when a
+    // row scrolls out and resets it on return, so a card the user expanded /
+    // flipped to Content collapsed on scroll ("edits disappear"). The store
+    // (keyed by toolCallID, held above the ForEach) survives that round-trip.
+    @EnvironmentObject private var cardUI: CardUIState
 
-    init(card: ToolCard, theme: AppTheme, typography: Typography,
-         expandRich: Bool, hideInputRich: Bool) {
-        self.card = card
-        self.theme = theme
-        self.typography = typography
-        self.expandRich = expandRich
-        self.hideInputRich = hideInputRich
-        // Pref: rich cards (diff/code/content) start expanded when enabled.
-        _expanded = State(initialValue: expandRich && Self.isRich(card))
+    /// Expanded binding — default: rich cards start expanded when the pref is on.
+    private var expandedBinding: Binding<Bool> {
+        Binding(get: { cardUI.expanded(card.toolCallID,
+                                       default: expandRich && Self.isRich(card)) },
+                set: { cardUI.setExpanded(card.toolCallID, $0) })
+    }
+
+    /// Diff⇄Content toggle binding (false = Diff, the default).
+    private var showContentBinding: Binding<Bool> {
+        Binding(get: { cardUI.showContent(card.toolCallID) },
+                set: { cardUI.setShowContent(card.toolCallID, $0) })
     }
 
     /// A card is "rich" when it has a renderable output block, an input diff, or
@@ -433,18 +437,18 @@ private struct ToolCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            DisclosureGroup(isExpanded: $expanded) {
+            DisclosureGroup(isExpanded: expandedBinding) {
                 VStack(alignment: .leading, spacing: 6) {
                     if let hunks = inputHunks, let content = contentText {
                         // Both present (live edit): toggle between the diff and
                         // the new text as a code block. Default Diff.
-                        Picker("view", selection: $showContent) {
+                        Picker("view", selection: showContentBinding) {
                             Text("Diff").tag(false)
                             Text("Content").tag(true)
                         }
                         .pickerStyle(.segmented)
                         .labelsHidden()
-                        if showContent {
+                        if cardUI.showContent(card.toolCallID) {
                             codeView(content.text, lang: content.lang)
                         } else {
                             diffView(hunks)

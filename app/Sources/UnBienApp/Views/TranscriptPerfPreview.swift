@@ -40,6 +40,7 @@ private struct TranscriptPerfPreview: View {
                     TranscriptRow(item: item, themeID: .tokyoNight, theme: theme,
                                   typography: typography, expandRich: true, hideInputRich: true)
                         .equatable()
+                        .environmentObject(CardUIState())
                         .id(item.id)
                 }
             }

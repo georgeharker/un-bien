@@ -351,6 +351,7 @@ struct EstimatorHarnessView: View {
                         TranscriptRow(item: item, themeID: .tokyoNight, theme: theme,
                                       typography: typography, expandRich: true, hideInputRich: true)
                             .equatable()
+                            .environmentObject(CardUIState())
                             .background(
                                 GeometryReader { geo in
                                     Color.clear.onAppear { record(item.id, geo.size.height) }
@@ -449,7 +450,12 @@ struct EstimatorHarnessView: View {
         if let code = measured["cal-asst-code1"] {
             kit.codeChrome = code - kit.lineHeightMono - (kit.chromeV[.assistant] ?? 0)
         }
-        ehPrint("kit w\(Int(width)): lineBody=\(String(format: "%.1f", kit.lineHeightBody)) lineMono=\(String(format: "%.1f", kit.lineHeightMono)) paraGap=\(String(format: "%.1f", kit.paraGap)) codeChrome=\(String(format: "%.1f", kit.codeChrome)) chromeV=\(kit.chromeV.mapValues { Int($0) })")
+        let bodyStr = String(format: "%.1f", kit.lineHeightBody)
+        let monoStr = String(format: "%.1f", kit.lineHeightMono)
+        let gapStr = String(format: "%.1f", kit.paraGap)
+        let chromeStr = String(format: "%.1f", kit.codeChrome)
+        ehPrint("kit w\(Int(width)): lineBody=\(bodyStr) lineMono=\(monoStr) "
+            + "paraGap=\(gapStr) codeChrome=\(chromeStr) chromeV=\(kit.chromeV.mapValues { Int($0) })")
         return kit
     }
 }
