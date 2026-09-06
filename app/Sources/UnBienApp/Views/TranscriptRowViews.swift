@@ -56,7 +56,8 @@ struct TranscriptRow: View, Equatable {
             assistantView(bubble)
         case let .tool(card):
             ToolCardView(card: card, theme: theme, typography: typography,
-                         expandRich: expandRich, hideInputRich: hideInputRich, store: cardUI)
+                         expandRich: expandRich, hideInputRich: hideInputRich, store: cardUI,
+                         themeID: themeID)
         case let .compaction(marker):
             Label("Context compacted (\(marker.tokensBefore) tokens)", systemImage: "arrow.triangle.merge")
                 .font(.caption).foregroundStyle(theme.secondaryText)
@@ -300,38 +301,49 @@ private struct BudgetedContent<Content: View>: View {
     }
 }
 
-/// Tool-card code block with the OFF-MAIN highlight miss path (perf #5,
-/// corrected 2026-09-18). Cache HIT renders synchronously (the repeat
-/// case); a MISS renders plain mono for one frame while the highlight
-/// evaluates on the engine's serial background queue. The `.task` IS the
-/// queue entry's lifetime: SwiftUI cancels it when this view leaves the
-/// hierarchy (row scrolled offscreen / husk detached), the engine's ticket
-/// flips, and the queue drain DROPS the entry before the expensive part —
-/// the "mutable queue" (user: "remove them again if offscreen by the time
-/// we get to them"). Onscreen rows get the queue sooner.
-private struct AsyncCodeBlock: View {
-    let code: String
-    let lang: String?
-    let theme: AppTheme
-    let font: PlatformFont
+/// The ONE windowed pull view for every attributed-text producer (highlighter,
+/// diff, …). Cache HIT renders synchronously (the repeat case); a MISS shows
+/// the producer's plain fallback for one frame while it produces off-main. The
+/// `.task` IS the queue entry's lifetime: SwiftUI cancels it when the row
+/// leaves the near window, the ticket flips, and the queue drain DROPS the
+/// entry before the expensive part — the "mutable queue". The near-window
+/// produces AHEAD of the viewport, so a warm row hits the sync cache and there
+/// is no visible frame delay.
+/// Warm-only sibling of AsyncAttributedText: drives a producer through the SAME
+/// windowed, appearance-driven off-main path (its `.task` fires when the row is
+/// in the near-window; the ticket cancels when it leaves), but renders NOTHING
+/// — so a hidden toggle face is cached ahead of a switch without being laid out
+/// or drawn. Same mechanism as the highlighted-code warm, just no output.
+private struct WarmAttributedText: View {
+    let producer: any AttributedTextProducer
+
+    var body: some View {
+        Color.clear.frame(width: 0, height: 0)
+            .task(id: producer.cacheKey) {
+                if AttributedTextCache.shared.cached(producer) == nil {
+                    _ = await AttributedTextCache.shared.attributed(producer)
+                }
+            }
+    }
+}
+
+private struct AsyncAttributedText: View {
+    let producer: any AttributedTextProducer
     @State private var landed: AttributedString?
 
     var body: some View {
-        if let hit = HighlightEngine.shared.cached(code, language: lang,
-                                                   style: theme.codeHighlightStyle, font: font)
-            ?? landed {
-            Text(hit).textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            Text(code).foregroundStyle(theme.text).textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .task {
-                    landed = await HighlightEngine.shared.highlightOffMain(
-                        code, language: lang,
-                        style: theme.codeHighlightStyle,
-                        fontName: font.fontName, fontSize: font.pointSize)
-                }
+        Group {
+            if let hit = AttributedTextCache.shared.cached(producer) ?? landed {
+                Text(hit)
+            } else {
+                Text(producer.plainText)
+                    .task(id: producer.cacheKey) {
+                        landed = await AttributedTextCache.shared.attributed(producer)
+                    }
+            }
         }
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -365,6 +377,39 @@ private struct ReasoningBlockView: View {
     }
 }
 
+/// Lightweight Diff/Content toggle — two tappable labels over a capsule track,
+/// pure SwiftUI. Deliberately NOT a segmented Picker: that bridges to a
+/// UISegmentedControl, whose per-attach construction hitched edit cards as they
+/// scrolled into the window. Text + a Capsule cost effectively nothing to build.
+private struct DiffContentToggle: View {
+    @Binding var showContent: Bool
+    let theme: AppTheme
+
+    var body: some View {
+        HStack(spacing: 2) {
+            segment("Diff", selected: !showContent) { showContent = false }
+            segment("Content", selected: showContent) { showContent = true }
+        }
+        .padding(2)
+        .background(theme.surface, in: Capsule())
+        .fixedSize()
+    }
+
+    private func segment(_ title: String, selected: Bool,
+                         _ tap: @escaping () -> Void) -> some View {
+        Text(title)
+            .font(.caption.weight(selected ? .semibold : .regular))
+            .foregroundStyle(selected ? theme.text : theme.secondaryText)
+            .padding(.vertical, 4)
+            .padding(.horizontal, 12)
+            .background {
+                if selected { Capsule().fill(theme.toolAccent.opacity(0.30)) }
+            }
+            .contentShape(Capsule())
+            .onTapGesture(perform: tap)
+    }
+}
+
 private struct ToolCardView: View {
     let card: ToolCard
     let theme: AppTheme
@@ -372,6 +417,7 @@ private struct ToolCardView: View {
     let expandRich: Bool
     let hideInputRich: Bool
     let store: CardUIState
+    let themeID: ThemeID  // diff-cache key discriminator (colors are theme-derived)
     // Expand + Diff⇄Content toggle (design 01M177AF) are LOCAL @State for
     // reactivity, SEEDED from CardUIState in init + written back onChange, so
     // they survive the windowed transcript destroying this view on scroll
@@ -383,13 +429,14 @@ private struct ToolCardView: View {
     @State private var showContent: Bool
 
     init(card: ToolCard, theme: AppTheme, typography: Typography,
-         expandRich: Bool, hideInputRich: Bool, store: CardUIState) {
+         expandRich: Bool, hideInputRich: Bool, store: CardUIState, themeID: ThemeID) {
         self.card = card
         self.theme = theme
         self.typography = typography
         self.expandRich = expandRich
         self.hideInputRich = hideInputRich
         self.store = store
+        self.themeID = themeID
         _expanded = State(initialValue: store.expanded(
             card.toolCallID, default: expandRich && Self.isRich(card)))
         _showContent = State(initialValue: store.showContent(card.toolCallID))
@@ -449,15 +496,22 @@ private struct ToolCardView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     if let hunks = inputHunks, let content = contentText {
                         // Both present (live edit): toggle between the diff and
-                        // the new text as a code block. Default Diff.
-                        Picker("view", selection: $showContent) {
-                            Text("Diff").tag(false)
-                            Text("Content").tag(true)
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
+                        // the new text as a code block. Default Diff. A lightweight
+                        // SwiftUI toggle, NOT .pickerStyle(.segmented) — a segmented
+                        // Picker bridges to a UISegmentedControl, and constructing
+                        // that UIKit view on every husk→full attach is what hitched
+                        // the scroll-in of edit cards.
+                        DiffContentToggle(showContent: $showContent, theme: theme)
+                        // Warm the OTHER (hidden) face through the SAME windowed,
+                        // appearance-driven path as the visible one (renders
+                        // nothing) so switching shows the ready result, not the
+                        // plain-then-highlight pop.
+                        WarmAttributedText(producer: showContent
+                            ? (diffProducer(hunks) as any AttributedTextProducer)
+                            : contentProducer(content))
                         if showContent {
-                            codeView(content.text, lang: content.lang)
+                            codeView(content.text, lang: content.lang,
+                                     identity: "\(card.toolCallID)\u{1}@source")
                         } else {
                             diffView(hunks)
                         }
@@ -508,6 +562,25 @@ private struct ToolCardView: View {
         // change — never per-render).
         .onChange(of: expanded) { _, value in store.setExpanded(card.toolCallID, value) }
         .onChange(of: showContent) { _, value in store.setShowContent(card.toolCallID, value) }
+    }
+
+    // The content key matches codeView's BudgetedContent truncation, so the warm
+    // hits the exact key the toggle will read.
+    private func diffProducer(_ hunks: [JSONValue]) -> DiffProducer {
+        DiffProducer(toolCallID: card.toolCallID, themeID: "\(themeID)", hunks: hunks,
+                     add: theme.success, remove: theme.error, context: theme.secondaryText)
+    }
+
+    private func contentProducer(_ content: (text: String, lang: String?)) -> HighlightProducer {
+        let truncated = content.text.count > toolBudget
+        // Warm the INITIALLY-shown key: @source when it'll truncate, else the
+        // full @source-all (matches codeView's initial render). The other key
+        // materializes on demand if the user hits Show all.
+        return HighlightProducer(
+            code: truncated ? String(content.text.prefix(toolBudget)) : content.text,
+            language: content.lang, style: theme.codeHighlightStyle,
+            font: typography.monoPlatformFont(),
+            identity: "\(card.toolCallID)\u{1}@source" + (truncated ? "" : "-all"))
     }
 
     // Input Edit diff: LIVE aux.hunks when present; otherwise DERIVED from
@@ -578,37 +651,17 @@ private struct ToolCardView: View {
         }
     }
 
-    @ViewBuilder
+    // Colored diff via the shared windowed cache (DiffProducer). The card's
+    // diff is immutable, so it's produced once (per theme) and reused across
+    // materializations — same cache + off-main pull as code blocks; only the
+    // production differs (platform-colored lines vs highlight.js).
     private func diffView(_ hunks: [JSONValue]) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("DIFF").font(.system(size: 9, weight: .bold))
                 .foregroundStyle(theme.secondaryText)
-            ForEach(Array(hunks.enumerated()), id: \.offset) { _, hunk in
-                ForEach(Array((hunk["lines"]?.arrayValue ?? []).enumerated()), id: \.offset) { _, line in
-                    let kind = line["kind"]?.stringValue ?? ""
-                    Text(diffPrefix(kind) + (line["text"]?.stringValue ?? ""))
-                        .foregroundStyle(diffColor(kind))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-        }
-    }
-
-    private func diffPrefix(_ kind: String) -> String {
-        switch kind {
-        case "remove": return "-"
-        case "add": return "+"
-        case "ellipsis": return " \u{22EF}"
-        default: return " "
-        }
-    }
-
-    private func diffColor(_ kind: String) -> Color {
-        switch kind {
-        case "remove": return theme.error
-        case "add": return theme.success
-        default: return theme.secondaryText
+            AsyncAttributedText(producer: DiffProducer(
+                toolCallID: card.toolCallID, themeID: "\(themeID)", hunks: hunks,
+                add: theme.success, remove: theme.error, context: theme.secondaryText))
         }
     }
 
@@ -633,21 +686,23 @@ private struct ToolCardView: View {
     }
 
     // `code` block: plain output text syntax-highlighted via the shared
-    // HighlightEngine (HighlighterSwift/highlight.js, cached + theme-matched,
-    // same path as assistant-bubble code blocks). `lang` may be nil →
-    // highlight.js auto-detects. PERF (#5 corrected, 2026-09-18): the MISS
-    // path no longer blocks main — AsyncCodeBlock renders plain mono for one
-    // frame while the highlight evaluates on the engine's serial background
-    // queue (queue-confined engines, ticket cancellation — offscreen rows'
-    // work drops at drain). Cache hits (the repeat case) stay synchronous.
-    // Budget applies BEFORE highlighting (see toolBudget). Assistant-bubble
-    // fences stay sync-on-miss: MarkdownUI's CodeSyntaxHighlighter protocol
-    // is synchronous — bounded by markdownBudget, cache-covered after.
+    // Syntax-highlighted code via the shared windowed cache (HighlightProducer,
+    // HighlighterSwift/highlight.js). `lang` may be nil → highlight.js
+    // auto-detects. Budget applies BEFORE highlighting (toolBudget).
+    // Assistant-bubble fences stay sync-on-miss: MarkdownUI's
+    // CodeSyntaxHighlighter protocol is synchronous — same cache, cache-covered
+    // after first render.
     @ViewBuilder
-    private func codeView(_ text: String, lang: String?) -> some View {
+    private func codeView(_ text: String, lang: String?, identity: String? = nil) -> some View {
         let font = typography.monoPlatformFont()
         BudgetedContent(text: text, budget: toolBudget) { budgeted in
-            AsyncCodeBlock(code: budgeted, lang: lang, theme: theme, font: font)
+            // Two stable id keys: @source (truncated view) vs @source-all (full,
+            // after Show all). The full view isn't pre-warmed, so it materializes
+            // on demand the first time it's expanded.
+            let id = identity.map { budgeted.count >= text.count ? "\($0)-all" : $0 }
+            AsyncAttributedText(producer: HighlightProducer(
+                code: budgeted, language: lang, style: theme.codeHighlightStyle,
+                font: font, identity: id))
         }
     }
 

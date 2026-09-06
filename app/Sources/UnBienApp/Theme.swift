@@ -4,9 +4,11 @@ import SwiftUI
 #if os(macOS)
 import AppKit
 public typealias PlatformFont = NSFont
+public typealias PlatformColor = NSColor
 #else
 import UIKit
 public typealias PlatformFont = UIFont
+public typealias PlatformColor = UIColor
 #endif
 
 /// Minimal design-token palette (Tokyo Night). The full curated multi-theme
@@ -463,7 +465,7 @@ public struct HighlighterCodeSyntaxHighlighter: CodeSyntaxHighlighter {
     private let font: PlatformFont?
 
     // Cheap to construct (swift-markdown-ui rebuilds this per render): the JS
-    // runtime + highlight results live in the shared bounded `HighlightEngine`,
+    // runtime + highlight results live in the shared bounded `AttributedTextCache`,
     // so no Highlighter is spun up here and repeated blocks hit the cache.
     public init(style: String, font: PlatformFont? = nil) {
         self.style = style
@@ -471,7 +473,7 @@ public struct HighlighterCodeSyntaxHighlighter: CodeSyntaxHighlighter {
     }
 
     public func highlightCode(_ code: String, language: String?) -> Text {
-        if let attributed = HighlightEngine.shared.highlighted(code, language: language,
+        if let attributed = AttributedTextCache.shared.highlighted(code, language: language,
                                                                style: style, font: font) {
             return Text(attributed)
         }

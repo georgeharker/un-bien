@@ -274,7 +274,7 @@ struct SettingsView: View {
     private var performanceSection: some View {
         Section {
             Stepper("Highlight cache: \(cacheBlocks) blocks", value: $cacheBlocks, in: 50...2000, step: 50)
-                .onChange(of: cacheBlocks) { _, new in HighlightEngine.shared.cacheLimit = new }
+                .onChange(of: cacheBlocks) { _, new in AttributedTextCache.shared.cacheLimit = new }
             Stepper("Image cache: \(cacheImages) images", value: $cacheImages, in: 20...1000, step: 20)
                 .onChange(of: cacheImages) { _, new in ImageCache.shared.cacheLimit = new }
         } header: {

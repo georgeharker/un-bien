@@ -103,7 +103,7 @@ public struct UnBienSceneApp: App {
         // Apply saved render-cache bounds at launch (Settings persists them).
         let defaults = UserDefaults.standard
         if let blocks = defaults.object(forKey: "renderCacheBlocks") as? Int {
-            HighlightEngine.shared.cacheLimit = blocks
+            AttributedTextCache.shared.cacheLimit = blocks
         }
         if let images = defaults.object(forKey: "renderCacheImages") as? Int {
             ImageCache.shared.cacheLimit = images
