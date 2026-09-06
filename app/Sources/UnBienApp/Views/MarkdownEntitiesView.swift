@@ -29,6 +29,25 @@ final class MarkdownEntityStore {
     }
 }
 
+/// One reused prose style per (theme, typography). All bubbles share the same
+/// style (it depends only on theme + typography, never on the bubble), so
+/// build it once and hand out the memoized value; it rebuilds only when the
+/// theme or fonts change. Single-entry: every visible bubble uses the same
+/// theme/typography at any given moment.
+@MainActor
+enum MarkdownStyleCache {
+    private static var last: (key: String, style: MarkdownProseStyle)?
+
+    static func style(theme: AppTheme, typography: Typography) -> MarkdownProseStyle {
+        let key = "\(theme.codeHighlightStyle)\u{1}\(Int(typography.bodySize))"
+            + "\u{1}\(typography.bodyFontName ?? "")\u{1}\(typography.monoFontName ?? "")"
+        if let last, last.key == key { return last.style }
+        let style = markdownProseStyle(theme: theme, typography: typography)
+        last = (key, style)
+        return style
+    }
+}
+
 func markdownProseStyle(theme: AppTheme, typography: Typography) -> MarkdownProseStyle {
     MarkdownProseStyle(baseSize: typography.bodySize, textColor: theme.text,
                        linkColor: theme.accent,
@@ -59,7 +78,7 @@ struct MarkdownEntitiesView: View {
 
     // Key = message identity + a hash of the WHOLE style, so any palette/font/
     // size change re-produces without hand-listing each field in the key.
-    private var style: MarkdownProseStyle { markdownProseStyle(theme: theme, typography: typography) }
+    private var style: MarkdownProseStyle { MarkdownStyleCache.style(theme: theme, typography: typography) }
     private var key: String { "\(id)\u{1}\(style.hashValue)" }
 
     var body: some View {
