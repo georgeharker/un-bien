@@ -170,6 +170,18 @@ struct EntityStack: View {
             }
             .fixedSize(horizontal: false, vertical: true)
 
+        case .details(let summary, let children):
+            VStack(alignment: .leading, spacing: 6) {
+                Text(summary).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                EntityStack(entities: children, theme: theme, typography: typography)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(theme.surface.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8)
+                .stroke(theme.secondaryText.opacity(0.25), lineWidth: 1))
+
         case .thematicBreak:
             Divider()
 
