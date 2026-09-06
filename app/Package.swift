@@ -13,7 +13,7 @@ let package = Package(
         .executable(name: "un-bien-mac", targets: ["UnBienMac"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/gonzalezreal/swift-markdown-ui", from: "2.4.0"),
+        .package(url: "https://github.com/georgeharker/swift-markdown-ui", branch: "main"),
         .package(url: "https://github.com/smittytone/HighlighterSwift", from: "3.1.0"),
     ],
     targets: [

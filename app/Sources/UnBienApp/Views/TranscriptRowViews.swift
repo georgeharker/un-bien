@@ -84,6 +84,8 @@ struct TranscriptRow: View, Equatable {
                 if isBranchPoint { branchMarker }
             }
             if !bubble.text.isEmpty {
+                if bubble.streaming {
+                // While streaming, render live MarkdownUI (text grows per token).
                 BudgetedContent(text: bubble.text, budget: markdownBudget) { budgeted in
                     Markdown(budgeted)
                     .markdownCodeSyntaxHighlighter(.highlighter(
@@ -107,6 +109,14 @@ struct TranscriptRow: View, Equatable {
                         .markdownMargin(top: 8, bottom: 8)
                     }
                     .textSelection(.enabled)
+                }
+                } else {
+                    // Settled: render off-main-produced entities (prose as cached
+                    // Text, code/table/list/blockquote plugged) — keeps fast scroll
+                    // jank-free vs live MarkdownUI's on-frame parse+layout.
+                    MarkdownEntitiesView(
+                        text: bubble.text, id: bubble.id,
+                        theme: theme, typography: typography)
                 }
             }
             ForEach(Array(bubble.images.enumerated()), id: \.offset) { _, image in
@@ -327,7 +337,7 @@ private struct WarmAttributedText: View {
     }
 }
 
-private struct AsyncAttributedText: View {
+struct AsyncAttributedText: View {
     let producer: any AttributedTextProducer
     @State private var landed: AttributedString?
 

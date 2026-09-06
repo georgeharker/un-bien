@@ -1,5 +1,5 @@
 {
-  "originHash" : "efeb2135e2d324f150b1bfa71abd6f45b6d1feffc47dc2271a68b4c6942d5c33",
+  "originHash" : "ded6fb54244fce2dc4ac79ac4b6ac3a31a67b34340edcdc0b090c896788031ab",
   "pins" : [
     {
       "identity" : "highlighterswift",
@@ -31,10 +31,10 @@
     {
       "identity" : "swift-markdown-ui",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/gonzalezreal/swift-markdown-ui",
+      "location" : "https://github.com/georgeharker/swift-markdown-ui",
       "state" : {
-        "revision" : "5f613358148239d0292c0cef674a3c2314737f9e",
-        "version" : "2.4.1"
+        "branch" : "main",
+        "revision" : "25a2bd3d9383e50d5a3cb1f29b04509ce4e38008"
       }
     }
   ],
