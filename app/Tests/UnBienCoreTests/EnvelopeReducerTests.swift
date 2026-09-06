@@ -386,20 +386,23 @@ final class EnvelopeReducerTests: XCTestCase {
     func testLeafMoveLandsBranchNotice() throws {
         var reducer = EnvelopeReducer()
         reducer.applyEntries(Self.branchyLog(), leafId: "d2")
-        // Move to the other branch.
+        // Move to the other branch (c2). b1 is the branch point (children c1,
+        // d1); the notice lands BELOW it (right after b1), NOT at the tail.
         reducer.applyEntries([], leafId: "c2")
-        guard case let .notice(notice) = try XCTUnwrap(reducer.session.items.last)
-        else { return XCTFail("expected a trailing branch notice") }
-        XCTAssertEqual(notice.code, "branch")
-        XCTAssertTrue(notice.message.contains("…d2".suffix(6)) || notice.message.contains("c2"),
-                      "the notice names the branch leaf")
+        let items = reducer.session.items
+        let idx = items.firstIndex {
+            if case let .notice(n) = $0 { return n.code == "branch" } else { return false }
+        }
+        XCTAssertEqual(idx, 2, "branch notice sits directly below the branch point b1")
+        XCTAssertNotEqual(idx, items.count - 1, "not at the tail")
     }
 
-    /// Branch at the FIRST user message when only non-renderable setup entries
-    /// (model_change / custom) sit above it: the re-path renders zero message
-    /// rows — the notice is the transcript's entire content, which is exactly
-    /// what makes the void legible.
-    func testBranchAtFirstUserMessageRendersOnlyNotice() throws {
+    /// A backward leaf move to an ANCESTOR is a SAME-LINE move (reachability:
+    /// the new leaf is an ancestor of the old — no fork, child count 1), so it
+    /// is NOT a branch. Here the leaf moves back above the first user message:
+    /// the path renders zero message rows and NO branch notice fires. (A branch
+    /// only exists once a divergent child is added — see testLeafMoveLandsBranchNotice.)
+    func testBackwardMoveToAncestorIsNotABranch() throws {
         let setup: [JSONValue] = [
             .object(["type": .string("model_change"), "id": .string("578c174a"),
                      "parentId": .string("")]),
@@ -414,13 +417,13 @@ final class EnvelopeReducerTests: XCTestCase {
         reducer.applyEntries(setup + [a, reply], leafId: "df23de31")
         XCTAssertEqual(reducer.session.items.count, 2, "A + its answer render")
 
-        // Branch at A: the leaf moves to A's PARENT (the custom chain) —
-        // zero renderable rows above; the notice is the only content.
+        // Move the leaf BACK to A's parent (an ancestor of the old leaf) — a
+        // same-line backward move, not a branch (64a3e342 still has one child).
         reducer.applyEntries([], leafId: "64a3e342")
-        XCTAssertEqual(reducer.session.items.count, 1,
-                       "the void case: the branch notice is the only row")
-        guard case let .notice(notice) = try XCTUnwrap(reducer.session.items.first)
-        else { return XCTFail("expected the branch notice") }
-        XCTAssertEqual(notice.code, "branch")
+        XCTAssertEqual(reducer.session.items.count, 0,
+                       "backward move to an ancestor renders empty — not a branch")
+        XCTAssertFalse(reducer.session.items.contains {
+            if case let .notice(n) = $0 { return n.code == "branch" } else { return false }
+        }, "no branch notice on a same-line backward move")
     }
 }

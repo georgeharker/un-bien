@@ -110,7 +110,7 @@ public struct SessionState: Equatable, Sendable {
     private(set) var activeLeafId: String?
     /// A leaf move awaiting its branch marker (appended after the replay —
     /// see derivePath / renderPendingPathEntries).
-    private var pendingBranchNoticeLeaf: String?
+    private var pendingBranchNoticeAfter: String?  // branch point; notice inserts AFTER it
     /// A beacon that arrived MID-TURN (run 2026-09-18: "stream ended without
     /// finish" — the reset raced the in-flight bubble). The re-path is DEFERRED
     /// to the settle point (agent_settled / shutdown), preserving the replay
@@ -740,9 +740,7 @@ public struct SessionState: Equatable, Sendable {
             if parent.isEmpty { reachedRoot = true; break }
             cursor = parent
         }
-        // Truncated walk (missing parentId, not a root): ancestry not fully
-        // backfilled — keep the rendered path, defer (avoids vanish/reappear;
-        // activeLeafId left stale so the next page's fold re-derives).
+        // Truncated walk (missing parentId, not a root): ancestry not backfilled — defer, keep the rendered path (activeLeafId stays stale so the next fold re-derives).
         if !reachedRoot, pathOrder != nil { pendingRepathLeaf = leaf; return }
         activeLeafId = leaf
         let newOrder = Array(chain.reversed())
@@ -751,11 +749,13 @@ public struct SessionState: Equatable, Sendable {
         let oldOrder = pathOrder ?? []
         pathOrder = newOrder
         pathIds = Set(newOrder)
-        // Branch = an old path entry abandoned (subset false); ancestry here is complete (truncated walks returned above).
-        let isExtension = Set(oldOrder).isSubset(of: Set(newOrder))
         if !firstDerivation {
             resetTranscript()
-            if !isExtension { pendingBranchNoticeLeaf = leaf }
+            // Branch = leaf jumped to a DIVERGENT line (fork, >1 child): prior
+            // leaf not on new path AND new leaf not on old path (else same-line).
+            let priorLeaf = oldOrder.last
+            let sameLine = (priorLeaf.map(newOrder.contains) ?? false) || oldOrder.contains(leaf)
+            if !sameLine { pendingBranchNoticeAfter = Array(zip(oldOrder, newOrder).prefix { $0.0 == $0.1 }).last?.0 }
         }
         renderedPathCount = 0
     }
@@ -769,16 +769,15 @@ public struct SessionState: Equatable, Sendable {
             renderedPathCount += 1
             guard let entry = entriesById[id] else { continue }
             birthEntry(entry)
-        }
-        // The branch marker lands AFTER the replayed rows — at the branch
-        // point, where the tail vanished. Notices are not entries: a later
-        // re-path's reset clears them, and the fresh move appends its own.
-        if let leaf = pendingBranchNoticeLeaf {
-            pendingBranchNoticeLeaf = nil
-            appendNotice(
-                code: "branch",
-                message: "Branched at …\(String(leaf.suffix(6))) — the earlier "
-                    + "continuation is preserved on its own branch")
+            // Branch notice lands BELOW the branch point (the deepest common
+            // ancestor), not at the tail. Notices aren't entries: a re-path's
+            // reset clears them and the fresh move re-inserts.
+            if id == pendingBranchNoticeAfter {
+                pendingBranchNoticeAfter = nil
+                appendNotice(code: "branch",
+                             message: "Branched here — the earlier continuation "
+                                 + "is preserved on its own branch")
+            }
         }
     }
 
