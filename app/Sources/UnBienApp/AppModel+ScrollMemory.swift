@@ -109,6 +109,27 @@ extension AppModel {
         log.notice("scroll memory persisted (\(self.lastViewedScroll.count, privacy: .public) sessions, \(self.heightCache.count, privacy: .public) height-cached)")
     }
 
+    /// Persisted render/scroll cache SCHEMA version. BUMP this to wipe stale
+    /// persisted bounds + scroll memory on the next launch — the easy "clear
+    /// the cache" knob (design 01M1X1R2): rules out bad-cache content as a
+    /// cause of vanishing/mis-placed rows. An install with no stored version
+    /// (or a mismatched one) is wiped clean and stamped current.
+    static let renderCacheSchemaVersion = 1
+    static let renderCacheSchemaKey = "com.georgeharker.un-bien.render-cache-schema"
+
+    /// Wipe persisted scroll/height caches when the schema version changed or
+    /// is absent. MUST run before the init loads (lastViewedScroll + height
+    /// cache). Pure UserDefaults — safe to call before `self` is ready.
+    static func clearPersistedCachesIfSchemaChanged() {
+        let defaults = UserDefaults.standard
+        let stored = defaults.object(forKey: renderCacheSchemaKey) as? Int
+        guard stored != renderCacheSchemaVersion else { return }
+        defaults.removeObject(forKey: heightCacheKey)
+        defaults.removeObject(forKey: lastViewedScrollKey)
+        defaults.set(renderCacheSchemaVersion, forKey: renderCacheSchemaKey)
+        log.notice("render cache schema bump \(stored ?? -1, privacy: .public): cleared persisted bounds+scroll")
+    }
+
     /// Load the height cache at init (call once, from AppModel.init).
     func loadHeightCache() {
         guard let data = UserDefaults.standard.data(forKey: Self.heightCacheKey),

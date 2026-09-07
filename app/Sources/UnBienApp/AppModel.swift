@@ -331,6 +331,10 @@ public final class AppModel: ObservableObject {
     static let reconnectMaxDelay: Double = 30
 
     public init(mesh: MeshStore = MeshStore(), identityStore: OwnerIdentityStore? = nil) {
+        // Wipe stale persisted bounds/scroll if the cache schema version
+        // changed or is absent (design 01M1X1R2) — MUST run before the loads
+        // below. Bump renderCacheSchemaVersion to force a clean slate.
+        Self.clearPersistedCachesIfSchemaChanged()
         self.mesh = mesh
         let syncOn = UserDefaults.standard.object(forKey: Self.iCloudDefaultsKey) as? Bool ?? true
         self.syncsToICloud = syncOn
