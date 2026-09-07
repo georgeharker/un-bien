@@ -48,7 +48,7 @@ final class MarkdownEntityStore {
     func cached(_ key: String) -> [MarkdownEntity]? { cache[key] }
 
     func produce(_ key: String, text: String, style: MarkdownProseStyle) async -> [MarkdownEntity] {
-        if let hit = cache[key] { return hit }
+        if let hit = cache[key] { touch(key); return hit }
         RenderActivity.produceStarted += 1
         let t0 = DispatchTime.now().uptimeNanoseconds
         let made = await Task.detached(priority: .userInitiated) {
@@ -67,6 +67,17 @@ final class MarkdownEntityStore {
             order.removeFirst()
             cache[drop] = nil
         }
+    }
+
+    /// LRU touch: move an already-cached key to MRU so retention follows what
+    /// the reader is VIEWING (a re-materialised row on scroll-back), not just
+    /// production order. Called from the `.task` produce path (event, not a
+    /// view body); materialisation order = scroll direction, so the leading
+    /// edge lands MRU and evicts last (design 01M1Y1GK).
+    private func touch(_ key: String) {
+        guard let i = order.firstIndex(of: key) else { return }
+        order.remove(at: i)
+        order.append(key)
     }
 }
 

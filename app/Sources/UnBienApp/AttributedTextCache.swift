@@ -147,18 +147,74 @@ public struct DiffProducer: AttributedTextProducer {
 public final class AttributedTextCache: @unchecked Sendable {
     public static let shared = AttributedTextCache()
 
-    private let cache = NSCache<NSString, NSAttributedString>()
+    // Manual access-touched LRU (design 01M1Y1GK): NSCache's eviction is
+    // opaque/discretionary and a read gives no recency touch, so retention
+    // couldn't follow what the reader is VIEWING. A dict + recency array (oldest
+    // first, MRU last) is a real LRU touched on materialisation; a memory-
+    // pressure source restores the iOS safety net NSCache gave for free.
+    private var store: [String: NSAttributedString] = [:]
+    private var recency: [String] = []
+    private var limit = 400
     private var engines: [String: Highlighter] = [:]      // main-path pool (highlighted)
     private let lock = NSLock()
+    private let pressureSource = DispatchSource.makeMemoryPressureSource(
+        eventMask: [.warning, .critical], queue: .global(qos: .utility))
 
     /// Max cached blocks. Configurable (Settings); default 400. Trades memory
     /// for scroll smoothness on long sessions.
     public var cacheLimit: Int {
-        get { cache.countLimit }
-        set { cache.countLimit = max(0, newValue) }
+        get { lock.lock(); defer { lock.unlock() }; return limit }
+        set {
+            lock.lock(); defer { lock.unlock() }
+            limit = max(0, newValue)
+            while recency.count > limit { store[recency.removeFirst()] = nil }
+        }
     }
 
-    private init() { cache.countLimit = 400 }
+    private init() {
+        pressureSource.setEventHandler { [weak self] in self?.purgeUnderPressure() }
+        pressureSource.resume()
+    }
+
+    // MARK: - LRU store (all access lock-guarded)
+
+    /// Read WITHOUT touching recency — the render-path read (sync body / sync
+    /// highlight), so rendering never reorders the LRU.
+    private func peek(_ key: String) -> NSAttributedString? {
+        lock.lock(); defer { lock.unlock() }
+        return store[key]
+    }
+    /// Read + TOUCH to MRU — the async .task MATERIALISE path (event, not a view
+    /// body). Materialisation order = scroll direction, so the leading edge
+    /// lands MRU and evicts last (design 01M1Y1GK).
+    private func touchHit(_ key: String) -> NSAttributedString? {
+        lock.lock(); defer { lock.unlock() }
+        return getLocked(key, touch: true)
+    }
+    private func insert(_ key: String, _ value: NSAttributedString) {
+        lock.lock(); defer { lock.unlock() }
+        setLocked(key, value)
+    }
+    /// Caller MUST hold `lock` (used by the sync highlight path under its own
+    /// lock + by the wrappers above).
+    private func getLocked(_ key: String, touch: Bool) -> NSAttributedString? {
+        guard let v = store[key] else { return nil }
+        if touch, let i = recency.firstIndex(of: key) { recency.remove(at: i); recency.append(key) }
+        return v
+    }
+    private func setLocked(_ key: String, _ value: NSAttributedString) {
+        if store[key] == nil { recency.append(key) }
+        else if let i = recency.firstIndex(of: key) { recency.remove(at: i); recency.append(key) }
+        store[key] = value
+        while recency.count > limit { store[recency.removeFirst()] = nil }
+    }
+    /// Purge cached strings under memory pressure (keeps the JS engine pools) —
+    /// the safety net NSCache gave automatically (design 01M1Y1GK).
+    private func purgeUnderPressure() {
+        lock.lock(); defer { lock.unlock() }
+        store.removeAll(keepingCapacity: false)
+        recency.removeAll(keepingCapacity: false)
+    }
 
     /// `\u{1}`-joined key can't collide across fields (content can't contain it).
     public static func codeKey(style: String, fontName: String?, fontSize: CGFloat,
@@ -172,7 +228,7 @@ public final class AttributedTextCache: @unchecked Sendable {
     /// Cache-ONLY sync lookup — nil on miss, never evaluates, never blocks. The
     /// repeat-render hot path (a warm near-window row hits this synchronously).
     public func cached(_ producer: any AttributedTextProducer) -> AttributedString? {
-        cache.object(forKey: producer.cacheKey as NSString).map(AttributedString.init)
+        peek(producer.cacheKey).map(AttributedString.init)
     }
 
     /// Off-main produce-once: awaits a slot on the serial eval queue; a
@@ -181,19 +237,19 @@ public final class AttributedTextCache: @unchecked Sendable {
     /// AHEAD of display — no visible frame delay. Returns nil when cancelled or
     /// unproducible; the caller's plain fallback stands.
     public func attributed(_ producer: any AttributedTextProducer) async -> AttributedString? {
-        let key = producer.cacheKey   // String is Sendable; bridge to NSString at each use
-        if let hit = cache.object(forKey: key as NSString) { return AttributedString(hit) }
+        let key = producer.cacheKey
+        if let hit = touchHit(key) { return AttributedString(hit) }
         let ticket = EvalTicket()
         return await withTaskCancellationHandler {
             await withCheckedContinuation { (cont: CheckedContinuation<AttributedString?, Never>) in
                 evalQueue.async { [weak self] in
                     guard let self else { cont.resume(returning: nil); return }
                     if ticket.isCancelled { cont.resume(returning: nil); return }   // mutable queue: drop
-                    if let hit = self.cache.object(forKey: key as NSString) {
+                    if let hit = self.touchHit(key) {
                         cont.resume(returning: AttributedString(hit)); return
                     }
                     guard let made = producer.produce() else { cont.resume(returning: nil); return }
-                    self.cache.setObject(made, forKey: key as NSString)
+                    self.insert(key, made)
                     cont.resume(returning: AttributedString(made))
                 }
             }
@@ -210,12 +266,12 @@ public final class AttributedTextCache: @unchecked Sendable {
     public func highlighted(_ code: String, language: String?, style: String,
                             font: PlatformFont?) -> AttributedString? {
         let key = Self.codeKey(style: style, fontName: font?.fontName,
-                               fontSize: font?.pointSize ?? 0, language: language, code: code) as NSString
-        if let hit = cache.object(forKey: key) { return AttributedString(hit) }
+                               fontSize: font?.pointSize ?? 0, language: language, code: code)
+        if let hit = peek(key) { return AttributedString(hit) }
 
         lock.lock()
         defer { lock.unlock() }
-        if let hit = cache.object(forKey: key) { return AttributedString(hit) }  // double-check under lock
+        if let hit = getLocked(key, touch: false) { return AttributedString(hit) }  // double-check under lock
 
         let engineKey = "\(style)\u{1}\(font.map { "\($0.fontName):\($0.pointSize)" } ?? "system")"
         let engine: Highlighter
@@ -229,14 +285,15 @@ public final class AttributedTextCache: @unchecked Sendable {
             engine = instance
         }
         guard let result = engine.highlight(code, as: language) else { return nil }
-        cache.setObject(result, forKey: key)
+        setLocked(key, result)
         return AttributedString(result)
     }
 
     /// Drop all cached results (e.g. on a hard theme reset).
     public func clear() {
-        cache.removeAllObjects()
         lock.lock()
+        store.removeAll()
+        recency.removeAll()
         engines.removeAll()
         lock.unlock()
         evalQueue.async { [weak self] in
