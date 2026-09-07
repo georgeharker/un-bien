@@ -14,6 +14,7 @@ struct SettingsView: View {
     @State private var fontPreview = "AaBbCc 0O1lI {}[]() => Meslo \u{2713}"
     @AppStorage("renderCacheBlocks") private var cacheBlocks = 400
     @AppStorage("renderCacheImages") private var cacheImages = 200
+    @AppStorage("renderCacheMessages") private var cacheMessages = 400
     @AppStorage("hideLaunchChipUntilDaemonUp") private var hideChipUntilDaemonUp = false
 
     var body: some View {
@@ -277,6 +278,8 @@ struct SettingsView: View {
                 .onChange(of: cacheBlocks) { _, new in AttributedTextCache.shared.cacheLimit = new }
             Stepper("Image cache: \(cacheImages) images", value: $cacheImages, in: 20...1000, step: 20)
                 .onChange(of: cacheImages) { _, new in ImageCache.shared.cacheLimit = new }
+            Stepper("Markdown cache: \(cacheMessages) messages", value: $cacheMessages, in: 50...2000, step: 50)
+                .onChange(of: cacheMessages) { _, new in MarkdownEntityStore.shared.cap = new }
         } header: {
             Text("Performance")
         } footer: {

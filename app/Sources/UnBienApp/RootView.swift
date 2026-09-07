@@ -100,13 +100,18 @@ public struct UnBienSceneApp: App {
     #endif
 
     public init() {
-        // Apply saved render-cache bounds at launch (Settings persists them).
+        // RESTORE persisted render-cache bounds at launch. Live changes take
+        // effect immediately via the Settings Steppers' .onChange (this is only
+        // the cold-start restore path, not the sole apply).
         let defaults = UserDefaults.standard
         if let blocks = defaults.object(forKey: "renderCacheBlocks") as? Int {
             AttributedTextCache.shared.cacheLimit = blocks
         }
         if let images = defaults.object(forKey: "renderCacheImages") as? Int {
             ImageCache.shared.cacheLimit = images
+        }
+        if let messages = defaults.object(forKey: "renderCacheMessages") as? Int {
+            MarkdownEntityStore.shared.cap = messages
         }
     }
 

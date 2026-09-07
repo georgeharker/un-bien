@@ -10,7 +10,10 @@ final class MarkdownEntityStore {
 
     private var cache: [String: [MarkdownEntity]] = [:]
     private var order: [String] = []
-    private let cap = 400
+    /// Max cached MESSAGES (per-bubble entity lists). Configurable (Settings);
+    /// default 400 — the per-BUBBLE tier alongside AttributedTextCache.cacheLimit
+    /// (per-BLOCK). Lowering it trims immediately.
+    var cap = 400 { didSet { trimToCap() } }
 
     func cached(_ key: String) -> [MarkdownEntity]? { cache[key] }
 
@@ -21,11 +24,15 @@ final class MarkdownEntityStore {
         }.value
         cache[key] = made
         order.append(key)
-        if order.count > cap {
-            let drop = order.removeFirst()
+        trimToCap()
+        return made
+    }
+
+    private func trimToCap() {
+        while order.count > cap, let drop = order.first {
+            order.removeFirst()
             cache[drop] = nil
         }
-        return made
     }
 }
 
@@ -126,14 +133,17 @@ struct EntityStack: View {
                 .padding(.top, level <= 2 ? 8 : 4)
 
         case .code(let language, let source):
-            ScrollView(.horizontal, showsIndicators: false) {
-                AsyncAttributedText(producer: HighlightProducer(
-                    code: source, language: language, style: theme.codeHighlightStyle,
-                    font: typography.monoPlatformFont()))
-                    .font(typography.monoFont())
-                    .padding(12)
-            }
-            .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
+            // Wrap long lines instead of a horizontal ScrollView. A ScrollView
+            // nested in the transcript's outer vertical ScrollView is heavy to
+            // MINT per code block per band-entry (scroll infra + gesture wiring)
+            // and is a known scrollable-in-scrollable smell (design 01M127NC4).
+            AsyncAttributedText(producer: HighlightProducer(
+                code: source, language: language, style: theme.codeHighlightStyle,
+                font: typography.monoPlatformFont()))
+                .font(typography.monoFont())
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
 
         case .table(let model):
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
