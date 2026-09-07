@@ -156,7 +156,7 @@ struct HuskRow: View {
             // truth on any desync instead of inverting.
             isNear = on
         }
-        .onAppear { driver.registerFlipInbox(flipInbox, for: item.id, index: index) }
+        .onAppear { driver.registerFlipInbox(flipInbox, for: item.id) }
         .onDisappear { driver.unregisterFlipInbox(for: item.id) }
     }
 

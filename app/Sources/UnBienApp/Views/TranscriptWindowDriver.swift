@@ -44,12 +44,16 @@ final class TranscriptWindowDriver {
     /// driver's truth instead of inverting.
     private var flipInboxes: [String: PassthroughSubject<Bool, Never>] = [:]
 
-    /// A husk registers its own inbox by id (passing its index so the heal is
-    /// O(1)); the driver immediately hands it the CURRENT membership so an
-    /// init-vs-register gap can't leave it stale.
-    func registerFlipInbox(_ inbox: PassthroughSubject<Bool, Never>, for id: String, index: Int) {
+    /// A husk registers its own inbox by id; the driver hands it the CURRENT
+    /// membership so an init-vs-register gap (a flip sent before this husk
+    /// registered) can't leave it stale. The heal MUST read the driver's OWN
+    /// authoritative index for the id (orderIndex[id]) — NEVER an index the husk
+    /// passes: content can change between a husk's construction and its onAppear,
+    /// so a husk-supplied index may be stale and healing against it shows the
+    /// WRONG row's membership (the missing / mis-shown-content bug).
+    func registerFlipInbox(_ inbox: PassthroughSubject<Bool, Never>, for id: String) {
         flipInboxes[id] = inbox
-        inbox.send(near.contains(index))
+        if let idx = orderIndex[id] { inbox.send(near.contains(idx)) }
     }
     func unregisterFlipInbox(for id: String) { flipInboxes[id] = nil }
 
@@ -127,9 +131,22 @@ final class TranscriptWindowDriver {
                 }
             }
         }
+        let oldOrder = self.order
         self.order = order
         orderIndex.removeAll(keepingCapacity: true)
         for (i, id) in order.enumerated() { orderIndex[id] = i }
+        // Remap `near` from OLD -> NEW indices BY ID. A non-tail order change
+        // (backfill prepend / middle-insert / reorder) shifts every index, so an
+        // index-keyed near would point at the WRONG rows and the recompute's flip
+        // diff would send OFF to order[oldIndex] — now a DIFFERENT message —
+        // ghosting the wrong husks (earlier messages rendering out of order after
+        // new content). The anchor already survives (id-based); near needs the
+        // same remap. Tail-append is a no-op here (indices unchanged).
+        if !near.isEmpty {
+            near = Set(near.compactMap { old in
+                old < oldOrder.count ? orderIndex[oldOrder[old]] : nil
+            })
+        }
         // Prune flip inboxes for ids no longer present (re-keyed / removed /
         // reset rows) — DETERMINISTIC cleanup independent of onDisappear (which
         // SwiftUI fires unreliably). Bounds the dict to live rows; a fresh husk
