@@ -649,22 +649,6 @@ extension AppModel {
                 endWalk(key: key)
             }
         }
-        // Disconnected-fold ancestry backwalk (plan 01M1YYYVT): a non-walk fold
-        // (delta refetch / straggler) can leave an entry whose ancestry is
-        // incomplete — derivePath parks it and re-derives against the SAME store
-        // forever. When no walk is in flight, fetch the missing ancestry ONCE
-        // (guarded per gap leaf so an unfetchable gap can't loop — the trap the
-        // one-walk-at-a-time rule guards; a current walk that ended still-gapped
-        // is covered by activeWalks == nil, having already failed to get it).
-        if activeWalks[key] == nil,
-           let gapLeaf = envelopeReducers[key]?.session.needsAncestryBackfillLeaf,
-           let gapSession = sessions[key],
-           let gapConn = connections[relayID],
-           ancestryBackwalkAttempted.insert("\(key)\u{1}\(gapLeaf)").inserted {
-            RenderActivity.ancestryBackwalks += 1
-            log.notice("disconnected fold leaf=\(String(gapLeaf.suffix(8)), privacy: .public) — ancestry backwalk")
-            Task { await requestReconstruction(gapSession, connection: gapConn) }
-        }
     }
 
     /// Queue chip resolution on user message_end (design 01M158S7).

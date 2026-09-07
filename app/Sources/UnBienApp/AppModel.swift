@@ -113,9 +113,6 @@ public final class AppModel: ObservableObject {
     /// module, so a plain internal setter (private(set) is FILE-scoped and the
     /// Inbound extension is a different file).
     @Published public var backfilledSessions: Set<String> = []
-    /// Per-session-leaf guard so a disconnected fold fires at most ONE ancestry
-    /// backwalk per gap leaf (an unfetchable gap can't loop). Key = "key\u{1}leaf".
-    var ancestryBackwalkAttempted: Set<String> = []
     /// Ask-reconciliation windows per session (see AskSyncWindow): the
     /// robustness backstop that retires a stale prompt whose dismissal notify
     /// was dropped — reconciled at `session_sync_end` in AppModel+Inbound.
