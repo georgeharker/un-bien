@@ -165,7 +165,12 @@ final class TranscriptWindowDriver {
         }
         #endif
         bounds.record(id: id, height: height)
-        dirty = true
+        // NO dirty = true (design 01M1X1R2): a height MEASUREMENT must not
+        // trigger a membership recompute. recomputeIfNeeded re-derives the near
+        // set via the height-budget windowRangeAroundIndex walk, so letting a
+        // measure dirty it EVICTS visible rows when a member grows (a big bubble
+        // settling 32->10000 shrank the extent -> downstream rows vanished).
+        // The new height feeds the NEXT anchor/viewport/order recompute instead.
     }
 
     /// The binding readout named a ROW — center the near window on it.
@@ -230,6 +235,17 @@ final class TranscriptWindowDriver {
 
     func sync(order: [String]) {
         update(order: order)
+        recomputeIfNeeded()
+    }
+
+    /// Live-apply a window size (Settings sweep — design 01M127NC4 cheap
+    /// diagnostic): `pages` is the DETACH (retention) band; the attach band
+    /// tracks one page narrower to preserve the hysteresis gap. Floors at the
+    /// shipped 2/3 so the minimum is "what we have".
+    func applyWindowPages(_ pages: Double) {
+        detachPages = max(3, pages)
+        attachPages = max(2, detachPages - 1)
+        dirty = true
         recomputeIfNeeded()
     }
 

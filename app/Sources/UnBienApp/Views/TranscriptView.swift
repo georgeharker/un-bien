@@ -80,6 +80,9 @@ struct TranscriptView: View {
     /// the reference for the view's lifetime; husks read membership at init
     /// and receive flips row-targeted.
     @State var windowDriver = TranscriptWindowDriver()
+    /// Live window-size sweep (Settings — design 01M127NC4): DETACH pages; attach
+    /// tracks one page narrower. Default 3 = the shipped window ("min what we have").
+    @AppStorage("transcriptWindowPages") private var windowPages = 3
     // Per-tool-card UI state (expand + Diff/Content), held ABOVE the windowed
     // rows so it survives dematerialize/rematerialize. Plain @State (not
     // @StateObject) — CardUIState is non-observed storage; ToolCardView reads
@@ -470,6 +473,10 @@ struct TranscriptView: View {
             if let cached = model.seedHeights(for: session) {
                 windowDriver.seedHeights(cached)
             }
+            windowDriver.applyWindowPages(Double(windowPages))
+        }
+        .onChange(of: windowPages) { _, new in
+            windowDriver.applyWindowPages(Double(new))
         }
         .onDisappear {
             // View exit: the last lifecycle moment THIS view gets — capture +
