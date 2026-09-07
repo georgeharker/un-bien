@@ -174,6 +174,7 @@ struct TranscriptView: View {
     /// stall detection (extracted from the body chain: the chain's aggregate
     /// expression outgrew the type-checker).
     private func handleScrollGeometry(_ scrollY: Double) {
+        RenderActivity.scrollGeomCallbacks &+= 1   // per-frame scroll callback probe (event handler)
         #if DEBUG
         let now = DispatchTime.now().uptimeNanoseconds
         if let last = lastProbeNanos {
@@ -402,6 +403,7 @@ struct TranscriptView: View {
             // only fires while PINNED, and a pinned reader sits on the sentinel
             // (inserts land above it), so the readout is stable there.
             .onChange(of: scrollAnchor) { old, new in
+                RenderActivity.scrollAnchorCrossings &+= 1   // body-rebuild trigger probe (event handler)
                 handleBindingChange(old, new)
             }
             // Scroll phases have exactly two duties: cancel a pending

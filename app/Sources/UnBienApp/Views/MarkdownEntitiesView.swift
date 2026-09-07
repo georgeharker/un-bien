@@ -50,9 +50,11 @@ final class MarkdownEntityStore {
     func produce(_ key: String, text: String, style: MarkdownProseStyle) async -> [MarkdownEntity] {
         if let hit = cache[key] { return hit }
         RenderActivity.produceStarted += 1
+        let t0 = DispatchTime.now().uptimeNanoseconds
         let made = await Task.detached(priority: .userInitiated) {
             markdownEntities(text, style: style)
         }.value
+        RenderActivity.produceLastMicros = Int((DispatchTime.now().uptimeNanoseconds - t0) / 1000)
         cache[key] = made
         RenderActivity.produceFinished += 1
         order.append(key)

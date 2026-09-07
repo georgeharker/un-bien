@@ -9,7 +9,12 @@ import Foundation
 ///
 /// Not thread-safe by itself; drive it from a single actor/`@MainActor` owner.
 public struct SessionState: Equatable, Sendable {
-    public private(set) var items: [TranscriptItem] = []
+    public private(set) var items: [TranscriptItem] = [] {
+        didSet { contentGeneration &+= 1 }
+    }
+    /// O(1) content token (didSet on items) for the transcript stack's
+    /// Equatable skip; liveArrivals (visible-only) would miss backfill/re-key.
+    public private(set) var contentGeneration = 0
     /// Ids already appended. A re-applied replay/history item (same id) must not
     /// create a duplicate — SwiftUI `ForEach` requires unique ids, and a dupe
     /// gives "undefined results" (wrong/dropped/duplicated bubbles).
@@ -21,18 +26,12 @@ public struct SessionState: Equatable, Sendable {
     public private(set) var activeTurnID: String?
 
     /// VISIBLE-arrival version for transcript bottom-following (scroll
-    /// design): bumped ONLY when a reader-visible mutation happened — a row
-    /// was inserted (appendNotice, replay included), streaming text grew, a
-    /// tool card was opened/filled, or a bubble settled. NOT bumped for
-    /// invisible arrivals: thinking deltas while thinking is hidden
-    /// (`hideReasoning`), toolcall lifecycle events, toolResult `message_end`s
-    /// (no row — the card fills via its own frame), dedup no-op replays, and
-    /// idempotent card re-opens. "The turn is running" is not "something was
-    /// output": phantom bumps during a quiet thinking phase would pin a
-    /// bottom reader — each phantom follow re-binds the bottom sentinel
-    /// (the "…" lock). The anti-yank guarantee for
-    /// replayed history is the VIEW's gates (pin policy + restore-wait),
-    /// not this counter. Int-based: `.onChange(of:)` needs Equatable.
+    /// design): bumped ONLY on a reader-visible mutation (row inserted,
+    /// streaming text grew, tool card opened/filled, bubble settled). NOT for
+    /// invisible arrivals: hidden thinking deltas (`hideReasoning`), toolcall
+    /// lifecycle, toolResult `message_end`s (no row), dedup no-op replays,
+    /// idempotent card re-opens — a phantom bump in a quiet thinking phase
+    /// would pin a bottom reader (the "…" lock). Int-based: onChange needs Equatable.
     public private(set) var liveArrivals: Int = 0
 
     /// Thinking-visibility pref (app-threaded; see EnvelopeReducer

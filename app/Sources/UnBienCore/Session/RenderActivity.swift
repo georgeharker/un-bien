@@ -40,6 +40,23 @@ public enum RenderActivity {
     /// get_entries responses that are per-turn message_end DELTA REFETCHES
     /// (also !isCurrentWalk, but expected — one per turn end).
     public nonisolated(unsafe) static var getEntriesRefetch = 0
+    /// GAUGES (not monotonic; not in raw()) — last computeWindow duration (µs)
+    /// and the resulting near-set size, for comparing bisection vs linear walk.
+    public nonisolated(unsafe) static var lastWindowMicros = 0
+    public nonisolated(unsafe) static var nearCount = 0
+    /// Materialize: last MarkdownEntityStore.produce duration (µs) — gauge.
+    public nonisolated(unsafe) static var produceLastMicros = 0
+    /// Swift callback-surface probes (monotonic, in raw() — HUD delta per 0.5s
+    /// reveals fan-out). ALL incremented in EVENT handlers / store logic, NEVER
+    /// a view body (a body side-effect broke rendering, 2026-09-07): husk
+    /// flip-subscription deliveries (onReceive fan-out, ~N/crossing),
+    /// scrollAnchor CROSSINGS (the transcriptStack body-rebuild TRIGGER — one
+    /// per crossing, each fanning to N husk builds), scroll-geometry callbacks
+    /// (per frame), height-probe callbacks (per near-row height change).
+    public nonisolated(unsafe) static var huskFlipCallbacks = 0
+    public nonisolated(unsafe) static var scrollAnchorCrossings = 0
+    public nonisolated(unsafe) static var scrollGeomCallbacks = 0
+    public nonisolated(unsafe) static var heightProbeCallbacks = 0
 
     /// Raw counters in a fixed order; the HUD diffs successive reads to colour
     /// tokens that moved. Order: produceStarted, produceFinished, window,
@@ -48,6 +65,7 @@ public enum RenderActivity {
         [produceStarted, produceFinished, windowRecomputed, transcriptReset,
          pathExtended, getEntriesStarted, getEntriesRetired, getEntriesCached,
          boundsInvalidated, boundsMeasured, boundsSet, getEntriesStraggler,
-         getEntriesRefetch]
+         getEntriesRefetch,
+         huskFlipCallbacks, scrollAnchorCrossings, scrollGeomCallbacks, heightProbeCallbacks]
     }
 }

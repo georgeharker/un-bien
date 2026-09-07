@@ -25,21 +25,33 @@ private func dbgDriverLog(_ message: String) {}
 ///
 /// Deliberately NOT @Published/@Observable: heights and window are read
 /// imperatively (each husk's @State is the RENDER source; this is the math
-/// source). The only reactive surface is `flips` — publishing a whole near-set
-/// would re-evaluate every husk per step, the churn this exists to escape.
+/// source). The only reactive surface is per-row flip inboxes — each husk owns
+/// one and receives ONLY its own membership changes, so a scroll step wakes
+/// O(boundary) husks, never all N (broadcasting a whole near-set would
+/// re-evaluate every husk per step, the churn this exists to escape).
 @MainActor
 final class TranscriptWindowDriver {
     /// Nonisolated so a `@State` default-value expression in the nonisolated
     /// `TranscriptView` struct can construct it (Swift 6 isolation; all stored
     /// properties have defaults).
     nonisolated init() {}
-    /// Membership changes from the last recompute, as SETS — `on` (attach
-    /// content) and `off` (husk). SET semantics, never toggle: if the driver's
-    /// window ever desyncs from a husk's actual state (e.g. the viewport
-    /// invalidation path resets the near set), a set heals to the driver's
-    /// truth instead of INVERTING — the toggle version could mass-off on
-    /// invalidation and blank the screen.
-    let flips = PassthroughSubject<(on: Set<Int>, off: Set<Int>), Never>()
+    /// Per-row flip delivery: each husk owns a PassthroughSubject (its @State
+    /// inbox) and REGISTERS it here by id (from onAppear — never a body side
+    /// effect). On a crossing the driver delivers true/false ONLY to the ~2
+    /// rows that actually changed, instead of broadcasting to all N husks (the
+    /// O(N) fan-out — ~1400 wakeups/crossing measured, 2026-09-07). Delivery is
+    /// an explicit membership VALUE (not a toggle), so a desync heals to the
+    /// driver's truth instead of inverting.
+    private var flipInboxes: [String: PassthroughSubject<Bool, Never>] = [:]
+
+    /// A husk registers its own inbox by id (passing its index so the heal is
+    /// O(1)); the driver immediately hands it the CURRENT membership so an
+    /// init-vs-register gap can't leave it stale.
+    func registerFlipInbox(_ inbox: PassthroughSubject<Bool, Never>, for id: String, index: Int) {
+        flipInboxes[id] = inbox
+        inbox.send(near.contains(index))
+    }
+    func unregisterFlipInbox(for id: String) { flipInboxes[id] = nil }
 
     /// Pages of attached context above + below the viewport. GEOMETRIC, not
     /// row-count: heights run from 2pt notices to screen-filling dumps, so an
@@ -70,6 +82,8 @@ final class TranscriptWindowDriver {
 
     private var bounds = RowBoundsStore()
     private var order: [String] = []
+    /// id -> display index for O(1) anchor lookup; rebuilt in update(order:).
+    private var orderIndex: [String: Int] = [:]
     private var near: Set<Int> = []
     private var scrollY: Double?
     private var viewportHeight: Double?
@@ -114,6 +128,16 @@ final class TranscriptWindowDriver {
             }
         }
         self.order = order
+        orderIndex.removeAll(keepingCapacity: true)
+        for (i, id) in order.enumerated() { orderIndex[id] = i }
+        // Prune flip inboxes for ids no longer present (re-keyed / removed /
+        // reset rows) — DETERMINISTIC cleanup independent of onDisappear (which
+        // SwiftUI fires unreliably). Bounds the dict to live rows; a fresh husk
+        // re-registers on appear. ALL order changes route here (sync -> update).
+        if !flipInboxes.isEmpty {
+            let live = Set(order)
+            flipInboxes = flipInboxes.filter { live.contains($0.key) }
+        }
         dirty = true
     }
 
@@ -207,7 +231,7 @@ final class TranscriptWindowDriver {
         // The ANCHOR is the rendered-state truth for the bottom-most visible
         // row (that is the binding readout's literal semantic) — prefer it;
         // arithmetic is the pre-anchor fallback.
-        if case .row(let id) = anchor, let i = order.firstIndex(of: id) { return i }
+        if case .row(let id) = anchor, let i = orderIndex[id] { return i }
         if case .tail = anchor, let last = order.indices.last { return last }
         guard let scrollY, let viewportHeight else { return order.indices.last }
         return bounds.bottomVisibleIndex(order: order, scrollY: scrollY,
@@ -271,9 +295,7 @@ final class TranscriptWindowDriver {
             // mapping here is exactly the local↔global confusion.
             return
         }
-        #if DEBUG
-        let t0 = DispatchTime.now().uptimeNanoseconds
-        #endif
+        let t0 = DispatchTime.now().uptimeNanoseconds   // always-on: HUD compare gauge
         dirty = false
         lastComputeScrollY = scrollY
         RenderActivity.windowRecomputed += 1
@@ -282,9 +304,12 @@ final class TranscriptWindowDriver {
         let turnedOn = newNear.subtracting(near)
         let turnedOff = near.subtracting(newNear)
         near = newNear
-        if !turnedOn.isEmpty || !turnedOff.isEmpty {
-            flips.send((on: turnedOn, off: turnedOff))
-        }
+        RenderActivity.lastWindowMicros = Int((DispatchTime.now().uptimeNanoseconds - t0) / 1000)
+        RenderActivity.nearCount = newNear.count
+        // Deliver ONLY to the rows that changed (index -> id via the current
+        // order) — not a broadcast to all N husks.
+        for i in turnedOn where i < order.count { flipInboxes[order[i]]?.send(true) }
+        for i in turnedOff where i < order.count { flipInboxes[order[i]]?.send(false) }
         #if DEBUG
         let dt = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000
         if dt > 3 {
@@ -307,7 +332,7 @@ final class TranscriptWindowDriver {
         let center: Int
         switch anchor {
         case .row(let id):
-            guard let c = order.firstIndex(of: id) else {
+            guard let c = orderIndex[id] else {
                 // Anchored row vanished (compaction/filter) — KEEP the last
                 // window rather than silently falling back to the global
                 // mapping; the readout names a valid row on its next change.

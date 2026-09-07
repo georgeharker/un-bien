@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import UnBienCore
 
 /// One windowed-layout row (design: transcript row-geometry): the HUSK —
@@ -32,6 +33,10 @@ struct HuskRow: View {
 
     @State private var isNear: Bool
     @State private var measuredHeight: Double?
+    /// This husk's OWN flip inbox (stable @State instance) — registered with
+    /// the driver by id in onAppear so it receives ONLY its own membership
+    /// changes, not the O(N) broadcast.
+    @State private var flipInbox = PassthroughSubject<Bool, Never>()
 
     init(item: TranscriptItem, index: Int, driver: TranscriptWindowDriver,
          themeID: ThemeID, theme: AppTheme, typography: Typography,
@@ -145,13 +150,14 @@ struct HuskRow: View {
                                 in: RoundedRectangle(cornerRadius: 10))
             }
         }
-        .onReceive(driver.flips) { flip in
-            // SET semantics (never toggle): heals to the driver's truth on any
-            // desync instead of inverting (the toggle version could mass-off
-            // on viewport invalidation and blank the screen).
-            if flip.on.contains(index) { isNear = true }
-            else if flip.off.contains(index) { isNear = false }
+        .onReceive(flipInbox) { on in
+            RenderActivity.huskFlipCallbacks &+= 1   // TARGETED delivery (event handler, not body)
+            // Explicit membership value (not a toggle): heals to the driver's
+            // truth on any desync instead of inverting.
+            isNear = on
         }
+        .onAppear { driver.registerFlipInbox(flipInbox, for: item.id, index: index) }
+        .onDisappear { driver.unregisterFlipInbox(for: item.id) }
     }
 
     /// Measure-on-layout (the existing probe pattern — no availability risk):
@@ -168,6 +174,7 @@ struct HuskRow: View {
     }
 
     private func record(_ height: Double) {
+        RenderActivity.heightProbeCallbacks &+= 1
         measuredHeight = height
         driver.record(id: item.id, height: height)
     }

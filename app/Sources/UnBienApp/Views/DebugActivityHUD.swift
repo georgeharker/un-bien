@@ -37,6 +37,7 @@ struct DebugActivityHUD: View {
             Text("\u{21BB} window   \u{2298} reset   + extend")
             Text("\u{25A6} bounds-gen   \u{2195} measure/set")
             Text("\u{29D6} in-flight \u{25B6} started \u{2713} done \u{2302} cache")
+            Text("cb flip=fan-out cross=anchor-crossings scr=scroll hp=height-probe")
             Text("tap to close").foregroundStyle(.gray)
         }
         .foregroundStyle(.white)
@@ -55,13 +56,14 @@ struct DebugActivityHUD: View {
         // 8 boundsInvalidated 9 boundsMeasured 10 boundsSet
         // 11 getEntriesStraggler 12 getEntriesRefetch
         rows = [
-            ("\u{2699} \u{29D6}\(raw[0] - raw[1]) \u{25B6}\(num(0)) \u{2713}\(num(1))", moved(0, 1)),
+            ("\u{2699} \u{29D6}\(raw[0] - raw[1]) \u{25B6}\(num(0)) \u{2713}\(num(1)) \(RenderActivity.produceLastMicros)\u{00B5}s", moved(0, 1)),
             ("\u{2315} \u{29D6}\(raw[5] - raw[6]) \u{25B6}\(num(5)) \u{2713}\(num(6)) \u{2302}\(num(7)) S\(num(11)) R\(num(12))", moved(5, 6, 7, 11, 12)),
-            ("\u{21BB} \(num(2))", moved(2)),
+            ("\u{21BB} \(num(2)) \(RenderActivity.lastWindowMicros)\u{00B5}s n\(RenderActivity.nearCount)", moved(2)),
             ("\u{2298} \(num(3)) \(RenderActivity.lastResetReason)", moved(3)),
             ("+ \(num(4))", moved(4)),
             ("\u{25A6} \(num(8))", moved(8)),
-            ("\u{2195} \u{25B6}\(num(9)) \u{2713}\(num(10))", moved(9, 10))
+            ("\u{2195} \u{25B6}\(num(9)) \u{2713}\(num(10))", moved(9, 10)),
+            ("cb flip\(num(13)) cross\(num(14)) scr\(num(15)) hp\(num(16))", moved(13, 14, 15, 16))
         ]
         prev = raw
     }

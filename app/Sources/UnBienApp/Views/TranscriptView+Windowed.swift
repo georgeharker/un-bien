@@ -18,38 +18,22 @@ extension TranscriptView {
     /// itself the scroll-target layout so the binding can address its
     /// children (rows + sentinel) by id.
     var transcriptStack: some View {
-        let ids = items.map(\.id)
-        // Fork points (>1 child) for the branch-glyph annotation — computed
-        // ONCE per body, not per row.
-        let branchPoints = model.transcripts[session.id]?.branchPointIds ?? []
-        // Body-time sync (idempotent, gated): inserted/re-keyed husks read
-        // correct initial membership BEFORE the ForEach builds them.
-        let _ = windowDriver.sync(order: ids)
-        return VStack(alignment: .leading, spacing: 12) {
-            ForEach(Array(items.enumerated()), id: \.element.id) { pair in
-                HuskRow(item: pair.element, index: pair.offset, driver: windowDriver,
-                        themeID: model.themeID, theme: theme, typography: typography,
-                        expandRich: model.expandRichToolResults,
-                        hideInputRich: model.hideInputWhenRich,
-                        onFork: model.isDemo(session) ? nil : { entryID in
-                            Task { await model.forkFromEntry(session, entryID: entryID) }
-                        },
-                        onBranch: model.isDemo(session) ? nil : { entryID, prefill in
-                            Task { await model.branchFromEntry(session, entryID: entryID,
-                                                               prefill: prefill) }
-                        },
-                        branchPointIds: branchPoints)
+        TranscriptStackView(
+            items: items,
+            contentGeneration: model.transcripts[session.id]?.contentGeneration ?? 0,
+            branchPoints: model.transcripts[session.id]?.branchPointIds ?? [],
+            driver: windowDriver,
+            themeID: model.themeID, theme: theme, typography: typography,
+            expandRich: model.expandRichToolResults,
+            hideInputRich: model.hideInputWhenRich,
+            isDemo: model.isDemo(session),
+            sentinelBusy: model.activeTurnID(for: session) != nil && !model.hasEnded(session),
+            onFork: { entryID in Task { await model.forkFromEntry(session, entryID: entryID) } },
+            onBranch: { entryID, prefill in
+                Task { await model.branchFromEntry(session, entryID: entryID, prefill: prefill) }
             }
-            bottomSentinel
-        }
-        .padding()
-        // Cap line length on wide windows; centered. No-op on phones.
-        .frame(maxWidth: 1100, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .center)
-        // Register rows + sentinel as scroll targets so the scrollPosition
-        // binding can address them by id (design: scroll-position pin;
-        // prototype-verified).
-        .scrollTargetLayout()
+        )
+        .equatable()
     }
 
     /// Viewport height for the window math + the resize reclaim.
@@ -65,23 +49,6 @@ extension TranscriptView {
                     windowDriver.update(viewportHeight: h)
                 }
         }
-    }
-
-    /// The bottom sentinel cell: the busy "…" box while a turn runs, an
-    /// invisible 2pt cell when idle. Its id is the scrollPosition binding's
-    /// bottom target (arm / follow / re-trigger all bind HERE, and the
-    /// two-way readout reports it when the user settles at the bottom). No
-    /// probe, no sensor duty — the scroll-view geometry source owns the
-    /// window's position input (main file).
-    var bottomSentinel: some View {
-        Group {
-            if model.activeTurnID(for: session) != nil, !model.hasEnded(session) {
-                BusyIndicatorBox(theme: theme)
-            } else {
-                Color.clear.frame(height: 2)
-            }
-        }
-        .id(Self.bottomSentinelID)
     }
 
     /// The CURRENT bottom-most visible stable anchor (driver arithmetic over
@@ -104,4 +71,66 @@ extension TranscriptView {
         return windowDriver.heightSnapshot().filter { stableIDs.contains($0.key) }
     }
 
+}
+
+/// The transcript stack extracted as an EQUATABLE view so a scrollAnchor-only
+/// re-eval of TranscriptView.body diff-skips it (no ForEach, no N HuskRow
+/// reconstruction). == gates on the content generation + display inputs;
+/// scrollAnchor is NOT an input, and the fork/branch closures are excluded
+/// (recreated only on a real rebuild — they capture the stable model/session).
+struct TranscriptStackView: View, Equatable {
+    let items: [TranscriptItem]
+    let contentGeneration: Int
+    let branchPoints: Set<String>
+    let driver: TranscriptWindowDriver
+    let themeID: ThemeID
+    let theme: AppTheme
+    let typography: Typography
+    let expandRich: Bool
+    let hideInputRich: Bool
+    let isDemo: Bool
+    let sentinelBusy: Bool
+    let onFork: (String) -> Void
+    let onBranch: (String, String?) -> Void
+
+    nonisolated static func == (l: TranscriptStackView, r: TranscriptStackView) -> Bool {
+        l.contentGeneration == r.contentGeneration
+            && l.themeID == r.themeID
+            && l.typography == r.typography
+            && l.expandRich == r.expandRich
+            && l.hideInputRich == r.hideInputRich
+            && l.isDemo == r.isDemo
+            && l.sentinelBusy == r.sentinelBusy
+            && l.branchPoints == r.branchPoints
+    }
+
+    var body: some View {
+        // Sync runs on a REAL rebuild only (a skipped scroll never reaches here,
+        // and order is unchanged on a scroll anyway → update(order:) no-ops).
+        // Inserted/re-keyed husks get correct membership BEFORE the ForEach.
+        let _ = driver.sync(order: items.map(\.id))
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { pair in
+                HuskRow(item: pair.element, index: pair.offset, driver: driver,
+                        themeID: themeID, theme: theme, typography: typography,
+                        expandRich: expandRich, hideInputRich: hideInputRich,
+                        onFork: isDemo ? nil : onFork,
+                        onBranch: isDemo ? nil : onBranch,
+                        branchPointIds: branchPoints)
+            }
+            bottomSentinel
+        }
+        .padding()
+        .frame(maxWidth: 1100, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .scrollTargetLayout()
+    }
+
+    private var bottomSentinel: some View {
+        Group {
+            if sentinelBusy { BusyIndicatorBox(theme: theme) }
+            else { Color.clear.frame(height: 2) }
+        }
+        .id(TranscriptView.bottomSentinelID)
+    }
 }
