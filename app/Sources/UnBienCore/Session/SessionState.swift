@@ -171,6 +171,7 @@ public struct SessionState: Equatable, Sendable {
     /// sessionStartedAt (session-level), liveArrivals (view counter),
     /// activeTurnID (cancel targeting).
     public mutating func resetTranscript() {
+        RenderActivity.transcriptReset += 1
         items.removeAll()
         appendedIDs.removeAll()
         rowIndex.removeAll()
@@ -750,11 +751,24 @@ public struct SessionState: Equatable, Sendable {
         pathOrder = newOrder
         pathIds = Set(newOrder)
         if !firstDerivation {
-            resetTranscript()
-            // Branch = leaf jumped to a DIVERGENT line (fork, >1 child): prior
-            // leaf not on new path AND new leaf not on old path (else same-line).
+            // SAME-LINE GROWTH — old path is a CONTIGUOUS sub-run of new (rootward
+            // front prepended, forward tail appended, or both): prepend the new
+            // front rows (by id), the tail appends, shared rows stay. Only a
+            // truncation or a genuine DIVERGENCE resets. Design 01M1X582.
+            if let frontCount = contiguousStart(of: oldOrder, in: newOrder) {
+                if frontCount > 0 {
+                    prependPathEntries(prefixCount: frontCount, newOrder: newOrder)
+                }
+                renderedPathCount = frontCount + oldOrder.count
+                return
+            }
+            // Not same-line growth: TRUNCATION (new is a sub-run of old) or a
+            // DIVERGENT branch. Record which for the debug HUD; both reset.
             let priorLeaf = oldOrder.last
             let sameLine = (priorLeaf.map(newOrder.contains) ?? false) || oldOrder.contains(leaf)
+            RenderActivity.lastResetReason = (contiguousStart(of: newOrder, in: oldOrder) != nil)
+                ? "trunc" : (sameLine ? "shape" : "diverge")
+            resetTranscript()
             if !sameLine { pendingBranchNoticeAfter = Array(zip(oldOrder, newOrder).prefix { $0.0 == $0.1 }).last?.0 }
         }
         renderedPathCount = 0
@@ -778,6 +792,56 @@ public struct SessionState: Equatable, Sendable {
                              message: "Branched here — the earlier continuation "
                                  + "is preserved on its own branch")
             }
+        }
+    }
+
+    /// The start index where `sub` occurs as a CONTIGUOUS run in `seq`, or nil.
+    /// Paths are ancestor chains with unique ids, so this is O(seq): find the
+    /// first element, verify the run. Detects SAME-LINE growth — the old path
+    /// is a sub-run of the new (rootward front, forward tail, or both).
+    private func contiguousStart(of sub: [String], in seq: [String]) -> Int? {
+        guard let first = sub.first, sub.count <= seq.count else { return nil }
+        var from = 0
+        while let idx = seq[from...].firstIndex(of: first) {
+            if idx + sub.count <= seq.count, Array(seq[idx..<idx + sub.count]) == sub { return idx }
+            from = idx + 1
+        }
+        return nil
+    }
+
+    /// Birth the newly-loaded ancestry entries (the new path PREFIX) and move
+    /// their rows to the FRONT, keeping the already-rendered tail intact. Caller
+    /// guarantees a QUIET transcript (liveTailStartIndex() == items.count) so
+    /// births append at the end and move as one contiguous block, and sets
+    /// renderedPathCount to the full count. Design 01M1X582.
+    private mutating func prependPathEntries(prefixCount: Int, newOrder: [String]) {
+        guard prefixCount > 0 else { return }
+        RenderActivity.pathExtended += 1
+        // Birth the prefix entries (they insert before the live tail, wherever
+        // that is), then move exactly the newly-birthed rows to the FRONT by id
+        // — the rootward ancestry is oldest, so it belongs before everything,
+        // including any pending tail rows. Robust to a non-quiet transcript.
+        let beforeIDs = appendedIDs
+        for id in newOrder[0..<prefixCount] {
+            guard let entry = entriesById[id] else { continue }
+            birthEntry(entry)
+        }
+        let newIDs = appendedIDs.subtracting(beforeIDs)
+        guard !newIDs.isEmpty else { return }
+        let prefixRows = items.filter { newIDs.contains($0.id) }   // preserves path order
+        items.removeAll { newIDs.contains($0.id) }
+        items.insert(contentsOf: prefixRows, at: 0)
+        rebuildRowIndexes()
+    }
+
+    /// Recompute rowIndex + toolIndex from items after a positional move
+    /// (prepend). O(n); once per rootward-extension fold, not per row.
+    private mutating func rebuildRowIndexes() {
+        rowIndex.removeAll(keepingCapacity: true)
+        toolIndex.removeAll(keepingCapacity: true)
+        for (idx, item) in items.enumerated() {
+            rowIndex[item.id] = idx
+            if case let .tool(card) = item { toolIndex[card.toolCallID] = idx }
         }
     }
 
@@ -905,70 +969,6 @@ public struct SessionState: Equatable, Sendable {
         default:
             return nil
         }
-    }
-
-    /// A stable, message-INTRINSIC identity derived from the pi message's own
-    /// fields — identical on the live `message_end` and on a `session_sync`
-    /// replay of the same message, so re-sync dedups instead of duplicating
-    /// (pi messages carry no id; see design 01M15FMQ). Prefer the provider
-    /// `responseId` when present; otherwise a deterministic hash of
-    /// role+timestamp+model+content (timestamp disambiguates same-content
-    /// messages; ts is non-unique, but content makes collisions negligible).
-    static func identify(_ message: JSONValue?) -> String {
-        if let rid = message?["responseId"]?.stringValue, !rid.isEmpty { return "r\(rid)" }
-        let role = message?["role"]?.stringValue ?? "?"
-        let ts = message?["timestamp"]?.intValue ?? 0
-        let model = message?["model"]?.stringValue ?? ""
-        let sig = contentSignature(message?["content"])
-        return "m\(stableHash("\(role)|\(ts)|\(model)|\(sig)"))"
-    }
-
-    /// Canonical, order-preserving signature of a message `content` (array or a
-    /// bare user string). Includes tool-call ids so tool-only messages don't
-    /// collide on empty text. Must be deterministic across app launches, so it
-    /// avoids Swift's per-process `Hasher`.
-    static func contentSignature(_ content: JSONValue?) -> String {
-        guard let blocks = content?.arrayValue else { return content?.stringValue ?? "" }
-        return blocks.map { block in
-            switch block["type"]?.stringValue ?? "" {
-            case "text": return "t:" + (block["text"]?.stringValue ?? "")
-            case "thinking": return "k:" + (block["thinking"]?.stringValue ?? "")
-            case "toolCall": return "c:" + (block["id"]?.stringValue ?? "") + ":" + (block["name"]?.stringValue ?? "")
-            case "image": return "i:" + (block["mimeType"]?.stringValue ?? "")
-            case let other: return other
-            }
-        }.joined(separator: "\n")
-    }
-
-    /// Deterministic FNV-1a over UTF-8, base-36 — stable across processes
-    /// (unlike `Hasher`), so `identify` matches on a relaunched app's re-sync.
-    static func stableHash(_ s: String) -> String {
-        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-        for byte in s.utf8 {
-            hash ^= UInt64(byte)
-            hash = hash &* 0x0000_0100_0000_01b3
-        }
-        return String(hash, radix: 36)
-    }
-
-    /// Image blocks (`{type:"image", data, mimeType}`) from a message `content`
-    /// array — mirrors the fork's `_imagesFromContent`.
-    static func imagesFromContent(_ content: JSONValue?) -> [WireImage] {
-        guard let blocks = content?.arrayValue else { return [] }
-        return blocks.compactMap { block in
-            guard block["type"]?.stringValue == "image",
-                  let data = block["data"]?.stringValue,
-                  let mime = block["mimeType"]?.stringValue else { return nil }
-            return WireImage(data: data, mime: mime)
-        }
-    }
-
-    /// Images from a `tool_execution_end` result — the live result is a wrapper
-    /// `{content:[...], details}`; unwrap `content` (mirrors `_imagesFromToolResult`).
-    static func imagesFromToolResult(_ value: JSONValue?) -> [WireImage] {
-        if value?.arrayValue != nil { return imagesFromContent(value) }
-        if let content = value?["content"] { return imagesFromContent(content) }
-        return []
     }
 
 }
