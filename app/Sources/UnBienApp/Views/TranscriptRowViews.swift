@@ -87,28 +87,9 @@ struct TranscriptRow: View, Equatable {
                 if bubble.streaming {
                 // While streaming, render live MarkdownUI (text grows per token).
                 BudgetedContent(text: bubble.text, budget: markdownBudget) { budgeted in
-                    Markdown(budgeted)
-                    .markdownCodeSyntaxHighlighter(.highlighter(
-                        style: theme.codeHighlightStyle,
-                        font: typography.monoPlatformFont()))
-                    .markdownTextStyle {
-                        ForegroundColor(theme.text)
-                        FontSize(typography.bodySize)
-                        if let body = typography.bodyFontName, !body.isEmpty {
-                            FontFamily(.custom(body))
-                        }
-                    }
-                    .markdownBlockStyle(\.codeBlock) { configuration in
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            configuration.label
-                                .fixedSize(horizontal: false, vertical: true)
-                                .font(typography.monoFont())
-                                .padding(12)
-                        }
-                        .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
-                        .markdownMargin(top: 8, bottom: 8)
-                    }
-                    .textSelection(.enabled)
+                    // Shared with the settled fallback so streaming → settle has
+                    // no code-width height jump (design 01M127NC4 warm-at-settle).
+                    styledMarkdown(budgeted, theme: theme, typography: typography)
                 }
                 } else {
                     // Settled: render off-main-produced entities (prose as cached

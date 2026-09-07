@@ -1,6 +1,35 @@
 import SwiftUI
 import MarkdownUI
 
+/// The themed live-MarkdownUI render, SHARED by the streaming assistant bubble
+/// and the MarkdownEntitiesView cache-MISS fallback. Code blocks WRAP (matching
+/// the entity path) so a settling bubble goes streaming → fallback → EntityStack
+/// with no plain-text or code-width height flash (design 01M127NC4 warm-at-settle).
+@MainActor @ViewBuilder
+func styledMarkdown(_ text: String, theme: AppTheme, typography: Typography) -> some View {
+    Markdown(text)
+        .markdownCodeSyntaxHighlighter(.highlighter(
+            style: theme.codeHighlightStyle,
+            font: typography.monoPlatformFont()))
+        .markdownTextStyle {
+            ForegroundColor(theme.text)
+            FontSize(typography.bodySize)
+            if let body = typography.bodyFontName, !body.isEmpty {
+                FontFamily(.custom(body))
+            }
+        }
+        .markdownBlockStyle(\.codeBlock) { configuration in
+            configuration.label
+                .fixedSize(horizontal: false, vertical: true)
+                .font(typography.monoFont())
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
+                .markdownMargin(top: 8, bottom: 8)
+        }
+        .textSelection(.enabled)
+}
+
 /// Off-main producer + cache for `[MarkdownEntity]`, keyed per settled message.
 /// Parsing + prose styling run on a background task; the result is memoized so
 /// a husk re-materialization is a synchronous cache hit (no re-parse).
@@ -93,7 +122,9 @@ struct MarkdownEntitiesView: View {
             if let resolved = entities ?? MarkdownEntityStore.shared.cached(key) {
                 EntityStack(entities: resolved, theme: theme, typography: typography)
             } else {
-                Text(text).foregroundStyle(theme.text)
+                // Formatted fallback (not plain Text) so the settle transition
+                // streaming → here → EntityStack has no height flash (01M127NC4).
+                styledMarkdown(text, theme: theme, typography: typography)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
