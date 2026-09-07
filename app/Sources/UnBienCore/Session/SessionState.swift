@@ -725,10 +725,9 @@ public struct SessionState: Equatable, Sendable {
         // state the replay machinery exists to protect; resetting under it
         // fragments the bubble and truncates streamed text). Park the beacon;
         // the settle point applies it.
-        if activeTurnID != nil || openAssistantIndex != nil || openReasoningIndex != nil {
-            pendingRepathLeaf = leaf
-            activeLeafId = leaf
-            return
+        // First derivation (pathOrder==nil) births additively (no reset) -> show history LIVE even mid-turn; only an existing render's re-path waits (01M1FTV2).
+        if pathOrder != nil, activeTurnID != nil || openAssistantIndex != nil || openReasoningIndex != nil {
+            pendingRepathLeaf = leaf; activeLeafId = leaf; return
         }
         var chain: [String] = []
         var seen = Set<String>()
