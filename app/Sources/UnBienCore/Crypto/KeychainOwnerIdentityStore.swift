@@ -12,9 +12,13 @@ import Security
 /// the data-protection keychain when the entitlement is present so existing
 /// installs stop prompting.
 ///
-/// iCloud Keychain sync is an option (`syncsToICloud`): when on, a second
-/// `kSecAttrSynchronizable` copy is stored so the Owner-key follows the user's
-/// Apple ID. Value is the 64-byte `pubkey || seed` blob (``OwnerIdentityBlob``).
+/// PER-DEVICE ACCOUNT (design 01M1VS0X): the `account` is scoped per device
+/// (`"owner." + <device id>`) so a re-key on one device can't overwrite another
+/// device's identity through the shared, iCloud-synced slot. `legacyAccount`
+/// (the old shared `"owner"`) is migrated INTO the per-device slot on first
+/// load — the shared item is left in place so other devices migrate from it
+/// independently. With per-device accounts iCloud sync can stay on (slots don't
+/// collide). Value is the 64-byte `pubkey || seed` blob (``OwnerIdentityBlob``).
 public final class KeychainOwnerIdentityStore: OwnerIdentityStore, @unchecked Sendable {
     public enum KeychainError: Error, Equatable {
         case unexpectedStatus(OSStatus)
@@ -25,17 +29,20 @@ public final class KeychainOwnerIdentityStore: OwnerIdentityStore, @unchecked Se
 
     private let service: String
     private let account: String
+    private let legacyAccount: String?
     private let syncsToICloud: Bool
 
     public init(service: String = "com.georgeharker.un-bien.owner-key",
                 account: String = "owner",
+                legacyAccount: String? = nil,
                 syncsToICloud: Bool) {
         self.service = service
         self.account = account
+        self.legacyAccount = legacyAccount
         self.syncsToICloud = syncsToICloud
     }
 
-    private func query(dataProtection: Bool) -> [String: Any] {
+    private func query(account: String, dataProtection: Bool) -> [String: Any] {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -51,20 +58,31 @@ public final class KeychainOwnerIdentityStore: OwnerIdentityStore, @unchecked Se
     }
 
     public func load() throws -> Ed25519Identity? {
-        if let identity = try read(dataProtection: true) { return identity }
-        // Fall back to a legacy-keychain item (pre-migration installs, or the
-        // unsigned `swift run` tool). When the data-protection keychain IS
-        // available, migrate it over so future launches stop hitting the ACL
-        // prompt, then drop the legacy copy.
-        guard let legacy = try read(dataProtection: false) else { return nil }
-        do {
-            try insert(blob: OwnerIdentityBlob.encode(legacy),
-                       synchronizable: false, dataProtection: true)
-            try? remove(dataProtection: false)
-        } catch {
-            // missingEntitlement (unsigned) or any other error: leave legacy as-is.
+        // 1) Per-device account in the data-protection keychain (steady state).
+        if let identity = try read(account: account, dataProtection: true) { return identity }
+        // 2) Per-device account in the LEGACY macOS per-binary keychain —
+        //    migrate it UP into the data-protection keychain, drop the old copy.
+        if let legacy = try read(account: account, dataProtection: false) {
+            try? insert(blob: OwnerIdentityBlob.encode(legacy), account: account,
+                        synchronizable: syncsToICloud, dataProtection: true)
+            try? remove(account: account, dataProtection: false)
+            return legacy
         }
-        return legacy
+        // 3) MIGRATION from the SHARED legacy account (the pre-per-device
+        //    `"owner"` slot): COPY it into this device's slot so future launches
+        //    find it and future writes stay isolated. Do NOT remove the shared
+        //    item — other devices migrate from it independently (removing it
+        //    would unpair them). Preserves the current pairing (same key).
+        if let legacyAccount {
+            for dataProtection in [true, false] {
+                if let shared = try read(account: legacyAccount, dataProtection: dataProtection) {
+                    try? insert(blob: OwnerIdentityBlob.encode(shared), account: account,
+                                synchronizable: syncsToICloud, dataProtection: true)
+                    return shared
+                }
+            }
+        }
+        return nil
     }
 
     public func save(_ identity: Ed25519Identity) throws {
@@ -72,30 +90,30 @@ public final class KeychainOwnerIdentityStore: OwnerIdentityStore, @unchecked Se
         // Prefer the data-protection keychain; fall back to legacy only when the
         // app has no keychain entitlement (unsigned dev build).
         do {
-            try remove(dataProtection: true)
-            try insert(blob: blob, synchronizable: false, dataProtection: true)
+            try remove(account: account, dataProtection: true)
+            try insert(blob: blob, account: account, synchronizable: false, dataProtection: true)
             if syncsToICloud {
-                try? insert(blob: blob, synchronizable: true, dataProtection: true)
+                try? insert(blob: blob, account: account, synchronizable: true, dataProtection: true)
             }
-            try? remove(dataProtection: false) // clear any stale legacy copy
+            try? remove(account: account, dataProtection: false) // clear any stale legacy copy
         } catch KeychainError.missingEntitlement {
-            try remove(dataProtection: false)
-            try insert(blob: blob, synchronizable: false, dataProtection: false)
+            try remove(account: account, dataProtection: false)
+            try insert(blob: blob, account: account, synchronizable: false, dataProtection: false)
             if syncsToICloud {
-                try? insert(blob: blob, synchronizable: true, dataProtection: false)
+                try? insert(blob: blob, account: account, synchronizable: true, dataProtection: false)
             }
         }
     }
 
     public func delete() throws {
-        try remove(dataProtection: true)
-        try remove(dataProtection: false)
+        try remove(account: account, dataProtection: true)
+        try remove(account: account, dataProtection: false)
     }
 
     // MARK: - SecItem primitives
 
-    private func read(dataProtection: Bool) throws -> Ed25519Identity? {
-        var query = query(dataProtection: dataProtection)
+    private func read(account: String, dataProtection: Bool) throws -> Ed25519Identity? {
+        var query = query(account: account, dataProtection: dataProtection)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
@@ -111,8 +129,8 @@ public final class KeychainOwnerIdentityStore: OwnerIdentityStore, @unchecked Se
         }
     }
 
-    private func insert(blob: Data, synchronizable: Bool, dataProtection: Bool) throws {
-        var attributes = query(dataProtection: dataProtection)
+    private func insert(blob: Data, account: String, synchronizable: Bool, dataProtection: Bool) throws {
+        var attributes = query(account: account, dataProtection: dataProtection)
         attributes[kSecAttrSynchronizable as String] = synchronizable
         attributes[kSecValueData as String] = blob
         attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
@@ -127,8 +145,8 @@ public final class KeychainOwnerIdentityStore: OwnerIdentityStore, @unchecked Se
         }
     }
 
-    private func remove(dataProtection: Bool) throws {
-        let status = SecItemDelete(query(dataProtection: dataProtection) as CFDictionary)
+    private func remove(account: String, dataProtection: Bool) throws {
+        let status = SecItemDelete(query(account: account, dataProtection: dataProtection) as CFDictionary)
         switch status {
         case errSecSuccess, errSecItemNotFound, errSecMissingEntitlement:
             return

@@ -9,7 +9,36 @@ import os
 @MainActor
 public final class AppModel: ObservableObject {
     @Published public var needsOnboarding = true
-    @Published public var syncsToICloud: Bool
+    /// A keychain READ THROW during identity load (device locked / ACL /
+    /// entitlement hiccup) — DISTINCT from a genuine absent key. On a throw the
+    /// app must NOT onboard (that mints a new key and orphans the pairing); it
+    /// surfaces this, keeps the existing identity, and retries.
+    @Published public var identityLoadFailed = false
+    /// Machines (relay peer epk) that answered a content route with
+    /// `unknown_peer` — this device's owner key isn't in their peers.json
+    /// (unpaired / re-keyed / evicted). The UI prompts a re-scan instead of a
+    /// silent blank; cleared when real content arrives or on re-pair.
+    @Published public var unpairedPeers: Set<String> = []
+    @Published public var syncsToICloud: Bool {
+        didSet {
+            guard syncsToICloud != oldValue else { return }
+            // Actually APPLY the change (design 01M1VS0X): persist it, rebuild
+            // the store with the new setting, and RE-SAVE. save() with sync off
+            // removes the iCloud-synced copy (its remove() matches Synchronizable
+            // Any); with sync on it adds one. Without this the switch changed
+            // only a label. didSet never fires for the init assignment, so this
+            // only runs on a real user toggle.
+            UserDefaults.standard.set(syncsToICloud, forKey: Self.iCloudDefaultsKey)
+            guard let owner else { return }
+            identityStore = KeychainOwnerIdentityStore(syncsToICloud: syncsToICloud)
+            try? identityStore.save(owner)
+        }
+    }
+
+    /// iCloud ACCOUNT presence — a proxy for iCloud Keychain sync being usable
+    /// (there is no public API for Keychain-sync state specifically). Gates the
+    /// sync toggle so it isn't offered as a no-op when iCloud is off.
+    public var iCloudAvailable: Bool { FileManager.default.ubiquityIdentityToken != nil }
     @Published public var relayHealth: [UUID: RelayHealth] = [:]
     @Published public var sessions: [String: LiveSession] = [:]
     /// Manually-dismissed ENDED chats (plan 01M18X3B): keyed by LiveSession.id,
@@ -354,19 +383,40 @@ public final class AppModel: ObservableObject {
         let skipOnboarding = UserDefaults.standard.bool(forKey: "unbien.debug.skip-onboarding")
         UserDefaults.standard.removeObject(forKey: "unbien.debug.skip-onboarding")
         #endif
-        if let existing = try? identityStore.load() {
-            owner = existing
-            needsOnboarding = false
-            await connectAll()
-        } else {
-            #if DEBUG
-            if skipOnboarding {
+        // Distinguish "no key yet" (nil -> onboard) from a keychain READ THROW
+        // (device locked / ACL / entitlement hiccup). A throw must NEVER fall
+        // through to onboarding: minting a new identity there silently re-keys
+        // and orphans the pairing (design 01M1V1PM). Retry a transient lock a
+        // few times, then surface + KEEP the existing identity.
+        for attempt in 0..<3 {
+            do {
+                guard let existing = try identityStore.load() else { break }  // genuine nil
+                owner = existing
+                needsOnboarding = false
+                identityLoadFailed = false
+                await connectAll()
+                return
+            } catch {
+                log.error("owner identity load failed (attempt \(attempt, privacy: .public)) — NOT re-keying: \(String(describing: error), privacy: .public)")
+                if attempt < 2 {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    continue
+                }
+                // Exhausted: surface, do NOT onboard/re-key. A retry can re-run
+                // bootstrap() (e.g. on next foreground) once the keychain frees.
+                identityLoadFailed = true
                 needsOnboarding = false
                 return
             }
-            #endif
-            needsOnboarding = true
         }
+        // Genuine empty keychain (load returned nil) -> onboard.
+        #if DEBUG
+        if skipOnboarding {
+            needsOnboarding = false
+            return
+        }
+        #endif
+        needsOnboarding = true
     }
 
     // MARK: - Session actions

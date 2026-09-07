@@ -305,11 +305,19 @@ struct SettingsView: View {
 
     private var syncSection: some View {
         Section {
-            Toggle("Sync Owner key via iCloud", isOn: $model.syncsToICloud)
+            if model.iCloudAvailable {
+                Toggle("Sync Owner key via iCloud", isOn: $model.syncsToICloud)
+            } else {
+                // Don't offer a no-op switch when iCloud isn't available.
+                Label("iCloud unavailable", systemImage: "icloud.slash")
+                    .foregroundStyle(.secondary)
+            }
         } header: {
             Text("Sync")
         } footer: {
-            Text("The Owner key lives in the iOS Keychain. iCloud sync shares it across your devices.")
+            Text(model.iCloudAvailable
+                 ? "The Owner key lives in the iOS Keychain. iCloud sync shares it across your devices."
+                 : "Sign into iCloud and enable Keychain to sync the Owner key across your devices.")
         }
     }
 

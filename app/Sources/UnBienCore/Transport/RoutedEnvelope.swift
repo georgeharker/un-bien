@@ -50,4 +50,14 @@ public struct RoutedEnvelope: Codable, Equatable, Sendable {
         }
         return try JSONDecoder().decode(EnvelopeMessage.self, from: data)
     }
+
+    /// Decode the carried inner as a raw JSON object — for non-envelope frames
+    /// such as a plaintext peer/relay `{type:"error", code, message}` (an
+    /// unpaired peer can't encrypt, so the extension sends the error plain).
+    public func decodeInner() throws -> JSONValue {
+        guard let data = Data(base64Encoded: ct) else {
+            throw DecodeError.invalidMessage("ct not base64")
+        }
+        return try JSONDecoder().decode(JSONValue.self, from: data)
+    }
 }

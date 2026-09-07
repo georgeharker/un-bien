@@ -209,6 +209,19 @@ extension AppModel {
 
     private func handleRouted(_ envelope: RoutedEnvelope, relayID: UUID) {
         guard let env = try? envelope.decodeEnvelope() else { return }
+        // A plaintext peer/relay error (e.g. unknown_peer from an unpaired owner)
+        // rides the content channel as {type:"error",code,message}: it decodes to
+        // type=="error" with no rpc/evt/ub, so it would fall through both content
+        // branches below and be dropped. Surface it — envelope.peer names the
+        // machine to flag for re-pair (design 01M1V1PM).
+        if env.type == "error" {
+            handlePeerError(inner: try? envelope.decodeInner(),
+                            peer: envelope.peer, relayID: relayID)
+            return
+        }
+        // Real content from this peer — it's reachable/paired; clear any stale
+        // unknown_peer flag so the re-pair prompt drops once it answers.
+        if unpairedPeers.contains(envelope.peer) { unpairedPeers.remove(envelope.peer) }
         // Key per-session state on the pi sessionId (wire identity); the
         // outer room is mesh/relay ROUTING only.
         let key = "\(relayID.uuidString):\(envelope.peer):\(env.sessionId ?? envelope.room)"
@@ -217,6 +230,26 @@ extension AppModel {
                           sid: env.sessionId ?? "nil")
         } else if env.rpc != nil || env.evt != nil {
             handleEnvelopeContent(env: env, key: key, envelope: envelope, relayID: relayID)
+        }
+    }
+
+    /// A peer/relay error arrived on the content channel. `unknown_peer` = this
+    /// device's owner key isn't in the machine's peers.json (unpaired / re-keyed
+    /// / evicted from a shared store): mark the machine so the UI prompts a
+    /// re-scan instead of a silent blank, and STOP every stuck backfill spinner
+    /// for it (they'd never complete until re-paired). Design 01M1V1PM.
+    private func handlePeerError(inner: JSONValue?, peer: String, relayID: UUID) {
+        let code = inner?["code"]?.stringValue
+        guard code == "unknown_peer" else {
+            log.error("peer error code=\(code ?? "?", privacy: .public)")
+            return
+        }
+        log.notice("unknown_peer from peer=\(String(peer.prefix(8)), privacy: .public) — not paired; prompting re-pair")
+        unpairedPeers.insert(peer)
+        for (key, session) in sessions
+        where session.relayID == relayID && session.peerEPK == peer {
+            backfilledSessions.insert(key)
+            endWalk(key: key)
         }
     }
 

@@ -312,6 +312,7 @@ struct TranscriptView: View {
     var body: some View {
         VStack(spacing: 0) {
             if model.hasEnded(session) { endedBanner }
+            if model.unpairedPeers.contains(session.peerEPK) { unpairedBanner }
             if model.isDemo(session) { demoBanner }
             statusStrip
                 ScrollView {
@@ -693,6 +694,24 @@ struct TranscriptView: View {
         .padding(.horizontal, 12).padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(theme.secondaryText)
+    }
+
+    /// Shown when this machine answered a content route with `unknown_peer`
+    /// (design 01M1V1PM): this device's owner key isn't in the machine's
+    /// peers.json (unpaired / re-keyed / evicted). The backfill spinner is
+    /// already stopped (handlePeerError) — this says WHY + what to do instead
+    /// of a silent blank.
+    private var unpairedBanner: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "lock.trianglebadge.exclamationmark.fill")
+            Text("Not paired with this machine — re-scan its QR to reconnect")
+            Spacer(minLength: 0)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(theme.background)
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange)
     }
 
     /// Demo-mode banner (AppModel+Demo): honest labeling so the canned

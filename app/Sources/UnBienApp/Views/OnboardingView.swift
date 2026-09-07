@@ -25,14 +25,29 @@ struct OnboardingView: View {
                      + "It never leaves your devices.")
                     .font(.subheadline)
                     .foregroundStyle(theme.secondaryText)
-                Toggle(isOn: $model.syncsToICloud) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Sync via iCloud Keychain").foregroundStyle(theme.text)
-                        Text("Follow you to your other devices. Off = this device only.")
-                            .font(.caption).foregroundStyle(theme.secondaryText)
+                if model.iCloudAvailable {
+                    Toggle(isOn: $model.syncsToICloud) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Sync via iCloud Keychain").foregroundStyle(theme.text)
+                            Text("Follow you to your other devices. Off = this device only.")
+                                .font(.caption).foregroundStyle(theme.secondaryText)
+                        }
                     }
+                    .tint(theme.accent)
+                } else {
+                    // iCloud unavailable — don't offer a no-op toggle; force sync
+                    // off so createOwnerKey doesn't write a (non-syncing) synced copy.
+                    HStack(spacing: 8) {
+                        Image(systemName: "icloud.slash").foregroundStyle(theme.secondaryText)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("iCloud Keychain unavailable").foregroundStyle(theme.secondaryText)
+                            Text("This device only. Sign into iCloud to sync across devices.")
+                                .font(.caption).foregroundStyle(theme.secondaryText)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .onAppear { model.syncsToICloud = false }
                 }
-                .tint(theme.accent)
             }
             .padding()
             .background(theme.surface, in: RoundedRectangle(cornerRadius: 14))

@@ -1,4 +1,5 @@
 import Foundation
+import os
 import UnBienCore
 
 // Pairing + owner-identity creation split out of AppModel.swift (its 1000-line
@@ -6,11 +7,23 @@ import UnBienCore
 // dedicated short-lived pairing connection. State (identityStore / owner /
 // pendingPairing) stays on AppModel; this extension only drives it.
 
+private let log = Logger(subsystem: "un-bien", category: "relay")
+
 extension AppModel {
     public func createOwnerKey() async {
         let identity = Ed25519Identity()
         identityStore = KeychainOwnerIdentityStore(syncsToICloud: syncsToICloud)
-        try? identityStore.save(identity)
+        // Do NOT swallow a save failure: if the key isn't written it won't
+        // persist and the next launch silently re-onboards (looks like 'doesn't
+        // stick'). Surface it. (The Simulator wipes its keychain on reinstall
+        // regardless — that's environmental, not this path.)
+        do {
+            try identityStore.save(identity)
+            identityLoadFailed = false
+        } catch {
+            log.error("owner key SAVE failed — identity will NOT persist: \(String(describing: error), privacy: .public)")
+            identityLoadFailed = true
+        }
         UserDefaults.standard.set(syncsToICloud, forKey: Self.iCloudDefaultsKey)
         owner = identity
         needsOnboarding = false
@@ -57,6 +70,8 @@ extension AppModel {
         mesh.upsertMachine(PairedMachine(
             epk: invite.epk, relayID: relay.id, nickname: nil,
             hostname: result.hostname, harnessName: result.harness?.name))
+        // Re-pair clears any stale unknown_peer prompt for this machine.
+        unpairedPeers.remove(invite.epk)
 
         if let connection = connections[relay.id] {
             let peers = mesh.config.machines(onRelay: relay.id).map(\.epk)
