@@ -85,11 +85,12 @@ struct TranscriptRow: View, Equatable {
             }
             if !bubble.text.isEmpty {
                 if bubble.streaming {
-                // While streaming, render live MarkdownUI (text grows per token).
+                // Stream through the ENTITY renderer (design 01M1YT1QGM): an
+                // off-main incremental segmenter re-segments only the changed tail
+                // and feeds the SAME EntityStack the settled bubble uses -> no
+                // streaming->settled flip, and the main thread never parses.
                 BudgetedContent(text: bubble.text, budget: markdownBudget) { budgeted in
-                    // Shared with the settled fallback so streaming → settle has
-                    // no code-width height jump (design 01M127NC4 warm-at-settle).
-                    styledMarkdown(budgeted, theme: theme, typography: typography)
+                    StreamingEntitiesView(text: budgeted, theme: theme, typography: typography)
                 }
                 } else {
                     // Settled: render off-main-produced entities (prose as cached
