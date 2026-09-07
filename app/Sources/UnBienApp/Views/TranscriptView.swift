@@ -84,6 +84,7 @@ struct TranscriptView: View {
     /// tracks one page narrower. Default 3 = the shipped window ("min what we have").
     @AppStorage("transcriptWindowPages") private var windowPages = 3
     @AppStorage("debugActivityHUD") private var debugActivityHUD = false
+    @AppStorage("useBisectionWindow") private var useBisection = false
     // Per-tool-card UI state (expand + Diff/Content), held ABOVE the windowed
     // rows so it survives dematerialize/rematerialize. Plain @State (not
     // @StateObject) — CardUIState is non-observed storage; ToolCardView reads
@@ -480,9 +481,13 @@ struct TranscriptView: View {
                 windowDriver.seedHeights(cached)
             }
             windowDriver.applyWindowPages(Double(windowPages))
+            windowDriver.setUseBisection(useBisection)
         }
         .onChange(of: windowPages) { _, new in
             windowDriver.applyWindowPages(Double(new))
+        }
+        .onChange(of: useBisection) { _, new in
+            windowDriver.setUseBisection(new)
         }
         .onDisappear {
             // View exit: the last lifecycle moment THIS view gets — capture +

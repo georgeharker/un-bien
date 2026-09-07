@@ -193,6 +193,35 @@ public struct RowBoundsStore: Sendable, Equatable {
         return first..<min(last + 1, order.count)
     }
 
+    /// Anchored bisection window — the near set of windowRangeAroundIndex (center
+    /// on a rendered row, search outward), boundaries found by BISECTION on the
+    /// row-top prefix. Robust like the anchored walk: the band is rowTop[center]
+    /// +/- pages*viewport, and comparing absolute rowTops to it is a DIFFERENCE
+    /// from the center, so accumulated error above the anchor (unmeasured far
+    /// rows) cancels — only LOCAL heights matter. Prefix built inline (O(n)); a
+    /// cached prefix-sum makes it O(log n).
+    public func windowRangeBisectAroundIndex(order: [String], center: Int, viewportHeight: Double,
+                                             pages: Double, spacing: Double, fallbackHeight: Double,
+                                             contentInset: Double = 17) -> Range<Int> {
+        guard !order.isEmpty, viewportHeight > 0 else { return 0..<0 }
+        let c = min(max(center, 0), order.count - 1)
+        var rowTop = [Double](repeating: 0, count: order.count)
+        var rowBottom = [Double](repeating: 0, count: order.count)
+        var top = contentInset
+        for (i, id) in order.enumerated() {
+            let h = heights[id] ?? fallbackHeight
+            rowTop[i] = top
+            rowBottom[i] = top + h
+            top += h + spacing
+        }
+        let windowMin = rowTop[c] - pages * viewportHeight
+        let windowMax = rowTop[c] + (1 + pages) * viewportHeight
+        let first = Self.leftmostIndex(in: rowBottom, greaterThan: windowMin) ?? c
+        let last = Self.rightmostIndex(in: rowTop, lessThan: windowMax) ?? c
+        // The center row is on screen by definition — always included.
+        return min(first, c)..<max(last + 1, c + 1)
+    }
+
     /// Leftmost index whose value > threshold in a strictly-increasing array, or nil.
     private static func leftmostIndex(in values: [Double], greaterThan threshold: Double) -> Int? {
         var low = 0, high = values.count

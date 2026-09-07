@@ -10,6 +10,7 @@ struct AdvancedSettingsView: View {
     @AppStorage("renderCacheMessages") private var cacheMessages = 400
     @AppStorage("transcriptWindowPages") private var windowPages = 3
     @AppStorage("debugActivityHUD") private var debugActivityHUD = false
+    @AppStorage("useBisectionWindow") private var useBisection = false
 
     var body: some View {
         Form {
@@ -31,6 +32,7 @@ struct AdvancedSettingsView: View {
             }
             Section {
                 Toggle("Debug activity HUD", isOn: $debugActivityHUD)
+                Toggle("Bisection window (experimental)", isOn: $useBisection)
             } header: {
                 Text("Debug")
             } footer: {
