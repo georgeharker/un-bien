@@ -114,9 +114,9 @@ public struct SessionState: Equatable, Sendable {
     /// finish" — the reset raced the in-flight bubble). The re-path is DEFERRED
     /// to the settle point (agent_settled / shutdown), preserving the replay
     /// invariant: nothing ever disturbs live-stream continuation state. The
-    /// settle's own fold indexes the finished turn's entries first, so the
-    /// deferred replay includes the turn's full text.
+    /// settle's own fold includes the finished turn's full text.
     private var pendingRepathLeaf: String?
+    public private(set) var needsAncestryBackfillLeaf: String?  // truncated-walk leaf; AppModel backwalks (01M1YYYVT)
 
     /// Apply a deferred re-path at a SETTLE point (no turn in flight — the
     /// reset is safe). No-op when no beacon parked.
@@ -741,8 +741,8 @@ public struct SessionState: Equatable, Sendable {
             cursor = parent
         }
         // Truncated walk (missing parentId, not a root): ancestry not backfilled — defer, keep the rendered path (activeLeafId stays stale so the next fold re-derives).
-        if !reachedRoot, pathOrder != nil { pendingRepathLeaf = leaf; return }
-        activeLeafId = leaf
+        if !reachedRoot, pathOrder != nil { pendingRepathLeaf = leaf; needsAncestryBackfillLeaf = leaf; return }
+        needsAncestryBackfillLeaf = nil; activeLeafId = leaf
         let newOrder = Array(chain.reversed())
         guard Set(newOrder) != pathIds else { return }
         let firstDerivation = pathOrder == nil

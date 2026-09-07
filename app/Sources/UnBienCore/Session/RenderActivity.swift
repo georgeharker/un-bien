@@ -54,6 +54,8 @@ public enum RenderActivity {
     public nonisolated(unsafe) static var nearCount = 0
     /// Materialize: last MarkdownEntityStore.produce duration (µs) — gauge.
     public nonisolated(unsafe) static var produceLastMicros = 0
+    /// Ancestry backwalks fired for a disconnected fold (plan 01M1YYYVT) — gauge.
+    public nonisolated(unsafe) static var ancestryBackwalks = 0
     /// Swift callback-surface probes (monotonic, in raw() — HUD delta per 0.5s
     /// reveals fan-out). ALL incremented in EVENT handlers / store logic, NEVER
     /// a view body (a body side-effect broke rendering, 2026-09-07): husk
