@@ -29,6 +29,14 @@ public enum RenderActivity {
     /// but non-quiet) / shape (same-line but not a clean extension) / diverge
     /// (branch). Shown on the HUD reset row to explain a reset in the act.
     public nonisolated(unsafe) static var lastResetReason = ""
+    /// Last reset's path sizes + leading common-prefix length. With
+    /// lastResetReason these distinguish TRUNCATION (new < old — an
+    /// authoritative refetch shorter than the local render / a dropped temp
+    /// bubble) from a MIDDLE-FILL reshape (common prefix stops MID-path, not at
+    /// 0 or min(old,new)). Gauges (direct-read, not raw()). Design 01M1X582.
+    public nonisolated(unsafe) static var lastResetOldCount = 0
+    public nonisolated(unsafe) static var lastResetNewCount = 0
+    public nonisolated(unsafe) static var lastResetCommonPrefix = 0
     /// Row-height MEASURES that arrived (heightProbe fired; synchronous, not bg).
     public nonisolated(unsafe) static var boundsMeasured = 0
     /// Row-height measures that actually STORED a changed value (measured minus

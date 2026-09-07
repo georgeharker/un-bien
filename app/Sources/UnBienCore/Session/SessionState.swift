@@ -761,12 +761,14 @@ public struct SessionState: Equatable, Sendable {
                 renderedPathCount = frontCount + oldOrder.count
                 return
             }
-            // Not same-line growth: TRUNCATION (new is a sub-run of old) or a
-            // DIVERGENT branch. Record which for the debug HUD; both reset.
+            // Not same-line growth: TRUNCATION (new ⊆ old) or DIVERGENT branch; both reset, record which for the HUD.
             let priorLeaf = oldOrder.last
             let sameLine = (priorLeaf.map(newOrder.contains) ?? false) || oldOrder.contains(leaf)
             RenderActivity.lastResetReason = (contiguousStart(of: newOrder, in: oldOrder) != nil)
                 ? "trunc" : (sameLine ? "shape" : "diverge")
+            RenderActivity.lastResetOldCount = oldOrder.count
+            RenderActivity.lastResetNewCount = newOrder.count
+            RenderActivity.lastResetCommonPrefix = zip(oldOrder, newOrder).prefix { $0.0 == $0.1 }.count
             resetTranscript()
             if !sameLine { pendingBranchNoticeAfter = Array(zip(oldOrder, newOrder).prefix { $0.0 == $0.1 }).last?.0 }
         }
