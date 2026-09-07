@@ -39,7 +39,15 @@ final class MarkdownEntityStore {
     static let shared = MarkdownEntityStore()
 
     private var cache: [String: [MarkdownEntity]] = [:]
-    private var order: [String] = []
+    /// LRU by monotonic use-sequence: touch = stamp (O(1), NO reorder); the
+    /// sorting cost (find min-seq victim) is on PURGE only (design 01M1Y1GK).
+    /// FULLY LOCK-FREE (unlike AttributedTextCache): @MainActor confines every
+    /// store access to the main thread, and the render is on the main thread
+    /// too, so render and store CAN'T RACE. Only the pure markdownEntities parse
+    /// is off-main (Task.detached) and it touches NO store state — the cache
+    /// read/write brackets the await back on the main actor. Nothing to lock.
+    private var useSeq: [String: Int] = [:]
+    private var clock = 0
     /// Max cached MESSAGES (per-bubble entity lists). Configurable (Settings);
     /// default 400 — the per-BUBBLE tier alongside AttributedTextCache.cacheLimit
     /// (per-BLOCK). Lowering it trims immediately.
@@ -48,7 +56,7 @@ final class MarkdownEntityStore {
     func cached(_ key: String) -> [MarkdownEntity]? { cache[key] }
 
     func produce(_ key: String, text: String, style: MarkdownProseStyle) async -> [MarkdownEntity] {
-        if let hit = cache[key] { touch(key); return hit }
+        if let hit = cache[key] { clock += 1; useSeq[key] = clock; return hit }   // touch: stamp, O(1)
         RenderActivity.produceStarted += 1
         let t0 = DispatchTime.now().uptimeNanoseconds
         let made = await Task.detached(priority: .userInitiated) {
@@ -56,28 +64,19 @@ final class MarkdownEntityStore {
         }.value
         RenderActivity.produceLastMicros = Int((DispatchTime.now().uptimeNanoseconds - t0) / 1000)
         cache[key] = made
+        clock += 1; useSeq[key] = clock
         RenderActivity.produceFinished += 1
-        order.append(key)
         trimToCap()
         return made
     }
 
+    /// Evict least-recently-USED (min use-seq) past the cap — O(n) find-min, but
+    /// only on PURGE (insert-over-cap), NEVER on touch (design 01M1Y1GK).
     private func trimToCap() {
-        while order.count > cap, let drop = order.first {
-            order.removeFirst()
-            cache[drop] = nil
+        while cache.count > cap, let victim = useSeq.min(by: { $0.value < $1.value })?.key {
+            cache[victim] = nil
+            useSeq[victim] = nil
         }
-    }
-
-    /// LRU touch: move an already-cached key to MRU so retention follows what
-    /// the reader is VIEWING (a re-materialised row on scroll-back), not just
-    /// production order. Called from the `.task` produce path (event, not a
-    /// view body); materialisation order = scroll direction, so the leading
-    /// edge lands MRU and evicts last (design 01M1Y1GK).
-    private func touch(_ key: String) {
-        guard let i = order.firstIndex(of: key) else { return }
-        order.remove(at: i)
-        order.append(key)
     }
 }
 

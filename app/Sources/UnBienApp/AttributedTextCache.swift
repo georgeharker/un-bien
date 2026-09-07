@@ -1,4 +1,5 @@
 import Foundation
+import os
 import SwiftUI
 import UnBienCore
 import Highlighter
@@ -147,16 +148,32 @@ public struct DiffProducer: AttributedTextProducer {
 public final class AttributedTextCache: @unchecked Sendable {
     public static let shared = AttributedTextCache()
 
-    // Manual access-touched LRU (design 01M1Y1GK): NSCache's eviction is
-    // opaque/discretionary and a read gives no recency touch, so retention
-    // couldn't follow what the reader is VIEWING. A dict + recency array (oldest
-    // first, MRU last) is a real LRU touched on materialisation; a memory-
-    // pressure source restores the iOS safety net NSCache gave for free.
+    // Manual access-touched LRU (design 01M1Y1GK). Replaces NSCache, whose
+    // eviction is opaque and whose reads give no recency touch, so retention
+    // couldn't follow what the reader is VIEWING.
+    //
+    // WHY THE RENDER CAN GO NEAR-LOCKLESS: unlike the entity store (which is
+    // @MainActor, so render and store are the same thread and it needs NO lock),
+    // this cache is genuinely CROSS-THREAD — read on the MAIN thread
+    // (highlighted() during MarkdownUI render, cached() in AsyncAttributedText
+    // .body) and written on the evalQueue (async produce). A lock is required
+    // for correctness. NEARLY ALL holds are O(1) dict ops — peek/get, set, or a
+    // seq-stamp touch (no reorder); the async produce runs its engine OFF this
+    // lock (evalQueue, SEPARATE queueEngines pool), and O(n) find-min eviction is
+    // on INSERT, not on a render read. os_unfair_lock (OSAllocatedUnfairLock)
+    // because those holds are nanosecond-short. THE ONE EXCEPTION is the sync
+    // highlighted() main path, which DELIBERATELY holds the lock across
+    // engine.highlight to serialise the non-thread-safe JSContext engine (why:
+    // see there).
+    //
+    // LRU BY MONOTONIC USE-SEQ: touch = stamp seq (O(1), NO sort); the sort
+    // (find min-seq victim) is on PURGE only.
     private var store: [String: NSAttributedString] = [:]
-    private var recency: [String] = []
+    private var useSeq: [String: Int] = [:]
+    private var clock = 0
     private var limit = 400
     private var engines: [String: Highlighter] = [:]      // main-path pool (highlighted)
-    private let lock = NSLock()
+    private let lock = OSAllocatedUnfairLock()
     private let pressureSource = DispatchSource.makeMemoryPressureSource(
         eventMask: [.warning, .critical], queue: .global(qos: .utility))
 
@@ -167,7 +184,7 @@ public final class AttributedTextCache: @unchecked Sendable {
         set {
             lock.lock(); defer { lock.unlock() }
             limit = max(0, newValue)
-            while recency.count > limit { store[recency.removeFirst()] = nil }
+            evictLocked()
         }
     }
 
@@ -196,24 +213,31 @@ public final class AttributedTextCache: @unchecked Sendable {
         setLocked(key, value)
     }
     /// Caller MUST hold `lock` (used by the sync highlight path under its own
-    /// lock + by the wrappers above).
+    /// lock + by the wrappers above). O(1): a seq stamp, never an array reorder.
     private func getLocked(_ key: String, touch: Bool) -> NSAttributedString? {
         guard let v = store[key] else { return nil }
-        if touch, let i = recency.firstIndex(of: key) { recency.remove(at: i); recency.append(key) }
+        if touch { clock += 1; useSeq[key] = clock }
         return v
     }
     private func setLocked(_ key: String, _ value: NSAttributedString) {
-        if store[key] == nil { recency.append(key) }
-        else if let i = recency.firstIndex(of: key) { recency.remove(at: i); recency.append(key) }
         store[key] = value
-        while recency.count > limit { store[recency.removeFirst()] = nil }
+        clock += 1; useSeq[key] = clock
+        evictLocked()
+    }
+    /// Evict least-recently-USED (min seq) past the cap. O(n) find-min, on PURGE
+    /// only (insert-over-cap / limit change) — NEVER on a touch or render read.
+    private func evictLocked() {
+        while store.count > limit, let victim = useSeq.min(by: { $0.value < $1.value })?.key {
+            store[victim] = nil
+            useSeq[victim] = nil
+        }
     }
     /// Purge cached strings under memory pressure (keeps the JS engine pools) —
     /// the safety net NSCache gave automatically (design 01M1Y1GK).
     private func purgeUnderPressure() {
         lock.lock(); defer { lock.unlock() }
         store.removeAll(keepingCapacity: false)
-        recency.removeAll(keepingCapacity: false)
+        useSeq.removeAll(keepingCapacity: false)
     }
 
     /// `\u{1}`-joined key can't collide across fields (content can't contain it).
@@ -269,10 +293,20 @@ public final class AttributedTextCache: @unchecked Sendable {
                                fontSize: font?.pointSize ?? 0, language: language, code: code)
         if let hit = peek(key) { return AttributedString(hit) }
 
+        // The lock IS held across engine.highlight here — deliberately, and unlike
+        // everywhere else the lock is O(1)-only. Highlighter is JSContext-backed
+        // and NOT thread-safe, so this serialises ENGINE USE. We do NOT narrow it
+        // by assuming highlighted() is main-serial: that's an assumption about
+        // MarkdownUI's CodeSyntaxHighlighter threading, and a concurrent/off-main
+        // call would corrupt the shared JSContext mid-highlight (the highlight
+        // data going away under us). The cost is only the evalQueue's O(1) store
+        // ops waiting for the highlight's duration, and only on the STREAMING
+        // render path (the main thread is busy with the highlight anyway); the
+        // scroll-critical async path uses the SEPARATE queueEngines pool off this
+        // lock, so scroll is unaffected.
         lock.lock()
         defer { lock.unlock() }
         if let hit = getLocked(key, touch: false) { return AttributedString(hit) }  // double-check under lock
-
         let engineKey = "\(style)\u{1}\(font.map { "\($0.fontName):\($0.pointSize)" } ?? "system")"
         let engine: Highlighter
         if let existing = engines[engineKey] {
@@ -293,7 +327,7 @@ public final class AttributedTextCache: @unchecked Sendable {
     public func clear() {
         lock.lock()
         store.removeAll()
-        recency.removeAll()
+        useSeq.removeAll()
         engines.removeAll()
         lock.unlock()
         evalQueue.async { [weak self] in
