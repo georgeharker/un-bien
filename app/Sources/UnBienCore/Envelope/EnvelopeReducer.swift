@@ -123,6 +123,7 @@ public struct EnvelopeReducer {
         case "response" where rpc["command"]?.stringValue == "get_state":
             applyState(rpc["data"])
         case "response" where rpc["command"]?.stringValue == "get_entries":
+            RenderActivity.getEntriesRetired += 1
             // Native pi get_entries: reduce the raw entry log into the transcript
             // (idempotent via identify) + keep the leaf cursor for a delta refetch.
             // STAGE 0 leaf beacon: a PARTIAL page's leafId is its last entry's

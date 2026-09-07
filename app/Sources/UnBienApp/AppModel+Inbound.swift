@@ -559,6 +559,10 @@ extension AppModel {
         // the walk's cursor. This is the walkID tidy-up over design 01M1NKAT.
         let pagingID = rpc["id"]?.stringValue ?? ""
         let isCurrentWalk = !pagingID.isEmpty && activeWalks[key] == pagingID
+        if !isCurrentWalk {
+            if deltaRefetchIDs.remove(pagingID) != nil { RenderActivity.getEntriesRefetch += 1 }
+            else { RenderActivity.getEntriesStraggler += 1 }
+        }
         if let page = rpc["data"], rpc["success"]?.boolValue == true {
             if let entries = page["entries"]?.arrayValue, !entries.isEmpty,
                let leaf = page["leafId"]?.stringValue,
@@ -695,7 +699,10 @@ extension AppModel {
               role == "user" || role == "assistant",
               let since = envelopeReducers[key]?.leafId,
               let conn = connections[relayID] else { return }
-        Task { try? await conn.send(.getEntries(id: UUID().uuidString, since: since),
+        let refetchID = UUID().uuidString
+        if deltaRefetchIDs.count > 500 { deltaRefetchIDs.removeAll(keepingCapacity: true) }
+        deltaRefetchIDs.insert(refetchID)
+        Task { try? await conn.send(.getEntries(id: refetchID, since: since),
                                      toPeer: envelope.peer, room: envelope.room) }
     }
 

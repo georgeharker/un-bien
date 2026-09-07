@@ -1,5 +1,6 @@
 import SwiftUI
 import MarkdownUI
+import UnBienCore
 
 /// The themed live-MarkdownUI render, SHARED by the streaming assistant bubble
 /// and the MarkdownEntitiesView cache-MISS fallback. Code blocks WRAP (matching
@@ -48,10 +49,12 @@ final class MarkdownEntityStore {
 
     func produce(_ key: String, text: String, style: MarkdownProseStyle) async -> [MarkdownEntity] {
         if let hit = cache[key] { return hit }
+        RenderActivity.produceStarted += 1
         let made = await Task.detached(priority: .userInitiated) {
             markdownEntities(text, style: style)
         }.value
         cache[key] = made
+        RenderActivity.produceFinished += 1
         order.append(key)
         trimToCap()
         return made

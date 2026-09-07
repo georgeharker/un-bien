@@ -89,6 +89,10 @@ public final class AppModel: ObservableObject {
     /// Last page-arrival time per walk-in-flight session — the watchdog's STALL
     /// signal (a walk still receiving pages is alive; only a silent one retries).
     var walkLastActivity: [String: Date] = [:]
+    /// Delta-refetch get_entries ids (per-turn message_end refetch) so the walk
+    /// handler can tell an expected refetch response from a superseded straggler
+    /// (both !isCurrentWalk). Debug-metric only; bounded on insert.
+    var deltaRefetchIDs: Set<String> = []
     var liveFrameBuffer: [String: [(env: EnvelopeMessage, envelope: RoutedEnvelope,
                                    relayID: UUID)]] = [:]
     /// Pending interactive prompt per session (extension_ui_request).
@@ -465,6 +469,7 @@ public final class AppModel: ObservableObject {
             if let cached = await entryCache.load(key: session.id) {
                 var reducer = envelopeReducers[session.id] ?? EnvelopeReducer()
                 reducer.setHideReasoning(!showThinking)
+                RenderActivity.getEntriesCached += 1
                 reducer.applyEntries(cached.entries, leafId: cached.leafId)
                 envelopeReducers[session.id] = reducer
                 transcripts[session.id] = reducer.session

@@ -141,6 +141,7 @@ final class TranscriptWindowDriver {
         // Small changes (keyboard, toolbar) keep heights.
         if let old = viewportHeightAtGeneration, abs(viewportHeight - old) > 120 {
             bounds.invalidate()
+            RenderActivity.boundsInvalidated += 1
             near = []
         }
         // ANY height change re-spreads the window (anchored windows included:
@@ -158,6 +159,7 @@ final class TranscriptWindowDriver {
     /// inflates contentHeight PERMANENTLY for the view's lifetime and sends
     /// the sentinel megapoints down (the "can't scroll to the bottom" hang).
     func record(id: String, height: Double) {
+        RenderActivity.boundsMeasured += 1
         guard height > 0, bounds.height(id: id) != height else { return }
         #if DEBUG
         if height > 20_000 {
@@ -165,6 +167,7 @@ final class TranscriptWindowDriver {
         }
         #endif
         bounds.record(id: id, height: height)
+        RenderActivity.boundsSet += 1
         // NO dirty = true (design 01M1X1R2): a height MEASUREMENT must not
         // trigger a membership recompute. recomputeIfNeeded re-derives the near
         // set via the height-budget windowRangeAroundIndex walk, so letting a
@@ -273,6 +276,7 @@ final class TranscriptWindowDriver {
         #endif
         dirty = false
         lastComputeScrollY = scrollY
+        RenderActivity.windowRecomputed += 1
         guard let window = computeWindow(viewportHeight: viewportHeight) else { return }
         let newNear = Set(window)
         let turnedOn = newNear.subtracting(near)

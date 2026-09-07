@@ -12,10 +12,6 @@ struct SettingsView: View {
     @State private var showFontImporter = false
     @State private var fontError: String?
     @State private var fontPreview = "AaBbCc 0O1lI {}[]() => Meslo \u{2713}"
-    @AppStorage("renderCacheBlocks") private var cacheBlocks = 400
-    @AppStorage("renderCacheImages") private var cacheImages = 200
-    @AppStorage("renderCacheMessages") private var cacheMessages = 400
-    @AppStorage("transcriptWindowPages") private var windowPages = 3
     @AppStorage("hideLaunchChipUntilDaemonUp") private var hideChipUntilDaemonUp = false
 
     var body: some View {
@@ -27,7 +23,7 @@ struct SettingsView: View {
                 subagentsSection
                 demoSection
                 machinesSection
-                performanceSection
+                advancedSection
                 syncSection
                 acknowledgementsSection
                 identitySection
@@ -273,22 +269,11 @@ struct SettingsView: View {
         }
     }
 
-    private var performanceSection: some View {
+    private var advancedSection: some View {
         Section {
-            Stepper("Highlight cache: \(cacheBlocks) blocks", value: $cacheBlocks, in: 50...2000, step: 50)
-                .onChange(of: cacheBlocks) { _, new in AttributedTextCache.shared.cacheLimit = new }
-            Stepper("Image cache: \(cacheImages) images", value: $cacheImages, in: 20...1000, step: 20)
-                .onChange(of: cacheImages) { _, new in ImageCache.shared.cacheLimit = new }
-            Stepper("Markdown cache: \(cacheMessages) messages", value: $cacheMessages, in: 50...2000, step: 50)
-                .onChange(of: cacheMessages) { _, new in MarkdownEntityStore.shared.cap = new }
-            Stepper("Transcript window: \(windowPages) pages", value: $windowPages, in: 3...8, step: 1)
-        } header: {
-            Text("Performance")
+            NavigationLink("Advanced") { AdvancedSettingsView() }
         } footer: {
-            Text("Larger caches keep more highlighted code and decoded images in memory "
-                 + "for smoother scrolling on long sessions. A wider transcript window keeps "
-                 + "more rows materialised around the viewport — fewer re-renders on "
-                 + "back-and-forth scroll, at the cost of more live rows.")
+            Text("Render caches, transcript window, and debug tools.")
         }
     }
 

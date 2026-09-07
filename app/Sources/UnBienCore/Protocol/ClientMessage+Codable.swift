@@ -62,6 +62,7 @@ extension ClientMessage: Codable {
             try container.encode(id, forKey: .id)
             try container.encodeIfPresent(limit, forKey: .limit)
         case let .getEntries(id, since):
+            RenderActivity.getEntriesStarted += 1   // single choke point: counts every send
             try container.encode(id, forKey: .id)
             try container.encodeIfPresent(since, forKey: .since)
         case let .sessionNew(id):
