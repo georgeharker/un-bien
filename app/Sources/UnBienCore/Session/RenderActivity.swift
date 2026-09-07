@@ -41,7 +41,7 @@ public enum RenderActivity {
     /// (also !isCurrentWalk, but expected — one per turn end).
     public nonisolated(unsafe) static var getEntriesRefetch = 0
     /// GAUGES (not monotonic; not in raw()) — last computeWindow duration (µs)
-    /// and the resulting near-set size, for comparing bisection vs linear walk.
+    /// and the resulting near-set size (window recompute cost + membership).
     public nonisolated(unsafe) static var lastWindowMicros = 0
     public nonisolated(unsafe) static var nearCount = 0
     /// Materialize: last MarkdownEntityStore.produce duration (µs) — gauge.

@@ -276,17 +276,6 @@ final class TranscriptWindowDriver {
         recomputeIfNeeded()
     }
 
-    /// EXPERIMENTAL (Advanced toggle): drive the near window GEOMETRICALLY via
-    /// windowRangeBisect on scrollY, bypassing the identity anchor. Needs
-    /// reliable heights (else the blank-tail deadlock) — opt-in for testing.
-    var useBisection = false
-    func setUseBisection(_ on: Bool) {
-        guard useBisection != on else { return }
-        useBisection = on
-        dirty = true
-        recomputeIfNeeded()
-    }
-
     // MARK: - Private
 
     private func recomputeIfNeeded() {
@@ -357,22 +346,14 @@ final class TranscriptWindowDriver {
             guard let range = geometricWindow(viewportHeight: viewportHeight) else { return nil }
             return Set(range)
         }
-        let attach = useBisection
-            ? bounds.windowRangeBisectAroundIndex(order: order, center: center,
-                                                  viewportHeight: viewportHeight, pages: attachPages,
-                                                  spacing: spacing, fallbackHeight: fallbackHeight,
-                                                  contentInset: contentInset)
-            : bounds.windowRangeAroundIndex(order: order, center: center,
-                                            viewportHeight: viewportHeight, pages: attachPages,
-                                            spacing: spacing, fallbackHeight: fallbackHeight)
-        let keep = useBisection
-            ? bounds.windowRangeBisectAroundIndex(order: order, center: center,
-                                                  viewportHeight: viewportHeight, pages: detachPages,
-                                                  spacing: spacing, fallbackHeight: fallbackHeight,
-                                                  contentInset: contentInset)
-            : bounds.windowRangeAroundIndex(order: order, center: center,
-                                            viewportHeight: viewportHeight, pages: detachPages,
-                                            spacing: spacing, fallbackHeight: fallbackHeight)
+        let attach = bounds.windowRangeAroundIndex(order: order, center: center,
+                                                    viewportHeight: viewportHeight,
+                                                    pages: attachPages, spacing: spacing,
+                                                    fallbackHeight: fallbackHeight)
+        let keep = bounds.windowRangeAroundIndex(order: order, center: center,
+                                                 viewportHeight: viewportHeight,
+                                                 pages: detachPages, spacing: spacing,
+                                                 fallbackHeight: fallbackHeight)
         // TRUE HYSTERESIS: attach band ∪ (already-near ∩ keep band). A plain
         // union would just be a wider window that flaps at its own edge.
         return Set(attach).union(near.intersection(Set(keep)))
