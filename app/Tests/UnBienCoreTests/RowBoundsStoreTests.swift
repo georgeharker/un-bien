@@ -200,3 +200,91 @@ final class WindowRangeTallRowTests: XCTestCase {
         XCTAssertFalse(range.contains(7), "rows beyond the straddler stay out")
     }
 }
+
+// MARK: - Bisection window (O(log n) offset-based; must match the linear
+// windowRange oracle, carry the coverage invariant, preserve visible rows)
+
+final class WindowRangeBisectTests: XCTestCase {
+    private let vp = 500.0, inset = 17.0, spacing = 12.0, fallback = 44.0, pages = 2.0
+
+    /// ORACLE: bisection == the linear windowRange across a scrollY sweep, for
+    /// varied height profiles (uniform / varied / some-unmeasured / one-tall).
+    func testBisectMatchesLinearAcrossScrollSweep() {
+        let profiles: [[Double?]] = [
+            Array(repeating: 100, count: 30),
+            (0..<30).map { Double(20 + ($0 % 7) * 60) },
+            (0..<30).map { $0 % 3 == 0 ? nil : Double(80) },
+            (0..<30).map { $0 == 15 ? 2500 : 50 }
+        ]
+        for profile in profiles {
+            var store = RowBoundsStore()
+            let order = (0..<profile.count).map { "r\($0)" }
+            for (idx, height) in profile.enumerated() where height != nil {
+                store.record(id: order[idx], height: height!)
+            }
+            for scrollY in stride(from: -800.0, through: 4000.0, by: 37.0) {
+                let linear = store.windowRange(order: order, scrollY: scrollY, viewportHeight: vp,
+                                               pages: pages, spacing: spacing, fallbackHeight: fallback)
+                let bisect = store.windowRangeBisect(order: order, scrollY: scrollY, viewportHeight: vp,
+                                                     pages: pages, spacing: spacing, fallbackHeight: fallback)
+                XCTAssertEqual(bisect, linear, "mismatch @ scrollY=\(scrollY) n=\(profile.count)")
+            }
+        }
+    }
+
+    /// COVERAGE INVARIANT: every row intersecting [scrollY, scrollY+viewport] is
+    /// in the returned range (no on-screen row excluded).
+    func testBisectCoversViewport() {
+        var store = RowBoundsStore()
+        let order = (0..<40).map { "r\($0)" }
+        let heights = (0..<40).map { Double(30 + ($0 % 5) * 40) }
+        for (idx, height) in heights.enumerated() { store.record(id: order[idx], height: height) }
+        for scrollY in stride(from: 0.0, through: 3000.0, by: 50.0) {
+            let range = store.windowRangeBisect(order: order, scrollY: scrollY, viewportHeight: vp,
+                                                pages: pages, spacing: spacing, fallbackHeight: fallback)
+            var top = inset
+            for (idx, height) in heights.enumerated() {
+                let bottom = top + height
+                if bottom > scrollY && top < scrollY + vp {
+                    XCTAssertTrue(range.contains(idx),
+                                  "row \(idx) visible @ scrollY=\(scrollY) but excluded \(range)")
+                }
+                top += height + spacing
+            }
+        }
+    }
+
+    /// A row visible at scrollY stays in-window under a small scroll.
+    func testBisectScrollPreservesVisible() {
+        var store = RowBoundsStore()
+        let order = (0..<40).map { "r\($0)" }
+        for id in order { store.record(id: id, height: 90) }
+        let base = 1000.0
+        func visibleRows(_ scrollY: Double) -> [Int] {
+            var top = inset, out: [Int] = []
+            for idx in 0..<order.count {
+                if top + 90 > scrollY && top < scrollY + vp { out.append(idx) }
+                top += 90 + spacing
+            }
+            return out
+        }
+        for delta in [-30.0, 30.0] {
+            let shifted = store.windowRangeBisect(order: order, scrollY: base + delta,
+                                                  viewportHeight: vp, pages: pages,
+                                                  spacing: spacing, fallbackHeight: fallback)
+            for idx in visibleRows(base) {
+                XCTAssertTrue(shifted.contains(idx), "visible row \(idx) dropped after \(delta)pt scroll")
+            }
+        }
+    }
+
+    func testBisectEmptyAndPastEnd() {
+        var store = RowBoundsStore()
+        XCTAssertEqual(store.windowRangeBisect(order: [], scrollY: 0, viewportHeight: vp,
+                                               pages: pages, spacing: spacing, fallbackHeight: fallback), 0..<0)
+        let order = (0..<5).map { "r\($0)" }
+        for id in order { store.record(id: id, height: 100) }
+        XCTAssertEqual(store.windowRangeBisect(order: order, scrollY: 100_000, viewportHeight: vp,
+                                               pages: pages, spacing: spacing, fallbackHeight: fallback), 0..<0)
+    }
+}

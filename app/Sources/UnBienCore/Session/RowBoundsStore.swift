@@ -159,6 +159,60 @@ public struct RowBoundsStore: Sendable, Equatable {
         return start..<min(last + 1, order.count)
     }
 
+    /// Same near-window as `windowRange`, found by BISECTION on the (strictly
+    /// increasing) row-top / row-bottom prefix sums instead of a linear scan.
+    /// Carries the COVERAGE INVARIANT of the offset model: [windowMin,windowMax]
+    /// ⊇ [scrollY, scrollY+viewport], and every row intersecting that band is
+    /// included — so a window computed this way never excludes an on-screen row
+    /// (relative to the offset model; accurate heights make that real coverage,
+    /// which is why this pairs with the content-ready record gate — design
+    /// 01M1X0N7 / 01M1X1R2). Correctness-first: the prefix is built inline here
+    /// (O(n)); back it with a cached/incremental prefix-sum for O(log n) once the
+    /// representation is chosen. MUST stay behaviourally identical to
+    /// `windowRange` (its oracle test asserts equality across a scrollY sweep).
+    public func windowRangeBisect(order: [String], scrollY: Double, viewportHeight: Double,
+                                  pages: Double, spacing: Double, fallbackHeight: Double,
+                                  contentInset: Double = 17) -> Range<Int> {
+        guard !order.isEmpty, viewportHeight > 0 else { return 0..<0 }
+        let windowMin = scrollY - pages * viewportHeight
+        let windowMax = scrollY + (1 + pages) * viewportHeight
+        var rowTop = [Double](repeating: 0, count: order.count)
+        var rowBottom = [Double](repeating: 0, count: order.count)
+        var top = contentInset
+        for (i, id) in order.enumerated() {
+            let h = heights[id] ?? fallbackHeight
+            rowTop[i] = top
+            rowBottom[i] = top + h
+            top += h + spacing
+        }
+        // first = smallest i with rowBottom[i] > windowMin (rowBottom increasing).
+        // last  = largest  i with rowTop[i]    < windowMax (rowTop increasing).
+        guard let first = Self.leftmostIndex(in: rowBottom, greaterThan: windowMin),
+              let last = Self.rightmostIndex(in: rowTop, lessThan: windowMax),
+              last >= first else { return 0..<0 }
+        return first..<min(last + 1, order.count)
+    }
+
+    /// Leftmost index whose value > threshold in a strictly-increasing array, or nil.
+    private static func leftmostIndex(in values: [Double], greaterThan threshold: Double) -> Int? {
+        var low = 0, high = values.count
+        while low < high {
+            let mid = (low + high) / 2
+            if values[mid] > threshold { high = mid } else { low = mid + 1 }
+        }
+        return low < values.count ? low : nil
+    }
+
+    /// Rightmost index whose value < threshold in a strictly-increasing array, or nil.
+    private static func rightmostIndex(in values: [Double], lessThan threshold: Double) -> Int? {
+        var low = 0, high = values.count
+        while low < high {
+            let mid = (low + high) / 2
+            if values[mid] < threshold { low = mid + 1 } else { high = mid }
+        }
+        return low > 0 ? low - 1 : nil
+    }
+
     /// The bottom-most VISIBLE row (top above the viewport's bottom edge) — the
     /// windowed layout's scroll-memory capture source (replaces lazy-stack
     /// materialization tracking). Approximate in unmeasured regions; scroll
