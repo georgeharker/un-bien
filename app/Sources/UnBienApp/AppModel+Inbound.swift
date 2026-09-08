@@ -179,10 +179,29 @@ extension AppModel {
     private func scheduleFoldFlush() {
         guard !foldFlushScheduled else { return }
         foldFlushScheduled = true
+        // Coarser cadence while the composer is actively typed so keystrokes get
+        // main-thread headroom (design 01M20SW3KHXJ). Still trailing-flushes.
+        let nanos = typingActive ? Self.foldFlushNanosTyping : Self.foldFlushNanos
         Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: Self.foldFlushNanos)
+            try? await Task.sleep(nanoseconds: nanos)
             guard let self else { return }
             self.foldFlushScheduled = false
+            self.flushAllFoldFrames()
+        }
+    }
+
+    /// Mark the composer ACTIVELY TYPED (design 01M20SW3KHXJ): throttles the fold
+    /// cadence for ~1.2s so keystrokes get main-thread headroom, then clears +
+    /// flushes to catch the stream up. Keystroke-debounced — each call resets the
+    /// timer, so the cadence only restores after typing pauses. NOT keyed on
+    /// focus (the box is focused by default).
+    func noteComposerTyping() {
+        typingActive = true
+        typingClearTask?.cancel()
+        typingClearTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.typingActive = false
             self.flushAllFoldFrames()
         }
     }

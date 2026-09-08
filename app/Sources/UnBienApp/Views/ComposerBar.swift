@@ -15,6 +15,9 @@ protocol ComposerChrome: ObservableObject {
     var demo: Bool { get }
     var prefill: String? { get }
     func consumePrefill()
+    /// Signal a keystroke so the model can throttle the streaming fold cadence
+    /// while the box is actively typed (design 01M20SW3KHXJ).
+    func noteTyping()
     func send(_ text: String)
     func queue(_ text: String)
     func cancel()
@@ -71,6 +74,7 @@ final class SessionComposerChrome: ComposerChrome {
     }
 
     func consumePrefill() { model.composerPrefill[session.id] = nil }
+    func noteTyping() { model.noteComposerTyping() }
     func send(_ text: String) { Task { await model.sendMessage(text, to: session) } }
     func queue(_ text: String) { Task { await model.queueMessage(text, to: session) } }
     func cancel() { Task { await model.cancel(session) } }
@@ -120,6 +124,12 @@ struct ComposerBar<Chrome: ComposerChrome>: View, Equatable {
                         draft = prefill
                         chrome.consumePrefill()
                     }
+                }
+                // Active-typing signal (non-empty so a send-clear to "" doesn't
+                // slow the response stream). Throttles the fold cadence for the
+                // keystroke's headroom. Design 01M20SW3KHXJ.
+                .onChange(of: draft) { _, new in
+                    if !new.isEmpty { chrome.noteTyping() }
                 }
                 .disabled(locked)
             Button {

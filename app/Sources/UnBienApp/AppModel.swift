@@ -278,10 +278,24 @@ public final class AppModel: ObservableObject {
     /// reducer pass + ONE publish per flush) — see
     /// AppModel+Inbound.handleEnvelopeContent for the design note.
     static let foldFlushNanos: UInt64 = 66_000_000
+    /// SLOWER fold cadence (~6fps) applied WHILE THE COMPOSER IS ACTIVELY TYPED
+    /// (design 01M20SW3KHXJ): each fold's downstream chain (bubble render +
+    /// height measure + window recompute + scroll pin) is main-thread work, and
+    /// so is the keyboard — at 15fps they compete and typing jerks. Coarsening
+    /// folds to ~6fps while a keystroke is recent hands the main thread back to
+    /// input; the stream still updates (just coarser) and ALWAYS finally flushes
+    /// (the trailing Task flush + the message_end barrier).
+    static let foldFlushNanosTyping: UInt64 = 160_000_000
     var pendingFoldFrames: [String: [(env: EnvelopeMessage,
                                       envelope: RoutedEnvelope,
                                       relayID: UUID)]] = [:]
     var foldFlushScheduled = false
+    /// True for ~1.2s after each composer keystroke — keystroke-DEBOUNCED, not
+    /// focus (the box is focused by default in a session, so focus would throttle
+    /// forever). Plain var (not @Published): read by scheduleFoldFlush, never
+    /// observed by a view. Design 01M20SW3KHXJ.
+    var typingActive = false
+    var typingClearTask: Task<Void, Never>?
     /// Connection generation per relay (run 2026-09-18 duplicate-delivery
     /// fix): incremented by every connect(); event loops carry their
     /// generation and refuse to tear down state when superseded — two
