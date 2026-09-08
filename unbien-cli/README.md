@@ -41,16 +41,16 @@ shows what's available.
 
 Type to prompt. Slash commands:
 
-| | |
-| --- | --- |
-| `/help` | list commands |
-| `/tree` | browse turns — `f` forks a new session, `b` branches in place |
-| `/fork`, `/branch` | same, by entry id |
-| `/plan`, `/subagents` | pin a panel above the composer (`toggle`/`expand`/`collapse`/`hide`) |
-| `/plan filter done`, `/plan filter context`, `/plan lines <n>` | what the plan shows |
-| `/model`, `/thinking`, `/compact`, `/abort` | pi's own session verbs |
-| `/set` | client settings (thinking stream, panel modes) |
-| `/quit` | detach; the remote session keeps running |
+|                                                                |                                                                      |
+| -------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `/help`                                                        | list commands                                                        |
+| `/tree`                                                        | browse turns — `f` forks a new session, `b` branches in place        |
+| `/fork`, `/branch`                                             | same, by entry id                                                    |
+| `/plan`, `/subagents`                                          | pin a panel above the composer (`toggle`/`expand`/`collapse`/`hide`) |
+| `/plan filter done`, `/plan filter context`, `/plan lines <n>` | what the plan shows                                                  |
+| `/model`, `/thinking`, `/compact`, `/abort`                    | pi's own session verbs                                               |
+| `/set`                                                         | client settings (thinking stream, panel modes)                       |
+| `/quit`                                                        | detach; the remote session keeps running                             |
 
 Ctrl-C exits. Settings live in `~/.config/unbien-cli/settings.json`.
 
@@ -63,7 +63,7 @@ for looking at a transcript, or for checking rendering without a live session.
 
 The un-bien wire carries **byte-faithful pi rpc frames**, so this is a second
 renderer over the stream the app already reads, not a second protocol. History
-(`get_entries`) replays through the *same* reducer as live frames.
+(`get_entries`) replays through the _same_ reducer as live frames.
 
 Requires a paired Pi running the [`@geohar/un-bien`](https://www.npmjs.com/package/@geohar/un-bien)
 extension and a relay you host. Machine administration (launcher daemon,

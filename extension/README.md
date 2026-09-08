@@ -411,10 +411,10 @@ real name to the peer.
 
 ### Service install & remote launch (see [Remote launch](#remote-launch))
 
-| Command             | Description                                                                        |
-| ------------------- | ---------------------------------------------------------------------------------- |
+| Command             | Description                                                                              |
+| ------------------- | ---------------------------------------------------------------------------------------- |
 | `/unbien install`   | Install the **unbien-launcher** daemon as a system service + link the `unbien-admin` CLI |
-| `/unbien uninstall` | Remove the launcher service + CLI links (pairing and config preserved)             |
+| `/unbien uninstall` | Remove the launcher service + CLI links (pairing and config preserved)                   |
 
 All commands above work both as Pi slash commands (interactive) and as
 shell-level `unbien <subcommand>` when the package is installed

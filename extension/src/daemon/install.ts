@@ -631,7 +631,11 @@ export function linkCliBinaries(
   }
 
   const links: LinkBinariesResult["links"] = [
-    { name: "unbien-admin", path: join(binDir, "unbien-admin"), target: remotePi },
+    {
+      name: "unbien-admin",
+      path: join(binDir, "unbien-admin"),
+      target: remotePi,
+    },
   ]
   for (const link of links) {
     _replaceSymlink(link.path, link.target, log)
