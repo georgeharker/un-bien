@@ -40,7 +40,8 @@ public enum InboundFrame: Equatable, Sendable {
             }
             return .challenge(nonce: nonce)
         case "error":
-            return .error(code: object["code"] as? String, message: object["message"] as? String)
+            return .error(code: object["code"] as? String, message: object["message"] as? String,
+                          peer: object["peer"] as? String)
         case "peer_online":
             return .peerOnline(peer: try peer())
         case "peer_offline":

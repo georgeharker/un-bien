@@ -117,7 +117,10 @@ public struct PresenceState: Codable, Equatable, Sendable {
 /// Relay → app control events (auth challenge + presence/rooms fan-out).
 public enum RelayControlIn: Equatable, Sendable {
     case challenge(nonce: String)
-    case error(code: String?, message: String?)
+    /// `peer` is set when the relay ATTRIBUTES the error to a target machine
+    /// (e.g. a rooms_check refusal for an unpaired peer, design 01M1ZE43);
+    /// nil for an unattributed/auth-time rejection.
+    case error(code: String?, message: String?, peer: String?)
     case peerOnline(peer: String)
     case peerOffline(peer: String, sinceTs: Int?)
     case presence(states: [PresenceState])

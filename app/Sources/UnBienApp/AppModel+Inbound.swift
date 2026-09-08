@@ -215,7 +215,7 @@ extension AppModel {
         // branches below and be dropped. Surface it — envelope.peer names the
         // machine to flag for re-pair (design 01M1V1PM).
         if env.type == "error" {
-            handlePeerError(inner: try? envelope.decodeInner(),
+            handlePeerError(code: (try? envelope.decodeInner())?["code"]?.stringValue,
                             peer: envelope.peer, relayID: relayID)
             return
         }
@@ -238,8 +238,7 @@ extension AppModel {
     /// / evicted from a shared store): mark the machine so the UI prompts a
     /// re-scan instead of a silent blank, and STOP every stuck backfill spinner
     /// for it (they'd never complete until re-paired). Design 01M1V1PM.
-    private func handlePeerError(inner: JSONValue?, peer: String, relayID: UUID) {
-        let code = inner?["code"]?.stringValue
+    private func handlePeerError(code: String?, peer: String, relayID: UUID) {
         guard code == "unknown_peer" else {
             log.error("peer error code=\(code ?? "?", privacy: .public)")
             return
@@ -768,6 +767,11 @@ extension AppModel {
 
     private func handle(control event: RelayControlIn, relayID: UUID) {
         switch event {
+        case let .error(code, _, peer):
+            // Relay-origin refusal (e.g. a rooms_check unknown_peer for an unpaired
+            // machine, design 01M1ZE43): attribute it to the machine so the UI can
+            // prompt re-pair instead of showing an empty/absent listing.
+            if let peer { handlePeerError(code: code, peer: peer, relayID: relayID) }
         case let .rooms(peer, rooms):
             // Authoritative per-peer snapshot (rooms_check on subscribe): RECONCILE,
             // don't just add. Drop any session for this (relay, peer) whose room

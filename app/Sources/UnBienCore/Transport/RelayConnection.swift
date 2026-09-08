@@ -49,7 +49,7 @@ public actor RelayConnection {
             }
             let sig = try identity.sign(nonceBytes)
             try await channel.send(encode(RelayControlOut.auth(sig: Base64.standard(sig))))
-        case let .error(code, message):
+        case let .error(code, message, _):
             throw ConnectionError.rejected(code: code, message: message)
         default:
             throw ConnectionError.unexpectedFrame(firstLine)
