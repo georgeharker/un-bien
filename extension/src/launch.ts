@@ -1,5 +1,5 @@
 import { spawn, spawnSync, execFile } from "node:child_process"
-import { basename, join } from "node:path"
+import { basename, join, resolve } from "node:path"
 import { existsSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { loadConfig } from "./config.js"
@@ -192,6 +192,23 @@ async function _launchHerdr(cwd: string, agentName: string): Promise<void> {
  * fast-follow (stubbed). Returns null when the launch is initiated, else an
  * error string.
  */
+/** Is `cwd` within the machine's remote-launch dir ALLOW-LIST (design 01M211VW9)?
+ *  `"*"` or absent (the default) allows any dir; a named list allows a dir only
+ *  when it equals or is nested under a listed entry. `~` expanded on both sides.
+ *  Callers pass `loadConfig().launch?.dirs` FRESH per request. */
+export function launchDirAllowed(
+  cwd: string,
+  dirs: "*" | string[] | undefined,
+): boolean {
+  if (dirs === undefined || dirs === "*") return true
+  if (!Array.isArray(dirs) || dirs.length === 0) return false
+  const target = resolve(_expandTilde(cwd))
+  return dirs.some((d) => {
+    const base = resolve(_expandTilde(d))
+    return target === base || target.startsWith(base + "/")
+  })
+}
+
 export function _launchSession(
   mode: "tmux" | "herdr" | "rpc",
   cwd: string,

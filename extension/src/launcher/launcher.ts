@@ -5,7 +5,7 @@ import { PlainPeerChannel } from "../transport/peer_channel.js"
 import { getOrCreateEd25519Keypair } from "../pairing/storage.js"
 import { roomIdForControl } from "../rooms.js"
 import { _findKnownPeer } from "../pairing/peer_trust.js"
-import { _launchSession, _expandTilde } from "../launch.js"
+import { _launchSession, _expandTilde, launchDirAllowed } from "../launch.js"
 import {
   helloEnvelope,
   isEnvelopeFrame,
@@ -88,7 +88,11 @@ export async function startLauncher(): Promise<LauncherHandle> {
    *  DAEMON-SPECIFIC caps PULL (design 01M1813Q) — reply with caps + hostname +
    *  backend. `session_launch` mirrors the extension's _routeUnBienPlaneFrom handler:
    *  per-cwd opt-in, machine-config backend, clean exec (no keystrokes). */
-  function handleUbFrame(env: EnvelopeMessage, sender: PlainPeerChannel): void {
+  async function handleUbFrame(
+    env: EnvelopeMessage,
+    sender: PlainPeerChannel,
+    peer: string,
+  ): Promise<void> {
     if (env.ub === undefined) return
     const frame = env.ub as Record<string, unknown>
 
@@ -113,6 +117,27 @@ export async function startLauncher(): Promise<LauncherHandle> {
     )
     if (!effectiveAllowRemoteLaunch(loadLocalConfig(cwd))) {
       envLog("launcher session_launch: remote launch disabled on this machine")
+      return
+    }
+    // Re-check pairing FRESH per launch (design 01M211VW9): the launcher has NO
+    // revoke-detach path (unlike the extension), so consult peers.json each
+    // request — a revoked owner stops launching without a daemon restart.
+    if (!(await _findKnownPeer(peer))) {
+      sender.send({
+        type: "error",
+        code: "unknown_peer",
+        message: "Peer not paired — re-scan QR",
+      })
+      return
+    }
+    // Directory allow-list, read FRESH each request.
+    if (!launchDirAllowed(cwd, loadConfig().launch?.dirs)) {
+      envLog("launcher session_launch: cwd not in launch.dirs allow-list")
+      sender.send({
+        type: "error",
+        code: "permission_denied",
+        message: "Remote launch not permitted for this directory",
+      })
       return
     }
     const launchError = _launchSession(
@@ -154,7 +179,9 @@ export async function startLauncher(): Promise<LauncherHandle> {
       roomId,
       (msg) => handleStockMessage(msg, channel), // liveness ping->pong
       () => channels.delete(peer),
-      (env) => handleUbFrame(env, channel),
+      (env) => {
+        void handleUbFrame(env, channel, peer)
+      },
     )
     channels.set(peer, channel)
     // Advertise machine caps up front so the app enables its launch control for
@@ -165,7 +192,7 @@ export async function startLauncher(): Promise<LauncherHandle> {
     )
     // The channel didn't see the line that triggered the attach — route it.
     if (isEnvelopeFrame(firstInner as Record<string, unknown>)) {
-      handleUbFrame(firstInner as EnvelopeMessage, channel)
+      void handleUbFrame(firstInner as EnvelopeMessage, channel, peer)
     }
   }
 

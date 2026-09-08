@@ -53,7 +53,19 @@ export type UnBienConfig = {
    * WINDOWS of (a window per pi, via clean `new-window`; single `tmux attach`
    * point). Absent ⇒ `"un-bien"`.
    */
-  launch?: { backend?: "tmux" | "herdr"; tmux_session?: string }
+  /**
+   * `dirs` = the remote-launch directory ALLOW-LIST (design 01M211VW9):
+   * `"*"` (or absent — the default) allows any cwd; a named list restricts
+   * launch to those dirs (or nested paths). Consulted FRESH per launch request
+   * (loadConfig reads the file each call), so edits take effect without a
+   * restart. Whether launch is enabled at all is still the per-cwd
+   * `allow_remote_launch` flag; `dirs` narrows WHERE within that.
+   */
+  launch?: {
+    backend?: "tmux" | "herdr"
+    tmux_session?: string
+    dirs?: "*" | string[]
+  }
   /**
    * Subagent surfacing. When `rooms` is true, a
    * Pi SUBAGENT is surfaced to the paired app as its OWN session — a distinct

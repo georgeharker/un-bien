@@ -90,7 +90,7 @@ import {
   isValidRelayUrl,
   isWebSocketScheme,
 } from "./config.js"
-import { _expandTilde, _launchSession } from "./launch.js"
+import { _expandTilde, _launchSession, launchDirAllowed } from "./launch.js"
 import { _enrichToolArgs } from "./enrich_tool_args.js"
 import {
   _findKnownPeer,
@@ -263,7 +263,10 @@ function _refreshPairingsCache(): void {
       _hasGlobalPairings = peers.length > 0
       // Keep the relay's ROOMS-gate allow-list in sync on every pairing change
       // (pair / unpair / revoke). Design 01M1ZE43; no-ops when the relay is down.
-      _relay?.sendControl({ type: "pairing_set", owners: pairingAllowList(peers) })
+      _relay?.sendControl({
+        type: "pairing_set",
+        owners: pairingAllowList(peers),
+      })
       _refreshFooter()
     })
     .catch(() => {
@@ -1262,6 +1265,16 @@ function _routeUnBienPlaneFrom(
     )
     if (!effectiveAllowRemoteLaunch(loadLocalConfig(cwd))) {
       envLog("session_launch(ub): remote launch disabled on this machine")
+      return
+    }
+    // Directory allow-list (design 01M211VW9), read FRESH each request.
+    if (!launchDirAllowed(cwd, loadConfig().launch?.dirs)) {
+      envLog("session_launch(ub): cwd not in launch.dirs allow-list")
+      sender.send({
+        type: "error",
+        code: "permission_denied",
+        message: "Remote launch not permitted for this directory",
+      })
       return
     }
     // Backend is a MACHINE config choice (pick-one via launch.backend), not
