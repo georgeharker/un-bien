@@ -10,7 +10,7 @@ name: Publish Relay Crate
   workflow_dispatch:
 
 permissions:
-  id-token: write  # Required for crates.io OIDC trusted publishing
+  id-token: write # Required for crates.io OIDC trusted publishing
   contents: read
 
 jobs:
