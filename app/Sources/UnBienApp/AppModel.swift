@@ -101,6 +101,18 @@ public final class AppModel: ObservableObject {
     /// TUI's /tree select-and-resubmit: navigate the leaf, hand the selected
     /// message text to the composer). Consumed by ComposerBar on change.
     @Published public var composerPrefill: [String: String] = [:]
+    /// Per-session composer chrome (design 01M20M1RQ8): the narrow observable the
+    /// input bar subscribes to instead of the whole model. Plain cache (NOT
+    /// @Published) of stable per-session objects; cleared in forgetSession.
+    var composerChromes: [String: SessionComposerChrome] = [:]
+
+    /// The (cached) composer chrome for `session` — created once, reused.
+    func composerChrome(for session: LiveSession) -> SessionComposerChrome {
+        if let existing = composerChromes[session.id] { return existing }
+        let chrome = SessionComposerChrome(model: self, session: session)
+        composerChromes[session.id] = chrome
+        return chrome
+    }
     /// Sessions whose get_entries backfill WALK has reached its terminal page
     /// (empty page / error / nil leaf) — the transcript is complete for now.
     /// TranscriptView's scroll-restore WAITS on this while pages stream in: the
@@ -508,6 +520,10 @@ public final class AppModel: ObservableObject {
         if since == nil {
             fullWalkInFlight[session.id] = walkID
         }
+        let kTag = String(session.id.suffix(12)), sTag = since.map { String($0.suffix(8)) } ?? "nil", wTag = String(walkID.suffix(8))
+        RenderActivity.walkStarts += 1
+        RenderActivity.lastWalkInfo = since == nil ? "full" : "delta:\(sTag)"
+        log.notice("WALK start key=\(kTag, privacy: .public) \(since == nil ? "full" : "delta") since=\(sTag, privacy: .public) w=\(wTag, privacy: .public)")
         try? await connection.send(.getEntries(id: walkID, since: since),
                                    toPeer: session.peerEPK, room: session.roomID)
         try? await connection.send(.sessionSync(id: UUID().uuidString, limit: nil),
@@ -566,6 +582,7 @@ public final class AppModel: ObservableObject {
                 self.activeWalks[sid] = retryID
                 if since == nil { self.fullWalkInFlight[sid] = retryID }
                 let sinceTail = since == nil ? "nil" : String(since!.suffix(8))
+                RenderActivity.walkStalls += 1
                 self.log.notice("get_entries walk stalled — retry \(attempt + 1) from cursor (since=\(sinceTail, privacy: .public))")
                 try? await conn.send(.getEntries(id: retryID, since: since),
                                      toPeer: session.peerEPK, room: session.roomID)

@@ -157,6 +157,7 @@ extension AppModel {
     func forgetSession(key: String) {
         lastViewedScroll[key] = nil
         heightCache[key] = nil
+        composerChromes[key] = nil
         // Entry cache follows the ROOM's lifecycle (design
         // 01M1M4N8RZZANDX6NWY7FCSBT5, append 3): trashed when the room goes
         // away — this fires on room_ended / rooms_check purge / removal.

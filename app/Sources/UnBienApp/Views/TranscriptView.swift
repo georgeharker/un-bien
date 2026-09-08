@@ -785,13 +785,14 @@ struct TranscriptView: View {
         // pending backfill-wait restore (their position wins), arm the pin,
         // and bind the bottom NOW — not just when the outgoing row echoes
         // back (a queued steer may not create a row for a while).
-        ComposerBar(session: session, onSent: {
+        ComposerBar(sessionID: session.id, chrome: model.composerChrome(for: session), onSent: {
             cancelPendingRestore()
             // Submit = EXPLICIT intent: the one direct policy write; the
             // binding set is the phase-free command.
             shouldPin = true
             scrollAnchor = Self.bottomSentinelID
         })
+        .equatable()
     }
 
     /// Composer replacement for a view-only subagent session (read-only).
