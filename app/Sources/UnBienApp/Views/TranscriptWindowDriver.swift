@@ -91,6 +91,16 @@ final class TranscriptWindowDriver {
     /// Window membership, id-keyed: ids survive any reorder/prepend/insert, so
     /// there is no index-remap to get wrong (01M1WZEND2).
     private var near: Set<String> = []
+    /// Scroll direction from the VIEW's rendered-state truth (the anchor index
+    /// delta, freshest signal): +1 toward newest/bottom, -1 toward oldest, 0
+    /// idle. scrollY delta is only the geometric-fallback source. Readable by
+    /// the content. Drives which window edge cache eviction protects.
+    private(set) var scrollDirection = 0
+    private var previousAnchorIndex: Int?
+    private var previousScrollY: Double?
+    /// Hash of the active MarkdownProseStyle (fed by the view via sync) so the
+    /// leading-window protection reconstructs the entity cache keys.
+    var currentStyleHash = 0
     private var scrollY: Double?
     private var viewportHeight: Double?
     private var viewportHeightAtGeneration: Double?
@@ -163,6 +173,13 @@ final class TranscriptWindowDriver {
             #endif
             return
         }
+        // Geometric-fallback direction: only when NO identity anchor exists (the
+        // anchor is the truth otherwise). scrollY is the distrusted global offset.
+        if case .none = anchor, let prev = previousScrollY {
+            if scrollY > prev + 0.5 { scrollDirection = 1 }
+            else if scrollY < prev - 0.5 { scrollDirection = -1 }
+        }
+        previousScrollY = scrollY
         self.scrollY = scrollY
         recomputeIfNeeded()
     }
@@ -214,6 +231,12 @@ final class TranscriptWindowDriver {
     func update(anchorID: String) {
         guard anchor != .row(anchorID) else { return }
         anchor = .row(anchorID)
+        // Direction from the rendered-state truth (bottom-visible row moving) —
+        // the freshest, most authoritative scroll signal (identity, not raw offset).
+        if let new = orderIndex[anchorID] {
+            if let old = previousAnchorIndex { scrollDirection = new > old ? 1 : (new < old ? -1 : scrollDirection) }
+            previousAnchorIndex = new
+        }
         dirty = true
         recomputeIfNeeded()
     }
@@ -223,6 +246,8 @@ final class TranscriptWindowDriver {
     func updateTailAnchor() {
         guard anchor != .tail else { return }
         anchor = .tail
+        scrollDirection = 1   // tail = moving toward the newest
+        previousAnchorIndex = order.indices.last
         dirty = true
         recomputeIfNeeded()
     }
@@ -270,7 +295,8 @@ final class TranscriptWindowDriver {
         dirty = true
     }
 
-    func sync(order: [String]) {
+    func sync(order: [String], styleHash: Int = 0) {
+        if styleHash != 0 { currentStyleHash = styleHash }
         update(order: order)
         recomputeIfNeeded()
     }
@@ -319,12 +345,41 @@ final class TranscriptWindowDriver {
         // broadcast to all N husks.
         for id in turnedOn { flipInboxes[id]?.send(true) }
         for id in turnedOff { flipInboxes[id]?.send(false) }
+        protectLeadingWindow()
         #if DEBUG
         let dt = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000
         if dt > 3 {
             dbgDriverLog("recompute \(String(format: "%.1f", dt))ms N=\(order.count) near=\(near.count) on=\(turnedOn.count) off=\(turnedOff.count) anchor=\(anchorLabel)")
         }
         #endif
+    }
+
+    /// Keep the direction-of-travel window edge warm: bump those entity keys to
+    /// MRU so cache eviction discards only what we've LEFT BEHIND, never what
+    /// we're scrolling TOWARD (01M1Y1GK). Idle (dir 0) protects the whole
+    /// visible window. O(window), all O(1) hits; a no-op under cap.
+    private func protectLeadingWindow() {
+        guard !near.isEmpty else { return }
+        RenderActivity.scrollDir = scrollDirection
+        let leading: [String]
+        if scrollDirection != 0, let center = centerIndex() {
+            leading = near.filter {
+                guard let i = orderIndex[$0] else { return false }
+                return scrollDirection > 0 ? i >= center : i <= center
+            }
+        } else {
+            leading = Array(near)
+        }
+        MarkdownEntityStore.shared.touchLeading(leading, styleHash: currentStyleHash)
+    }
+
+    /// The window's center row index by the current anchor (rendered-state truth).
+    private func centerIndex() -> Int? {
+        switch anchor {
+        case .row(let id): return orderIndex[id]
+        case .tail: return order.indices.last
+        case .none: return bottomVisibleIndex()
+        }
     }
 
     private var anchorLabel: String {

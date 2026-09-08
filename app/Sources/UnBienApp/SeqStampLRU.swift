@@ -20,6 +20,9 @@ struct SeqStampLRU<Key: Hashable, Value> {
 
     /// Retention bound. Lowering it purges immediately (didSet).
     var cap: Int { didSet { evictIfNeeded() } }
+    /// Cumulative evictions (a debug gauge; distinguishes an under-cap cache
+    /// from one churning under pressure).
+    private(set) var evictedTotal = 0
 
     init(cap: Int) { self.cap = cap }
 
@@ -53,6 +56,7 @@ struct SeqStampLRU<Key: Hashable, Value> {
         while store.count > cap, let victim = useSeq.min(by: { $0.value < $1.value })?.key {
             store[victim] = nil
             useSeq[victim] = nil
+            evictedTotal += 1
         }
     }
 }

@@ -108,7 +108,8 @@ struct TranscriptStackView: View, Equatable {
         // Sync runs on a REAL rebuild only (a skipped scroll never reaches here,
         // and order is unchanged on a scroll anyway → update(order:) no-ops).
         // Inserted/re-keyed husks get correct membership BEFORE the ForEach.
-        let _ = driver.sync(order: items.map(\.id))
+        let _ = driver.sync(order: items.map(\.id),
+                            styleHash: MarkdownStyleCache.style(theme: theme, typography: typography).hashValue)
         VStack(alignment: .leading, spacing: 12) {
             ForEach(Array(items.enumerated()), id: \.element.id) { pair in
                 HuskRow(item: pair.element, index: pair.offset, driver: driver,

@@ -51,7 +51,7 @@ struct MarkdownEntitiesView: View {
     // Key = message identity + a hash of the WHOLE style, so any palette/font/
     // size change re-produces without hand-listing each field in the key.
     private var style: MarkdownProseStyle { MarkdownStyleCache.style(theme: theme, typography: typography) }
-    private var key: String { "\(id)\u{1}\(style.hashValue)" }
+    private var key: String { MarkdownEntityStore.key(rowID: id, styleHash: style.hashValue) }
 
     var body: some View {
         Group {

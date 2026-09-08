@@ -57,6 +57,14 @@ public enum RenderActivity {
     public nonisolated(unsafe) static var nearCount = 0
     /// Materialize: last MarkdownEntityStore.produce duration (µs) — gauge.
     public nonisolated(unsafe) static var produceLastMicros = 0
+    /// Entity cache occupancy + cumulative evictions (gauges). Evictions climbing
+    /// = a >cap session under pressure — the regime the leading-window protection
+    /// (never evict what we're scrolling toward, 01M1Y1GK) exists for.
+    public nonisolated(unsafe) static var entityCacheCount = 0
+    public nonisolated(unsafe) static var entityCacheEvicted = 0
+    /// Last scroll direction the driver derived from the view's anchor (+1 toward
+    /// newest, -1 toward oldest, 0 idle) — the leading edge it protects.
+    public nonisolated(unsafe) static var scrollDir = 0
     /// Walk lifecycle (plan 01M1YYYVT diagnosis): starts, terminals (completed),
     /// stalls (watchdog retries), + the last walk's kind (full | delta:<leaf>).
     /// starts climbing while terminals lags = walks not completing.

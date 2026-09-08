@@ -23,7 +23,18 @@ final class MarkdownEntityStore {
         set { lru.cap = newValue }
     }
 
+    /// Cache key = row identity + a hash of the whole style. Shared with the
+    /// driver so its leading-window protection reconstructs the same key.
+    static func key(rowID: String, styleHash: Int) -> String { "\(rowID)\u{1}\(styleHash)" }
+
     func cached(_ key: String) -> [MarkdownEntity]? { lru.value(key) }   // peek: no touch
+
+    /// Protect the leading window edge from eviction (01M1Y1GK): bump each
+    /// still-cached row to MRU so find-min never discards what we're scrolling
+    /// TOWARD. No-op for rows not (yet) produced. O(rowIDs), all O(1) hits.
+    func touchLeading(_ rowIDs: [String], styleHash: Int) {
+        for id in rowIDs { _ = lru.hit(Self.key(rowID: id, styleHash: styleHash)) }
+    }
 
     func produce(_ key: String, text: String, style: MarkdownProseStyle) async -> [MarkdownEntity] {
         if let hit = lru.hit(key) { return hit }   // touch: stamp MRU, O(1)
@@ -35,6 +46,8 @@ final class MarkdownEntityStore {
         RenderActivity.produceLastMicros = Int((DispatchTime.now().uptimeNanoseconds - t0) / 1000)
         lru.insert(key, made)
         RenderActivity.produceFinished += 1
+        RenderActivity.entityCacheCount = lru.count
+        RenderActivity.entityCacheEvicted = lru.evictedTotal
         return made
     }
 }
