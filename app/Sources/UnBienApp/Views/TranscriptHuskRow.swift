@@ -55,7 +55,7 @@ struct HuskRow: View {
         self.onFork = onFork
         self.onBranch = onBranch
         self.branchPointIds = branchPointIds
-        _isNear = State(initialValue: driver.isNear(index))
+        _isNear = State(initialValue: driver.isNear(item.id))
     }
 
     /// The row's pi entry id when the row is DURABLE (entry-keyed, anchorable)

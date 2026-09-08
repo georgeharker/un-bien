@@ -53,7 +53,7 @@ final class TranscriptWindowDriver {
     /// WRONG row's membership (the missing / mis-shown-content bug).
     func registerFlipInbox(_ inbox: PassthroughSubject<Bool, Never>, for id: String) {
         flipInboxes[id] = inbox
-        if let idx = orderIndex[id] { inbox.send(near.contains(idx)) }
+        inbox.send(near.contains(id))
     }
     func unregisterFlipInbox(for id: String) { flipInboxes[id] = nil }
 
@@ -88,7 +88,9 @@ final class TranscriptWindowDriver {
     private var order: [String] = []
     /// id -> display index for O(1) anchor lookup; rebuilt in update(order:).
     private var orderIndex: [String: Int] = [:]
-    private var near: Set<Int> = []
+    /// Window membership, id-keyed: ids survive any reorder/prepend/insert, so
+    /// there is no index-remap to get wrong (01M1WZEND2).
+    private var near: Set<String> = []
     private var scrollY: Double?
     private var viewportHeight: Double?
     private var viewportHeightAtGeneration: Double?
@@ -105,9 +107,9 @@ final class TranscriptWindowDriver {
     private enum WindowAnchor: Equatable { case none, tail, row(String) }
     private var anchor: WindowAnchor = .none
 
-    /// Current membership — a husk reads this ONCE at init; updates arrive via
-    /// `flips` (row-targeted, so non-boundary husks never re-eval).
-    func isNear(_ index: Int) -> Bool { near.contains(index) }
+    /// Current membership by id — a husk reads this ONCE at init; updates arrive
+    /// via `flips` (row-targeted, so non-boundary husks never re-eval).
+    func isNear(_ id: String) -> Bool { near.contains(id) }
 
     /// A row's retained height (measured OR seeded/migrated) — the RENDER side
     /// of the "registry IS what the husks render" invariant. Without this,
@@ -131,22 +133,13 @@ final class TranscriptWindowDriver {
                 }
             }
         }
-        let oldOrder = self.order
         self.order = order
         orderIndex.removeAll(keepingCapacity: true)
         for (i, id) in order.enumerated() { orderIndex[id] = i }
-        // Remap `near` from OLD -> NEW indices BY ID. A non-tail order change
-        // (backfill prepend / middle-insert / reorder) shifts every index, so an
-        // index-keyed near would point at the WRONG rows and the recompute's flip
-        // diff would send OFF to order[oldIndex] — now a DIFFERENT message —
-        // ghosting the wrong husks (earlier messages rendering out of order after
-        // new content). The anchor already survives (id-based); near needs the
-        // same remap. Tail-append is a no-op here (indices unchanged).
-        if !near.isEmpty {
-            near = Set(near.compactMap { old in
-                old < oldOrder.count ? orderIndex[oldOrder[old]] : nil
-            })
-        }
+        // NO near remap: near is id-keyed, and ids survive a reorder / backfill
+        // prepend / middle-insert unchanged. This deletes the "anything
+        // index-keyed surviving a reorder must remap by id" bug class outright
+        // (01M1WZEND2) — both this session's flip bugs lived in that remap.
         // Prune flip inboxes for ids no longer present (re-keyed / removed /
         // reset rows) — DETERMINISTIC cleanup independent of onDisappear (which
         // SwiftUI fires unreliably). Bounds the dict to live rows; a fresh husk
@@ -316,17 +309,16 @@ final class TranscriptWindowDriver {
         dirty = false
         lastComputeScrollY = scrollY
         RenderActivity.windowRecomputed += 1
-        guard let window = computeWindow(viewportHeight: viewportHeight) else { return }
-        let newNear = Set(window)
+        guard let newNear = computeWindow(viewportHeight: viewportHeight) else { return }
         let turnedOn = newNear.subtracting(near)
         let turnedOff = near.subtracting(newNear)
         near = newNear
         RenderActivity.lastWindowMicros = Int((DispatchTime.now().uptimeNanoseconds - t0) / 1000)
         RenderActivity.nearCount = newNear.count
-        // Deliver ONLY to the rows that changed (index -> id via the current
-        // order) — not a broadcast to all N husks.
-        for i in turnedOn where i < order.count { flipInboxes[order[i]]?.send(true) }
-        for i in turnedOff where i < order.count { flipInboxes[order[i]]?.send(false) }
+        // Deliver ONLY to the rows that changed, addressed BY ID — not a
+        // broadcast to all N husks.
+        for id in turnedOn { flipInboxes[id]?.send(true) }
+        for id in turnedOff { flipInboxes[id]?.send(false) }
         #if DEBUG
         let dt = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000
         if dt > 3 {
@@ -345,14 +337,13 @@ final class TranscriptWindowDriver {
 
     /// The near window by ANCHOR (rendered-state truth) with the geometric
     /// mapping as fallback — see WindowAnchor.
-    private func computeWindow(viewportHeight: Double) -> Set<Int>? {
+    private func computeWindow(viewportHeight: Double) -> Set<String>? {
         let center: Int
         switch anchor {
         case .row(let id):
             guard let c = orderIndex[id] else {
                 // Anchored row vanished (compaction/filter) — KEEP the last
-                // window rather than silently falling back to the global
-                // mapping; the readout names a valid row on its next change.
+                // window rather than silently falling back to the global mapping.
                 return nil
             }
             center = c
@@ -361,8 +352,10 @@ final class TranscriptWindowDriver {
             center = last
         case .none:
             guard let range = geometricWindow(viewportHeight: viewportHeight) else { return nil }
-            return Set(range)
+            return Set(range.map { order[$0] })
         }
+        // windowRangeAroundIndex is index-based (the height-budget walk needs
+        // positions); convert its result to IDS for the id-keyed near set.
         let attach = bounds.windowRangeAroundIndex(order: order, center: center,
                                                     viewportHeight: viewportHeight,
                                                     pages: attachPages, spacing: spacing,
@@ -371,9 +364,10 @@ final class TranscriptWindowDriver {
                                                  viewportHeight: viewportHeight,
                                                  pages: detachPages, spacing: spacing,
                                                  fallbackHeight: fallbackHeight)
-        // TRUE HYSTERESIS: attach band ∪ (already-near ∩ keep band). A plain
-        // union would just be a wider window that flaps at its own edge.
-        return Set(attach).union(near.intersection(Set(keep)))
+        let attachIDs = Set(attach.map { order[$0] })
+        let keepIDs = Set(keep.map { order[$0] })
+        // TRUE HYSTERESIS: attach band ∪ (already-near ∩ keep band).
+        return attachIDs.union(near.intersection(keepIDs))
     }
 
     private func geometricWindow(viewportHeight: Double) -> Range<Int>? {
