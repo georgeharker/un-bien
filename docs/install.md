@@ -88,7 +88,7 @@ relay lives and how it stays running**. Pick one of three flows:
 | **C. [Raw run from binaries](#flow-c--raw-run-from-binaries)**                           | foreground process, nothing installed | trying Un Bien out, development                                  |
 
 All three flows also cover the machine side, including the optional
-**unbien-launcher** — a small daemon (`unbien install`) that lets the app start
+**unbien-launcher** — a small daemon (`unbien-admin install`) that lets the app start
 Pi sessions on your machine even when no Pi is running. Skip it if you only
 ever attach to sessions you started yourself.
 
@@ -190,11 +190,11 @@ Then install the **unbien-launcher** as a login service so the machine is
 reachable for remote launches even when no Pi is running:
 
 ```bash
-npm install -g @geohar/un-bien    # puts the `unbien` CLI on PATH
-unbien install                    # systemd --user (Linux) / launchd (macOS)
+npm install -g @geohar/un-bien    # puts the `unbien-admin` CLI on PATH
+unbien-admin install                    # systemd --user (Linux) / launchd (macOS)
 ```
 
-`unbien install` generates and activates the service from the bundled
+`unbien-admin install` generates and activates the service from the bundled
 templates:
 
 - **Linux:** `~/.config/systemd/user/unbien-launcher.service` —
@@ -250,7 +250,7 @@ Verify with `curl http://<docker-host>:3000/health`.
 
 **2. Working machine** — identical to Flow A step 4 (Pi + extension +
 `/unbien set-relay http://<docker-host>:3000` + `/unbien pair` + optional
-`unbien install` for the launcher service).
+`unbien-admin install` for the launcher service).
 
 **3. Phone** — build/install the app, **Add relay** →
 `http://<docker-host>:3000`, scan the pairing QR.

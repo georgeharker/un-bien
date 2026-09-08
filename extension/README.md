@@ -413,7 +413,7 @@ real name to the peer.
 
 | Command             | Description                                                                        |
 | ------------------- | ---------------------------------------------------------------------------------- |
-| `/unbien install`   | Install the **unbien-launcher** daemon as a system service + link the `unbien` CLI |
+| `/unbien install`   | Install the **unbien-launcher** daemon as a system service + link the `unbien-admin` CLI |
 | `/unbien uninstall` | Remove the launcher service + CLI links (pairing and config preserved)             |
 
 All commands above work both as Pi slash commands (interactive) and as
@@ -446,7 +446,7 @@ See [`docs/daemon.md`](./docs/daemon.md) for troubleshooting.
 ### One-time setup
 
 ```bash
-# Install the package globally so the `unbien` CLI is on your PATH
+# Install the package globally so the `unbien-admin` CLI is on your PATH
 # (`pi install npm:@geohar/un-bien` alone makes the Pi extension available
 # but does NOT expose the CLI binary — see
 # https://docs.npmjs.com/cli/v10/configuring-npm/package-json#bin).
@@ -455,11 +455,11 @@ npm install -g @geohar/un-bien
 # Install the launcher as a user-level system service. Linux uses
 # systemd --user; macOS uses launchd LaunchAgent. Both auto-start at
 # login and survive reboots.
-unbien install
+unbien-admin install
 ```
 
 Or from inside Pi: `/unbien install` — same service, plus it links the
-`unbien` CLI into `~/.local/bin` so no global npm install is needed.
+`unbien-admin` CLI into `~/.local/bin` so no global npm install is needed.
 
 The `install` command:
 
@@ -485,7 +485,7 @@ The launcher only spawns sessions where remote launch is **opted in**:
 
 The spawn backend is machine-wide: `launch.backend` in the global config —
 `tmux` (default; one shared `un-bien` tmux session, a window per launched Pi)
-or `herdr`. The backend binary must be on PATH: `unbien install` snapshots
+or `herdr`. The backend binary must be on PATH: `unbien-admin install` snapshots
 your PATH at install time, so re-run it after installing new tools.
 
 ### Launch names
@@ -503,7 +503,7 @@ only until it can pass args through to pi.
 ### Removing or uninstalling
 
 ```bash
-unbien uninstall        # remove the launcher service (pairing + config kept)
+unbien-admin uninstall        # remove the launcher service (pairing + config kept)
 ```
 
 `uninstall` is reversible — re-running `install` later brings the launcher

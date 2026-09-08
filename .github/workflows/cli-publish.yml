@@ -1,0 +1,47 @@
+name: Publish CLI
+
+on:
+  push:
+    tags:
+      # Component-scoped: extension publishes on `v*`, relay on
+      # `relay-v*`, launcher on `launcher-v*`, cli on `cli-v*` — one
+      # tag never publishes two packages.
+      - "cli-v*"
+  workflow_dispatch:
+
+permissions:
+  id-token: write # Required for OIDC trusted publishing
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24.x"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - run: npm install -g npm@latest
+
+      # The CLI imports @geohar/un-bien/client for the relay + envelope
+      # transport, so the extension must be built before it typechecks.
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -C extension build
+      - run: pnpm -C unbien-cli build
+
+      # Guard the publish: the CLI's reducer is one of two interpreters of
+      # the same wire, and its fixture tests are what keep them honest.
+      - run: pnpm -C unbien-cli test
+
+      # `pnpm publish` rewrites the `workspace:*` dep on @geohar/un-bien
+      # to the concrete published version (npm publish can't).
+      - name: Publish @geohar/unbien-cli
+        working-directory: unbien-cli
+        run: pnpm publish --provenance --access public --no-git-checks

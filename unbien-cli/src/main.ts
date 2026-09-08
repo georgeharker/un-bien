@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Single front door: `unbien-cli <command>`. */
+/** Single front door: `unbien <command>`. */
 
 const COMMANDS = new Map([
   ["connect", () => import("./connect.js")],
@@ -11,10 +11,10 @@ const load = command ? COMMANDS.get(command) : undefined
 
 if (!load) {
   console.error(
-    "usage: unbien-cli <command> [options]\n\n" +
+    "usage: unbien <command> [options]\n\n" +
       "  connect   attach to a live pi session over the relay\n" +
       "  replay    render a captured envelope stream from a file\n\n" +
-      "run `unbien-cli <command>` with no arguments for its options.",
+      "run `unbien <command>` with no arguments for its options.",
   )
   process.exit(command ? 1 : 0)
 }

@@ -1,11 +1,10 @@
 {
-  "name": "@geohar/un-bien-cli",
-  "version": "0.0.0",
-  "private": true,
-  "description": "Prototype: renders an un-bien rpc-envelope stream with pi's own TUI components and theme.",
+  "name": "@geohar/unbien-cli",
+  "version": "0.1.0",
+  "description": "unbien \u2014 a terminal client for remote Pi coding-agent sessions. Attach over an un-bien relay and render the transcript with pi's own TUI components: markdown, syntax highlighting, native tool cards, and your pi theme.",
   "type": "module",
   "bin": {
-    "unbien-cli": "dist/main.js"
+    "unbien": "dist/main.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -15,7 +14,29 @@
     "connect": "tsx src/main.ts connect",
     "test": "vitest run"
   },
+  "keywords": [
+    "pi",
+    "un-bien",
+    "unbien",
+    "cli",
+    "tui",
+    "coding-agent",
+    "remote",
+    "relay",
+    "terminal",
+    "agent-mesh"
+  ],
+  "author": "George Harker <georgeharker@gmail.com>",
   "license": "MIT",
+  "homepage": "https://docs.georgeharker.com/un-bien",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/georgeharker/un-bien.git",
+    "directory": "unbien-cli"
+  },
+  "bugs": {
+    "url": "https://github.com/georgeharker/un-bien/issues"
+  },
   "engines": {
     "node": ">=20.0.0"
   },
@@ -29,5 +50,9 @@
     "@geohar/un-bien": "workspace:*",
     "@earendil-works/pi-coding-agent": ">=0.84.3",
     "@earendil-works/pi-tui": "^0.84.4"
-  }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ]
 }

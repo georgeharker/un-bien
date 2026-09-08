@@ -318,7 +318,7 @@ describe.skipIf(posixOnly)("linkCliBinaries / unlinkCliBinaries", () => {
     expect(result.links).toHaveLength(1)
 
     const names = result.links.map((l) => l.name).sort()
-    expect(names).toEqual(["unbien"])
+    expect(names).toEqual(["unbien-admin"])
 
     for (const link of result.links) {
       expect(lstatSync(link.path).isSymbolicLink()).toBe(true)
@@ -340,13 +340,13 @@ describe.skipIf(posixOnly)("linkCliBinaries / unlinkCliBinaries", () => {
     const binDir = join(tmpHome, ".local", "bin")
     mkdirSync(binDir, { recursive: true })
     // Write a fake stale symlink first
-    const stale = join(binDir, "unbien")
+    const stale = join(binDir, "unbien-admin")
     writeFileSync(join(tmpHome, "fake-old.js"), "// old\n")
     require("node:fs").symlinkSync(join(tmpHome, "fake-old.js"), stale)
     expect(readlinkSync(stale)).toBe(join(tmpHome, "fake-old.js"))
 
     const result = linkCliBinaries(tmpHome, fakePaths)
-    const pi = result.links.find((l) => l.name === "unbien")!
+    const pi = result.links.find((l) => l.name === "unbien-admin")!
     expect(readlinkSync(pi.path)).toBe(pi.target)
     expect(readlinkSync(pi.path)).not.toBe(join(tmpHome, "fake-old.js"))
   })

@@ -6,7 +6,7 @@ likely causes and how to fix it.
 
 ---
 
-## 1. `unbien install` fails
+## 1. `unbien-admin install` fails
 
 ### "launcher script not found"
 
@@ -16,7 +16,7 @@ likely causes and how to fix it.
 `npm install -g @geohar/un-bien` (prod) first.
 ```
 
-You're running `unbien install` from a dev clone where `dist/` doesn't
+You're running `unbien-admin install` from a dev clone where `dist/` doesn't
 exist yet, or from a partial install.
 
 ```bash
@@ -25,7 +25,7 @@ cd extension && pnpm build
 
 # Production install:
 npm install -g @geohar/un-bien
-unbien install
+unbien-admin install
 ```
 
 ### "launchctl: bootstrap … already running"
@@ -38,7 +38,7 @@ new one. If it still fails:
 launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/dev.unbien.launcher.plist
 launchctl unload ~/Library/LaunchAgents/dev.unbien.launcher.plist 2>/dev/null
 rm ~/Library/LaunchAgents/dev.unbien.launcher.plist
-unbien install
+unbien-admin install
 ```
 
 ### "systemctl --user … No such file or directory"
@@ -50,12 +50,12 @@ the unit survives logout:
 ```bash
 loginctl enable-linger $USER
 systemctl --user daemon-reload
-unbien install
+unbien-admin install
 ```
 
 ### Windows: the UAC prompt fails or is declined
 
-`unbien install` needs elevation **once** — only the `schtasks /Create`
+`unbien-admin install` needs elevation **once** — only the `schtasks /Create`
 that registers the task requires admin. Accept the prompt when it appears.
 Stopping/starting the task afterwards (`/End`, `/Run`) works un-elevated.
 
@@ -81,11 +81,11 @@ tail -100 ~/.local/state/un-bien/launcher.log
   baked into the unit/plist no longer match where the package lives. This
   happens when you reinstall Node via a version manager (nvm/fnm) or
   uninstall/reinstall the package to a different location. Fix:
-  `unbien uninstall && unbien install` (install snapshots the current
+  `unbien-admin uninstall && unbien-admin install` (install snapshots the current
   node binary and paths).
 - **`tmux: command not found`** (at launch time, not startup) — the PATH
   captured at install time didn't include the remote-launch backend.
-  Install tmux (or herdr), then re-run `unbien install` to refresh PATH.
+  Install tmux (or herdr), then re-run `unbien-admin install` to refresh PATH.
 - **First connect race** — the launcher logs `initial connect failed (…)
 — retrying every 3000ms` and retries on its own. This is normal when
   the relay starts in the same breath; it clears once the relay is up.
@@ -103,7 +103,7 @@ node $(npm root -g)/@geohar/un-bien/dist/bin/launcher.js
 
 If it prints `[un-bien launcher] listening on control room …` and stays
 up, the daemon itself is fine — the problem is in the unit/plist
-environment (PATH, node path). Re-run `unbien install`.
+environment (PATH, node path). Re-run `unbien-admin install`.
 
 ---
 
@@ -149,7 +149,7 @@ tmux kill-session -t un-bien    # or tmux kill-server (kills ALL sessions)
    tmux new-session -d -s un-bien
    ```
 
-2. **Run the launcher as a login service** (`unbien install` — launchd
+2. **Run the launcher as a login service** (`unbien-admin install` — launchd
    LaunchAgent / systemd `--user`), not from a detached daemon: the launcher
    — and any tmux server it creates — stays inside your login session where
    the keychain just works.
@@ -237,11 +237,11 @@ session on the machine and scan the QR from the app.
 When you suspect everything is misconfigured:
 
 ```bash
-unbien uninstall                    # removes the service, keeps config + pairing
+unbien-admin uninstall                    # removes the service, keeps config + pairing
 rm -rf ~/.local/state/un-bien       # nukes pairing + identity (re-pair after this)
 npm uninstall -g @geohar/un-bien
 npm install -g @geohar/un-bien
-unbien install
+unbien-admin install
 # Then re-pair from scratch: pi → /unbien pair
 ```
 

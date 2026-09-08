@@ -82,10 +82,10 @@ const resolved = resolveTarget()
 if (!resolved) {
   console.error(
     "usage:\n" +
-      "  unbien-cli connect '<unbien://pair?...>'   # first run: pair with a machine\n" +
-      "  unbien-cli connect [<epk-prefix>] --list   # list that machine's sessions\n" +
-      "  unbien-cli connect [<epk-prefix>] --session <id>        # pi session id\n" +
-      "  unbien-cli connect [<epk-prefix>] --session-name <name>\n" +
+      "  unbien connect '<unbien://pair?...>'   # first run: pair with a machine\n" +
+      "  unbien connect [<epk-prefix>] --list   # list that machine's sessions\n" +
+      "  unbien connect [<epk-prefix>] --session <id>        # pi session id\n" +
+      "  unbien connect [<epk-prefix>] --session-name <name>\n" +
       "options: --relay <url> (default $UNBIEN_RELAY) --name <device>\n" +
       "         --theme <name> (default: your pi theme setting) --list-themes",
   )

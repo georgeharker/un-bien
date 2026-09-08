@@ -76,8 +76,8 @@ export function findLauncherScript(): string {
 
 /**
  * Absolute path to the extension's CLI entry (`dist/index.js`). This is
- * the file we symlink to `~/.local/bin/unbien` so the user can run
- * `un-bien <subcommand>` from any shell after installing the extension
+ * the file we symlink to `~/.local/bin/unbien-admin` so the user can run
+ * `unbien-admin <subcommand>` from any shell after installing the extension
  * through Pi (`pi install npm:un-bien`).
  *
  * Same resolution strategy as `findLauncherScript`: from
@@ -539,7 +539,7 @@ function _execElevatedWindows(lines: string[], log: string[]): void {
 // the user can't run `unbien …` from a shell.
 //
 // `linkCliBinaries` writes one symlink into `~/.local/bin/`:
-//   - `un-bien`     → `<extensionRoot>/dist/index.js`
+//   - `unbien-admin` → `<extensionRoot>/dist/index.js`
 //
 // The target gets `chmod +x` (tsc doesn't preserve the executable bit;
 // node tolerates running it via symlink either way, but POSIX shells
@@ -549,8 +549,8 @@ function _execElevatedWindows(lines: string[], log: string[]): void {
 //
 // This step is opt-in and runs ONLY when the slash-command path triggers
 // `_cmdInstall` — i.e., the user is inside Pi's TUI. The CLI-mode path
-// (`unbien install` invoked from a shell because the user did
-// `npm install -g un-bien`) MUST NOT symlink — the user already has
+// (`unbien-admin install` invoked from a shell because the user did
+// `npm install -g @geohar/un-bien`) MUST NOT symlink — the user already has
 // working bins from npm-global, and stomping them with our symlinks
 // would point them at the *Pi-extension copy* instead of the npm-global
 // copy, which is a different file tree and would diverge on upgrades.
@@ -631,7 +631,7 @@ export function linkCliBinaries(
   }
 
   const links: LinkBinariesResult["links"] = [
-    { name: "unbien", path: join(binDir, "unbien"), target: remotePi },
+    { name: "unbien-admin", path: join(binDir, "unbien-admin"), target: remotePi },
   ]
   for (const link of links) {
     _replaceSymlink(link.path, link.target, log)
@@ -754,7 +754,7 @@ export function unlinkCliBinaries(
   const log: string[] = []
   // Windows shims are `.cmd` files (linkCliBinaries writes those); POSIX uses
   // extensionless symlinks. Match what was actually created on this platform.
-  const names = platform() === "win32" ? ["un-bien.cmd"] : ["unbien"]
+  const names = platform() === "win32" ? ["unbien-admin.cmd"] : ["unbien-admin"]
   const removed: UnlinkBinariesResult["removed"] = []
 
   for (const name of names) {

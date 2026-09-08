@@ -32,7 +32,7 @@ if (theme === "list") {
 
 if (!file) {
   console.error(
-    "usage: unbien-cli replay <fixture.jsonl> [--theme <name>|list] [--width <cols>] [--cwd <path>]",
+    "usage: unbien replay <fixture.jsonl> [--theme <name>|list] [--width <cols>] [--cwd <path>]",
   )
   process.exit(1)
 }
