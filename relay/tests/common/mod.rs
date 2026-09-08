@@ -36,6 +36,7 @@ pub async fn start_relay() -> u16 {
         registry,
         presence,
         rooms,
+        pairing: Arc::new(relay::PairingRegistry::new()),
         mesh,
         mesh_auth,
         metrics,

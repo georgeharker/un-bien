@@ -39,6 +39,7 @@ async fn spawn_relay() -> (String, tempfile::TempDir) {
         registry,
         presence,
         rooms,
+        pairing: Arc::new(relay::PairingRegistry::new()),
         mesh,
         mesh_auth,
         metrics,

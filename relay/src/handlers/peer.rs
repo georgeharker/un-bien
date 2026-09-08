@@ -152,6 +152,7 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
     let mesh = state.mesh.clone();
     let mesh_auth = state.mesh_auth.clone();
     let metrics = state.metrics.clone();
+    let pairing = state.pairing.clone();
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
     let conn_id = registry.register(peer_id.clone(), room_meta, tx).await;
@@ -244,13 +245,61 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
 
                                 // ── rooms control frames (plano 17) ──
                                 "subscribe_rooms" => {
-                                    rooms.subscribe(peer_id.clone(), peers).await;
+                                    // ROOMS gate (design 01M1ZE43): subscribe only to
+                                    // machines whose pushed allow-list includes this
+                                    // requester; unconfigured machines fail-open. Unpaired
+                                    // targets are dropped so no room events leak.
+                                    let allowed: Vec<String> = peers
+                                        .into_iter()
+                                        .filter(|target| pairing.allows(target, &peer_id))
+                                        .collect();
+                                    rooms.subscribe(peer_id.clone(), allowed).await;
+                                }
+                                // ── pairing allow-list push (design 01M1ZE43) ──
+                                // The pushing peer_id IS the machine declaring who may
+                                // list its rooms. Full-set replace (extension re-pushes on
+                                // every change), then re-filter existing subscribers so a
+                                // revoke / reconnect-race drops stale watchers immediately.
+                                "pairing_set" => {
+                                    let owners: Vec<String> = frame
+                                        .get("owners")
+                                        .and_then(|v| v.as_array())
+                                        .map(|arr| {
+                                            arr.iter()
+                                                .filter_map(|v| v.as_str().map(String::from))
+                                                .collect()
+                                        })
+                                        .unwrap_or_default();
+                                    let owner_set: std::collections::HashSet<String> =
+                                        owners.iter().cloned().collect();
+                                    pairing.set(peer_id.clone(), owners);
+                                    for sub in rooms.subscribers_of(&peer_id).await {
+                                        if !owner_set.contains(&sub) {
+                                            rooms.unsubscribe(&sub, vec![peer_id.clone()]).await;
+                                        }
+                                    }
                                 }
                                 "unsubscribe_rooms" => {
                                     rooms.unsubscribe(&peer_id, peers).await;
                                 }
                                 "rooms_check" => {
                                     for target_peer in &peers {
+                                        // ROOMS gate (design 01M1ZE43): refuse to list an
+                                        // unpaired machine's rooms. Routed + peer-attributed
+                                        // (not a silent drop) so the app distinguishes
+                                        // not-paired from offline.
+                                        if !pairing.allows(target_peer, &peer_id) {
+                                            let refusal = serde_json::json!({
+                                                "type": "error",
+                                                "code": "unknown_peer",
+                                                "peer": target_peer,
+                                            })
+                                            .to_string();
+                                            if sink.send(Message::Text(refusal)).await.is_err() {
+                                                break 'routing;
+                                            }
+                                            continue;
+                                        }
                                         let active_rooms = registry.rooms_of(target_peer);
                                         let resp = serde_json::json!({
                                             "type": "rooms",

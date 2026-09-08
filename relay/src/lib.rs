@@ -20,6 +20,7 @@ use axum::{
 pub use handlers::pi_forward::MeshAuthCache;
 pub use mesh::MeshStore;
 pub use metrics::FirehoseMetrics;
+pub use peers::pairing::PairingRegistry;
 pub use peers::registry::PeerRegistry;
 pub use presence::PresenceManager;
 pub use rooms::{RoomManager, RoomMeta, RoomMetaPatch};
@@ -34,6 +35,9 @@ pub struct AppState {
     pub registry: Arc<PeerRegistry>,
     pub presence: Arc<PresenceManager>,
     pub rooms: Arc<RoomManager>,
+    /// Per-machine pairing allow-list (extension-pushed) gating the ROOMS
+    /// plane. Design 01M1ZE43.
+    pub pairing: Arc<PairingRegistry>,
     pub mesh: Arc<MeshStore>,
     /// Plan 25 — caches `Pi-pubkey → mesh siblings` to avoid hitting SQLite
     /// for every `pi_envelope` forward (60 s TTL).

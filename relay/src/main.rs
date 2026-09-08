@@ -41,6 +41,7 @@ async fn main() -> anyhow::Result<()> {
         metrics.clone(),
     ));
     let mesh_auth = Arc::new(relay::MeshAuthCache::new());
+    let pairing = Arc::new(relay::PairingRegistry::new());
 
     // Background reporter: drain firehose counters every 10 s and emit a
     // single structured log line. Quiet windows are silent.
@@ -58,6 +59,7 @@ async fn main() -> anyhow::Result<()> {
         registry,
         presence,
         rooms,
+        pairing,
         mesh,
         mesh_auth,
         metrics,
