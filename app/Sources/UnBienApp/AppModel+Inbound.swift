@@ -252,6 +252,14 @@ extension AppModel {
         }
     }
 
+    /// True when `epk` has been flagged unknown_peer by a relay/extension refusal
+    /// (rooms gate or content bounce). Encoding-normalized both sides so a config
+    /// machine.epk matches the relay peer_id form in `unpairedPeers`. Design 01M1ZE43.
+    func isMachineUnpaired(_ epk: String) -> Bool {
+        guard !unpairedPeers.isEmpty, let key = Base64.canonicalKey(epk) else { return false }
+        return unpairedPeers.contains { Base64.canonicalKey($0) == key }
+    }
+
     /// The un-bien control plane (`{type:"ub"}` frames), dispatched on the
     /// inner `ub.type`.
     private func handleUbFrame(ub: JSONValue, key: String, relayID: UUID,

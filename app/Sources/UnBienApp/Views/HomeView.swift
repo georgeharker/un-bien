@@ -116,10 +116,14 @@ struct HomeView: View {
                     // launch chip). "Hide launch chip until daemon is up" drops the
                     // chips whose daemon hasn't answered yet, for a clean list.
                     let launchMachines = model.mesh.config.machines(onRelay: relay.id)
+                    // Paired-but-refused machines (rooms gate / re-key): surfaced as a
+                    // re-pair row, and kept out of the launch chips. Design 01M1ZE43.
+                    let unpairedMachines = launchMachines.filter { model.isMachineUnpaired($0.epk) }
                     let visibleMachines = launchMachines.filter {
-                        model.daemonPresence(for: $0) != nil || !hideChipUntilDaemonUp
+                        !model.isMachineUnpaired($0.epk)
+                        && (model.daemonPresence(for: $0) != nil || !hideChipUntilDaemonUp)
                     }
-                    if sessions.isEmpty && visibleMachines.isEmpty {
+                    if sessions.isEmpty && visibleMachines.isEmpty && unpairedMachines.isEmpty {
                         Text("No live sessions — pair a machine or start Pi with un-bien.")
                             .font(.footnote).foregroundStyle(theme.secondaryText)
                     } else {
@@ -158,6 +162,11 @@ struct HomeView: View {
                             MachineLaunchRow(machine: machine) {
                                 launchTarget = .machine(machine)
                             }
+                        }
+                        // Known machine whose rooms are gated (unpaired / revoked /
+                        // re-keyed): offer re-pair instead of a silent empty listing.
+                        ForEach(unpairedMachines) { machine in
+                            MachineUnpairedRow(machine: machine) { pairingRelay = relay }
                         }
                     }
                     Button {
@@ -552,7 +561,36 @@ private struct MachineLaunchRow: View {
 
     private var subtitle: String {
         guard let d = model.daemonPresence(for: machine) else { return "searching for daemon…" }
-        let backend = d.backend.map { " · \($0)" } ?? ""
+        let backend = d.backend.map { " · \($0)" } ?? "" 
         return "ready to launch" + backend
+    }
+}
+
+/// A paired machine the relay refuses to list rooms for (unpaired / revoked /
+/// re-keyed owner key) — tapped to re-scan the QR. Design 01M1ZE43 / 01M1V1PM.
+private struct MachineUnpairedRow: View {
+    @Environment(\.appTheme) private var theme
+    let machine: PairedMachine
+    let onRepair: () -> Void
+
+    var body: some View {
+        Button(action: onRepair) {
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.lock")
+                    .font(.title3).foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(machine.nickname ?? machine.hostname ?? "Machine")
+                        .font(.subheadline.weight(.medium))
+                    Text("Not paired — re-scan the QR to see its sessions")
+                        .font(.caption).foregroundStyle(theme.secondaryText).lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "qrcode.viewfinder").imageScale(.large)
+                    .foregroundStyle(theme.accent)
+            }
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
