@@ -37,6 +37,9 @@ public enum RenderActivity {
     public nonisolated(unsafe) static var lastResetOldCount = 0
     public nonisolated(unsafe) static var lastResetNewCount = 0
     public nonisolated(unsafe) static var lastResetCommonPrefix = 0
+    /// Which branch the last derivePath took: defer-turn / defer-trunc / nochange
+    /// / extend(N) / reset(reason) / render(N). Names the cold-launch withhold.
+    public nonisolated(unsafe) static var lastDerivePath = ""
     /// Row-height MEASURES that arrived (heightProbe fired; synchronous, not bg).
     public nonisolated(unsafe) static var boundsMeasured = 0
     /// Row-height measures that actually STORED a changed value (measured minus
@@ -54,6 +57,13 @@ public enum RenderActivity {
     public nonisolated(unsafe) static var nearCount = 0
     /// Materialize: last MarkdownEntityStore.produce duration (µs) — gauge.
     public nonisolated(unsafe) static var produceLastMicros = 0
+    /// Walk lifecycle (plan 01M1YYYVT diagnosis): starts, terminals (completed),
+    /// stalls (watchdog retries), + the last walk's kind (full | delta:<leaf>).
+    /// starts climbing while terminals lags = walks not completing.
+    public nonisolated(unsafe) static var walkStarts = 0
+    public nonisolated(unsafe) static var walkTerminals = 0
+    public nonisolated(unsafe) static var walkStalls = 0
+    public nonisolated(unsafe) static var lastWalkInfo = ""
     /// Swift callback-surface probes (monotonic, in raw() — HUD delta per 0.5s
     /// reveals fan-out). ALL incremented in EVENT handlers / store logic, NEVER
     /// a view body (a body side-effect broke rendering, 2026-09-07): husk

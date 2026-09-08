@@ -720,15 +720,16 @@ public struct SessionState: Equatable, Sendable {
     /// go, the new path renders (the user-visible correctness fix for TUI
     /// edit-resubmit / /tree).
     private mutating func derivePath(from leaf: String) {
-        // MID-TURN DEFERRAL: a re-path RESETS + replays the rows — never while
-        // a turn is streaming (the open bubble is live-stream continuation
-        // state the replay machinery exists to protect; resetting under it
-        // fragments the bubble and truncates streamed text). Park the beacon;
-        // the settle point applies it.
-        if activeTurnID != nil || openAssistantIndex != nil || openReasoningIndex != nil {
-            pendingRepathLeaf = leaf
-            activeLeafId = leaf
-            return
+        // MID-TURN DEFERRAL — WHY WE AVOID: a re-path RESETS + replays existing
+        // rows; under a live stream that fragments the open bubble + truncates
+        // its streamed text, so we park the beacon for the settle. WHY GATED ON
+        // pathOrder != nil (the carve-out): the guard only protects an EXISTING
+        // render. FIRST derivation (pathOrder == nil — cold cache-fold: content
+        // folded, heights seeded, renderedPathCount == 0) births ADDITIVELY:
+        // nothing to reset/scroll-jump, so it MUST render even mid-turn.
+        // Withholding it = the "cold launch shows 2 of N rows" bug.
+        if pathOrder != nil, activeTurnID != nil || openAssistantIndex != nil || openReasoningIndex != nil {
+            RenderActivity.lastDerivePath = "defer-turn"; pendingRepathLeaf = leaf; activeLeafId = leaf; return
         }
         var chain: [String] = []
         var seen = Set<String>()
@@ -741,25 +742,23 @@ public struct SessionState: Equatable, Sendable {
             cursor = parent
         }
         // Truncated walk (missing parentId, not a root): ancestry not backfilled — defer, keep the rendered path (activeLeafId stays stale so the next fold re-derives).
-        if !reachedRoot, pathOrder != nil { pendingRepathLeaf = leaf; return }
+        if !reachedRoot, pathOrder != nil { RenderActivity.lastDerivePath = "defer-trunc"; pendingRepathLeaf = leaf; return }
         activeLeafId = leaf
         let newOrder = Array(chain.reversed())
-        guard Set(newOrder) != pathIds else { return }
+        guard Set(newOrder) != pathIds else { RenderActivity.lastDerivePath = "nochange"; return }
         let firstDerivation = pathOrder == nil
         let oldOrder = pathOrder ?? []
         pathOrder = newOrder
         pathIds = Set(newOrder)
         if !firstDerivation {
-            // SAME-LINE GROWTH — old path is a CONTIGUOUS sub-run of new (rootward
-            // front prepended, forward tail appended, or both): prepend the new
-            // front rows (by id), the tail appends, shared rows stay. Only a
-            // truncation or a genuine DIVERGENCE resets. Design 01M1X582.
+            // SAME-LINE GROWTH (old is a CONTIGUOUS sub-run of new): prepend new
+            // front rows by id, tail appends, shared rows stay; only trunc/DIVERGE resets (01M1X582).
             if let frontCount = contiguousStart(of: oldOrder, in: newOrder) {
                 if frontCount > 0 {
                     prependPathEntries(prefixCount: frontCount, newOrder: newOrder)
                 }
                 renderedPathCount = frontCount + oldOrder.count
-                return
+                RenderActivity.lastDerivePath = "extend(\(newOrder.count))"; return
             }
             // Not same-line growth: TRUNCATION (new ⊆ old) or DIVERGENT branch; both reset, record which for the HUD.
             let priorLeaf = oldOrder.last
@@ -769,9 +768,10 @@ public struct SessionState: Equatable, Sendable {
             RenderActivity.lastResetOldCount = oldOrder.count
             RenderActivity.lastResetNewCount = newOrder.count
             RenderActivity.lastResetCommonPrefix = zip(oldOrder, newOrder).prefix { $0.0 == $0.1 }.count
-            resetTranscript()
+            RenderActivity.lastDerivePath = "reset(\(RenderActivity.lastResetReason))"; resetTranscript()
             if !sameLine { pendingBranchNoticeAfter = Array(zip(oldOrder, newOrder).prefix { $0.0 == $0.1 }).last?.0 }
         }
+        if firstDerivation { RenderActivity.lastDerivePath = "render(\(newOrder.count))" }
         renderedPathCount = 0
     }
 

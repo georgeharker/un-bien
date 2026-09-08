@@ -58,8 +58,9 @@ struct DebugActivityHUD: View {
         rows = [
             ("\u{2699} \u{29D6}\(raw[0] - raw[1]) \u{25B6}\(num(0)) \u{2713}\(num(1)) \(RenderActivity.produceLastMicros)\u{00B5}s", moved(0, 1)),
             ("\u{2315} \u{29D6}\(raw[5] - raw[6]) \u{25B6}\(num(5)) \u{2713}\(num(6)) \u{2302}\(num(7)) S\(num(11)) R\(num(12))", moved(5, 6, 7, 11, 12)),
+            ("\u{21BA} st\(RenderActivity.walkStarts) tm\(RenderActivity.walkTerminals) sl\(RenderActivity.walkStalls) \(RenderActivity.lastWalkInfo)", false),
             ("\u{21BB} \(num(2)) \(RenderActivity.lastWindowMicros)\u{00B5}s n\(RenderActivity.nearCount)", moved(2)),
-            ("\u{2298} \(num(3)) \(RenderActivity.lastResetReason) \(RenderActivity.lastResetOldCount)\u{2192}\(RenderActivity.lastResetNewCount) c\(RenderActivity.lastResetCommonPrefix)", moved(3)),
+            ("\u{2298} \(num(3)) \(RenderActivity.lastResetReason) \(RenderActivity.lastResetOldCount)\u{2192}\(RenderActivity.lastResetNewCount) c\(RenderActivity.lastResetCommonPrefix) dp:\(RenderActivity.lastDerivePath)", moved(3)),
             ("+ \(num(4))", moved(4)),
             ("\u{25A6} \(num(8))", moved(8)),
             ("\u{2195} \u{25B6}\(num(9)) \u{2713}\(num(10))", moved(9, 10)),
