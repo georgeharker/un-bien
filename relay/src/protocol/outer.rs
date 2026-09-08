@@ -40,7 +40,7 @@ pub fn is_pair_envelope(ct: &str) -> bool {
 #[cfg(test)]
 mod pair_envelope_tests {
     use super::is_pair_envelope;
-    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 
     fn ct_of(json: &str) -> String {
         B64.encode(json.as_bytes())
@@ -48,9 +48,13 @@ mod pair_envelope_tests {
 
     #[test]
     fn exempts_pair_handshake_frames() {
-        assert!(is_pair_envelope(&ct_of(r#"{"type":"pair_request","token":"x"}"#)));
+        assert!(is_pair_envelope(&ct_of(
+            r#"{"type":"pair_request","token":"x"}"#
+        )));
         assert!(is_pair_envelope(&ct_of(r#"{"type":"pair_ok"}"#)));
-        assert!(is_pair_envelope(&ct_of(r#"{"type":"pair_error","code":"token_expired"}"#)));
+        assert!(is_pair_envelope(&ct_of(
+            r#"{"type":"pair_error","code":"token_expired"}"#
+        )));
     }
 
     #[test]
