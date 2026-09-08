@@ -548,7 +548,10 @@ async function _attemptReconnect(
 export function _pushPairingAllowList(relay: RelayClient): void {
   void listPeers()
     .then((peers) =>
-      relay.sendControl({ type: "pairing_set", owners: pairingAllowList(peers) }),
+      relay.sendControl({
+        type: "pairing_set",
+        owners: pairingAllowList(peers),
+      }),
     )
     .catch(() => {
       /* best-effort */
@@ -823,10 +826,12 @@ export function _installAutoListener(
     if (!outer.peer || !outer.ct) return
 
     if (!hasListenerAuthority()) return
-    // Already-attached owners: their PlainPeerChannel handles routing.
-    if (deps.activePeers.has(outer.peer)) return
 
-    // Decode inner envelope (base64 JSON)
+    // Decode inner envelope (base64 JSON) BEFORE the already-attached
+    // short-circuit, so a pair_request from an ATTACHED owner still reaches
+    // _handlePairRequest (an idempotent re-confirm, design 01M20G8SE) instead of
+    // being dropped. Inbound app->pi frames are low-volume, so the extra decode
+    // is cheap — streaming OUTPUT is outbound and never hits this path.
     let inner: ClientMessage
     try {
       const plaintext = Buffer.from(outer.ct, "base64").toString("utf8")
@@ -854,6 +859,9 @@ export function _installAutoListener(
       )
       return
     }
+
+    // Already-attached owners: their PlainPeerChannel handles non-pair routing.
+    if (deps.activePeers.has(appPeerId)) return
 
     // Reconnect path: known peer (peers.json) without an active channel
     // sends a non-pair message → attach + route through the new channel.
@@ -943,6 +951,28 @@ const PROTOCOL_VERSION = 1
 // ub hello (here) and room_meta.caps (commands/lifecycle) advertise the SAME
 // set from one choke point.
 
+/** Send pair_ok to `inner`'s sender — the shared success + re-confirm payload
+ *  (design 01M20G8SE). The caller has already attached the owner and (for a NEW
+ *  peer) persisted it; this only emits the confirmation. */
+function _emitPairOk(
+  deps: RelayLifecycleDeps,
+  sendInner: (msg: ServerMessage) => void,
+  inner: Extract<ClientMessage, { type: "pair_request" }>,
+  roomId: string,
+): void {
+  sendInner({
+    type: "pair_ok",
+    in_reply_to: inner.id,
+    session_name: deps.displayName(deps.sessionCwd()),
+    session_started_at: deps.sessionStartedAt ?? Date.now(),
+    room_id: roomId,
+    harness: _HARNESS,
+    hostname: _HOSTNAME,
+    protocol_version: PROTOCOL_VERSION,
+    capabilities: sessionCapabilities(),
+  })
+}
+
 async function _handlePairRequest(
   deps: RelayLifecycleDeps,
   relay: RelayClient,
@@ -957,6 +987,31 @@ async function _handlePairRequest(
 
   const sendError = (code: PairErrorCode, message: string) => {
     sendInner({ type: "pair_error", in_reply_to: inner.id, code, message })
+  }
+
+  // IDEMPOTENT RE-CONFIRM for an owner already in peers.json (design 01M20G8SE):
+  // the relay rewrites outer.peer to the challenge-verified sender, so a known
+  // epk here is an already-authenticated, already-trusted owner. Re-send pair_ok
+  // WITHOUT consuming a token (the token only bootstraps trust for a NEW epk), so
+  // a re-pair from a trusted device — re-scanned a fresh QR while still attached,
+  // or a stale-token re-scan — is ACKed instead of silently dropped.
+  const knownOwner = await _findKnownPeer(appPeerId)
+  if (knownOwner) {
+    if (!hasListenerAuthority()) return
+    const roomId = deps.myRoomId
+    if (!roomId) {
+      sendError(
+        "internal_error",
+        "No session room yet — retry pairing once this session has started " +
+          "(design 01M1CAW0).",
+      )
+      return
+    }
+    if (!deps.activePeers.has(appPeerId)) {
+      _attachOwner(deps, relay, appPeerId, knownOwner.name)
+    }
+    _emitPairOk(deps, sendInner, inner, roomId)
+    return
   }
 
   const status = qrSession.consumeToken(inner.token)
@@ -983,7 +1038,8 @@ async function _handlePairRequest(
   // refuse the pair instead of falling back to the retired cwd-derived room
   // (which the app would then address while the Pi announces another). The
   // app surfaces pair_error and the user rescans once the session has started.
-  if (!deps.myRoomId) {
+  const roomId = deps.myRoomId
+  if (!roomId) {
     envLog("pair_request refused: no session room yet (design 01M1CAW0)")
     sendError(
       "internal_error",
@@ -1022,32 +1078,9 @@ async function _handlePairRequest(
     return
   }
 
-  const cwd = deps.sessionCwd()
-  // Prefer the user-configured agent_name (with broker suffix when on the
-  // mesh) over the legacy parent/folder path — matches what the user sees
-  // in the terminal title and in /unbien status.
-  const sessionName = deps.displayName(cwd)
-
   _attachOwner(deps, relay, appPeerId, inner.device_name)
 
-  sendInner({
-    type: "pair_ok",
-    in_reply_to: inner.id,
-    session_name: sessionName,
-    session_started_at: deps.sessionStartedAt ?? Date.now(),
-    // App uses this to address subsequent inner messages to the right room
-    // when this Pi runs alongside others with the same epk. Always the
-    // session-id-derived room the Pi announced (guarded above; design
-    // 01M1CAW0 — never a cwd-derived guess).
-    room_id: deps.myRoomId,
-    // Plan/27 Wave A — surface the host coding-agent identity + machine
-    // hostname so the app can render a meaningful device row (and tell
-    // two PCs apart even when nicknames collide).
-    harness: _HARNESS,
-    hostname: _HOSTNAME,
-    protocol_version: PROTOCOL_VERSION,
-    capabilities: sessionCapabilities(),
-  })
+  _emitPairOk(deps, sendInner, inner, roomId)
 
   // Notify local RPC clients (e.g. Cockpit) that pairing completed, so they can
   // close the QR screen and show the new device. Pure data event (display:false)

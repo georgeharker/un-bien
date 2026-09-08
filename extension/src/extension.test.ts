@@ -680,7 +680,7 @@ describe("state machine + pair_request flow", () => {
     expect(errs[0]!.inner).toMatchObject({ code: "token_consumed" })
   })
 
-  test("paired peer ignores subsequent pair_request (idempotent)", async () => {
+  test("paired peer RE-CONFIRMS subsequent pair_request (idempotent pair_ok)", async () => {
     _tokenStatus = "ok"
     const APP_PEER_ID = "already-paired"
 
@@ -703,8 +703,9 @@ describe("state machine + pair_request flow", () => {
 
     const sendsBefore = relayRef.current!.send.mock.calls.length
 
-    // Second pair_request from same peer while paired → routed through
-    // PlainPeerChannel.onMessage → routeClientMessage which ignores it.
+    // Second pair_request from the same (already-attached) peer → idempotent
+    // RE-CONFIRM: the extension re-sends pair_ok (design 01M20G8SE) instead of
+    // silently ignoring it, so the app's re-pair flow completes, not hangs.
     relayRef.current!.emit(
       "message",
       makeInnerLine(APP_PEER_ID, {
@@ -714,11 +715,23 @@ describe("state machine + pair_request flow", () => {
         device_name: "Phone",
       }),
     )
-    await new Promise((r) => setTimeout(r, 50))
+    await vi.waitFor(
+      () =>
+        expect(relayRef.current!.send.mock.calls.length).toBeGreaterThan(
+          sendsBefore,
+        ),
+      { timeout: 2000 },
+    )
 
     expect(_getState()).toBe("paired")
-    // No additional outbound messages from this second pair_request
-    expect(relayRef.current!.send.mock.calls.length).toBe(sendsBefore)
+    // The new outbound is a pair_ok acknowledging req-2.
+    const lastLine = relayRef.current!.send.mock.calls.at(-1)![0] as string
+    const ct = (JSON.parse(lastLine) as { ct: string }).ct
+    const reconfirm = JSON.parse(
+      Buffer.from(ct, "base64").toString("utf8"),
+    ) as { type: string; in_reply_to: string }
+    expect(reconfirm.type).toBe("pair_ok")
+    expect(reconfirm.in_reply_to).toBe("req-2")
   })
 
   test("known peer reconnect: any non-pair message from peers.json → paired", async () => {
