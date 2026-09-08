@@ -166,12 +166,10 @@ public final class AttributedTextCache: @unchecked Sendable {
     // engine.highlight to serialise the non-thread-safe JSContext engine (why:
     // see there).
     //
-    // LRU BY MONOTONIC USE-SEQ: touch = stamp seq (O(1), NO sort); the sort
-    // (find min-seq victim) is on PURGE only.
-    private var store: [String: NSAttributedString] = [:]
-    private var useSeq: [String: Int] = [:]
-    private var clock = 0
-    private var limit = 400
+    // LRU: SeqStampLRU (shared with MarkdownEntityStore) — touch O(1), find-min
+    // victim search on PURGE only. This cache guards it with `lock` (genuinely
+    // cross-thread); the entity store uses the same type bare (@MainActor).
+    private var lru = SeqStampLRU<String, NSAttributedString>(cap: 400)
     private var engines: [String: Highlighter] = [:]      // main-path pool (highlighted)
     private let lock = OSAllocatedUnfairLock()
     private let pressureSource = DispatchSource.makeMemoryPressureSource(
@@ -180,11 +178,10 @@ public final class AttributedTextCache: @unchecked Sendable {
     /// Max cached blocks. Configurable (Settings); default 400. Trades memory
     /// for scroll smoothness on long sessions.
     public var cacheLimit: Int {
-        get { lock.lock(); defer { lock.unlock() }; return limit }
+        get { lock.lock(); defer { lock.unlock() }; return lru.cap }
         set {
             lock.lock(); defer { lock.unlock() }
-            limit = max(0, newValue)
-            evictLocked()
+            lru.cap = max(0, newValue)   // cap didSet purges
         }
     }
 
@@ -199,45 +196,32 @@ public final class AttributedTextCache: @unchecked Sendable {
     /// highlight), so rendering never reorders the LRU.
     private func peek(_ key: String) -> NSAttributedString? {
         lock.lock(); defer { lock.unlock() }
-        return store[key]
+        return lru.value(key)
     }
     /// Read + TOUCH to MRU — the async .task MATERIALISE path (event, not a view
     /// body). Materialisation order = scroll direction, so the leading edge
     /// lands MRU and evicts last (design 01M1Y1GK).
     private func touchHit(_ key: String) -> NSAttributedString? {
         lock.lock(); defer { lock.unlock() }
-        return getLocked(key, touch: true)
+        return lru.hit(key)
     }
     private func insert(_ key: String, _ value: NSAttributedString) {
         lock.lock(); defer { lock.unlock() }
-        setLocked(key, value)
+        lru.insert(key, value)
     }
-    /// Caller MUST hold `lock` (used by the sync highlight path under its own
-    /// lock + by the wrappers above). O(1): a seq stamp, never an array reorder.
+    /// Caller MUST hold `lock` (the sync highlight path double-checks/inserts
+    /// under its own lock). O(1): peek or a seq stamp, never an array reorder.
     private func getLocked(_ key: String, touch: Bool) -> NSAttributedString? {
-        guard let v = store[key] else { return nil }
-        if touch { clock += 1; useSeq[key] = clock }
-        return v
+        touch ? lru.hit(key) : lru.value(key)
     }
     private func setLocked(_ key: String, _ value: NSAttributedString) {
-        store[key] = value
-        clock += 1; useSeq[key] = clock
-        evictLocked()
-    }
-    /// Evict least-recently-USED (min seq) past the cap. O(n) find-min, on PURGE
-    /// only (insert-over-cap / limit change) — NEVER on a touch or render read.
-    private func evictLocked() {
-        while store.count > limit, let victim = useSeq.min(by: { $0.value < $1.value })?.key {
-            store[victim] = nil
-            useSeq[victim] = nil
-        }
+        lru.insert(key, value)
     }
     /// Purge cached strings under memory pressure (keeps the JS engine pools) —
     /// the safety net NSCache gave automatically (design 01M1Y1GK).
     private func purgeUnderPressure() {
         lock.lock(); defer { lock.unlock() }
-        store.removeAll(keepingCapacity: false)
-        useSeq.removeAll(keepingCapacity: false)
+        lru.removeAll(keepingCapacity: false)
     }
 
     /// `\u{1}`-joined key can't collide across fields (content can't contain it).
@@ -326,8 +310,7 @@ public final class AttributedTextCache: @unchecked Sendable {
     /// Drop all cached results (e.g. on a hard theme reset).
     public func clear() {
         lock.lock()
-        store.removeAll()
-        useSeq.removeAll()
+        lru.removeAll()
         engines.removeAll()
         lock.unlock()
         evalQueue.async { [weak self] in

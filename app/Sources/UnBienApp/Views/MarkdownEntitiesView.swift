@@ -131,45 +131,33 @@ struct StreamingEntitiesView: View {
 final class MarkdownEntityStore {
     static let shared = MarkdownEntityStore()
 
-    private var cache: [String: [MarkdownEntity]] = [:]
-    /// LRU by monotonic use-sequence: touch = stamp (O(1), NO reorder); the
-    /// sorting cost (find min-seq victim) is on PURGE only (design 01M1Y1GK).
-    /// FULLY LOCK-FREE (unlike AttributedTextCache): @MainActor confines every
-    /// store access to the main thread, and the render is on the main thread
-    /// too, so render and store CAN'T RACE. Only the pure markdownEntities parse
-    /// is off-main (Task.detached) and it touches NO store state — the cache
-    /// read/write brackets the await back on the main actor. Nothing to lock.
-    private var useSeq: [String: Int] = [:]
-    private var clock = 0
+    /// LRU shared with AttributedTextCache (SeqStampLRU). FULLY LOCK-FREE here:
+    /// @MainActor confines every store access to the main thread, and the render
+    /// is on the main thread too, so render and store CAN'T RACE. Only the pure
+    /// markdownEntities parse is off-main (Task.detached) and it touches NO store
+    /// state — the cache read/write brackets the await back on the main actor.
+    private var lru = SeqStampLRU<String, [MarkdownEntity]>(cap: 400)
     /// Max cached MESSAGES (per-bubble entity lists). Configurable (Settings);
     /// default 400 — the per-BUBBLE tier alongside AttributedTextCache.cacheLimit
-    /// (per-BLOCK). Lowering it trims immediately.
-    var cap = 400 { didSet { trimToCap() } }
+    /// (per-BLOCK). Lowering it trims immediately (SeqStampLRU.cap didSet).
+    var cap: Int {
+        get { lru.cap }
+        set { lru.cap = newValue }
+    }
 
-    func cached(_ key: String) -> [MarkdownEntity]? { cache[key] }
+    func cached(_ key: String) -> [MarkdownEntity]? { lru.value(key) }   // peek: no touch
 
     func produce(_ key: String, text: String, style: MarkdownProseStyle) async -> [MarkdownEntity] {
-        if let hit = cache[key] { clock += 1; useSeq[key] = clock; return hit }   // touch: stamp, O(1)
+        if let hit = lru.hit(key) { return hit }   // touch: stamp MRU, O(1)
         RenderActivity.produceStarted += 1
         let t0 = DispatchTime.now().uptimeNanoseconds
         let made = await Task.detached(priority: .userInitiated) {
             markdownEntities(text, style: style)
         }.value
         RenderActivity.produceLastMicros = Int((DispatchTime.now().uptimeNanoseconds - t0) / 1000)
-        cache[key] = made
-        clock += 1; useSeq[key] = clock
+        lru.insert(key, made)
         RenderActivity.produceFinished += 1
-        trimToCap()
         return made
-    }
-
-    /// Evict least-recently-USED (min use-seq) past the cap — O(n) find-min, but
-    /// only on PURGE (insert-over-cap), NEVER on touch (design 01M1Y1GK).
-    private func trimToCap() {
-        while cache.count > cap, let victim = useSeq.min(by: { $0.value < $1.value })?.key {
-            cache[victim] = nil
-            useSeq[victim] = nil
-        }
     }
 }
 
