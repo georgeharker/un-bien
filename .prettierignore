@@ -1,0 +1,6 @@
+# Generated + machine-owned: pnpm rewrites these, and reformatting them
+# fights the tool (prettier reflowed every `integrity:` entry into a flow map).
+pnpm-lock.yaml
+Cargo.lock
+**/dist/
+_site/
