@@ -72,7 +72,10 @@ mod tests {
     fn empty_push_is_configured_and_refuses_all() {
         let p = PairingRegistry::new();
         p.set("machine".into(), vec![]);
-        assert!(!p.allows("machine", "anyone"), "empty list is CONFIGURED, not open");
+        assert!(
+            !p.allows("machine", "anyone"),
+            "empty list is CONFIGURED, not open"
+        );
     }
 
     #[test]
