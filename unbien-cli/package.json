@@ -1,6 +1,6 @@
 {
   "name": "@geohar/unbien-cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "unbien \u2014 a terminal client for remote Pi coding-agent sessions. Attach over an un-bien relay and render the transcript with pi's own TUI components: markdown, syntax highlighting, native tool cards, and your pi theme.",
   "type": "module",
   "bin": {
