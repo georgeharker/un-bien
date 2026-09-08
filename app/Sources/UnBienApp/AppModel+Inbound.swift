@@ -463,7 +463,7 @@ extension AppModel {
             // a refetch raced from the app side could beat the leaf move).
             if let leafId = evt.data["leafId"]?.stringValue, !leafId.isEmpty {
                 var reducer = envelopeReducers[key] ?? EnvelopeReducer()
-                reducer.applyEntries([], leafId: leafId)
+                reducer.applyEntries([], leafId: leafId, authoritative: true)
                 envelopeReducers[key] = reducer
                 transcripts[key] = reducer.session
             }
@@ -636,6 +636,8 @@ extension AppModel {
                 // walk lifecycle (a delta/straggler just stops).
                 pagingLeaf[pagingID] = nil
                 if isCurrentWalk {
+                    RenderActivity.walkTerminals += 1
+                    log.notice("WALK terminal key=\(String(key.suffix(12)), privacy: .public) — backfilled")
                     backfilledSessions.insert(key)
                     endWalk(key: key)
                 }

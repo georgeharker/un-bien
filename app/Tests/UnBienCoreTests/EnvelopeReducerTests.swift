@@ -417,13 +417,37 @@ final class EnvelopeReducerTests: XCTestCase {
         reducer.applyEntries(setup + [a, reply], leafId: "df23de31")
         XCTAssertEqual(reducer.session.items.count, 2, "A + its answer render")
 
-        // Move the leaf BACK to A's parent (an ancestor of the old leaf) — a
-        // same-line backward move, not a branch (64a3e342 still has one child).
-        reducer.applyEntries([], leafId: "64a3e342")
+        // Move the leaf BACK to A's parent — an AUTHORITATIVE navigate (the
+        // production session_info leaf beacon), so it ADOPTS the shorter path
+        // (zero message rows). Not a branch (64a3e342 still has one child). 01M1Z9SC.
+        reducer.applyEntries([], leafId: "64a3e342", authoritative: true)
         XCTAssertEqual(reducer.session.items.count, 0,
-                       "backward move to an ancestor renders empty — not a branch")
+                       "authoritative backward navigate adopts the ancestor path — empty")
         XCTAssertFalse(reducer.session.items.contains {
             if case let .notice(n) = $0 { return n.code == "branch" } else { return false }
         }, "no branch notice on a same-line backward move")
+    }
+
+    /// The SAME backward-to-ancestor move via a NON-authoritative delta (a
+    /// lagging get_entries page whose leaf moved on since we issued it): the
+    /// live render is legitimately AHEAD, so trunc-keep HOLDS the superset
+    /// rather than shrinking to a stale ancestor. 01M1Z9SC.
+    func testStaleDeltaRegressionKeepsRender() throws {
+        let setup: [JSONValue] = [
+            .object(["type": .string("model_change"), "id": .string("578c174a"),
+                     "parentId": .string("")]),
+            .object(["type": .string("custom"), "id": .string("a10706da"),
+                     "parentId": .string("578c174a")]),
+            .object(["type": .string("custom"), "id": .string("64a3e342"),
+                     "parentId": .string("a10706da")]),
+        ]
+        let a = Self.msgEntry("e058836f", parent: "64a3e342", role: "user", text: "A")
+        let reply = Self.msgEntry("df23de31", parent: "e058836f", role: "assistant", text: "answer")
+        var reducer = EnvelopeReducer()
+        reducer.applyEntries(setup + [a, reply], leafId: "df23de31")
+        XCTAssertEqual(reducer.session.items.count, 2)
+        reducer.applyEntries([], leafId: "64a3e342")   // default authoritative: false
+        XCTAssertEqual(reducer.session.items.count, 2,
+                       "non-authoritative regression keeps the superset (trunc-keep)")
     }
 }

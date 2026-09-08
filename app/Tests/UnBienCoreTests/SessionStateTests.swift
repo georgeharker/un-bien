@@ -610,12 +610,12 @@ final class EntryBornErrorNoticeTests: XCTestCase {
         let noticeCount = s.items.filter { if case .notice = $0 { return true } else { return false } }.count
         XCTAssertEqual(noticeCount, 2)
     }
-    /// REGRESSION (run 2026-09-18: "stream ended without finish"): a beacon
-    /// arriving MID-TURN must NOT reset the in-flight rows — the re-path
-    /// defers to the settle point (agent_settled), which replays including
-    /// the finished turn's entries. The replay invariant: nothing disturbs
-    /// live-stream continuation state.
-    func testMidTurnBeaconDefersRepath() {
+    /// A mid-turn beacon that EXTENDS the leaf (additive, forward) applies
+    /// immediately — the natural "new message" case; no reset, nothing to
+    /// defer (01M1FTV2). Only a RESET (divergence) defers mid-turn — see
+    /// testMidTurnDivergenceDefersReset. Invariant: nothing RESETS live-stream
+    /// continuation state under a turn.
+    func testMidTurnBeaconAppliesExtend() {
         var state = SessionState()
         state.applyEntries([
             .object(["type": .string("message"), "id": .string("a1"), "parentId": .string(""),
@@ -633,26 +633,59 @@ final class EntryBornErrorNoticeTests: XCTestCase {
         state.applyRPC(.object(["type": .string("turn_start")]))
 
         // MID-TURN: the branch entry indexes (a page fold — no beacon), then
-        // the beacon leaf arrives. The re-path MUST DEFER — no reset under
-        // the in-flight turn.
+        // the beacon leaf arrives. c1.parentId == b1 — this EXTENDS the current
+        // leaf (additive, forward), the natural "new message" case. An extend
+        // applies mid-turn: no reset, nothing to defer. Design 01M1FTV2.
         state.applyEntries([
             .object(["type": .string("message"), "id": .string("c1"), "parentId": .string("b1"),
                      "message": .object(["role": .string("user"), "timestamp": .number(3),
                                          "content": .string("branched")])]),
         ])
         state.applyEntries([], leafId: "c1")
-        XCTAssertEqual(state.items.count, 2, "mid-turn beacon must NOT reset the rows")
+        XCTAssertEqual(state.items.count, 3, "mid-turn EXTEND applies additively — no reset")
 
-        // Settle: the deferred re-path applies — the new path renders (a1, b1,
-        // c1). c1.parentId == b1, so this EXTENDS the current leaf (forward) —
-        // NOT a divergence — so NO branch notice fires (a branch requires an
-        // old path entry to be abandoned; nothing was). Design 01M1FTV2.
+        // Settle: nothing was parked (the extend already applied) — a no-op.
+        // Path is (a1, b1, c1); a forward extension is not a divergence, so NO
+        // branch notice fires. Design 01M1FTV2.
         state.applyRPC(.object(["type": .string("agent_settled")]))
-        XCTAssertEqual(state.items.count, 3, "settle applies the parked re-path (a1, b1, c1)")
+        XCTAssertEqual(state.items.count, 3, "path is a1, b1, c1")
         XCTAssertEqual(state.items.last?.id, "user:c1")
         let branchNotices = state.items.filter {
             if case let .notice(n) = $0 { return n.code == "branch" } else { return false }
         }
         XCTAssertTrue(branchNotices.isEmpty, "forward extension must NOT flag a branch")
+    }
+
+    /// A mid-turn beacon that DIVERGES (a real branch) is the one case the
+    /// suppression still guards: a reset+replay fragments the live bubble, so
+    /// it DEFERS to the settle. Design 01M1FTV2 / 01M1Z9SC.
+    func testMidTurnDivergenceDefersReset() {
+        var state = SessionState()
+        state.applyEntries([
+            .object(["type": .string("message"), "id": .string("a1"), "parentId": .string(""),
+                     "message": .object(["role": .string("user"), "timestamp": .number(1),
+                                         "content": .string("start")])]),
+            .object(["type": .string("message"), "id": .string("b1"), "parentId": .string("a1"),
+                     "message": .object(["role": .string("assistant"), "timestamp": .number(2),
+                                         "responseId": .string("r1"),
+                                         "content": .array([.object(["type": .string("text"),
+                                                                     "text": .string("answer")])])])]),
+        ], leafId: "b1")
+        XCTAssertEqual(state.items.count, 2)
+        state.applyRPC(.object(["type": .string("turn_start")]))
+        // c1 forks from a1 (abandons b1) — neither a sub-run of the other =
+        // divergence. Under the live turn it must DEFER, not reset.
+        state.applyEntries([
+            .object(["type": .string("message"), "id": .string("c1"), "parentId": .string("a1"),
+                     "message": .object(["role": .string("user"), "timestamp": .number(3),
+                                         "content": .string("forked")])]),
+        ])
+        state.applyEntries([], leafId: "c1")
+        XCTAssertEqual(state.items.count, 2, "mid-turn divergence must DEFER the reset")
+        state.applyRPC(.object(["type": .string("agent_settled")]))
+        XCTAssertEqual(state.items.last?.id, "user:c1", "settle applies the reset onto the forked leaf")
+        XCTAssertTrue(state.items.contains {
+            if case let .notice(n) = $0 { return n.code == "branch" } else { return false }
+        }, "divergence flags a branch notice")
     }
 }

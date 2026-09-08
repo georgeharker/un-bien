@@ -109,8 +109,8 @@ public struct EnvelopeReducer {
     /// advances so the following delta fetch continues from the cache tail.
     /// The cache's leafId is the COMPLETING walk's active leaf — a TRUSTED
     /// beacon for Stage 0's path derivation (derive + render in one shot).
-    public mutating func applyEntries(_ entries: [JSONValue], leafId: String?) {
-        session.applyEntries(entries, leafId: leafId)
+    public mutating func applyEntries(_ entries: [JSONValue], leafId: String?, authoritative: Bool = false) {
+        session.applyEntries(entries, leafId: leafId, authoritative: authoritative)
         if let leafId { self.leafId = leafId }
     }
 
