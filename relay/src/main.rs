@@ -41,7 +41,18 @@ async fn main() -> anyhow::Result<()> {
         metrics.clone(),
     ));
     let mesh_auth = Arc::new(relay::MeshAuthCache::new());
-    let pairing = Arc::new(relay::PairingRegistry::new());
+    // Pairing allow-list in its OWN sqlite store (design 01M1ZE43): survives
+    // restart so the fail-closed gate doesn't re-open a leak window each boot.
+    let pairing_db = relay::paths::resolve_pairing_db_path();
+    let pairing = Arc::new(
+        relay::PairingRegistry::with_store(&pairing_db).unwrap_or_else(|e| {
+            eprintln!(
+                "pairing store open failed at {}: {e}; falling back to in-memory (still fail-closed; re-pushed on each connect)",
+                pairing_db.display()
+            );
+            relay::PairingRegistry::new()
+        }),
+    );
 
     // Background reporter: drain firehose counters every 10 s and emit a
     // single structured log line. Quiet windows are silent.

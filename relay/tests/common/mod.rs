@@ -20,6 +20,15 @@ pub type WsStream = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 /// port and returns that port. Mesh storage is `:memory:` for these tests —
 /// use the helper in `tests/mesh_test.rs` when you need a persistent DB.
 pub async fn start_relay() -> u16 {
+    start_relay_state().await.0
+}
+
+/// Like [`start_relay`] but also hands back the relay's `PairingRegistry` Arc,
+/// so tests can configure the (fail-closed, design 01M1ZE43) rooms/content gate
+/// IN-PROCESS — `pairing.set(machine, vec![owner])` — before the app checks.
+/// Synchronous + race-free: the set is applied (under the shared Mutex) before
+/// the app's subsequent WS frame is processed by the relay.
+pub async fn start_relay_state() -> (u16, Arc<relay::PairingRegistry>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let mesh = Arc::new(MeshStore::open_in_memory().unwrap());
@@ -32,11 +41,12 @@ pub async fn start_relay() -> u16 {
         metrics.clone(),
     ));
     let mesh_auth = Arc::new(MeshAuthCache::new());
+    let pairing = Arc::new(relay::PairingRegistry::new());
     let state = AppState {
         registry,
         presence,
         rooms,
-        pairing: Arc::new(relay::PairingRegistry::new()),
+        pairing: pairing.clone(),
         mesh,
         mesh_auth,
         metrics,
@@ -51,7 +61,7 @@ pub async fn start_relay() -> u16 {
     });
     // Give axum a moment to start accepting.
     tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
-    port
+    (port, pairing)
 }
 
 /// Connects using a caller-supplied key and room_id, completes the full auth handshake.
@@ -100,4 +110,25 @@ pub async fn connect_and_auth_with_key(port: u16, sk: &SigningKey) -> (WsStream,
 pub async fn connect_and_auth(port: u16) -> (WsStream, String) {
     let sk = SigningKey::generate(&mut rand::thread_rng());
     connect_and_auth_with_key(port, &sk).await
+}
+
+/// Connect an app AND pair it into `machine_peer`'s allow-list in one step, so
+/// the fail-closed rooms/content gate (design 01M1ZE43) permits it. Accumulates
+/// (never clobbers an existing owner), and the in-process `set` is applied
+/// before the returned app issues any rooms_check/subscribe — race-free.
+pub async fn connect_app_paired(
+    port: u16,
+    pairing: &Arc<relay::PairingRegistry>,
+    machine_peer: &str,
+) -> (WsStream, String) {
+    let (ws, peer) = connect_and_auth(port).await;
+    let mut owners: Vec<String> = pairing
+        .owners_of(machine_peer)
+        .map(|s| s.into_iter().collect())
+        .unwrap_or_default();
+    if !owners.contains(&peer) {
+        owners.push(peer.clone());
+    }
+    pairing.set(machine_peer.to_string(), owners);
+    (ws, peer)
 }

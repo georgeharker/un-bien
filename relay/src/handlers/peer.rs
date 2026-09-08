@@ -15,7 +15,7 @@ use crate::AppState;
 use crate::auth::challenge::{
     HELLO_TIMEOUT_MS, challenge_line, gen_nonce, parse_hello, verify_auth,
 };
-use crate::protocol::outer::{OuterEnvelope, parse_line};
+use crate::protocol::outer::{OuterEnvelope, is_pair_envelope, parse_line};
 use crate::rooms::{RoomMeta, RoomMetaPatch};
 
 /// Axum route handler: validates the WebSocket upgrade and hands the upgraded
@@ -427,6 +427,28 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                 let ct_len = env.ct.len();
                                 let dest_peer = env.peer;
                                 let dest_room = env.room;
+                                // CONTENT GATE (design 01M1ZE43, fail-closed): forward
+                                // only if the (machine, owner) relationship is in the
+                                // allow-list — either direction, since the MACHINE's
+                                // list authorizes both app→machine and machine→app.
+                                // EXEMPT pairing frames (peek ct for pair_request /
+                                // pair_ok) so pairing bootstraps before the
+                                // relationship exists. Routed unknown_peer refusal so
+                                // the app distinguishes not-paired from offline.
+                                let paired = pairing.allows(&dest_peer, &peer_id)
+                                    || pairing.allows(&peer_id, &dest_peer);
+                                if !paired && !is_pair_envelope(&env.ct) {
+                                    let refusal = serde_json::json!({
+                                        "type": "error",
+                                        "code": "unknown_peer",
+                                        "peer": dest_peer,
+                                    })
+                                    .to_string();
+                                    if sink.send(Message::Text(refusal)).await.is_err() {
+                                        break 'routing;
+                                    }
+                                    continue;
+                                }
                                 let dest_tail =
                                     dest_peer[dest_peer.len().saturating_sub(8)..].to_string();
                                 // Rewrite: recipient sees sender's peer_id + sender's room_id.

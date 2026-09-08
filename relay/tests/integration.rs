@@ -14,6 +14,15 @@ async fn two_peers_route_message() {
     let (mut ws_a, peer_a) = connect_and_auth(port).await;
     let (mut ws_b, peer_b) = connect_and_auth(port).await;
 
+    // Pair the two so the content gate (design 01M1ZE43, fail-closed) permits
+    // the forward. Pushed on A's OWN connection, so it is applied before A's
+    // content frame below (same-connection frame ordering) — no race.
+    ws_a.send(Message::text(
+        json!({"type": "pairing_set", "owners": [peer_b.clone()]}).to_string(),
+    ))
+    .await
+    .unwrap();
+
     let ct = "aGVsbG8="; // "hello" in base64, never decoded by relay
     // A sends: peer = dest (peer_b)
     ws_a.send(Message::text(json!({"peer": peer_b, "ct": ct}).to_string()))
@@ -41,6 +50,14 @@ async fn two_peers_route_message() {
 async fn dest_offline_drops_silently() {
     let port = start_relay().await;
     let (mut ws_a, _) = connect_and_auth(port).await;
+
+    // Authorize the (offline) dest so the content gate PASSES and we exercise
+    // the offline-drop path (design 01M1ZE43), not a pairing refusal.
+    ws_a.send(Message::text(
+        json!({"type": "pairing_set", "owners": ["bm9uZXhpc3RlbnRwZWVy"]}).to_string(),
+    ))
+    .await
+    .unwrap();
 
     let envelope = json!({"peer": "bm9uZXhpc3RlbnRwZWVy", "ct": "aGVsbG8="}).to_string();
     ws_a.send(Message::text(envelope)).await.unwrap();

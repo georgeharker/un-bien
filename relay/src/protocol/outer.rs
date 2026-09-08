@@ -18,6 +18,50 @@ pub struct OuterEnvelope {
     pub ct: String, // base64 — nunca decodificado aqui
 }
 
+/// Peek an outer envelope's opaque `ct` to classify it as a PAIRING frame
+/// (inner `type` == pair_request / pair_ok). Used ONLY for the content-gate
+/// exemption (design 01M1ZE43): `ct` is base64(JSON) plaintext-by-policy
+/// (01M20590), so the relay may classify it for this one narrow purpose. Any
+/// decode/parse failure ⇒ NOT a pair frame (fail-closed).
+pub fn is_pair_envelope(ct: &str) -> bool {
+    use base64::Engine;
+    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(ct) else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return false;
+    };
+    matches!(
+        v.get("type").and_then(|t| t.as_str()),
+        Some("pair_request") | Some("pair_ok") | Some("pair_error")
+    )
+}
+
+#[cfg(test)]
+mod pair_envelope_tests {
+    use super::is_pair_envelope;
+    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+
+    fn ct_of(json: &str) -> String {
+        B64.encode(json.as_bytes())
+    }
+
+    #[test]
+    fn exempts_pair_handshake_frames() {
+        assert!(is_pair_envelope(&ct_of(r#"{"type":"pair_request","token":"x"}"#)));
+        assert!(is_pair_envelope(&ct_of(r#"{"type":"pair_ok"}"#)));
+        assert!(is_pair_envelope(&ct_of(r#"{"type":"pair_error","code":"token_expired"}"#)));
+    }
+
+    #[test]
+    fn rejects_non_pair_and_garbage() {
+        assert!(!is_pair_envelope(&ct_of(r#"{"type":"rpc"}"#)));
+        assert!(!is_pair_envelope(&ct_of("not json")));
+        assert!(!is_pair_envelope("!!! not base64 !!!"));
+        assert!(!is_pair_envelope(&ct_of(r#"{"no_type":true}"#)));
+    }
+}
+
 /// Nome da env var que sobrescreve o teto do outer envelope (inteiro em MiB).
 pub const MAX_CT_ENV: &str = "RELAY_MAX_CT_MIB";
 

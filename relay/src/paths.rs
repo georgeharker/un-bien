@@ -71,6 +71,26 @@ pub fn resolve_relay_log_path() -> PathBuf {
     relay_log_path_from(&state_root())
 }
 
+/// Pure pairing DB resolution: `UNBIEN_PAIRING_DB_PATH` (absolute override,
+/// wins) falls through to `<state root>/pairing.db`. Its OWN store —
+/// deliberately NOT mesh.db and NOT the extension's peers.json (design
+/// 01M1ZE43: the relay holds only a derived allow-list, never owner-private
+/// source-of-truth).
+pub fn pairing_db_path_from(override_path: Option<&str>, state_root: &Path) -> PathBuf {
+    match override_path.filter(|s| !s.is_empty()) {
+        Some(p) => PathBuf::from(p),
+        None => state_root.join("pairing.db"),
+    }
+}
+
+/// The relay's default pairing DB path, from the process env.
+pub fn resolve_pairing_db_path() -> PathBuf {
+    pairing_db_path_from(
+        std::env::var("UNBIEN_PAIRING_DB_PATH").ok().as_deref(),
+        &state_root(),
+    )
+}
+
 /// `$HOME` / `%USERPROFILE%`. Read directly rather than via
 /// `std::env::home_dir()`: that function is only un-deprecated since Rust
 /// 1.87 while this crate's MSRV is 1.85. A process with no home at all gets

@@ -1,6 +1,6 @@
 mod common;
 use common::{
-    connect_and_auth, connect_and_auth_with_key, connect_and_auth_with_room, start_relay,
+    connect_and_auth_with_key, connect_and_auth_with_room, connect_app_paired, start_relay_state,
 };
 
 use ed25519_dalek::SigningKey;
@@ -15,13 +15,13 @@ fn random_key() -> SigningKey {
 /// B subscribes to Pi's rooms. Pi connects with a named room → B gets room_announced.
 #[tokio::test]
 async fn subscribe_rooms_then_peer_opens_room_pushes_announced() {
-    let port = start_relay().await;
+    let (port, pairing) = start_relay_state().await;
     let sk_pi = random_key();
     use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
 
     // App (B) subscribes to Pi's room events before Pi connects.
-    let (mut ws_app, _) = connect_and_auth(port).await;
+    let (mut ws_app, _) = connect_app_paired(port, &pairing, &peer_pi).await;
     ws_app
         .send(Message::text(
             json!({"type": "subscribe_rooms", "peers": [&peer_pi]}).to_string(),
@@ -53,13 +53,13 @@ async fn subscribe_rooms_then_peer_opens_room_pushes_announced() {
 /// Pi connects; App subscribes then Pi disconnects → App gets room_ended.
 #[tokio::test]
 async fn peer_disconnects_pushes_room_ended() {
-    let port = start_relay().await;
+    let (port, pairing) = start_relay_state().await;
     let sk_pi = random_key();
     use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
 
     let (ws_pi, _) = connect_and_auth_with_room(port, &sk_pi, "work").await;
-    let (mut ws_app, _) = connect_and_auth(port).await;
+    let (mut ws_app, _) = connect_app_paired(port, &pairing, &peer_pi).await;
 
     ws_app
         .send(Message::text(
@@ -91,12 +91,12 @@ async fn peer_disconnects_pushes_room_ended() {
 /// rooms_check for a peer with no active connections → rooms: [].
 #[tokio::test]
 async fn rooms_check_empty_for_offline_peer() {
-    let port = start_relay().await;
+    let (port, pairing) = start_relay_state().await;
     let sk_pi = random_key();
     use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
 
-    let (mut ws_app, _) = connect_and_auth(port).await;
+    let (mut ws_app, _) = connect_app_paired(port, &pairing, &peer_pi).await;
     ws_app
         .send(Message::text(
             json!({"type": "rooms_check", "peers": [&peer_pi]}).to_string(),
@@ -119,7 +119,7 @@ async fn rooms_check_empty_for_offline_peer() {
 /// rooms_check while two rooms are active → both room_ids appear in snapshot.
 #[tokio::test]
 async fn rooms_check_returns_all_active_rooms() {
-    let port = start_relay().await;
+    let (port, pairing) = start_relay_state().await;
     let sk_pi = random_key();
     use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
@@ -127,7 +127,7 @@ async fn rooms_check_returns_all_active_rooms() {
     let (_ws_pi_work, _) = connect_and_auth_with_room(port, &sk_pi, "work").await;
     let (_ws_pi_home, _) = connect_and_auth_with_room(port, &sk_pi, "home").await;
 
-    let (mut ws_app, _) = connect_and_auth(port).await;
+    let (mut ws_app, _) = connect_app_paired(port, &pairing, &peer_pi).await;
     ws_app
         .send(Message::text(
             json!({"type": "rooms_check", "peers": [&peer_pi]}).to_string(),
@@ -156,7 +156,7 @@ async fn rooms_check_returns_all_active_rooms() {
 /// Messages route to the exact (peer, room) — a different room of the same peer does NOT receive them.
 #[tokio::test]
 async fn forward_routes_by_room_not_just_peer() {
-    let port = start_relay().await;
+    let (port, pairing) = start_relay_state().await;
     let sk_pi = random_key();
     use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
@@ -164,7 +164,7 @@ async fn forward_routes_by_room_not_just_peer() {
     let (mut ws_pi_work, _) = connect_and_auth_with_room(port, &sk_pi, "work").await;
     let (mut ws_pi_home, _) = connect_and_auth_with_room(port, &sk_pi, "home").await;
 
-    let (mut ws_app, peer_app) = connect_and_auth(port).await;
+    let (mut ws_app, peer_app) = connect_app_paired(port, &pairing, &peer_pi).await;
 
     let ct = "dGVzdA=="; // "test" base64
 
@@ -201,7 +201,7 @@ async fn forward_routes_by_room_not_just_peer() {
 /// A message from a third party reaches BOTH conns (broadcast).
 #[tokio::test]
 async fn duplicate_room_connection_accepted_and_both_receive_broadcast() {
-    let port = start_relay().await;
+    let (port, pairing) = start_relay_state().await;
     let sk_pi = random_key();
     use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
@@ -211,7 +211,7 @@ async fn duplicate_room_connection_accepted_and_both_receive_broadcast() {
     let (mut ws_pi_2, _) = connect_and_auth_with_room(port, &sk_pi, "work").await;
 
     // A third party (the "app") sends a message to (peer_pi, "work").
-    let (mut ws_app, _) = connect_and_auth(port).await;
+    let (mut ws_app, _) = connect_app_paired(port, &pairing, &peer_pi).await;
     let ct = "YnJvYWRjYXN0"; // "broadcast" b64
     ws_app
         .send(Message::text(
@@ -244,14 +244,14 @@ async fn duplicate_room_connection_accepted_and_both_receive_broadcast() {
 /// Pi connects with room_meta.model → room_announced received by subscriber includes model.
 #[tokio::test]
 async fn room_announced_includes_model_from_hello() {
-    let port = start_relay().await;
+    let (port, pairing) = start_relay_state().await;
     let sk_pi = random_key();
     use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     use ed25519_dalek::Signer;
 
     let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
 
-    let (mut ws_app, _) = connect_and_auth(port).await;
+    let (mut ws_app, _) = connect_app_paired(port, &pairing, &peer_pi).await;
     ws_app
         .send(Message::text(
             json!({"type": "subscribe_rooms", "peers": [&peer_pi]}).to_string(),
@@ -310,13 +310,13 @@ async fn room_announced_includes_model_from_hello() {
 /// Pi sends room_meta_update → subscribers receive room_meta_updated with new model.
 #[tokio::test]
 async fn room_meta_update_broadcasts_to_subscribers() {
-    let port = start_relay().await;
+    let (port, pairing) = start_relay_state().await;
     let sk_pi = random_key();
     use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
 
     let (mut ws_pi, _) = connect_and_auth_with_key(port, &sk_pi).await; // room = "main"
-    let (mut ws_app, _) = connect_and_auth(port).await;
+    let (mut ws_app, _) = connect_app_paired(port, &pairing, &peer_pi).await;
 
     ws_app
         .send(Message::text(
@@ -356,13 +356,13 @@ async fn room_meta_update_broadcasts_to_subscribers() {
 /// peer is suppressed by the relay (firehose-fix). First reply always sent.
 #[tokio::test]
 async fn rooms_check_dedup_suppresses_identical_responses() {
-    let port = start_relay().await;
+    let (port, pairing) = start_relay_state().await;
     let sk_pi = random_key();
     use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
 
     let (_ws_pi, _) = connect_and_auth_with_room(port, &sk_pi, "work").await;
-    let (mut ws_app, _) = connect_and_auth(port).await;
+    let (mut ws_app, _) = connect_app_paired(port, &pairing, &peer_pi).await;
 
     ws_app
         .send(Message::text(
@@ -401,13 +401,13 @@ async fn rooms_check_dedup_suppresses_identical_responses() {
 /// emitted, not suppressed.
 #[tokio::test]
 async fn rooms_check_after_real_change_emits_new_snapshot() {
-    let port = start_relay().await;
+    let (port, pairing) = start_relay_state().await;
     let sk_pi = random_key();
     use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
 
     let (mut ws_pi, _) = connect_and_auth_with_key(port, &sk_pi).await; // room "main"
-    let (mut ws_app, _) = connect_and_auth(port).await;
+    let (mut ws_app, _) = connect_app_paired(port, &pairing, &peer_pi).await;
 
     // First rooms_check — primes the cache.
     ws_app
@@ -469,13 +469,13 @@ async fn rooms_check_after_real_change_emits_new_snapshot() {
 /// to subscribers in the subsequent `room_meta_updated` broadcast.
 #[tokio::test]
 async fn room_meta_update_propagates_thinking() {
-    let port = start_relay().await;
+    let (port, pairing) = start_relay_state().await;
     let sk_pi = random_key();
     use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
 
     let (mut ws_pi, _) = connect_and_auth_with_key(port, &sk_pi).await; // room "main"
-    let (mut ws_app, _) = connect_and_auth(port).await;
+    let (mut ws_app, _) = connect_app_paired(port, &pairing, &peer_pi).await;
 
     ws_app
         .send(Message::text(
@@ -518,13 +518,13 @@ async fn room_meta_update_propagates_thinking() {
 /// preserved.
 #[tokio::test]
 async fn room_meta_update_with_only_model_preserves_thinking() {
-    let port = start_relay().await;
+    let (port, pairing) = start_relay_state().await;
     let sk_pi = random_key();
     use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
 
     let (mut ws_pi, _) = connect_and_auth_with_key(port, &sk_pi).await;
-    let (mut ws_app, _) = connect_and_auth(port).await;
+    let (mut ws_app, _) = connect_app_paired(port, &pairing, &peer_pi).await;
 
     ws_app
         .send(Message::text(
@@ -585,14 +585,14 @@ async fn room_meta_update_with_only_model_preserves_thinking() {
 /// and in `rooms_check` snapshots.
 #[tokio::test]
 async fn room_announced_and_rooms_check_include_thinking_from_hello() {
-    let port = start_relay().await;
+    let (port, pairing) = start_relay_state().await;
     let sk_pi = random_key();
     use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     use ed25519_dalek::Signer;
     let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
 
     // App subscribes first so it catches room_announced.
-    let (mut ws_app, _) = connect_and_auth(port).await;
+    let (mut ws_app, _) = connect_app_paired(port, &pairing, &peer_pi).await;
     ws_app
         .send(Message::text(
             json!({"type": "subscribe_rooms", "peers": [&peer_pi]}).to_string(),
@@ -679,13 +679,13 @@ async fn room_announced_and_rooms_check_include_thinking_from_hello() {
 /// to subscribers, toggling both `true` and `false` through the broadcast.
 #[tokio::test]
 async fn room_meta_update_propagates_working() {
-    let port = start_relay().await;
+    let (port, pairing) = start_relay_state().await;
     let sk_pi = random_key();
     use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
 
     let (mut ws_pi, _) = connect_and_auth_with_key(port, &sk_pi).await; // room "main"
-    let (mut ws_app, _) = connect_and_auth(port).await;
+    let (mut ws_app, _) = connect_app_paired(port, &pairing, &peer_pi).await;
 
     ws_app
         .send(Message::text(
@@ -750,13 +750,13 @@ async fn room_meta_update_propagates_working() {
 /// fields are preserved (working never auto-zeroes).
 #[tokio::test]
 async fn room_meta_update_with_only_model_preserves_working() {
-    let port = start_relay().await;
+    let (port, pairing) = start_relay_state().await;
     let sk_pi = random_key();
     use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
 
     let (mut ws_pi, _) = connect_and_auth_with_key(port, &sk_pi).await;
-    let (mut ws_app, _) = connect_and_auth(port).await;
+    let (mut ws_app, _) = connect_app_paired(port, &pairing, &peer_pi).await;
 
     ws_app
         .send(Message::text(
@@ -816,14 +816,14 @@ async fn room_meta_update_with_only_model_preserves_working() {
 /// `thinking` shape) and in `rooms_check` snapshots.
 #[tokio::test]
 async fn room_announced_and_rooms_check_include_working_from_hello() {
-    let port = start_relay().await;
+    let (port, pairing) = start_relay_state().await;
     let sk_pi = random_key();
     use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     use ed25519_dalek::Signer;
     let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
 
     // App subscribes first so it catches room_announced.
-    let (mut ws_app, _) = connect_and_auth(port).await;
+    let (mut ws_app, _) = connect_app_paired(port, &pairing, &peer_pi).await;
     ws_app
         .send(Message::text(
             json!({"type": "subscribe_rooms", "peers": [&peer_pi]}).to_string(),
@@ -902,13 +902,13 @@ async fn room_announced_and_rooms_check_include_working_from_hello() {
 /// rooms_check after room_meta_update reflects the updated model.
 #[tokio::test]
 async fn rooms_check_reflects_updated_model() {
-    let port = start_relay().await;
+    let (port, pairing) = start_relay_state().await;
     let sk_pi = random_key();
     use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
 
     let (mut ws_pi, _) = connect_and_auth_with_key(port, &sk_pi).await;
-    let (mut ws_app, _) = connect_and_auth(port).await;
+    let (mut ws_app, _) = connect_app_paired(port, &pairing, &peer_pi).await;
 
     // Update model first.
     ws_pi
