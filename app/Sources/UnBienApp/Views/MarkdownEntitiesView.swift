@@ -47,11 +47,18 @@ struct MarkdownEntitiesView: View {
     let theme: AppTheme
     let typography: Typography
     @State private var entities: [MarkdownEntity]?
+    // Scopes the SHARED entity-store key by session (design 01M21JSKJB): bubble
+    // ids are session-local seq counters, so an un-scoped key bleeds a bubble's
+    // render between chats. Set at the transcript root.
+    @Environment(\.sessionScope) private var sessionScope
 
-    // Key = message identity + a hash of the WHOLE style, so any palette/font/
-    // size change re-produces without hand-listing each field in the key.
+    // Key = session scope + message identity + a hash of the WHOLE style, so any
+    // palette/font/size change re-produces without hand-listing each field.
     private var style: MarkdownProseStyle { MarkdownStyleCache.style(theme: theme, typography: typography) }
-    private var key: String { MarkdownEntityStore.key(rowID: id, styleHash: style.hashValue) }
+    private var key: String {
+        let scoped = sessionScope.isEmpty ? id : "\(sessionScope)\u{1}\(id)"
+        return MarkdownEntityStore.key(rowID: scoped, styleHash: style.hashValue)
+    }
 
     var body: some View {
         Group {

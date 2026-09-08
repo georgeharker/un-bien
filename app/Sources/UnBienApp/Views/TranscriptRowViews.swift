@@ -308,12 +308,13 @@ private struct BudgetedContent<Content: View>: View {
 /// or drawn. Same mechanism as the highlighted-code warm, just no output.
 private struct WarmAttributedText: View {
     let producer: any AttributedTextProducer
+    @Environment(\.sessionScope) private var sessionScope
 
     var body: some View {
         Color.clear.frame(width: 0, height: 0)
-            .task(id: producer.cacheKey) {
-                if AttributedTextCache.shared.cached(producer) == nil {
-                    _ = await AttributedTextCache.shared.attributed(producer)
+            .task(id: "\(sessionScope)\u{1}\(producer.cacheKey)") {
+                if AttributedTextCache.shared.cached(producer, scope: sessionScope) == nil {
+                    _ = await AttributedTextCache.shared.attributed(producer, scope: sessionScope)
                 }
             }
     }
@@ -322,15 +323,16 @@ private struct WarmAttributedText: View {
 struct AsyncAttributedText: View {
     let producer: any AttributedTextProducer
     @State private var landed: AttributedString?
+    @Environment(\.sessionScope) private var sessionScope
 
     var body: some View {
         Group {
-            if let hit = AttributedTextCache.shared.cached(producer) ?? landed {
+            if let hit = AttributedTextCache.shared.cached(producer, scope: sessionScope) ?? landed {
                 Text(hit)
             } else {
                 Text(producer.plainText)
-                    .task(id: producer.cacheKey) {
-                        landed = await AttributedTextCache.shared.attributed(producer)
+                    .task(id: "\(sessionScope)\u{1}\(producer.cacheKey)") {
+                        landed = await AttributedTextCache.shared.attributed(producer, scope: sessionScope)
                     }
             }
         }

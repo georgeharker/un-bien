@@ -59,7 +59,13 @@ public struct EnvelopeReducer {
     /// it as `since` for a delta refetch (design 01M15FMQ).
     public private(set) var leafId: String?
 
-    public init() {}
+    /// `scope` = the globally-unique session key (LiveSession.id) this reducer
+    /// is stored under; forwarded to SessionState so app-generated synthetic
+    /// bubble ids are session-scoped (design 01M21JSKJB — no cross-session
+    /// render-cache bleed). Empty (tests/demo) = unscoped, legacy behaviour.
+    public init(scope: String = "") {
+        session = SessionState(scope: scope)
+    }
 
     public mutating func apply(_ message: EnvelopeMessage) {
         if let evt = message.evt { applyEvt(evt) }

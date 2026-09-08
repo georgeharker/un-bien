@@ -329,6 +329,10 @@ struct TranscriptView: View {
             // Per-card expand/toggle state that survives row windowing
             // (ToolCardView reads/writes it keyed by toolCallID).
             .environment(\.cardUIState, cardUIState)
+            // Scope the process-wide render caches to THIS session so bubble
+            // ids (session-local seq counters) can't collide across chats
+            // (design 01M21JSKJB).
+            .environment(\.sessionScope, session.id)
             .background(viewportProbe)
             // THE PIN (design: scroll-position pin; prototype
             // app/Prototypes/scroll-position-pin.swift): ONE binding is the

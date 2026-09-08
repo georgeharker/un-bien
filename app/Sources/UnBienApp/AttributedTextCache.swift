@@ -233,10 +233,18 @@ public final class AttributedTextCache: @unchecked Sendable {
 
     // MARK: - Generic windowed pull (every producer shares this)
 
+    /// Session-scope a producer key so this PROCESS-WIDE cache can't collide
+    /// across sessions (design 01M21JSKJB): producers keyed by a session-local
+    /// id (@diff toolCallID, HighlightProducer identity) would otherwise bleed
+    /// content between chats. Empty scope = legacy unscoped key.
+    static func scopedKey(_ scope: String, _ base: String) -> String {
+        scope.isEmpty ? base : "\(scope)\u{1}\(base)"
+    }
+
     /// Cache-ONLY sync lookup — nil on miss, never evaluates, never blocks. The
     /// repeat-render hot path (a warm near-window row hits this synchronously).
-    public func cached(_ producer: any AttributedTextProducer) -> AttributedString? {
-        peek(producer.cacheKey).map(AttributedString.init)
+    public func cached(_ producer: any AttributedTextProducer, scope: String = "") -> AttributedString? {
+        peek(Self.scopedKey(scope, producer.cacheKey)).map(AttributedString.init)
     }
 
     /// Off-main produce-once: awaits a slot on the serial eval queue; a
@@ -244,8 +252,8 @@ public final class AttributedTextCache: @unchecked Sendable {
     /// at drain, so onscreen work gets the queue. Windowed callers warm this
     /// AHEAD of display — no visible frame delay. Returns nil when cancelled or
     /// unproducible; the caller's plain fallback stands.
-    public func attributed(_ producer: any AttributedTextProducer) async -> AttributedString? {
-        let key = producer.cacheKey
+    public func attributed(_ producer: any AttributedTextProducer, scope: String = "") async -> AttributedString? {
+        let key = Self.scopedKey(scope, producer.cacheKey)
         if let hit = touchHit(key) { return AttributedString(hit) }
         let ticket = EvalTicket()
         return await withTaskCancellationHandler {

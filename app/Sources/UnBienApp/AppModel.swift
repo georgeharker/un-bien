@@ -493,7 +493,7 @@ public final class AppModel: ObservableObject {
         if since == nil, !isDemoKey(session.id) {
             let t0 = Date()
             if let cached = await entryCache.load(key: session.id) {
-                var reducer = envelopeReducers[session.id] ?? EnvelopeReducer()
+                var reducer = envelopeReducers[session.id] ?? EnvelopeReducer(scope: session.id)
                 reducer.setHideReasoning(!showThinking)
                 RenderActivity.getEntriesCached += 1
                 reducer.applyEntries(cached.entries, leafId: cached.leafId)
