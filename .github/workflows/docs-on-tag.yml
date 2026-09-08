@@ -1,8 +1,9 @@
+---
 # Thin caller for gh-quarto-publish: refresh the default-branch docs when a
 # release tag is pushed.
 name: docs (release tag)
 
-on:
+"on":
   push:
     tags: ["v*"]
 

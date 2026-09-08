@@ -1,6 +1,7 @@
+---
 name: Publish Relay Crate
 
-on:
+"on":
   push:
     tags:
       # Component-scoped: the extension publishes on `v*`, the relay on
@@ -9,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write # Required for crates.io OIDC trusted publishing
+  id-token: write  # Required for crates.io OIDC trusted publishing
   contents: read
 
 jobs:

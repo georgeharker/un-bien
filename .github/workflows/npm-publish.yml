@@ -1,13 +1,14 @@
+---
 name: Publish Package
 
-on:
+"on":
   push:
     tags:
       - "v*"
   workflow_dispatch:
 
 permissions:
-  id-token: write # Required for OIDC trusted publishing
+  id-token: write  # Required for OIDC trusted publishing
   contents: read
 
 jobs:

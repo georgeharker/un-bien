@@ -1,8 +1,9 @@
+---
 # Thin caller for gh-quarto-publish: deploy docs when they change on a branch.
 name: docs (branch push)
 
-on:
-  workflow_dispatch: # manual run: deploys the selected branch to its prefix
+"on":
+  workflow_dispatch:  # manual run: deploys the selected branch to its prefix
   push:
     branches: [main]
     paths:

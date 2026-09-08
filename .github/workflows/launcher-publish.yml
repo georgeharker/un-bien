@@ -1,6 +1,7 @@
+---
 name: Publish Launcher
 
-on:
+"on":
   push:
     tags:
       # Component-scoped: extension publishes on `v*`, relay on
@@ -10,7 +11,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write # Required for OIDC trusted publishing
+  id-token: write  # Required for OIDC trusted publishing
   contents: read
 
 jobs:
