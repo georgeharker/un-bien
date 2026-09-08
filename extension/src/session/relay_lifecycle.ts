@@ -33,7 +33,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent"
 import { qrSession } from "../pairing/qr.js"
-import { addPeer } from "../pairing/storage.js"
+import { addPeer, listPeers, pairingAllowList } from "../pairing/storage.js"
 import type { Ed25519Keypair } from "../pairing/crypto.js"
 import { _findKnownPeer } from "../pairing/peer_trust.js"
 import type { SelfRevoke } from "../mesh/self_revoke.js"
@@ -523,6 +523,11 @@ async function _attemptReconnect(
   deps.relay = relay
   _reconnectAttempt = 0
 
+  // Push our ROOMS-gate allow-list on every (re)connect so the relay rebuilds
+  // its soft-state pairing db (design 01M1ZE43). Best-effort; the relay fails
+  // open until a push lands.
+  _pushPairingAllowList(relay)
+
   relay.on("close", () => _onRelayClose(deps, relay))
   deps.stopAutoListener = _installAutoListener(deps, relay)
 
@@ -536,6 +541,19 @@ async function _attemptReconnect(
 }
 
 // ── Relay state event + transparent control channel (Cockpit toggle) ─────────
+
+/** Push this machine's ROOMS-gate allow-list (paired Owner epks permitted to
+ *  list our rooms) to the relay. Best-effort — a miss just delays the gate
+ *  until the next push (the relay fails open meanwhile). Design 01M1ZE43. */
+export function _pushPairingAllowList(relay: RelayClient): void {
+  void listPeers()
+    .then((peers) =>
+      relay.sendControl({ type: "pairing_set", owners: pairingAllowList(peers) }),
+    )
+    .catch(() => {
+      /* best-effort */
+    })
+}
 
 /** Current relay connectivity, derived from `_state` + `_relay`. */
 export function _relayStatus(deps: RelayLifecycleDeps): RelayConnectivity {

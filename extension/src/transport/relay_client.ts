@@ -79,6 +79,14 @@ export interface RoomMetaUpdateFrame {
   }
 }
 
+/** Control frame pushing this machine's ROOMS-gate allow-list to the relay
+ *  (design 01M1ZE43): the set of Owner epks (relay `peer_id` encoding) permitted
+ *  to list this machine's rooms. Full-set replace on connect + every change. */
+export interface PairingSetFrame {
+  type: "pairing_set"
+  owners: string[]
+}
+
 export interface ConnectOptions {
   roomId?: string
   roomMeta?: RoomMeta
@@ -216,7 +224,7 @@ export class RelayClient extends EventEmitter {
    * the WS isn't open (best-effort: control frames are observational; we
    * don't want them throwing inside SDK event callbacks).
    */
-  sendControl(frame: RoomMetaUpdateFrame): void {
+  sendControl(frame: RoomMetaUpdateFrame | PairingSetFrame): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
     this.ws.send(JSON.stringify(frame))
   }

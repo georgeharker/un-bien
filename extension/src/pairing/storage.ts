@@ -738,6 +738,24 @@ export async function listPeers(): Promise<PeerRecord[]> {
 }
 
 /**
+ * The relay ROOMS-gate allow-list (design 01M1ZE43): each paired Owner's epk
+ * canonicalized to the relay's `peer_id` encoding (standard padded base64 of
+ * the 32 raw bytes), so it matches the challenge-verified peer_id the relay
+ * routes on. Undecodable handles are skipped rather than poisoning the set.
+ */
+export function pairingAllowList(peers: PeerRecord[]): string[] {
+  const owners: string[] = []
+  for (const p of peers) {
+    try {
+      owners.push(canonicalizeEd25519PublicKey(p.remote_epk, "peer allow-list"))
+    } catch {
+      /* skip an undecodable handle */
+    }
+  }
+  return owners
+}
+
+/**
  * Authoritative container read for SelfRevoke's token path. Public readers
  * intentionally remain best-effort; only a missing file is proof of emptiness
  * here. Valid array elements are returned verbatim for corruption isolation.

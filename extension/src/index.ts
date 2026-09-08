@@ -37,7 +37,7 @@ import type {
   ExtensionFactory,
 } from "@earendil-works/pi-coding-agent"
 import type { Ed25519Keypair } from "./pairing/crypto.js"
-import { listPeers } from "./pairing/storage.js"
+import { listPeers, pairingAllowList } from "./pairing/storage.js"
 import type { SelfRevoke } from "./mesh/self_revoke.js"
 import type { MeshTopologySnapshot } from "./mesh/siblings.js"
 import type { ClientMessage, ThinkingLevel } from "./protocol/types.js"
@@ -261,6 +261,9 @@ function _refreshPairingsCache(): void {
   void listPeers()
     .then((peers) => {
       _hasGlobalPairings = peers.length > 0
+      // Keep the relay's ROOMS-gate allow-list in sync on every pairing change
+      // (pair / unpair / revoke). Design 01M1ZE43; no-ops when the relay is down.
+      _relay?.sendControl({ type: "pairing_set", owners: pairingAllowList(peers) })
       _refreshFooter()
     })
     .catch(() => {
