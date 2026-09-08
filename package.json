@@ -11,11 +11,11 @@
     ]
   },
   "scripts": {
-    "build": "pnpm -C extension build && pnpm -C launcher build",
-    "typecheck": "pnpm -C extension typecheck && pnpm -C launcher typecheck",
-    "test": "pnpm -C extension test",
-    "format": "prettier --write \"extension/src/**/*.ts\" \"launcher/src/**/*.ts\"",
-    "format:check": "prettier --check \"extension/src/**/*.ts\" \"launcher/src/**/*.ts\""
+    "build": "pnpm -C extension build && pnpm -C launcher build && pnpm -C unbien-cli build",
+    "typecheck": "pnpm -C extension typecheck && pnpm -C launcher typecheck && pnpm -C unbien-cli typecheck",
+    "test": "pnpm -C extension test && pnpm -C unbien-cli test",
+    "format": "prettier --write \"extension/src/**/*.ts\" \"launcher/src/**/*.ts\" \"unbien-cli/src/**/*.ts\"",
+    "format:check": "prettier --check \"extension/src/**/*.ts\" \"launcher/src/**/*.ts\" \"unbien-cli/src/**/*.ts\""
   },
   "engines": {
     "node": ">=20.0.0"

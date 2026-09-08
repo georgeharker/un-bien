@@ -1,0 +1,33 @@
+{
+  "name": "@geohar/un-bien-cli",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Prototype: renders an un-bien rpc-envelope stream with pi's own TUI components and theme.",
+  "type": "module",
+  "bin": {
+    "unbien-cli": "dist/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "cli": "tsx src/main.ts",
+    "replay": "tsx src/main.ts replay",
+    "connect": "tsx src/main.ts connect",
+    "test": "vitest run"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.8.0",
+    "tsx": "^4.22.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
+  },
+  "dependencies": {
+    "@geohar/un-bien": "workspace:*",
+    "@earendil-works/pi-coding-agent": ">=0.84.3",
+    "@earendil-works/pi-tui": "^0.84.4"
+  }
+}
