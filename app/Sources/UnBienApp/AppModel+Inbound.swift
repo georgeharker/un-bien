@@ -179,9 +179,10 @@ extension AppModel {
     private func scheduleFoldFlush() {
         guard !foldFlushScheduled else { return }
         foldFlushScheduled = true
-        // Coarser cadence while the composer is actively typed so keystrokes get
-        // main-thread headroom (design 01M20SW3KHXJ). Still trailing-flushes.
-        let nanos = typingActive ? Self.foldFlushNanosTyping : Self.foldFlushNanos
+        // Coarser cadence while a keystroke or scroll is recent so input keeps
+        // main-thread headroom — scroll backs off harder than typing (see
+        // foldFlushInterval). Design 01M20SW3KHXJ. Still trailing-flushes.
+        let nanos = foldFlushInterval
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: nanos)
             guard let self else { return }
@@ -190,20 +191,22 @@ extension AppModel {
         }
     }
 
-    /// Mark the composer ACTIVELY TYPED (design 01M20SW3KHXJ): throttles the fold
-    /// cadence for ~1.2s so keystrokes get main-thread headroom, then clears +
-    /// flushes to catch the stream up. Keystroke-debounced — each call resets the
-    /// timer, so the cadence only restores after typing pauses. NOT keyed on
-    /// focus (the box is focused by default).
+    /// Stamp the last composer keystroke (design 01M20SW3KHXJ): coarsens the fold
+    /// cadence while typing is recent (AppModel.isInputBusy / typingBusyWindow).
+    /// Records a timestamp only — NO per-keystroke Task/timer; the window clears
+    /// itself by comparison and buffered frames still land via the trailing fold
+    /// flush + the message_end barrier. NOT keyed on focus (the box is focused by
+    /// default in a session, which would throttle forever).
     func noteComposerTyping() {
-        typingActive = true
-        typingClearTask?.cancel()
-        typingClearTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
-            guard let self, !Task.isCancelled else { return }
-            self.typingActive = false
-            self.flushAllFoldFrames()
-        }
+        lastComposerTypingAt = ContinuousClock.now
+    }
+
+    /// Stamp the last transcript scroll (design 01M20SW3KHXJ): same treatment as
+    /// typing — coarsens the fold cadence briefly so a scroll gesture keeps the
+    /// main thread, restored quickly after it stops (scrollBusyWindow). Timestamp
+    /// only, no timer.
+    func noteScrolling() {
+        lastScrollAt = ContinuousClock.now
     }
 
     /// Flush one session's pending frames — ONE reducer fetch, N applies,

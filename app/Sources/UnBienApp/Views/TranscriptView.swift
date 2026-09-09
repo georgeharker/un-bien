@@ -187,6 +187,15 @@ struct TranscriptView: View {
         lastProbeNanos = now
         #endif
         windowDriver.update(scrollY: scrollY)
+        // Coarsen the fold cadence while the USER is scrolling (design
+        // 01M20SW3KHXJ, twin of noteComposerTyping): stamp on each geometry frame
+        // during a GESTURE phase only. Geometry also fires for .animating
+        // (streaming auto-pin growth) and at .idle — excluded, so the stream is
+        // never throttled by its own content movement, only by real scroll.
+        switch lastScrollPhase {
+        case .tracking, .interacting, .decelerating: model.noteScrolling()
+        default: break
+        }
         // Pre-restore movement backstop — RELATIVE to the offset baseline
         // (captured when the wait began), SUSPENDED while the phase is
         // .animating (programmatic offset jumps from content growth are not

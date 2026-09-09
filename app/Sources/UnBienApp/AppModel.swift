@@ -286,16 +286,44 @@ public final class AppModel: ObservableObject {
     /// input; the stream still updates (just coarser) and ALWAYS finally flushes
     /// (the trailing Task flush + the message_end barrier).
     static let foldFlushNanosTyping: UInt64 = 160_000_000
+    /// EVEN SLOWER fold cadence (~3fps) applied WHILE SCROLLING (design
+    /// 01M20SW3KHXJ): a scroll gesture drives more per-frame main-thread layout
+    /// than the keyboard (offset → window recompute → attach/detach → pin), so it
+    /// backs off HARDER than typing. Still trailing-flushes + message_end barrier.
+    static let foldFlushNanosScroll: UInt64 = 300_000_000
+    /// How long after the last keystroke / scroll the coarse cadence stays
+    /// engaged — a 1.5s hold for BOTH (george). The backoff DEPTH still differs
+    /// (scroll coarser than typing, above); only the timeout is shared. Windowed
+    /// by timestamp, so it self-clears with no timer. Design 01M20SW3KHXJ.
+    static let typingBusyWindow: Duration = .milliseconds(1500)
+    static let scrollBusyWindow: Duration = .milliseconds(1500)
     var pendingFoldFrames: [String: [(env: EnvelopeMessage,
                                       envelope: RoutedEnvelope,
                                       relayID: UUID)]] = [:]
     var foldFlushScheduled = false
-    /// True for ~1.2s after each composer keystroke — keystroke-DEBOUNCED, not
-    /// focus (the box is focused by default in a session, so focus would throttle
-    /// forever). Plain var (not @Published): read by scheduleFoldFlush, never
-    /// observed by a view. Design 01M20SW3KHXJ.
-    var typingActive = false
-    var typingClearTask: Task<Void, Never>?
+    /// Timestamps of the last composer keystroke / last transcript scroll. The
+    /// fold cadence checks these against a window instead of spawning a per-event
+    /// clear Task — an event just STAMPS a time (O(1), no Task/timer), and
+    /// scheduleFoldFlush reads whether either is recent. Keystroke/scroll bursts
+    /// therefore never spool timers; the window self-clears by comparison.
+    /// Plain vars (not @Published): read by scheduleFoldFlush, never observed by
+    /// a view. Design 01M20SW3KHXJ.
+    var lastComposerTypingAt: ContinuousClock.Instant?
+    var lastScrollAt: ContinuousClock.Instant?
+    /// Fold-flush interval for the CURRENT input state, chosen purely by
+    /// timestamp window (no timer). Scroll backs off HARDER than typing and wins
+    /// when both are recent (the active gesture is the layout-heavier one); idle
+    /// returns the normal ~15fps cadence. Design 01M20SW3KHXJ.
+    var foldFlushInterval: UInt64 {
+        let now = ContinuousClock.now
+        if let scrolled = lastScrollAt, now - scrolled < Self.scrollBusyWindow {
+            return Self.foldFlushNanosScroll
+        }
+        if let typed = lastComposerTypingAt, now - typed < Self.typingBusyWindow {
+            return Self.foldFlushNanosTyping
+        }
+        return Self.foldFlushNanos
+    }
     /// Connection generation per relay (run 2026-09-18 duplicate-delivery
     /// fix): incremented by every connect(); event loops carry their
     /// generation and refuse to tear down state when superseded — two
