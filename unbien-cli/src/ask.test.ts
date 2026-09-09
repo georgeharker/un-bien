@@ -4,6 +4,7 @@ import {
   cancelResponse,
   effectiveType,
   routeNotify,
+  type AskAnswer,
   type AskPrompt,
 } from "./ask.js"
 import { reduce, toEnvelope } from "./reduce.js"
@@ -17,7 +18,10 @@ const isOpen = (id: string) => id === OPEN
  */
 describe("notify routing", () => {
   it("dismisses the open ask it resolves", () => {
-    const r = routeNotify({ id: OPEN, message: "Clarification resolved." }, isOpen)
+    const r = routeNotify(
+      { id: OPEN, message: "Clarification resolved." },
+      isOpen,
+    )
     expect(r).toEqual({ kind: "dismiss", id: OPEN })
   })
 
@@ -39,7 +43,9 @@ describe("notify routing", () => {
   })
 
   it("keeps an id-less notify as an ordinary notice", () => {
-    expect(routeNotify({ message: "relay attached" }, isOpen).kind).toBe("notice")
+    expect(routeNotify({ message: "relay attached" }, isOpen).kind).toBe(
+      "notice",
+    )
   })
 })
 
@@ -84,7 +90,36 @@ describe("responses carry the ask envelope", () => {
   })
 
   it("cancels with the flow id", () => {
-    expect(cancelResponse(prompt).ask).toEqual({ flow_id: OPEN, kind: "cancel" })
+    expect(cancelResponse(prompt).ask).toEqual({
+      flow_id: OPEN,
+      kind: "cancel",
+    })
+  })
+
+  // pi-ask's own validator (src/remote-ask.ts) rejects an answer that combines
+  // a selected value with custom text on a non-multi question, so the freeform
+  // path must send customText ALONE.
+  it("answers a freeform question with custom text and no values", () => {
+    const freeform: AskPrompt = {
+      id: OPEN,
+      method: "input",
+      ask: {
+        flow_id: OPEN,
+        questions: [
+          {
+            id: "q1",
+            prompt: "Which?",
+            type: "single",
+            options: [{ value: "freeform", label: "Type answer", freeform: true }],
+          },
+        ],
+      },
+    }
+    const r = answerResponse(freeform, { q1: { customText: "my own words" } })
+    const answer = (r.ask as { answers: Record<string, AskAnswer> }).answers.q1
+    expect(answer?.customText).toBe("my own words")
+    expect(answer?.values).toBeUndefined()
+    expect(r.value).toBe("my own words")
   })
 
   it("prefers the presented type over the requested one", () => {

@@ -13,7 +13,15 @@ export interface AskOption {
   label: string
   description?: string
   preview?: string
+  /**
+   * pi-ask's "the user should type an answer" marker. It appears as exactly
+   * ONE option, never mixed with real choices, and wants `customText` with no
+   * `values` — submitting the literal option value would answer with the token
+   * "freeform" instead of what was typed.
+   */
   freeform?: boolean
+  /** Presentation metadata only; it never changes the submitted value. */
+  recommended?: boolean
 }
 
 export interface AskQuestion {
@@ -98,8 +106,7 @@ export function answerResponse(
   const firstAnswer = first ? answers[first.id] : undefined
   // `value` is the label-shaped scalar a strict client would have sent; the
   // `ask` envelope carries the structured truth.
-  const value =
-    firstAnswer?.customText ?? firstAnswer?.values?.join(", ") ?? ""
+  const value = firstAnswer?.customText ?? firstAnswer?.values?.join(", ") ?? ""
 
   return {
     type: "extension_ui_response",

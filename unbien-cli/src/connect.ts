@@ -493,12 +493,23 @@ async function presentAsk(prompt: AskPrompt): Promise<void> {
       awaitingText = { prompt, questionId: question.id }
       return // the submit handler resumes the flow
     }
+    // pi-ask encodes "the user should type an answer" as exactly ONE option
+    // marked `freeform`, never mixed with real choices. Presenting that as a
+    // one-item list would submit the literal "freeform" token instead of what
+    // the user typed — it wants customText and NO values.
+    if (question.options.length === 1 && question.options[0]?.freeform) {
+      emit([`  ${question.prompt}`, "  (type your answer and press enter)"])
+      awaitingText = { prompt, questionId: question.id }
+      return
+    }
     const type = effectiveType(question)
     const picked = await shell.choose(
       question.prompt,
       question.options.map((o) => ({
         value: o.value,
-        label: o.label,
+        // `recommended` is presentation-only metadata; surface it as a marker
+        // rather than letting it change the value we submit.
+        label: o.recommended ? `${o.label}  ★` : o.label,
         description: o.description ?? (type === "preview" ? o.preview : ""),
       })),
     )
@@ -547,7 +558,10 @@ async function submit(text: string): Promise<void> {
       return
     }
     if (questionId) {
-      respond(answerResponse(prompt, { [questionId]: { customText: text } }), prompt.id)
+      respond(
+        answerResponse(prompt, { [questionId]: { customText: text } }),
+        prompt.id,
+      )
     } else {
       respond(plainResponse(prompt, text), prompt.id)
     }
