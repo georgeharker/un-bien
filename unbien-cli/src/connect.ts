@@ -16,6 +16,7 @@ import {
   effectiveType,
   plainResponse,
   routeNotify,
+  staleFlows,
   type AskAnswer,
   type AskPrompt,
 } from "./ask.js"
@@ -114,6 +115,17 @@ if (!resolved) {
 // this module is still initialising, and a `let` read in its temporal dead
 // zone would throw instead of exiting.
 let shell: Shell | null = null
+/** Flows we are showing, keyed by request id (which IS the pi-ask flowId). */
+const openAsks = new Map<string, AskPrompt>()
+/**
+ * Open sync window: the flow ids the host replayed since we asked. A push can
+ * be lost (a dismissal notify we never saw), so the PULL reconciles — anything
+ * we still show that the host did NOT replay has since resolved.
+ *
+ * Null means no window in flight, which deliberately FAILS OPEN: a dropped
+ * terminator must never retire a live prompt.
+ */
+let syncWindow: Set<string> | null = null
 let quitting = false
 function hardQuit(reason: string): void {
   if (quitting) process.exit(130)
@@ -276,6 +288,7 @@ client.on("envelope", (env) => {
   const kind = env.rpc ? "rpc" : env.evt ? "evt" : "ub"
   const inner = (env.rpc ?? env.evt ?? env.ub) as { type?: string } | undefined
   trace("in", `${kind} ${inner?.type ?? "?"}`)
+  if (env.ub && inner?.type === "session_sync_end") closeSyncWindow()
   // Panels are ephemeral view state, not transcript.
   if (panels.apply(env)) {
     paintWidgets()
@@ -312,6 +325,12 @@ client.on("relayControl", (frame) => {
 
 client.on("control", (frame) => {
   trace("in", `control ${String(frame.type)}`)
+  // session_sync replays pending asks on the STOCK path (`sender.send`), not
+  // the envelope, so they arrive here rather than as {rpc} frames.
+  if (frame.type === "extension_ui_request") {
+    handleUiRequest(frame)
+    return
+  }
   if (frame.type === "pair_error") {
     console.error(`[pair failed] ${String(frame.message ?? frame.code ?? "")}`)
     process.exit(1)
@@ -419,14 +438,32 @@ console.error(
     "type a prompt, /help for commands, Ctrl-C to exit\n",
 )
 // The first frame to a trusted peer is what triggers the extension's attach.
+// Opening the window BEFORE the request: the replay arrives ahead of the
+// terminator, and anything still open that isn't replayed has since resolved.
+syncWindow = new Set()
 client.requestSync()
 
-/** Flows we are showing, keyed by request id (which IS the pi-ask flowId). */
-const openAsks = new Map<string, AskPrompt>()
 /** Set while an ask wants free text: the next submitted line answers it. */
 let awaitingText: { prompt: AskPrompt; questionId: string } | null = null
 
+/**
+ * Close the reconciliation window: any ask we are still showing that the host
+ * did NOT replay has resolved without us seeing the dismissal, so retire it.
+ * The host only replays flows still awaiting an answer, which is what makes
+ * "not replayed" mean "answered" rather than "maybe missed".
+ */
+function closeSyncWindow(): void {
+  const replayed = syncWindow
+  syncWindow = null
+  for (const id of staleFlows(openAsks.keys(), replayed)) {
+    openAsks.delete(id)
+    if (awaitingText?.prompt.id === id) awaitingText = null
+    emit(["  (clarification resolved elsewhere)"])
+  }
+}
+
 function handleUiRequest(rpc: Record<string, unknown>): void {
+  if (typeof rpc.id === "string") syncWindow?.add(rpc.id)
   if (rpc.method === "notify") {
     const routed = routeNotify(rpc, (id) => openAsks.has(id))
     if (routed.kind === "dismiss") {

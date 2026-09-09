@@ -96,6 +96,23 @@ export function routeNotify(
   return { kind: "notice", level, text }
 }
 
+/**
+ * Which shown flows are stale after a reconciliation window closes.
+ *
+ * The host replays only flows still awaiting an answer (`pendingRequests()`
+ * maps `activeFlows`, which the `completed` event deletes), so a replayed ask
+ * is provably unanswered and one we show that was NOT replayed has provably
+ * resolved. `replayed === null` means no window was in flight: fail open and
+ * retire nothing, so a dropped terminator can't clear a live prompt.
+ */
+export function staleFlows(
+  shown: Iterable<string>,
+  replayed: ReadonlySet<string> | null,
+): string[] {
+  if (!replayed) return []
+  return [...shown].filter((id) => !replayed.has(id))
+}
+
 /** The reply for a completed flow. `value` keeps degraded clients working. */
 export function answerResponse(
   prompt: AskPrompt,

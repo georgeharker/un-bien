@@ -4,6 +4,7 @@ import {
   cancelResponse,
   effectiveType,
   routeNotify,
+  staleFlows,
   type AskAnswer,
   type AskPrompt,
 } from "./ask.js"
@@ -64,6 +65,26 @@ describe("the reducer keeps resolution acks out of the transcript", () => {
   })
 })
 
+describe("sync reconciliation retires only provably-resolved flows", () => {
+  it("retires a shown flow the host did not replay", () => {
+    expect(staleFlows(["a", "b"], new Set(["a"]))).toEqual(["b"])
+  })
+
+  it("keeps every flow the host replayed — those are provably unanswered", () => {
+    expect(staleFlows(["a", "b"], new Set(["a", "b"]))).toEqual([])
+  })
+
+  it("retires nothing when no window was in flight (fail open)", () => {
+    // A dropped terminator must never clear a live prompt.
+    expect(staleFlows(["a", "b"], null)).toEqual([])
+  })
+
+  it("an empty replay retires everything shown", () => {
+    // The host had no pending flows: whatever we still show has resolved.
+    expect(staleFlows(["a"], new Set())).toEqual(["a"])
+  })
+})
+
 describe("responses carry the ask envelope", () => {
   const prompt: AskPrompt = {
     id: OPEN,
@@ -110,7 +131,9 @@ describe("responses carry the ask envelope", () => {
             id: "q1",
             prompt: "Which?",
             type: "single",
-            options: [{ value: "freeform", label: "Type answer", freeform: true }],
+            options: [
+              { value: "freeform", label: "Type answer", freeform: true },
+            ],
           },
         ],
       },
