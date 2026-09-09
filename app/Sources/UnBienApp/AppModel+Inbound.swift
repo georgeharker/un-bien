@@ -211,7 +211,7 @@ extension AppModel {
     private func flushFoldFrames(for key: String) {
         guard let pending = pendingFoldFrames.removeValue(forKey: key),
               !pending.isEmpty else { return }
-        var reducer = envelopeReducers[key] ?? EnvelopeReducer(scope: key)
+        var reducer = envelopeReducers[key] ?? EnvelopeReducer()
         reducer.setHideReasoning(!showThinking)
         for frame in pending {
             reducer.apply(frame.env)
@@ -317,7 +317,7 @@ extension AppModel {
         // Other un-bien-plane frames (the session_sync_end terminator):
         // fold via the reducer as a frame — its inner `.type` drives
         // applyRPC, exactly like an rpc-plane frame.
-        var reducer = envelopeReducers[key] ?? EnvelopeReducer(scope: key)
+        var reducer = envelopeReducers[key] ?? EnvelopeReducer()
         reducer.setHideReasoning(!showThinking)
         reducer.apply(EnvelopeMessage(rpc: ub))
         envelopeReducers[key] = reducer
@@ -391,7 +391,7 @@ extension AppModel {
         }
         // The key IS the pi sessionId now, so a replaced session is
         // simply a NEW key with fresh state — no reset needed here.
-        if envelopeReducers[key] == nil { envelopeReducers[key] = EnvelopeReducer(scope: key) }
+        if envelopeReducers[key] == nil { envelopeReducers[key] = EnvelopeReducer() }
         // Manual dismissal (plan 01M18X3B): a hello is PROOF OF
         // LIFE from this session's (fresh) instance — if the user
         // had removed the ended row, resurrect it. Clear the pin
@@ -446,7 +446,7 @@ extension AppModel {
         }
         flushFoldFrames(for: key)   // barrier: order-preserving flush first
 
-        var reducer = envelopeReducers[key] ?? EnvelopeReducer(scope: key)
+        var reducer = envelopeReducers[key] ?? EnvelopeReducer()
         reducer.setHideReasoning(!showThinking)
         // Full-walk BUFFERING (ordering fix): while a full walk pages in, live
         // frames must NOT fold — they would interleave BETWEEN the walk's
@@ -488,7 +488,7 @@ extension AppModel {
             // immediately (the same machinery as the walk terminal's beacon;
             // a refetch raced from the app side could beat the leaf move).
             if let leafId = evt.data["leafId"]?.stringValue, !leafId.isEmpty {
-                var reducer = envelopeReducers[key] ?? EnvelopeReducer(scope: key)
+                var reducer = envelopeReducers[key] ?? EnvelopeReducer()
                 reducer.applyEntries([], leafId: leafId, authoritative: true)
                 envelopeReducers[key] = reducer
                 transcripts[key] = reducer.session
@@ -772,7 +772,7 @@ extension AppModel {
     /// so the row persists in its session like any other notice.
     func appendSessionNotice(key: String, code: String, message: String) {
         guard !message.isEmpty else { return }
-        var reducer = envelopeReducers[key] ?? EnvelopeReducer(scope: key)
+        var reducer = envelopeReducers[key] ?? EnvelopeReducer()
         reducer.setHideReasoning(!showThinking)
         reducer.appendNotice(code: code, message: message)
         envelopeReducers[key] = reducer

@@ -144,14 +144,7 @@ public struct SessionState: Equatable, Sendable {
     /// deltas fragment or the bubble loses identity). See applyEntries.
     private var isReplayingEntries = false
 
-    /// Session scope (LiveSession.id) prefixed onto app-generated synthetic ids
-    /// so they can't collide across sessions' render caches (design 01M21JSKJB).
-    private var scope: String = ""
-    private func scoped(_ raw: String) -> String {
-        scope.isEmpty ? raw : "\(scope)\u{1}\(raw)"
-    }
-
-    public init(scope: String = "") { self.scope = scope }
+    public init() {}
 
     /// Retract the ended state: the session was resumed (its room re-advertised
     /// and/or a fresh extension instance greeted). Drops the banner and
@@ -207,7 +200,7 @@ public struct SessionState: Equatable, Sendable {
             return
         }
         noticeSeq += 1
-        if append(.notice(NoticeItem(id: scoped("ext\(noticeSeq)"), code: code, message: message))) {
+        if append(.notice(NoticeItem(id: "ext\(noticeSeq)", code: code, message: message))) {
             liveArrivals += 1
         }
     }
@@ -312,7 +305,7 @@ public struct SessionState: Equatable, Sendable {
             items[index] = .reasoning(block)
         } else {
             reasoningSeq += 1
-            _ = append(.reasoning(ReasoningBlock(id: scoped("\(reasoningSeq)"), text: delta, streaming: true)))
+            _ = append(.reasoning(ReasoningBlock(id: "\(reasoningSeq)", text: delta, streaming: true)))
             openReasoningIndex = items.count - 1
         }
         activeTurnID = inReplyTo
@@ -326,7 +319,7 @@ public struct SessionState: Equatable, Sendable {
             items[index] = .assistant(bubble)
         } else {
             assistantSeq += 1
-            _ = append(.assistant(AssistantBubble(id: scoped("a\(assistantSeq)"), inReplyTo: inReplyTo,
+            _ = append(.assistant(AssistantBubble(id: "a\(assistantSeq)", inReplyTo: inReplyTo,
                                               text: delta, streaming: true)))
             openAssistantIndex = items.count - 1
         }
@@ -515,7 +508,7 @@ public struct SessionState: Equatable, Sendable {
             noticeSeq += 1
             let action = frame["action"]?.stringValue ?? "action"
             let err = frame["error"]?.stringValue ?? "failed"
-            if append(.notice(NoticeItem(id: scoped("act\(noticeSeq)"), code: "action_error",
+            if append(.notice(NoticeItem(id: "act\(noticeSeq)", code: "action_error",
                                          message: "\(action) failed: \(err)"))) {
                 liveArrivals += 1
             }
@@ -523,7 +516,7 @@ public struct SessionState: Equatable, Sendable {
             // Enveloped error reply (e.g. malformed models.json on list_models):
             // same notice surface as a provider error.
             noticeSeq += 1
-            if append(.notice(NoticeItem(id: scoped("n\(noticeSeq)"), code: frame["code"]?.stringValue ?? "error",
+            if append(.notice(NoticeItem(id: "n\(noticeSeq)", code: frame["code"]?.stringValue ?? "error",
                                          message: frame["message"]?.stringValue ?? ""))) {
                 liveArrivals += 1
             }
@@ -646,7 +639,7 @@ public struct SessionState: Equatable, Sendable {
             // extensions' display-intended custom messages).
             if message?["display"]?.boolValue == false { return false }
             noticeSeq += 1
-            return append(.notice(NoticeItem(id: scoped("custom\(noticeSeq)"), code: "custom",
+            return append(.notice(NoticeItem(id: "custom\(noticeSeq)", code: "custom",
                                              message: message?["content"]?.joinedText() ?? "")))
         default:
             return false  // toolResult is rendered via tool_execution_*, not as a row
