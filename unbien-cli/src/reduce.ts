@@ -144,9 +144,17 @@ export function reduce(
 
       case "extension_ui_request": {
         if (rpc.method !== "notify") break
+        // A notify is NOT transcript content by default: the ui bridge emits
+        // one with id === flowId when a pi-ask flow RESOLVES, so rendering
+        // every notify turns each answered ask into a log row ("Clarification
+        // resolved."). Only an actionable one earns a row; the rest are
+        // routed live by the client, which knows what is open.
+        // Design 01M1CF5FYMWHAGVZX3RDM50E34.
+        const level = String(rpc.notifyType ?? "info")
+        if (level !== "warning" && level !== "error") break
         items.push({
           kind: "notice",
-          level: String(rpc.notifyType ?? "info"),
+          level,
           text: String(rpc.message ?? ""),
         })
         break

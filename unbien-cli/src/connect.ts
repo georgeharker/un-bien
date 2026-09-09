@@ -11,6 +11,15 @@ import { applyTheme, availableThemes } from "./theme.js"
 import { loadOrCreateIdentity } from "./identity.js"
 import { parseInvite, type PairingInvite } from "./invite.js"
 import {
+  answerResponse,
+  cancelResponse,
+  effectiveType,
+  plainResponse,
+  routeNotify,
+  type AskAnswer,
+  type AskPrompt,
+} from "./ask.js"
+import {
   findCommand,
   type CommandContext,
   type SessionEntry,
@@ -273,6 +282,7 @@ client.on("envelope", (env) => {
     return
   }
   const rpc = env.rpc as Record<string, unknown> | undefined
+  if (rpc?.type === "extension_ui_request") handleUiRequest(rpc)
   if (rpc) applyStreaming(rpc)
   seen.push(env)
   if (!rpc || TRANSCRIPT_FRAMES.has(String(rpc.type))) draw()
@@ -411,6 +421,98 @@ console.error(
 // The first frame to a trusted peer is what triggers the extension's attach.
 client.requestSync()
 
+/** Flows we are showing, keyed by request id (which IS the pi-ask flowId). */
+const openAsks = new Map<string, AskPrompt>()
+/** Set while an ask wants free text: the next submitted line answers it. */
+let awaitingText: { prompt: AskPrompt; questionId: string } | null = null
+
+function handleUiRequest(rpc: Record<string, unknown>): void {
+  if (rpc.method === "notify") {
+    const routed = routeNotify(rpc, (id) => openAsks.has(id))
+    if (routed.kind === "dismiss") {
+      openAsks.delete(routed.id)
+      if (awaitingText?.prompt.id === routed.id) awaitingText = null
+      emit(["  (clarification resolved elsewhere)"])
+    }
+    // notice → the reducer already renders it; drop → nothing to do.
+    return
+  }
+  // SAFETY: the non-notify extension_ui_request shapes (select/confirm/input/
+  // editor) are exactly AskPrompt's fields, and every one of them is optional
+  // here except `id`/`method`, which the dispatch above has already matched.
+  // presentAsk reads nothing it doesn't first check.
+  const prompt = rpc as unknown as AskPrompt
+  openAsks.set(prompt.id, prompt)
+  void presentAsk(prompt)
+}
+
+function respond(frame: Record<string, unknown>, promptId: string): void {
+  openAsks.delete(promptId)
+  if (awaitingText?.prompt.id === promptId) awaitingText = null
+  client.sendEnvelope({ rpc: frame })
+}
+
+/**
+ * Present a flow question by question. Scoped to select / confirm / input —
+ * the realistic ask surface the app also implements; an `editor` degrades to
+ * free text rather than pretending to be an editor.
+ */
+async function presentAsk(prompt: AskPrompt): Promise<void> {
+  if (!shell) return
+  const questions = prompt.ask?.questions ?? []
+  const header = prompt.ask?.title ?? prompt.title ?? "Clarification"
+
+  if (prompt.method === "confirm") {
+    const picked = await shell.choose(header, [
+      { value: "yes", label: "Yes" },
+      { value: "no", label: "No" },
+    ])
+    if (!picked) return respond(cancelResponse(prompt), prompt.id)
+    return respond(plainResponse(prompt, picked.value === "yes"), prompt.id)
+  }
+
+  // No pi-ask envelope: pi's own select/input dialog.
+  if (questions.length === 0) {
+    if (prompt.method === "select" && prompt.options?.length) {
+      const picked = await shell.choose(
+        header,
+        prompt.options.map((o) => ({ value: o, label: o })),
+      )
+      if (!picked) return respond(cancelResponse(prompt), prompt.id)
+      return respond(plainResponse(prompt, picked.value), prompt.id)
+    }
+    emit([`  ${header}`, "  (type your answer and press enter)"])
+    awaitingText = { prompt, questionId: "" }
+    return
+  }
+
+  const answers: Record<string, AskAnswer> = {}
+  for (const question of questions) {
+    if (question.options.length === 0) {
+      emit([`  ${question.prompt}`, "  (type your answer and press enter)"])
+      awaitingText = { prompt, questionId: question.id }
+      return // the submit handler resumes the flow
+    }
+    const type = effectiveType(question)
+    const picked = await shell.choose(
+      question.prompt,
+      question.options.map((o) => ({
+        value: o.value,
+        label: o.label,
+        description: o.description ?? (type === "preview" ? o.preview : ""),
+      })),
+    )
+    if (!picked) return respond(cancelResponse(prompt), prompt.id)
+    answers[question.id] = { values: [picked.value] }
+    if (type === "multi") {
+      // Honest degradation: the list picks one, so say so rather than
+      // silently sending a single value for a multi-select.
+      emit([`  (${question.label ?? question.id}: one option sent)`])
+    }
+  }
+  respond(answerResponse(prompt, answers), prompt.id)
+}
+
 function commandContext(): CommandContext {
   return {
     client,
@@ -434,6 +536,25 @@ function commandContext(): CommandContext {
 }
 
 async function submit(text: string): Promise<void> {
+  // An ask waiting on free text owns the next line — otherwise the answer would
+  // be sent to the agent as a fresh prompt while it sits blocked on the dialog.
+  if (awaitingText) {
+    const { prompt, questionId } = awaitingText
+    awaitingText = null
+    if (text === "/cancel") {
+      respond(cancelResponse(prompt), prompt.id)
+      emit(["  clarification cancelled"])
+      return
+    }
+    if (questionId) {
+      respond(answerResponse(prompt, { [questionId]: { customText: text } }), prompt.id)
+    } else {
+      respond(plainResponse(prompt, text), prompt.id)
+    }
+    emit(["  answer sent"])
+    return
+  }
+
   const found = findCommand(text)
   if (found) {
     try {
