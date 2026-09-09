@@ -58,6 +58,15 @@ public final class KeychainOwnerIdentityStore: OwnerIdentityStore, @unchecked Se
     }
 
     public func load() throws -> Ed25519Identity? {
+        #if targetEnvironment(simulator)
+        // The iOS SIMULATOR keychain does NOT persist across relaunch: the write
+        // reports success but the next launch's read is errSecItemNotFound even
+        // with protected data available (confirmed empirically). Back the seed
+        // with a 0600 file in the app container on the SIMULATOR ONLY so the dev
+        // rebuild loop keeps one identity. Compiled out of device/App-Store
+        // builds entirely — real devices use the keychain, which persists there.
+        if let blob = simFileBlob(), let id = try? OwnerIdentityBlob.decode(blob) { return id }
+        #endif
         // 1) Per-device account in the data-protection keychain (steady state).
         if let identity = try read(account: account, dataProtection: true) { return identity }
         // 2) Per-device account in the LEGACY macOS per-binary keychain —
@@ -87,6 +96,9 @@ public final class KeychainOwnerIdentityStore: OwnerIdentityStore, @unchecked Se
 
     public func save(_ identity: Ed25519Identity) throws {
         let blob = OwnerIdentityBlob.encode(identity)
+        #if targetEnvironment(simulator)
+        try? writeSimFile(blob) // sim-only durable fallback (see load())
+        #endif
         // Prefer the data-protection keychain; fall back to legacy only when the
         // app has no keychain entitlement (unsigned dev build).
         do {
@@ -108,7 +120,32 @@ public final class KeychainOwnerIdentityStore: OwnerIdentityStore, @unchecked Se
     public func delete() throws {
         try remove(account: account, dataProtection: true)
         try remove(account: account, dataProtection: false)
+        #if targetEnvironment(simulator)
+        if let url = simFileURL { try? FileManager.default.removeItem(at: url) }
+        #endif
     }
+
+    #if targetEnvironment(simulator)
+    // Simulator-only file fallback for the owner seed (the sim keychain does not
+    // persist across relaunch). Plain 0600 file, NO file-protection class (that
+    // would reintroduce the same lock-gating). Never compiled for device.
+    private var simFileURL: URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("un-bien", isDirectory: true)
+            .appendingPathComponent("owner-\(account).seed")
+    }
+    private func simFileBlob() -> Data? {
+        guard let url = simFileURL else { return nil }
+        return try? Data(contentsOf: url)
+    }
+    private func writeSimFile(_ blob: Data) throws {
+        guard let url = simFileURL else { return }
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try blob.write(to: url, options: .atomic)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+    #endif
 
     // MARK: - SecItem primitives
 
