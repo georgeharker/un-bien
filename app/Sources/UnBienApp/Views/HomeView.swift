@@ -132,16 +132,26 @@ struct HomeView: View {
                         // navigates to it). Nesting is behind a preference.
                         let top = sessions.filter { !$0.isSubagent }
                         let topIDs = Set(top.map(\.sessionID))
+                        // Machine badge (design 01M22JRC): disambiguate sessions
+                        // only when >1 machine is live on this relay.
+                        let multiMachine = Set(sessions.map(\.peerEPK)).count > 1
+                        let badge: (LiveSession) -> String? = { s in
+                            guard multiMachine else { return nil }
+                            let m = launchMachines.first { $0.epk == s.peerEPK }
+                            return m?.nickname ?? m?.hostname ?? String(s.peerEPK.prefix(6))
+                        }
                         let kids: [String: [LiveSession]] = model.showSubagentsOnHome
                             ? Dictionary(grouping: sessions.filter(\.isSubagent),
                                          by: { $0.parentSessionID ?? "" })
                             : [:]
                         ForEach(top) { session in
                             let children = kids[session.sessionID] ?? []
-                            sessionRow(session, hasChildren: !children.isEmpty)
+                            sessionRow(session, hasChildren: !children.isEmpty,
+                                       machineBadge: badge(session))
                             if !children.isEmpty, !collapsed.contains(session.id) {
                                 ForEach(children) { child in
-                                    sessionRow(child, indented: true)
+                                    sessionRow(child, indented: true,
+                                               machineBadge: badge(child))
                                 }
                             }
                         }
@@ -151,7 +161,7 @@ struct HomeView: View {
                             let orphans = sessions.filter {
                                 $0.isSubagent && !topIDs.contains($0.parentSessionID ?? "")
                             }
-                            ForEach(orphans) { sessionRow($0) }
+                            ForEach(orphans) { sessionRow($0, machineBadge: badge($0)) }
                         }
                         // Machine-level launch (regime 2): its OWN row, styled
                         // distinctly from sessions (icon-led). Hidden when no
@@ -270,7 +280,8 @@ struct HomeView: View {
     @ViewBuilder
     private func sessionRow(_ session: LiveSession,
                            indented: Bool = false,
-                           hasChildren: Bool = false) -> some View {
+                           hasChildren: Bool = false,
+                           machineBadge: String? = nil) -> some View {
         NavigationLink(value: session) {
             HStack {
                 // Leading slot (fixed width so rows align): a fold-out chevron on
@@ -301,6 +312,18 @@ struct HomeView: View {
                     Color.clear.frame(width: 16)
                 }
                 SessionRow(session: session)
+                // Machine differentiator (design 01M22JRC): shown ONLY when the
+                // relay has >1 machine with live sessions, so a single-machine
+                // relay stays clutter-free.
+                if let machineBadge {
+                    Text(machineBadge)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(theme.secondaryText)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(theme.secondaryText.opacity(0.12), in: Capsule())
+                        .accessibilityLabel("Machine: \(machineBadge)")
+                }
                 // A pending extension_ui ask for this session: the ask sheet only
                 // presents INSIDE the open transcript, so without a row-level
                 // affordance an ask that fires while the user is elsewhere in
