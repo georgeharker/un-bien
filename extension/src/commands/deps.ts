@@ -130,8 +130,12 @@ export interface CommandDeps {
   goIdle(): void
   /** Reconnect backoff entry for a closed relay. */
   onRelayClose(closedRelay: RelayClient): void
-  /** Attach the pair_request auto-listener to a live relay. */
-  installAutoListener(relay: RelayClient): () => void
+  /** THE single must-be-called setup for a freshly authenticated relay
+   *  connection: registers close, pushes the fail-closed rooms/content
+   *  allow-list, and installs the pair_request auto-listener. Both connect
+   *  paths route through it so the allow-list push cannot drift out of one
+   *  (design 01M1ZE43). */
+  setupRelayConnection(relay: RelayClient): void
   /** Repaint the footer status line from current state. */
   refreshFooter(
     ctx?: { ui?: { setStatus?: unknown; setTitle?: unknown } } | null,

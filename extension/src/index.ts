@@ -37,7 +37,7 @@ import type {
   ExtensionFactory,
 } from "@earendil-works/pi-coding-agent"
 import type { Ed25519Keypair } from "./pairing/crypto.js"
-import { listPeers, pairingAllowList } from "./pairing/storage.js"
+import { listPeers } from "./pairing/storage.js"
 import type { SelfRevoke } from "./mesh/self_revoke.js"
 import type { MeshTopologySnapshot } from "./mesh/siblings.js"
 import type { ClientMessage, ThinkingLevel } from "./protocol/types.js"
@@ -139,11 +139,12 @@ import {
   _goIdle,
   _handleControl as _handleControlImpl,
   _headlessUi,
-  _installAutoListener,
   _onPeerDisconnect as _onPeerDisconnectImpl,
   _onRelayClose,
   _panelBroadcast,
+  _pushPairingAllowList,
   _relayStatus,
+  _setupRelayConnection,
   _setRelayLifecycleGeneration,
   _uiBroadcast,
   type RelayConnectivity,
@@ -261,12 +262,11 @@ function _refreshPairingsCache(): void {
   void listPeers()
     .then((peers) => {
       _hasGlobalPairings = peers.length > 0
-      // Keep the relay's ROOMS-gate allow-list in sync on every pairing change
-      // (pair / unpair / revoke). Design 01M1ZE43; no-ops when the relay is down.
-      _relay?.sendControl({
-        type: "pairing_set",
-        owners: pairingAllowList(peers),
-      })
+      // Keep the relay's fail-closed allow-list in sync on every pairing change
+      // (pair / unpair / revoke) through the SINGLE signed-push producer
+      // (_pushPairingAllowList); no-ops when the relay is down. Design 01M1ZE43 /
+      // 01M23MKVG.
+      if (_relay) _pushPairingAllowList(relayDeps, _relay)
       _refreshFooter()
     })
     .catch(() => {
@@ -1874,7 +1874,7 @@ const deps: CommandDeps = {
   rootState: _rootState,
   goIdle: () => _goIdle(relayDeps),
   onRelayClose: (closedRelay) => _onRelayClose(relayDeps, closedRelay),
-  installAutoListener: (relay) => _installAutoListener(relayDeps, relay),
+  setupRelayConnection: (relay) => _setupRelayConnection(relayDeps, relay),
   refreshFooter: _refreshFooter,
   revokeActiveOwnerRuntime: _revokeActiveOwnerRuntime,
   attachBridgeIfReady: _attachBridgeIfReady,

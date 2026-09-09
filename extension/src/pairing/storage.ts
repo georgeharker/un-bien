@@ -103,6 +103,30 @@ export class FileIdentityUnreadableError extends Error {
 const PI_DIR = unbienStateHome()
 const IDENTITY_FILE = join(PI_DIR, "identity.json")
 const PEERS_PATH = join(PI_DIR, "peers.json")
+const ALLOW_VERSION_PATH = join(PI_DIR, "allow-list-version")
+
+let _allowVersionChain: Promise<number> = Promise.resolve(0)
+/** Strictly-increasing, restart-persistent version for the machine-signed
+ *  allow-list (design 01M23MKVG). Floored at Date.now() so a newer push always
+ *  outranks an older one — the relay's monotonic check then rejects any replay
+ *  of a stale signed blob. Serialized per-process against its own read-bump-write
+ *  race; cross-process races (sibling pi sessions sharing this machine key) are
+ *  resolved by the relay keeping the higher version. */
+export function nextAllowListVersion(): Promise<number> {
+  _allowVersionChain = _allowVersionChain.then(async () => {
+    let floor = 0
+    try {
+      floor =
+        Number.parseInt(await readFile(ALLOW_VERSION_PATH, "utf8"), 10) || 0
+    } catch {
+      /* first use — no version file yet */
+    }
+    const next = Math.max(Date.now(), floor + 1)
+    await writeFile(ALLOW_VERSION_PATH, String(next), { mode: 0o600 })
+    return next
+  })
+  return _allowVersionChain
+}
 
 // ── KeyStore abstraction ─────────────────────────────────────────────────────
 

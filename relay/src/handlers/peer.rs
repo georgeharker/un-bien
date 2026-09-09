@@ -261,21 +261,72 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                 // every change), then re-filter existing subscribers so a
                                 // revoke / reconnect-race drops stale watchers immediately.
                                 "pairing_set" => {
-                                    let owners: Vec<String> = frame
-                                        .get("owners")
-                                        .and_then(|v| v.as_array())
-                                        .map(|arr| {
-                                            arr.iter()
-                                                .filter_map(|v| v.as_str().map(String::from))
-                                                .collect()
-                                        })
-                                        .unwrap_or_default();
-                                    let owner_set: std::collections::HashSet<String> =
-                                        owners.iter().cloned().collect();
-                                    pairing.set(peer_id.clone(), owners);
-                                    for sub in rooms.subscribers_of(&peer_id).await {
-                                        if !owner_set.contains(&sub) {
-                                            rooms.unsubscribe(&sub, vec![peer_id.clone()]).await;
+                                    // SIGNED-ONLY (design 01M23MKVG, george 'No legacy
+                                    // support'): the push MUST be a machine-signed {blob,sig}
+                                    // envelope — verify_strict, monotonic, and bound to THIS
+                                    // connection's peer_id (a machine may sign only its own
+                                    // list). A plaintext {owners} push is not accepted at all,
+                                    // so the relay can never store an allow-list it did not
+                                    // cryptographically verify — authority parity with
+                                    // mesh_versions, no forgeable path. None => rejected.
+                                    let owner_set: Option<std::collections::HashSet<String>> =
+                                        if let (Some(blob_b64), Some(sig_b64)) = (
+                                            frame.get("blob").and_then(|v| v.as_str()),
+                                            frame.get("sig").and_then(|v| v.as_str()),
+                                        ) {
+                                            match (B64.decode(blob_b64), B64.decode(sig_b64)) {
+                                                (Ok(blob), Ok(sig)) => {
+                                                    match crate::peers::pairing::verify_pairing_blob(
+                                                        &blob, &sig,
+                                                    ) {
+                                                        Ok(p) if p.machine_pk == peer_id => {
+                                                            let version = p.version;
+                                                            let set: std::collections::HashSet<
+                                                                String,
+                                                            > = p.owners.iter().cloned().collect();
+                                                            match pairing.set_signed(
+                                                                peer_id.clone(),
+                                                                p.owners,
+                                                                version,
+                                                                &blob,
+                                                                &sig,
+                                                            ) {
+                                                                Ok(()) => {
+                                                                    tracing::info!(machine = %peer_id, count = set.len(), version, "pairing_set: stored SIGNED allow-list");
+                                                                    Some(set)
+                                                                }
+                                                                Err(stale) => {
+                                                                    tracing::info!(machine = %peer_id, new = stale.new, current = stale.current, "pairing_set rejected: stale version");
+                                                                    None
+                                                                }
+                                                            }
+                                                        }
+                                                        Ok(p) => {
+                                                            tracing::warn!(signer = %p.machine_pk, conn = %peer_id, "pairing_set rejected: signer is not this connection (authority binding)");
+                                                            None
+                                                        }
+                                                        Err(e) => {
+                                                            tracing::warn!(err = %e, machine = %peer_id, "pairing_set rejected: signature verify failed");
+                                                            None
+                                                        }
+                                                    }
+                                                }
+                                                _ => {
+                                                    tracing::warn!(machine = %peer_id, "pairing_set rejected: bad base64 blob/sig");
+                                                    None
+                                                }
+                                            }
+                                        } else {
+                                            tracing::warn!(machine = %peer_id, "pairing_set rejected: unsigned push (signed blob+sig required; design 01M23MKVG)");
+                                            None
+                                        };
+                                    if let Some(owner_set) = owner_set {
+                                        for sub in rooms.subscribers_of(&peer_id).await {
+                                            if !owner_set.contains(&sub) {
+                                                rooms
+                                                    .unsubscribe(&sub, vec![peer_id.clone()])
+                                                    .await;
+                                            }
                                         }
                                     }
                                 }

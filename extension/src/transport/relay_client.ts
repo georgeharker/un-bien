@@ -84,7 +84,12 @@ export interface RoomMetaUpdateFrame {
  *  to list this machine's rooms. Full-set replace on connect + every change. */
 export interface PairingSetFrame {
   type: "pairing_set"
-  owners: string[]
+  // Machine-signed allow-list envelope (design 01M23MKVG): base64 canonical-JSON
+  // blob {machine_pk, owners, version, issued_at} + base64 Ed25519 sig. The
+  // relay verifies the exact blob bytes and forges neither plane. Mirrors
+  // MeshEnvelopeWire.
+  blob: string
+  sig: string
 }
 
 export interface ConnectOptions {

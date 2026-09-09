@@ -498,9 +498,11 @@ export async function _cmdStart(
   // message_end events for the lifetime of the Pi process, including turns
   // initiated from the terminal while the relay was disconnected.
 
-  relay.on("close", () => deps.onRelayClose(relay))
-
-  deps.stopAutoListener = deps.installAutoListener(relay)
+  // One must-be-called relay setup shared with the reconnect path (see
+  // _setupRelayConnection): close handler + fail-closed rooms/content allow-list
+  // push + auto-listener. Routing both paths through the single func is what
+  // keeps the push from silently going missing on one of them (design 01M1ZE43).
+  deps.setupRelayConnection(relay)
   deps.refreshFooter(ctx)
 
   // SelfRevoke is the Pi path's single initial topology producer. Its first

@@ -33,7 +33,13 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent"
 import { qrSession } from "../pairing/qr.js"
-import { addPeer, listPeers, pairingAllowList } from "../pairing/storage.js"
+import {
+  addPeer,
+  listPeers,
+  nextAllowListVersion,
+  pairingAllowList,
+} from "../pairing/storage.js"
+import { buildSignedAllowList } from "../pairing/signed_allow_list.js"
 import type { Ed25519Keypair } from "../pairing/crypto.js"
 import { _findKnownPeer } from "../pairing/peer_trust.js"
 import type { SelfRevoke } from "../mesh/self_revoke.js"
@@ -520,16 +526,12 @@ async function _attemptReconnect(
     return
   }
 
-  deps.relay = relay
   _reconnectAttempt = 0
 
-  // Push our ROOMS-gate allow-list on every (re)connect so the relay rebuilds
-  // its soft-state pairing db (design 01M1ZE43). Best-effort; the relay fails
-  // open until a push lands.
-  _pushPairingAllowList(relay)
-
-  relay.on("close", () => _onRelayClose(deps, relay))
-  deps.stopAutoListener = _installAutoListener(deps, relay)
+  // One must-be-called setup shared with the initial-start path (see
+  // _setupRelayConnection): close handler + fail-closed allow-list push +
+  // auto-listener. Routed through the single func so the push can't drift out.
+  _setupRelayConnection(deps, relay)
 
   // Plan/25 Wave B/C: relay is back; bring cross-PC routing back online.
   deps.attachBridgeIfReady()
@@ -544,17 +546,25 @@ async function _attemptReconnect(
 
 /** Push this machine's ROOMS-gate allow-list (paired Owner epks permitted to
  *  list our rooms) to the relay. Best-effort — a miss just delays the gate
- *  until the next push (the relay fails open meanwhile). Design 01M1ZE43. */
-export function _pushPairingAllowList(relay: RelayClient): void {
-  void listPeers()
-    .then((peers) =>
-      relay.sendControl({
-        type: "pairing_set",
-        owners: pairingAllowList(peers),
-      }),
-    )
-    .catch(() => {
-      /* best-effort */
+ *  until the next push; under the fail-closed relay (design 01M1ZE43) the owner
+ *  stays refused until then, so any caller that just changed the set (e.g. a new
+ *  pairing) MUST invoke this explicitly rather than wait for the next connect. */
+export function _pushPairingAllowList(
+  deps: RelayLifecycleDeps,
+  relay: RelayClient,
+): void {
+  const kp = deps.cachedEd25519
+  if (!kp) return // no machine key yet — nothing to sign with
+  void Promise.all([listPeers(), nextAllowListVersion()])
+    .then(([peers, version]) => {
+      const owners = pairingAllowList(peers)
+      const { blob, sig } = buildSignedAllowList(kp, owners, version)
+      relay.sendControl({ type: "pairing_set", blob, sig })
+    })
+    .catch((err) => {
+      // Surface a sign/push failure (gated behind debug.envelope) — otherwise
+      // the fail-closed relay silently refuses this machine until the next push.
+      envLog(`pairing_set push failed: ${String(err)}`)
     })
 }
 
@@ -804,6 +814,24 @@ function _attachOwner(
 //   • Non-pair message from a known peer (peers.json) without an active
 //     channel yet → attach + route the inner (reconnect path)
 //   • Anything else (unknown peer + non-pair) → emit `error: unknown_peer`
+
+/** THE single mandatory setup for every authenticated machine relay connection,
+ *  whichever path opened it: initial `/unbien start` (commands/lifecycle) OR
+ *  reconnect (_attemptReconnect). Both call ONLY this; neither open-codes the
+ *  sequence, and _installAutoListener is reachable ONLY from here. This exists
+ *  because the fail-closed relay gate (design 01M1ZE43) refuses rooms/content
+ *  until the machine pushes its allow-list, so a connect path that installs the
+ *  listener but forgets the push silently locks out every paired owner — the
+ *  exact drift that happened when reconnect pushed and initial-start did not. */
+export function _setupRelayConnection(
+  deps: RelayLifecycleDeps,
+  relay: RelayClient,
+): void {
+  deps.relay = relay
+  relay.on("close", () => _onRelayClose(deps, relay))
+  _pushPairingAllowList(deps, relay)
+  deps.stopAutoListener = _installAutoListener(deps, relay)
+}
 
 export function _installAutoListener(
   deps: RelayLifecycleDeps,
@@ -1062,6 +1090,10 @@ async function _handlePairRequest(
       paired_at: pairedAt,
     })
     if (!hasListenerAuthority()) return
+    // refreshPairingsCache re-pushes the signed allow-list (now including this
+    // just-paired owner) through the single _pushPairingAllowList signer — so a
+    // fresh pairing reaches the fail-closed relay immediately, not on the next
+    // reconnect (design 01M1ZE43 / 01M23MKVG). No separate push call here.
     deps.refreshPairingsCache()
     if (
       producer &&

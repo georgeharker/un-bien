@@ -1,5 +1,5 @@
 mod common;
-use common::{connect_and_auth, start_relay};
+use common::{connect_and_auth, start_relay, start_relay_state};
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
@@ -10,18 +10,15 @@ use tokio_tungstenite::tungstenite::Message;
 /// not B (the original dest) — per protocol.md semantics.
 #[tokio::test]
 async fn two_peers_route_message() {
-    let port = start_relay().await;
+    let (port, pairing) = start_relay_state().await;
     let (mut ws_a, peer_a) = connect_and_auth(port).await;
     let (mut ws_b, peer_b) = connect_and_auth(port).await;
 
-    // Pair the two so the content gate (design 01M1ZE43, fail-closed) permits
-    // the forward. Pushed on A's OWN connection, so it is applied before A's
-    // content frame below (same-connection frame ordering) — no race.
-    ws_a.send(Message::text(
-        json!({"type": "pairing_set", "owners": [peer_b.clone()]}).to_string(),
-    ))
-    .await
-    .unwrap();
+    // Pair A→B so the fail-closed content gate (design 01M1ZE43) permits the
+    // forward. Configured IN-PROCESS — the sanctioned test path; the machine
+    // pushes its allow-list over the wire only as a SIGNED frame now
+    // (signed-only, design 01M23MKVG), which the pairing unit tests cover.
+    pairing.set(peer_a.clone(), vec![peer_b.clone()]);
 
     let ct = "aGVsbG8="; // "hello" in base64, never decoded by relay
     // A sends: peer = dest (peer_b)
@@ -48,16 +45,13 @@ async fn two_peers_route_message() {
 /// Sending to an unknown peer ID is silently dropped; the sender's connection stays alive.
 #[tokio::test]
 async fn dest_offline_drops_silently() {
-    let port = start_relay().await;
-    let (mut ws_a, _) = connect_and_auth(port).await;
+    let (port, pairing) = start_relay_state().await;
+    let (mut ws_a, peer_a) = connect_and_auth(port).await;
 
     // Authorize the (offline) dest so the content gate PASSES and we exercise
-    // the offline-drop path (design 01M1ZE43), not a pairing refusal.
-    ws_a.send(Message::text(
-        json!({"type": "pairing_set", "owners": ["bm9uZXhpc3RlbnRwZWVy"]}).to_string(),
-    ))
-    .await
-    .unwrap();
+    // the offline-drop path (design 01M1ZE43), not a pairing refusal. Configured
+    // in-process (signed-only wire protocol is covered by the pairing tests).
+    pairing.set(peer_a.clone(), vec!["bm9uZXhpc3RlbnRwZWVy".to_string()]);
 
     let envelope = json!({"peer": "bm9uZXhpc3RlbnRwZWVy", "ct": "aGVsbG8="}).to_string();
     ws_a.send(Message::text(envelope)).await.unwrap();
