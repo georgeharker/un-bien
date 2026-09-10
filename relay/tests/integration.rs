@@ -66,6 +66,43 @@ async fn dest_offline_drops_silently() {
     );
 }
 
+/** An envelope whose ct exceeds RELAY_MAX_CT_MIB is REFUSED TO THE SENDER with
+ * a payload_too_large error frame (not a silent drop) and the connection stays
+ * alive; an unparseable envelope gets invalid_envelope the same way. */
+#[tokio::test]
+async fn oversized_ct_refused_to_sender() {
+    let (port, _pairing) = start_relay_state().await;
+    let (mut ws_a, peer_a) = connect_and_auth(port).await;
+
+    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+    // 5 MiB decoded payload → over the 4 MiB default cap.
+    let ct = B64.encode(vec![0u8; 5 * 1024 * 1024]);
+    ws_a.send(Message::text(json!({"peer": peer_a, "ct": ct}).to_string()))
+        .await
+        .unwrap();
+
+    let refused = tokio::time::timeout(tokio::time::Duration::from_secs(1), ws_a.next())
+        .await
+        .expect("timed out waiting for refusal")
+        .unwrap()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(refused.to_text().unwrap()).unwrap();
+    assert_eq!(v["type"], "error");
+    assert_eq!(v["code"], "payload_too_large");
+
+    // Unparseable envelope → invalid_envelope, same refusal story.
+    ws_a.send(Message::text("this is not json".to_string()))
+        .await
+        .unwrap();
+    let refused2 = tokio::time::timeout(tokio::time::Duration::from_secs(1), ws_a.next())
+        .await
+        .expect("timed out waiting for refusal 2")
+        .unwrap()
+        .unwrap();
+    let v2: serde_json::Value = serde_json::from_str(refused2.to_text().unwrap()).unwrap();
+    assert_eq!(v2["code"], "invalid_envelope");
+}
+
 /// A client that sends an invalid signature must have its WS closed within 100 ms.
 #[tokio::test]
 async fn invalid_sig_closes_ws() {

@@ -15,8 +15,16 @@ use crate::AppState;
 use crate::auth::challenge::{
     HELLO_TIMEOUT_MS, challenge_line, gen_nonce, parse_hello, verify_auth,
 };
-use crate::protocol::outer::{OuterEnvelope, is_pair_envelope, parse_line};
+use crate::protocol::outer::{OuterEnvelope, ParseError, is_pair_envelope, parse_line};
 use crate::rooms::{RoomMeta, RoomMetaPatch};
+
+/// WS framing limits — PINNED EXPLICITLY (these happen to be axum/tungstenite's
+/// defaults; now they can't silently change with an upgrade). The SEMANTIC ct
+/// cap (RELAY_MAX_CT_MIB, default 4 MiB decoded) is the tighter ceiling peers
+/// actually hit; framing must merely exceed it with margin — a max-size ct
+/// (~5.34 MiB base64 + envelope) has to fit in ONE frame/message.
+const MAX_WS_FRAME_BYTES: usize = 16 * 1024 * 1024;
+const MAX_WS_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
 
 /// Axum route handler: validates the WebSocket upgrade and hands the upgraded
 /// socket to `handle_peer`, which owns the connection for its lifetime.
@@ -25,7 +33,9 @@ pub async fn ws_handler(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<AppState>,
 ) -> Response {
-    ws.on_upgrade(move |socket| handle_peer(socket, addr, state))
+    ws.max_frame_size(MAX_WS_FRAME_BYTES)
+        .max_message_size(MAX_WS_MESSAGE_BYTES)
+        .on_upgrade(move |socket| handle_peer(socket, addr, state))
 }
 
 /// Owns one peer's WebSocket connection: hello/challenge/auth → register →
@@ -190,7 +200,20 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                         let frame: serde_json::Value = match serde_json::from_str(&text) {
                             Ok(v) => v,
                             Err(e) => {
-                                warn!(peer = %peer_short, err = %e, "invalid json, dropping");
+                                // NOT a silent drop (2026-09-10 story): refuse to
+                                // the sender — same refusal shape as parse_line's
+                                // payload_too_large / invalid_envelope below.
+                                warn!(peer = %peer_short, err = %e,
+                                      "invalid json, refused to sender");
+                                let refusal = serde_json::json!({
+                                    "type": "error",
+                                    "code": "invalid_envelope",
+                                    "detail": e.to_string(),
+                                })
+                                .to_string();
+                                if sink.send(Message::Text(refusal)).await.is_err() {
+                                    break 'routing;
+                                }
                                 continue;
                             }
                         };
@@ -245,10 +268,12 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
 
                                 // ── rooms control frames (plano 17) ──
                                 "subscribe_rooms" => {
-                                    // ROOMS gate (design 01M1ZE43): subscribe only to
-                                    // machines whose pushed allow-list includes this
-                                    // requester; unconfigured machines fail-open. Unpaired
-                                    // targets are dropped so no room events leak.
+                                    // ROOMS gate (design 01M1ZE43): the effective subscription
+                                    // is the request ∩ this requester's allow-list membership.
+                                    // Record the RAW request too, so a later pairing_set that
+                                    // grants a machine re-derives the subscription without a
+                                    // reconnect (order-independent push, design 01M23Z6MK).
+                                    rooms.set_requested(peer_id.clone(), peers.clone()).await;
                                     let allowed: Vec<String> = peers
                                         .into_iter()
                                         .filter(|target| pairing.allows(target, &peer_id))
@@ -321,13 +346,11 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                             None
                                         };
                                     if let Some(owner_set) = owner_set {
-                                        for sub in rooms.subscribers_of(&peer_id).await {
-                                            if !owner_set.contains(&sub) {
-                                                rooms
-                                                    .unsubscribe(&sub, vec![peer_id.clone()])
-                                                    .await;
-                                            }
-                                        }
+                                        // Reconcile M's live subscribers = (who requested M) ∩
+                                        // allowed: adds a subscribe-before-pairing owner now
+                                        // that it is granted, drops a revoked one (design
+                                        // 01M23Z6MK).
+                                        rooms.reconcile_subscribers(&peer_id, &owner_set).await;
                                     }
                                 }
                                 "unsubscribe_rooms" => {
@@ -472,7 +495,26 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                         // No "type" field → outer envelope (opaque routing).
                         match parse_line(&text) {
                             Err(e) => {
-                                warn!(peer = %peer_short, err = %e, "invalid envelope, dropping");
+                                // NOT a silent drop: refuse TO THE SENDER (the
+                                // unknown_peer refusal pattern, 01M1ZE43) so an
+                                // oversized/invalid envelope SURFACES instead of
+                                // vanishing. payload_too_large is actionable — the
+                                // peer can tell the user "message too large".
+                                let code = if matches!(e, ParseError::TooLarge { .. }) {
+                                    "payload_too_large"
+                                } else {
+                                    "invalid_envelope"
+                                };
+                                warn!(peer = %peer_short, err = %e, "invalid envelope, refused to sender");
+                                let refusal = serde_json::json!({
+                                    "type": "error",
+                                    "code": code,
+                                    "detail": e.to_string(),
+                                })
+                                .to_string();
+                                if sink.send(Message::Text(refusal)).await.is_err() {
+                                    break 'routing;
+                                }
                             }
                             Ok(env) => {
                                 let ct_len = env.ct.len();
