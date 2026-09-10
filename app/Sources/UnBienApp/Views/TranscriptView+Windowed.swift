@@ -143,39 +143,14 @@ struct TranscriptStackView: View, Equatable {
         // seeds EXACTLY as ToolCardView does (store override ?? expandRich &&
         // isRich — cards OPEN by default per the pref), so the estimate matches
         // the disclosure state the materialized card actually renders in.
+        // TOOL-CARD facts (shared builder — the regression harness exercises
+        // the SAME path, so tests and production can't diverge).
         let toolFacts = Dictionary(
             items.compactMap { item -> (String, RowHeightEstimator.ToolCardFacts)? in
                 guard case let .tool(card) = item else { return nil }
-                let contentKeys = ["content", "contents", "text", "new_string", "new_str", "newText"]
-                let hasContent = contentKeys.contains {
-                    (card.args[$0]?.stringValue ?? "").isEmpty == false
-                }
-                let hasHunks = !(card.hunks ?? []).isEmpty
-                var facts = RowHeightEstimator.ToolCardFacts(
-                    expanded: cardUI.expanded(card.toolCallID,
-                                              default: expandRich && ToolCardView.isRich(card)),
-                    hasSwitcher: hasHunks && hasContent,
-                    labeledSections: (card.args.isEmpty || hasHunks || hasContent ? 0 : 1)
-                        + (card.result != nil && !hasContent ? 1 : 0)
-                        + (card.error != nil ? 1 : 0),
-                    textLines: 0,
-                    imageCount: card.images.count)
-                // Mono text lines: the content text if present, else the result
-                // string (prefix-bounded while RUNNING — the full-string line
-                // count was O(output) per rebuild on main).
-                let body: String
-                if hasContent {
-                    body = contentKeys.compactMap { card.args[$0]?.stringValue }.first ?? ""
-                } else if let result = card.result {
-                    body = card.state == .running
-                        ? String(result.prettyString.prefix(4_000))
-                        : result.prettyString
-                } else {
-                    body = ""
-                }
-                facts.textLines = body.isEmpty ? 0 : body.split(separator: "\n",
-                                                                 omittingEmptySubsequences: false).count
-                return (item.id, facts)
+                let expanded = cardUI.expanded(card.toolCallID,
+                                                default: expandRich && ToolCardView.isRich(card))
+                return (item.id, RowHeightEstimator.toolCardFacts(for: card, expanded: expanded))
             }, uniquingKeysWith: { first, _ in first })
         let _ = driver.sync(order: items.map(\.id), scope: sessionScope, style: style,
                             warmPairFor: { warmPairs[$0] ?? nil },

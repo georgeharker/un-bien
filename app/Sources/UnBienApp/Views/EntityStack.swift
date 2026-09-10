@@ -84,12 +84,14 @@ struct EntityStack: View {
             }
 
         case .blockquote(let children):
+            // NO padding: the quote is a bar + indented children (harness
+            // CAUGHT the padding this case briefly gained in the same-symbol
+            // refactor — rendered 52 vs estimated 92).
             HStack(spacing: 8) {
                 Rectangle().fill(theme.secondaryText.opacity(0.4)).frame(width: 3)
                 EntityStack(entities: children, theme: theme, typography: typography)
             }
             .fixedSize(horizontal: false, vertical: true)
-            .padding(TranscriptMetrics.quotePadding)
 
         case .details(let summary, let children):
             VStack(alignment: .leading, spacing: 6) {

@@ -102,6 +102,44 @@ enum RowHeightEstimator {
         return h + imageTerms(facts, width: width)
     }
 
+    /// Build facts from a card the SAME way the view resolver does (shared by
+    /// production + the regression harness so they can't diverge).
+    /// `expanded` must be seeded EXACTLY as ToolCardView does:
+    /// store.expanded(id, default: expandRich && isRich).
+    static func toolCardFacts(for card: ToolCard, expanded: Bool) -> ToolCardFacts {
+        let contentKeys = ["content", "contents", "text", "new_string", "new_str", "newText"]
+        let hasContent = contentKeys.contains {
+            (card.args[$0]?.stringValue ?? "").isEmpty == false
+        }
+        let hasHunks = !(card.hunks ?? []).isEmpty
+        var facts = ToolCardFacts(
+            expanded: expanded,
+            hasSwitcher: hasHunks && hasContent,
+            labeledSections: (card.args.isEmpty || hasHunks || hasContent ? 0 : 1)
+                + (card.result != nil && !hasContent ? 1 : 0)
+                + (card.error != nil ? 1 : 0),
+            textLines: 0,
+            imageCount: card.images.count)
+        let body: String
+        if hasContent {
+            body = contentKeys.compactMap { card.args[$0]?.stringValue }.first ?? ""
+        } else if let result = card.result {
+            body = card.state == .running
+                ? String(result.prettyString.prefix(4_000))
+                : result.prettyString
+        } else {
+            body = ""
+        }
+        facts.textLines = body.isEmpty ? 0 : body.split(separator: "\n",
+                                                         omittingEmptySubsequences: false).count
+        // DIFF HUNK LINES are content too (harness-caught gap: a hunks-only
+        // card estimated 0 lines but renders them — Δ+92 on the first run).
+        facts.textLines += (card.hunks ?? []).reduce(0) {
+            $0 + ($1["lines"]?.arrayValue?.count ?? 0)
+        }
+        return facts
+    }
+
     private static func imageTerms(_ facts: ToolCardFacts, width: Double) -> Double {
         guard facts.imageCount > 0 else { return 0 }
         var total = 0.0
@@ -136,7 +174,6 @@ enum RowHeightEstimator {
         total += Double(m.codeBlocks) * codeChrome
         total += Double(m.tableRows) * (bodyLine + 8)
         total += Double(m.listItems) * listItemGap
-        total += Double(m.quoteLines) * quoteChrome
         total += Double(max(blocks - 1, 0)) * paraGap
         for (i, img) in images.enumerated() {
             if i > 0 || total > 0 { total += imageSpacing }
@@ -183,7 +220,9 @@ enum RowHeightEstimator {
             }
             return h
         case .blockquote(let children):
-            return estimate(children, images: [], style: style, width: max(0, width - 20)) + quoteChrome
+            // NO quote chrome (harness-verified: bar + indent only); the
+            // indent is the width reduction.
+            return estimate(children, images: [], style: style, width: max(0, width - 20))
         case .details(let summary, _):
             // Fixed-height callout (never collapsible by design): summary + bounded.
             return textHeight(String(summary.characters), size: style.baseSize,
