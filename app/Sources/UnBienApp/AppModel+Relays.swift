@@ -167,7 +167,7 @@ extension AppModel {
                 // message_end — then the streamed bubble stays partial AND
                 // activeTurnID is stuck "running" forever (the busy state is
                 // driven off activeTurnID). A delta get_entries mid-turn is
-                // routine here (it's exactly the refetch fired on every real
+                // routine here (it's exactly the delta walk fired on every real
                 // message_end), so it can't corrupt a genuinely-live stream, and
                 // for a dropped-end turn it pulls the AUTHORITATIVE completed
                 // entry that replaces the streamed fragments.

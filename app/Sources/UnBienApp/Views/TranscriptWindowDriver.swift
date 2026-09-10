@@ -99,9 +99,6 @@ final class TranscriptWindowDriver {
     private(set) var scrollDirection = 0
     private var previousAnchorIndex: Int?
     private var previousScrollY: Double?
-    /// Hash of the active MarkdownProseStyle (fed by the view via sync) so the
-    /// leading-window pass reconstructs the entity cache keys.
-    var currentStyleHash = 0
     /// PREWARM inputs (design 01M24A9NR): the leading pass calls the shared
     /// MarkdownEntityStore.prewarm — the scoped key needs the session scope
     /// and the produce needs the style + row TEXT, none of which this
@@ -307,10 +304,9 @@ final class TranscriptWindowDriver {
         dirty = true
     }
 
-    func sync(order: [String], styleHash: Int = 0, scope: String = "",
+    func sync(order: [String], scope: String = "",
               style: MarkdownProseStyle? = nil,
               warmPairFor: ((String) -> (id: String, text: String)?)? = nil) {
-        if styleHash != 0 { currentStyleHash = styleHash }
         if !scope.isEmpty { sessionScope = scope }
         if let style { prewarmStyle = style }
         if let warmPairFor { self.warmPairFor = warmPairFor }

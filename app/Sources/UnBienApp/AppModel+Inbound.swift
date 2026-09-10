@@ -219,9 +219,7 @@ extension AppModel {
         for frame in pending {
             reducer.apply(frame.env)
         }
-        envelopeReducers[key] = reducer
-        transcripts[key] = reducer.session
-        prewarmSettledEntities(key: key)
+        commitFold(key, reducer)
     }
 
     private func flushAllFoldFrames() {
@@ -324,9 +322,7 @@ extension AppModel {
         var reducer = envelopeReducers[key] ?? EnvelopeReducer()
         reducer.setHideReasoning(!showThinking)
         reducer.apply(EnvelopeMessage(rpc: ub))
-        envelopeReducers[key] = reducer
-        transcripts[key] = reducer.session
-        prewarmSettledEntities(key: key)
+        commitFold(key, reducer)
         // NAME PULL (pre-release 2026-09-18, user: "both should do a session
         /// name sync"): the sync terminator carries the session's CURRENT
         /// display name — the AUTHORITATIVE name path for BOTH platforms, so
@@ -460,15 +456,11 @@ extension AppModel {
         // path. The flag + buffer clear BEFORE replay, so it can't re-buffer.
         if env.rpc?["type"]?.stringValue != "response", fullWalkInFlight[key] != nil {
             liveFrameBuffer[key, default: []].append((env: env, envelope: envelope, relayID: relayID))
-            envelopeReducers[key] = reducer
-            transcripts[key] = reducer.session
-            prewarmSettledEntities(key: key)
+            commitFold(key, reducer)
             return
         }
         reducer.apply(env)
-        envelopeReducers[key] = reducer
-        transcripts[key] = reducer.session
-        prewarmSettledEntities(key: key)
+        commitFold(key, reducer)
         // A shut-down session's pending ask is dead by construction
         // (the bridge is disposed and pi-ask emits no `completed` for
         // disposed flows) — drop the modal so a stale ask can't pop
@@ -497,9 +489,7 @@ extension AppModel {
             if let leafId = evt.data["leafId"]?.stringValue, !leafId.isEmpty {
                 var reducer = envelopeReducers[key] ?? EnvelopeReducer()
                 reducer.applyEntries([], leafId: leafId, authoritative: true)
-                envelopeReducers[key] = reducer
-                transcripts[key] = reducer.session
-                prewarmSettledEntities(key: key)
+                commitFold(key, reducer)
             }
         }
         if let evt = env.evt, evt.channel == "panel",
@@ -586,16 +576,16 @@ extension AppModel {
         guard rpc["command"]?.stringValue == "get_entries" else { return }
         // Which paging CHAIN is this a page of? The current walk keeps
         // activeWalks[key] == its id across pages (next-page reuses the id);
-        // a superseded/stale walk's straggler no longer matches, and a
-        // message_end delta refetch is never the current walk. Only the
-        // CURRENT walk drives walk bookkeeping (breaker→terminal, backfilled,
-        // endWalk); others fold idempotently on their OWN id and never corrupt
-        // the walk's cursor. This is the walkID tidy-up over design 01M1NKAT.
+        // a superseded/stale walk's straggler no longer matches. Every
+        // message_end sync is a delta WALK now, so a non-match is always a
+        // straggler. Only the CURRENT walk drives walk bookkeeping
+        // (breaker→terminal, backfilled, endWalk); others fold idempotently
+        // on their OWN id and never corrupt the walk's cursor. This is the
+        // walkID tidy-up over design 01M1NKAT.
         let pagingID = rpc["id"]?.stringValue ?? ""
         let isCurrentWalk = !pagingID.isEmpty && activeWalks[key] == pagingID
         if !isCurrentWalk {
-            if deltaRefetchIDs.remove(pagingID) != nil { RenderActivity.getEntriesRefetch += 1 }
-            else { RenderActivity.getEntriesStraggler += 1 }
+            RenderActivity.getEntriesStraggler += 1
         }
         if let page = rpc["data"], rpc["success"]?.boolValue == true {
             if let entries = page["entries"]?.arrayValue, !entries.isEmpty,
@@ -630,7 +620,7 @@ extension AppModel {
                 // NOTE: no backfilledSessions.remove here. The walk START
                 // (requestReconstruction) owns the remove; the terminal/error
                 // page owns the insert. A per-page remove meant (a) every
-                // message_end delta refetch — a get_entries round trip on each
+                // message_end delta walk — a get_entries round trip on each
                 // turn end — BLIPPED the title spinner on→off per round trip,
                 // and (b) a straggler page from a superseded walk (reconnect
                 // re-issued mid-flight) arriving after its terminal re-armed
@@ -638,7 +628,7 @@ extension AppModel {
                 if isCurrentWalk { walkLastActivity[key] = Date() } // watchdog alive-signal
                 // CACHE APPEND (design 01M1M4N8RZZANDX6NWY7FCSBT5, append 5):
                 /// EVERY get_entries response funnels here — walk pages AND
-                /// message_end refetch entries (the authoritative log versions
+                /// message_end delta-walk entries (the authoritative log versions
                 /// that replace the streamed fragments + the out-of-band
                 /// compaction/model entries) — so the cache tracks the LIVE
                 /// frontier. Fire-and-forget: the store's overlap guard skips
@@ -655,8 +645,8 @@ extension AppModel {
                 let keyTail = String(key.suffix(12))
                 log.notice("get_entries page key=\(keyTail, privacy: .public) n=\(n, privacy: .public) leaf=\(leafTail, privacy: .public) — fetching next page")
                 // ONLY the current walk pages on (keeping its id). A
-                // superseded/duplicate walk (reconnect storm) or a delta
-                // refetch folds its page (via handleRpcResponse) but must NOT
+                // superseded/duplicate walk (reconnect storm) folds its page
+                // (via handleRpcResponse) but must NOT
                 // keep paging — else concurrent chains re-fetch the SAME leaf
                 // forever (observed: 3 chains spinning on one leaf after
                 // repeated reconnects, so the walk never advanced to the tail).
@@ -785,9 +775,7 @@ extension AppModel {
         var reducer = envelopeReducers[key] ?? EnvelopeReducer()
         reducer.setHideReasoning(!showThinking)
         reducer.appendNotice(code: code, message: message)
-        envelopeReducers[key] = reducer
-        transcripts[key] = reducer.session
-        prewarmSettledEntities(key: key)
+        commitFold(key, reducer)
     }
 
     /// Retract a session's ended state (banner + input lock): the session was

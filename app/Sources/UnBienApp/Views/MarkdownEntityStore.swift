@@ -76,10 +76,12 @@ final class MarkdownEntityStore {
         // VIEW's own .task is already parsing this row, prewarm neither spawns
         // nor spends a cap slot — that parse will cache it. `prewarming` then
         // caps only what PREWARM itself originates.
-        for row in cold {
+        for (i, row) in cold.enumerated() {
             if inflight[row.key] != nil { continue }
             guard prewarming.count < Self.prewarmMaxInFlight else {
-                RenderActivity.prewarmDeferred += 1
+                // ALL remaining cold rows (incl. this one) were deferred by the
+                // cap — count them all, not just the first (an honest ⏸).
+                RenderActivity.prewarmDeferred += cold.count - i
                 return
             }
             guard prewarming.insert(row.key).inserted else { continue }
@@ -90,6 +92,10 @@ final class MarkdownEntityStore {
             }
         }
     }
+
+    /// Prewarm-originated parses currently in flight (cap-accounting set
+    /// size). Read-only; for tests + HUD diagnostics.
+    var prewarmInFlight: Int { prewarming.count }
 
     /// priority: the VIEW's lazy path runs .userInitiated (the user is looking
     /// at that row NOW); PREWARM runs .utility + capped (see prewarm) so a

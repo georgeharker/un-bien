@@ -62,12 +62,9 @@ public enum RenderActivity {
     /// Row-height measures that actually STORED a changed value (measured minus
     /// set = no-op re-measures = wasteful churn).
     public nonisolated(unsafe) static var boundsSet = 0
-    /// get_entries responses for a SUPERSEDED walk chain (!isCurrentWalk, not a
-    /// delta refetch) — reconnect-storm stragglers / redelivery (the surplus).
+    /// get_entries responses for a SUPERSEDED walk chain (!isCurrentWalk) —
+    /// reconnect-storm stragglers / redelivery (the surplus).
     public nonisolated(unsafe) static var getEntriesStraggler = 0
-    /// get_entries responses that are per-turn message_end DELTA REFETCHES
-    /// (also !isCurrentWalk, but expected — one per turn end).
-    public nonisolated(unsafe) static var getEntriesRefetch = 0
     /// GAUGES (not monotonic; not in raw()) — last computeWindow duration (µs)
     /// and the resulting near-set size (window recompute cost + membership).
     public nonisolated(unsafe) static var lastWindowMicros = 0
@@ -108,7 +105,6 @@ public enum RenderActivity {
         [produceStarted, produceFinished, windowRecomputed, transcriptReset,
          pathExtended, getEntriesStarted, getEntriesRetired, getEntriesCached,
          boundsInvalidated, boundsMeasured, boundsSet, getEntriesStraggler,
-         getEntriesRefetch,
          huskFlipCallbacks, scrollAnchorCrossings, scrollGeomCallbacks, heightProbeCallbacks]
     }
 }

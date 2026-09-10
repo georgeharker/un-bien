@@ -127,8 +127,7 @@ struct TranscriptStackView: View, Equatable {
                 default: return nil
                 }
             }, uniquingKeysWith: { first, _ in first })
-        let _ = driver.sync(order: items.map(\.id),
-                            styleHash: style.hashValue, scope: sessionScope, style: style,
+        let _ = driver.sync(order: items.map(\.id), scope: sessionScope, style: style,
                             warmPairFor: { warmPairs[$0] ?? nil })
         VStack(alignment: .leading, spacing: 12) {
             ForEach(Array(items.enumerated()), id: \.element.id) { pair in

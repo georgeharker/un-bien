@@ -78,7 +78,7 @@ public final class AppModel: ObservableObject {
     /// means the paging loop is spinning and would never terminate.
     // Repeated-leaf breaker cursor, keyed by PAGING-CHAIN id (walkID/deltaID),
     // not session key — so a superseded walk's straggler and a message_end
-    // delta refetch each page on their own cursor and can't trip the current
+    // delta walk each page on their own cursor and can't trip the current
     // walk's breaker (walkID tidy-up over 01M1NKAT).
     var pagingLeaf: [String: String] = [:]
     /// Local entry-stream cache (design 01M1M4N8RZZANDX6NWY7FCSBT5). Actor —
@@ -89,10 +89,6 @@ public final class AppModel: ObservableObject {
     /// Last page-arrival time per walk-in-flight session — the watchdog's STALL
     /// signal (a walk still receiving pages is alive; only a silent one retries).
     var walkLastActivity: [String: Date] = [:]
-    /// Delta-refetch get_entries ids (per-turn message_end refetch) so the walk
-    /// handler can tell an expected refetch response from a superseded straggler
-    /// (both !isCurrentWalk). Debug-metric only; bounded on insert.
-    var deltaRefetchIDs: Set<String> = []
     var liveFrameBuffer: [String: [(env: EnvelopeMessage, envelope: RoutedEnvelope,
                                    relayID: UUID)]] = [:]
     /// Pending interactive prompt per session (extension_ui_request).
@@ -525,9 +521,7 @@ public final class AppModel: ObservableObject {
                 reducer.setHideReasoning(!showThinking)
                 RenderActivity.getEntriesCached += 1
                 reducer.applyEntries(cached.entries, leafId: cached.leafId)
-                envelopeReducers[session.id] = reducer
-                transcripts[session.id] = reducer.session
-                prewarmSettledEntities(key: session.id)
+                commitFold(session.id, reducer)
                 since = cached.leafId
                 let foldMs = Int(-t0.timeIntervalSinceNow * 1000)
                 let leafTail = String(cached.leafId.suffix(8))
@@ -596,6 +590,16 @@ public final class AppModel: ObservableObject {
         RenderActivity.walkStarts += 1
         Task { try? await connection.send(.getEntries(id: walkID, since: since),
                                           toPeer: session.peerEPK, room: session.roomID) }
+    }
+
+    /// Land a transcript fold: publish the reducer + session and prewarm the
+    /// tail's settled rows. EVERY fold site routes through here — a fold that
+    /// writes transcripts directly leaves just-settled/re-keyed rows' entity
+    /// keys cold (the fallback flash prewarm exists to kill, 01M24A9NR).
+    func commitFold(_ key: String, _ reducer: EnvelopeReducer) {
+        envelopeReducers[key] = reducer
+        transcripts[key] = reducer.session
+        prewarmSettledEntities(key: key)
     }
 
     /// PREWARM fold trigger (design 01M24A9NR): after every transcript fold

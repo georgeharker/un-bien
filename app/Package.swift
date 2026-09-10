@@ -38,5 +38,9 @@ let package = Package(
             dependencies: ["UnBienCore"],
             resources: [.copy("Fixtures")]
         ),
+        .testTarget(
+            name: "UnBienAppTests",
+            dependencies: ["UnBienApp"]
+        ),
     ]
 )
