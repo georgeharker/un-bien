@@ -4,7 +4,8 @@
 # Usage: scripts/build-iphone.sh [device-name]     (default: geoifon)
 #
 # - Resolves the device by NAME via devicectl (falls back to listing devices).
-# - Builds the UnBien-iOS scheme for the concrete device (Debug), with
+# - Builds the UnBien-iOS scheme for the concrete device (Release by default;
+#   UNBIEN_IOS_CONFIG=Debug overrides), with
 #   -allowProvisioningUpdates so signing/profile refresh happens automatically.
 # - Installs the resulting .app with devicectl. Does NOT launch it.
 #
@@ -47,16 +48,20 @@ fi
 echo "==> device: $DEVICE_NAME ($UDID)"
 
 # --- Build --------------------------------------------------------------------
+# RELEASE by default (2026-09-10: device perf/battery profiling needs the
+# shipping optimization level; Debug's os_log volume also bloats Instruments
+# traces). Override back with:  UNBIEN_IOS_CONFIG=Debug ./scripts/build-iphone.sh
+CONFIG="${UNBIEN_IOS_CONFIG:-Release}"
 # Output goes to a FILE first: piping xcodebuild into tail would mask its exit
 # status under /bin/sh (no pipefail), and a failed build used to fall through
 # and INSTALL A STALE .app from the previous successful build. Capture, check,
 # THEN show the tail.
-echo "==> building $SCHEME (Debug) for $DEVICE_NAME..."
+echo "==> building $SCHEME ($CONFIG) for $DEVICE_NAME..."
 BUILD_LOG="$DERIVED/build.log"
 if ! xcodebuild \
   -project "$PROJECT" \
   -scheme "$SCHEME" \
-  -configuration Debug \
+  -configuration "$CONFIG" \
   -destination "platform=iOS,id=$UDID" \
   -derivedDataPath "$DERIVED" \
   -allowProvisioningUpdates \
@@ -72,9 +77,10 @@ tail -2 "$BUILD_LOG" | grep -q "BUILD SUCCEEDED" || {
 }
 
 # --- Locate the bundle ---------------------------------------------------------
-APP=$(find "$DERIVED/Build/Products/Debug-iphoneos" -maxdepth 1 -name '*.app' | head -1)
+PRODUCT_DIR="$DERIVED/Build/Products/${CONFIG}-iphoneos"
+APP=$(find "$PRODUCT_DIR" -maxdepth 1 -name '*.app' | head -1)
 if [ -z "$APP" ]; then
-  echo "ERROR: no .app found in $DERIVED/Build/Products/Debug-iphoneos"
+  echo "ERROR: no .app found in $PRODUCT_DIR"
   exit 1
 fi
 echo "==> built: $APP"

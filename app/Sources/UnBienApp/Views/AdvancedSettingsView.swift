@@ -9,6 +9,8 @@ struct AdvancedSettingsView: View {
     @AppStorage("renderCacheImages") private var cacheImages = 200
     @AppStorage("renderCacheMessages") private var cacheMessages = 400
     @AppStorage("transcriptWindowPages") private var windowPages = 3
+    @AppStorage("prewarmMaxInFlight") private var prewarmInFlight = 3
+    @AppStorage("foldFlushMaxKiB") private var foldFlushKiB = 1024
     @AppStorage("debugActivityHUD") private var debugActivityHUD = false
 
     var body: some View {
@@ -20,14 +22,25 @@ struct AdvancedSettingsView: View {
                     .onChange(of: cacheImages) { _, new in ImageCache.shared.cacheLimit = new }
                 Stepper("Markdown cache: \(cacheMessages) messages", value: $cacheMessages, in: 50...2000, step: 50)
                     .onChange(of: cacheMessages) { _, new in MarkdownEntityStore.shared.cap = new }
-                Stepper("Transcript window: \(windowPages) pages", value: $windowPages, in: 3...8, step: 1)
+                Stepper("Transcript window: \(windowPages) pages", value: $windowPages, in: 3...16, step: 1)
+                Stepper("Prewarm in-flight: \(prewarmInFlight)", value: $prewarmInFlight, in: 0...16, step: 1)
+                    .onChange(of: prewarmInFlight) { _, new in
+                        MarkdownEntityStore.prewarmMaxInFlight = new
+                    }
+                Stepper("Fold flush ceiling: \(foldFlushKiB) KiB", value: $foldFlushKiB, in: 256...4096, step: 256)
+                    .onChange(of: foldFlushKiB) { _, new in
+                        AppModel.foldFlushMaxBytes = new * 1024
+                    }
             } header: {
                 Text("Performance")
             } footer: {
                 Text("Larger caches keep more highlighted code and decoded images in memory "
                      + "for smoother scrolling on long sessions. A wider transcript window keeps "
                      + "more rows materialised around the viewport - fewer re-renders on "
-                     + "back-and-forth scroll, at the cost of more live rows.")
+                     + "back-and-forth scroll, at the cost of more live rows. Prewarm in-flight "
+                     + "bounds concurrent ahead-of-view markdown parses (0 = warm-off; the view "
+                     + "still produces on demand). Fold flush ceiling bounds the largest single "
+                     + "transcript fold - smaller = snappier typing under load, more publishes.")
             }
             Section {
                 Toggle("Debug activity HUD", isOn: $debugActivityHUD)

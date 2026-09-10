@@ -113,6 +113,12 @@ public struct UnBienSceneApp: App {
         if let messages = defaults.object(forKey: "renderCacheMessages") as? Int {
             MarkdownEntityStore.shared.cap = messages
         }
+        if let prewarm = defaults.object(forKey: "prewarmMaxInFlight") as? Int {
+            MarkdownEntityStore.prewarmMaxInFlight = prewarm
+        }
+        if let foldKiB = defaults.object(forKey: "foldFlushMaxKiB") as? Int {
+            AppModel.foldFlushMaxBytes = foldKiB * 1024
+        }
     }
 
     public var body: some Scene {
