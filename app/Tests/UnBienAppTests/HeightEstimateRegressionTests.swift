@@ -90,6 +90,108 @@ final class HeightEstimateRegressionTests: XCTestCase {
 
              > Note: the tolerance table lives beside the corpus.
              """, 90),
+            // MULTI-BLOCK BATTERY (bigger code sections, richer mixes):
+            ("mixed-large-code",
+             """
+             ## Implementation
+
+             The estimator now handles the wide case:
+
+             ```swift
+             func estimate(_ entities: [MarkdownEntity], width: Double) -> Double {
+                 var total: Double = 0
+                 for (i, e) in entities.enumerated() {
+                     if i > 0 { total += paraGap }
+                     total += entity(e, style: style, width: width)
+                 }
+                 for (i, img) in images.enumerated() {
+                     if i > 0 || total > 0 { total += 8 }
+                     total += imageHeight(img, width: width)
+                 }
+                 return total + rowChrome
+             }
+
+             func entity(_ e: MarkdownEntity, style: MarkdownProseStyle, width: Double) -> Double {
+                 switch e {
+                 case .prose(let attr):
+                     return textHeight(String(attr.characters), size: style.baseSize,
+                                       fontName: style.fontName, width: width)
+                 case .code(_, let text):
+                     let lines = max(1, text.split(separator: "\n").count)
+                     return Double(lines) * style.baseSize * 1.3 + 40
+                 default:
+                     return 0
+                 }
+             }
+             ```
+
+             And the trailing prose wraps a couple of lines to check the gap
+             accounting between big blocks and paragraphs after them.
+             """, 100),
+            ("mixed-code-pair-prose",
+             """
+             First, the scan:
+
+             ```bash
+             find . -name '*.swift' | xargs wc -l | sort -n | tail -20
+             ```
+
+             Then the fix:
+
+             ```swift
+             let fixed = true
+             ```
+
+             Done.
+             """, 80),
+            ("mixed-table-list-code",
+             """
+             | kind | Δ | status |
+             |---|---|---|
+             | table | −25 | backlog |
+             | list | −17 | backlog |
+
+             Priorities:
+
+             1. switcher hidden face
+             2. output blocks
+
+             ```text
+             queue: empty
+             ```
+             """, 90),
+            ("mixed-quote-nested",
+             """
+             Before:
+
+             > The estimator counts both faces.
+             > The renderer shows one.
+
+             After the fix, only the visible face counts — verified:
+
+             ```swift
+             XCTAssertLessThan(abs(delta), 100)
+             ```
+             """, 80),
+            ("mixed-long-reply",
+             String(repeating: """
+             ### Section
+
+             A paragraph that wraps across a couple of lines because it is long enough to do so in the narrow width of the corpus.
+
+             - item one
+             - item two
+             - item three
+
+             ```swift
+             // a code block inside the long reply
+             let value = section.index * 2
+             print(value)
+             ```
+
+             > A closing thought for this section.
+
+             """, count: 4), 140),
         ]
         for width in widths {
             for (id, md, budget) in cases {

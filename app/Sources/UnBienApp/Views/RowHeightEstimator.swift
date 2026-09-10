@@ -134,8 +134,23 @@ enum RowHeightEstimator {
                                                          omittingEmptySubsequences: false).count
         // DIFF HUNK LINES are content too (harness-caught gap: a hunks-only
         // card estimated 0 lines but renders them — Δ+92 on the first run).
-        facts.textLines += (card.hunks ?? []).reduce(0) {
+        let hunkLines = (card.hunks ?? []).reduce(0) {
             $0 + ($1["lines"]?.arrayValue?.count ?? 0)
+        }
+        facts.textLines += hunkLines
+        // OUTPUT-BLOCK lines (aux.output v1 blocks — harness-caught: +31).
+        if let blocks = card.output?["blocks"]?.arrayValue {
+            for block in blocks {
+                if let text = block["text"]?.stringValue {
+                    facts.textLines += text.split(separator: "\n",
+                                                  omittingEmptySubsequences: false).count
+                }
+            }
+        }
+        // SWITCHER cards render ONE face (Diff is the default) — counting BOTH
+        // faces' lines overestimated by the hidden content (harness: −65).
+        if facts.hasSwitcher {
+            facts.textLines = hunkLines
         }
         return facts
     }
@@ -167,6 +182,10 @@ enum RowHeightEstimator {
         if m.tableRows > 0 { blocks += 1 }
         if m.listItems > 0 { blocks += 1 }
         if m.quoteLines > 0 { blocks += 1 }
+        // PROSE-PROSE spacing renders ~14pt (harness-calibrated: 8 gap + 6
+        // extra) — coalesced paragraphs carry internal spacing ABOVE the
+        // entity gap.
+        let proseExtra = Double(max(m.proseBlocks - 1, 0)) * 6
         // Composed step-by-step (a single chained expression trips the
         // type-checker): text metrics, then per-kind chrome, then gaps.
         var total: Double = m.textHeight
@@ -175,6 +194,7 @@ enum RowHeightEstimator {
         total += Double(m.tableRows) * (bodyLine + 8)
         total += Double(m.listItems) * listItemGap
         total += Double(max(blocks - 1, 0)) * paraGap
+        total += proseExtra
         for (i, img) in images.enumerated() {
             if i > 0 || total > 0 { total += imageSpacing }
             total += imageHeight(img, width: width)
