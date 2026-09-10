@@ -24,14 +24,93 @@ export interface GetEntriesResult {
   leafId: string | null
 }
 
-/** Page budget for get_entries replies (design: get_entries backfill paging).
- *  Keeps each reply frame comfortably under every transport cap: the relay's
- *  500 KiB POST /mesh body limit, URLSessionWebSocketTask's 1 MiB default
- *  maximumMessageSize, and the 4 MiB WS outer-envelope limit. ~256 KiB of
- *  entries leaves ample headroom for envelope + signature overhead. This is
- *  chunking BEHAVIOR, not protocol — the frame shapes stay byte-faithful to
- *  pi's rpc (`success(id, "get_entries", { entries, leafId })`). */
-export const GET_ENTRIES_PAGE_BUDGET_BYTES = 256 * 1024
+/** Page budget for get_entries replies (design: get_entries backfill paging;
+ *  raised 256 KiB → 1 MiB → 2 MiB after device testing, 2026-09-10).
+ *  2 MiB of entry JSON per page — 8× fewer round trips than the original,
+ *  still wide margin under every cap: body ≈ 2 MiB + envelope overhead →
+ *  ≈ 2.7 MiB base64 wire → decoded estimate ≈ 2 MiB, ~1.9 MiB UNDER the
+ *  relay's 4 MiB ct cap (RELAY_MAX_CT_MIB) < the app's 8 MiB WS receive.
+ *  A page carrying one MAX_ENTRY_JSON_BYTES (2 MiB) fitted entry alone also
+ *  fits with the same margin. (The 500 KiB POST /mesh cap does NOT apply —
+ *  pages ride the peer WS plane, not mesh.) Fold cost: the reader folds a
+ *  page on its main actor; 2 MiB parses in ~5-10 ms — device-verified smooth.
+ *  If refusals (payload_too_large) ever appear in logs, dial this back toward
+ *  1 MiB — the refusal frames make that visible now. This is chunking
+ *  BEHAVIOR, not protocol — frames stay byte-faithful to pi's rpc
+ *  (`success(id, "get_entries", { entries, leafId })`). */
+export const GET_ENTRIES_PAGE_BUDGET_BYTES = 2 * 1024 * 1024
+
+/** Hard ceiling for a SINGLE entry's JSON (design: transport-fit paging). The
+ *  at-least-one-entry progress rule means an entry beyond the relay's ct cap
+ *  would ride alone, get refused payload_too_large, and stall the reader's
+ *  walk on the same cursor FOREVER — one giant entry (a multi-MB tool result)
+ *  poisoned the whole session's backfill. Fitted entries deep-truncate long
+ *  strings (suffix marker) so shape + ids survive and the walk always crosses.
+ *  2 MiB JSON → ≈2.7 MiB base64 ≈ 2.7 MiB decoded estimate — half the relay
+ *  cap, deliberately, so a page carrying one fitted entry still has margin. */
+export const MAX_ENTRY_JSON_BYTES = 2 * 1024 * 1024
+
+const truncationMarker = (cut: number, total: number) =>
+  `…[transport-truncated ${total - cut}/${total} bytes]`
+
+/** JSON value tree with every over-cap string LEAF shortened (marker suffix).
+ *  Same keys/structure — only string leaves change — so callers can safely
+ *  treat the result as the same shape they passed in. */
+type JsonTree =
+  string | number | boolean | null | JsonTree[] | { [key: string]: JsonTree }
+
+function truncateStringsDeep(value: JsonTree, cap: number): JsonTree {
+  if (typeof value === "string") {
+    return value.length > cap
+      ? value.slice(0, cap) + truncationMarker(cap, value.length)
+      : value
+  }
+  if (Array.isArray(value)) {
+    return value.map((v) => truncateStringsDeep(v, cap))
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, JsonTree> = {}
+    for (const [k, v] of Object.entries(value as Record<string, JsonTree>)) {
+      out[k] = truncateStringsDeep(v, cap)
+    }
+    return out
+  }
+  return value
+}
+
+/** Fit one entry for transport: unchanged when small enough; string-truncated
+ *  (shrinking per-string caps across passes) when oversized; ultimate fallback
+ *  is a minimal content-elided stub so the walk ALWAYS crosses this entry. */
+export function fitEntryForTransport(entry: SessionEntry): SessionEntry {
+  if (JSON.stringify(entry).length <= MAX_ENTRY_JSON_BYTES) return entry
+  for (const cap of [64 * 1024, 8 * 1024, 256]) {
+    // SAFETY: SessionEntry serializes to a JSON tree; the cast only moves it
+    // into the walker's domain type.
+    const fitted = truncateStringsDeep(entry as unknown as JsonTree, cap)
+    // SAFETY: the deep walk only replaces string LEAVES (same keys, same
+    // structure), so the result keeps SessionEntry's shape — TS can't prove
+    // that through the JsonTree round-trip.
+    const candidate = fitted as unknown as SessionEntry
+    if (JSON.stringify(candidate).length <= MAX_ENTRY_JSON_BYTES)
+      return candidate
+  }
+  // SAFETY: hand-built to the message-entry shape; the cast papers over the
+  // pi union's narrower content typing.
+  return {
+    type: "message",
+    id: entry.id,
+    parentId: entry.parentId,
+    message: {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `[entry ${entry.id} exceeds the transport ceiling — content elided]`,
+        },
+      ],
+    },
+  } as unknown as SessionEntry
+}
 
 /** Slice the entry log into one budget-bounded page starting AFTER `since`
  *  (undefined = from the start). Handlers pre-validate `since` pi-faithfully
@@ -59,8 +138,11 @@ export function pageEntries(
   const page: SessionEntry[] = []
   let used = 0
   for (const e of remaining) {
-    page.push(e)
-    used += JSON.stringify(e).length
+    // Transport-fit FIRST: an oversized entry must never ride raw (it would be
+    // refused and stall the walk); budget accounting uses the FITTED size.
+    const fitted = fitEntryForTransport(e)
+    page.push(fitted)
+    used += JSON.stringify(fitted).length
     if (used >= budgetBytes) break
   }
   const complete = page.length === remaining.length

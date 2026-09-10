@@ -3,8 +3,15 @@ import WebSocket from "ws"
 import { ed25519Sign } from "../pairing/crypto.js"
 import type { Ed25519Keypair } from "../pairing/crypto.js"
 import type { ThinkingLevel } from "../protocol/types.js"
+import { envLog } from "../session/debug_log.js"
 
 const AUTH_TIMEOUT_MS = 5_000
+
+/** Inbound frame cap for the `ws` socket — PINNED, not the lib's 100 MiB
+ *  default: aligned with the relay's WS message limit (64 MiB). The largest
+ *  LEGAL frame is a max-ct envelope ≈ 5.4 MiB, so this is pure headroom that
+ *  can't drift with a `ws` upgrade. */
+const MAX_WS_PAYLOAD_BYTES = 64 * 1024 * 1024
 
 /**
  * Liveness watchdog. The relay sends a WS Ping every ~25s (relay `peer.rs`),
@@ -161,7 +168,7 @@ export class RelayClient extends EventEmitter {
    */
   async connect(options: ConnectOptions = {}): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(this.url)
+      const ws = new WebSocket(this.url, { maxPayload: MAX_WS_PAYLOAD_BYTES })
       this.ws = ws
 
       ws.on("error", (err) => reject(err))
@@ -179,7 +186,14 @@ export class RelayClient extends EventEmitter {
             const text = Buffer.isBuffer(raw) ? raw.toString() : String(raw)
             for (const line of text.split("\n")) {
               const trimmed = line.trim()
-              if (trimmed) this.emit("message", trimmed)
+              if (!trimmed) continue
+              // Relay refusal (payload_too_large / invalid_envelope / unknown_peer):
+              // surface in the envelope debug log so an oversized send is VISIBLE
+              // instead of the message silently vanishing (silent-drop fix).
+              if (trimmed.startsWith('{"type":"error"')) {
+                envLog(`relay error frame: ${trimmed}`)
+              }
+              this.emit("message", trimmed)
             }
           })
           // The relay pings every ~25s; `ws` auto-replies Pong (keeping the

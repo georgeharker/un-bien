@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 import type { SessionEntry } from "@earendil-works/pi-coding-agent"
 import {
   dispatchRpcCommand,
+  MAX_ENTRY_JSON_BYTES,
   type GetEntriesResult,
   pageEntries,
   rpcResponse,
@@ -205,6 +206,39 @@ describe("dispatchRpcCommand", () => {
         id,
         text: "x".repeat(Math.max(0, size - 40)),
       }) as unknown as SessionEntry
+
+    it("an entry beyond the transport ceiling is string-truncated (walk still crosses)", () => {
+      const giant = mk("big", 3 * 1024 * 1024)
+      const after = mk("after", 50)
+      const page = pageEntries([giant, after], undefined, "after", 1024 * 1024)
+      // Fitted ≈ 64 KiB + marker → under both the ceiling AND the budget, so
+      // the page completes in one go with both entries.
+      expect(page.entries.map((e) => e.id)).toEqual(["big", "after"])
+      expect(page.leafId).toBe("after")
+      expect(JSON.stringify(page.entries[0]).length).toBeLessThan(
+        MAX_ENTRY_JSON_BYTES,
+      )
+      expect((page.entries[0] as any).text).toContain("transport-truncated")
+    })
+
+    it("many mid-size strings shrink across passes (multi-pass truncation)", () => {
+      const wide: Record<string, unknown> = {
+        type: "message",
+        id: "wide",
+        parentId: "",
+      }
+      for (let i = 0; i < 50; i++) wide[`f${i}`] = "y".repeat(100 * 1024)
+      const page = pageEntries(
+        [wide as unknown as SessionEntry],
+        undefined,
+        "wide",
+        1024 * 1024,
+      )
+      expect(page.entries[0].id).toBe("wide")
+      expect(JSON.stringify(page.entries[0]).length).toBeLessThan(
+        MAX_ENTRY_JSON_BYTES,
+      )
+    })
 
     it("small log → single page, complete, leafId passes through", () => {
       const all = [mk("e1", 100), mk("e2", 100)]
