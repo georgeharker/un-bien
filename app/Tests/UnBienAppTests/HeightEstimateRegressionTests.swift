@@ -72,6 +72,11 @@ final class HeightEstimateRegressionTests: XCTestCase {
             ("list-loose", "- one\n- two\n- three", 50),
             ("list-tight", "- a\n- b\n- c\n- d\n- e", 50),
             ("table", "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |", 60),
+            ("table-wide-wraps",
+             "| column one | column two | column three | column four |\n"
+             + "|---|---|---|---|\n"
+             + "| a long cell value that certainly wraps | short | another long value that wraps twice over | x |\n"
+             + "| more wrapped content here too | y | z | also fairly long content in this cell |", 70),
             ("blockquote", "> quoted line one\n> quoted line two", 50),
             ("headings", "# One\n## Two\n### Three", 70),
             ("mixed-realistic",

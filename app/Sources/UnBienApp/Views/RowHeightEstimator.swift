@@ -32,10 +32,10 @@ enum RowHeightEstimator {
     static let lineMonoFactor: Double = 1.30      // code line-height × baseSize
     static var paraGap: Double { TranscriptMetrics.entitySpacing }
     static var rowChrome: Double { TranscriptMetrics.assistantRowChrome }
-    static var headingExtra: Double { TranscriptMetrics.headingTopPadding }
-    static var listItemGap: Double {
-        (TranscriptMetrics.listItemGapTight + TranscriptMetrics.listItemGapLoose) / 2
-    }
+    /// Level-tiered heading chrome (harness: flat 13 overshot #/## standalone
+    /// but the long-reply's ### sections needed it — deep headings carry more).
+    static func headingExtra(level: Int) -> Double { level <= 2 ? 4 : 14 }
+    static var listItemGap: Double { 3 }   // harness-calibrated (loose≈8 tight≈2; rendered lands low)
     static var quoteChrome: Double { TranscriptMetrics.quoteChrome }
     static var codeChrome: Double { TranscriptMetrics.codeBlockChrome }
     static var imageCap: Double { TranscriptMetrics.imageCap }
@@ -84,7 +84,7 @@ enum RowHeightEstimator {
 
     static func estimateToolCard(_ facts: ToolCardFacts, style: MarkdownProseStyle,
                                  width: Double) -> Double {
-        let monoLine = lineHeight(size: style.codeSize ?? style.baseSize, name: style.codeFontName)
+        let monoLine = lineHeight(size: style.codeSize ?? style.baseSize, name: style.codeFontName, mono: true)
         let bodyLine = lineHeight(size: style.baseSize, name: style.fontName)
         var h = TranscriptMetrics.toolCardCollapsedChrome   // padding + header (+ images below)
         guard facts.expanded else { return h + imageTerms(facts, width: width) }
@@ -176,7 +176,8 @@ enum RowHeightEstimator {
                              style: MarkdownProseStyle, width: Double) -> Double {
         guard width > 0 else { return 0 }
         let m = markdownEstimateMetrics(text, style: style, width: width)
-        let monoLine = Self.lineHeight(size: style.baseSize, name: style.codeFontName)
+        let monoLine = Self.lineHeight(size: style.codeSize ?? style.baseSize,
+                                     name: style.codeFontName, mono: true)
         let bodyLine = Self.lineHeight(size: style.baseSize, name: style.fontName)
         var blocks = m.proseBlocks + m.codeBlocks + m.headings
         if m.tableRows > 0 { blocks += 1 }
@@ -191,8 +192,10 @@ enum RowHeightEstimator {
         var total: Double = m.textHeight
         total += Double(m.codeLines) * monoLine
         total += Double(m.codeBlocks) * codeChrome
-        total += Double(m.tableRows) * (bodyLine + 8)
+        total += Double(m.tableLines) * bodyLine   // WRAPPED row-lines (wide tables)
+        total += Double(m.tableRows) * 8            // grid row spacing
         total += Double(m.listItems) * listItemGap
+        total += Double(m.headings) * headingExtra(level: 3)
         total += Double(max(blocks - 1, 0)) * paraGap
         total += proseExtra
         for (i, img) in images.enumerated() {
@@ -205,14 +208,24 @@ enum RowHeightEstimator {
     /// Real line height from font metrics (ascent+descent+leading) for the
     /// style's font at size — replaces ×-factor guesses where it matters.
     /// (macOS NSFont has no lineHeight: ascent+descent+leading.)
-    static func lineHeight(size: Double, name: String?) -> Double {
+    static func lineHeight(size: Double, name: String?, mono: Bool = false) -> Double {
         #if os(macOS)
-        let font: NSFont = name.flatMap { NSFont(name: $0, size: size) }
-            ?? NSFont.systemFont(ofSize: size)
+        let font: NSFont
+        if let name, let named = NSFont(name: name, size: size) {
+            font = named
+        } else {
+            font = mono ? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+                        : NSFont.systemFont(ofSize: size)
+        }
         return font.ascender + font.descender.magnitude + font.leading
         #else
-        let font: UIFont = name.flatMap { UIFont(name: $0, size: size) }
-            ?? UIFont.systemFont(ofSize: size)
+        let font: UIFont
+        if let name, let named = UIFont(name: name, size: size) {
+            font = named
+        } else {
+            font = mono ? UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
+                        : UIFont.systemFont(ofSize: size)
+        }
         return font.lineHeight
         #endif
     }
@@ -223,9 +236,9 @@ enum RowHeightEstimator {
         case .prose(let attr):
             return textHeight(String(attr.characters), size: style.baseSize,
                               fontName: style.fontName, width: width)
-        case .heading(_, let text):
+        case .heading(let level, let text):
             return textHeight(String(text.characters), size: style.baseSize * 1.3,
-                              fontName: style.fontName, width: width) + headingExtra
+                              fontName: style.fontName, width: width) + headingExtra(level: level)
         case .code(_, let text):
             let lines = max(1, text.split(separator: "\n", omittingEmptySubsequences: false).count)
             return Double(lines) * style.baseSize * lineMonoFactor + codeChrome

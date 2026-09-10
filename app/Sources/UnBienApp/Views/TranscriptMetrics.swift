@@ -17,8 +17,10 @@ enum TranscriptMetrics {
     static let entitySpacing: CGFloat = 8
     /// Code block inner padding (all sides).
     static let codeBlockPadding: CGFloat = 12
-    /// Code block vertical chrome (padding × 2).
-    static let codeBlockChrome: CGFloat = codeBlockPadding * 2
+    /// Code block vertical chrome (padding × 2 + harness-calibrated slack:
+    /// rendered blocks run ~7pt taller than padding alone — attributed mono
+    /// leading + background margins).
+    static let codeBlockChrome: CGFloat = codeBlockPadding * 2 + 7
     /// Heading top padding (level ≤ 2; deeper levels use half).
     static let headingTopPadding: CGFloat = 8
     /// List item spacing when the source list is tight / loose.
