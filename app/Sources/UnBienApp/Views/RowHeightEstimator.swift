@@ -106,7 +106,7 @@ enum RowHeightEstimator {
     /// production + the regression harness so they can't diverge).
     /// `expanded` must be seeded EXACTLY as ToolCardView does:
     /// store.expanded(id, default: expandRich && isRich).
-    static func toolCardFacts(for card: ToolCard, expanded: Bool) -> ToolCardFacts {
+    static func toolCardFacts(for card: ToolCard, expanded: Bool, width: Double = 360) -> ToolCardFacts {
         let contentKeys = ["content", "contents", "text", "new_string", "new_str", "newText"]
         let hasContent = contentKeys.contains {
             (card.args[$0]?.stringValue ?? "").isEmpty == false
@@ -134,8 +134,20 @@ enum RowHeightEstimator {
                                                          omittingEmptySubsequences: false).count
         // DIFF HUNK LINES are content too (harness-caught gap: a hunks-only
         // card estimated 0 lines but renders them — Δ+92 on the first run).
+        // Wrap-aware: diff lines are ~80 chars and WRAP at phone widths —
+        // raw counts undercounted rendered lines ~2x.
+        // Mono wrap metrics from raw Typography defaults (facts-building is
+        // nonisolated and has no style in scope — raw metrics suffice for
+        // chars-per-line; the exact monoLine composes later in estimateToolCard).
+        let t = Typography()
+        let monoLine = lineHeight(size: t.codeSize, name: t.monoFontName, mono: true)
+        let monoCharW = max(0.5, monoLine * 0.60)
+        let perLine = max(1, Int(width / monoCharW))
         let hunkLines = (card.hunks ?? []).reduce(0) {
-            $0 + ($1["lines"]?.arrayValue?.count ?? 0)
+            $0 + ($1["lines"]?.arrayValue ?? []).reduce(0) { n, line in
+                let len = line["text"]?.stringValue?.count ?? 0
+                return n + max(1, Int(ceil(Double(len) / Double(perLine))))
+            }
         }
         facts.textLines += hunkLines
         // OUTPUT-BLOCK lines (aux.output v1 blocks — harness-caught: +31).

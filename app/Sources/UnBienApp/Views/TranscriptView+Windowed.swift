@@ -150,7 +150,8 @@ struct TranscriptStackView: View, Equatable {
                 guard case let .tool(card) = item else { return nil }
                 let expanded = cardUI.expanded(card.toolCallID,
                                                 default: expandRich && ToolCardView.isRich(card))
-                return (item.id, RowHeightEstimator.toolCardFacts(for: card, expanded: expanded))
+                return (item.id, RowHeightEstimator.toolCardFacts(for: card, expanded: expanded,
+                                                                  width: driver.prewarmWidth))
             }, uniquingKeysWith: { first, _ in first })
         // CODE-SEGMENT warm factory: builds the SAME content-addressed
         // HighlightProducer EntityStack constructs (theme + mono metrics), so
