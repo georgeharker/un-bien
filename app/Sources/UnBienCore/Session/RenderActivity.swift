@@ -19,6 +19,13 @@ public enum RenderActivity {
     /// the WALL total.
     public nonisolated(unsafe) static var produceSelfMicros = 0
     public nonisolated(unsafe) static var produceWaitMicros = 0
+    /// Fold-flush gauges: last coalesced fold's MAIN-ACTOR duration + buffered
+    /// ct bytes, and how many flushes fired EARLY on the byte ceiling
+    /// (foldFlushMaxBytes) rather than the cadence timer — the byte-bounded
+    /// flush working under bursty delivery / jumbo pages.
+    public nonisolated(unsafe) static var lastFoldMicros = 0
+    public nonisolated(unsafe) static var lastFoldBytes = 0
+    public nonisolated(unsafe) static var foldFlushedByBytes = 0
     /// PREWARM-triggered parses actually launched (post cap), and ones DEFERRED
     /// by the in-flight cap (scroll-contention guard) — deferred climbing while
     /// scrolling is the self-throttle working; deferred climbing at REST would

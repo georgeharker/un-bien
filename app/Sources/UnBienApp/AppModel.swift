@@ -293,9 +293,23 @@ public final class AppModel: ObservableObject {
     /// by timestamp, so it self-clears with no timer. Design 01M20SW3KHXJ.
     static let typingBusyWindow: Duration = .milliseconds(1500)
     static let scrollBusyWindow: Duration = .milliseconds(1500)
+    /// BYTE ceiling for one coalesced fold flush (2026-09-10): the flush
+    /// coalescer amortized COUNT, not BYTES — under bursty delivery several
+    /// jumbo get_entries pages could land inside one typing window and fold
+    /// as ONE multi-MiB main-actor block (keyboard lag). Crossing this flushes
+    /// the session immediately — same flush the timer would do, just smaller.
+    /// 1 MiB of base64 ct ≈ 768 KiB decoded per fold: bounded main block while
+    /// keeping the ~15fps cadence for the common small-delta case. TUNABLE
+    /// from Advanced settings (KiB stepper).
+    /// SAFETY: nonisolated(unsafe) mutable static — written only from the
+    /// Settings UI and read only on the main actor (folds are main-actor).
+    nonisolated(unsafe) static var foldFlushMaxBytes = 1024 * 1024
     var pendingFoldFrames: [String: [(env: EnvelopeMessage,
                                       envelope: RoutedEnvelope,
                                       relayID: UUID)]] = [:]
+    /// Buffered ct-byte weight per session (base64 length — already in memory,
+    /// ≈ payload × 4/3). Maintained beside pendingFoldFrames by bufferFoldFrame.
+    var pendingFoldBytes: [String: Int] = [:]
     var foldFlushScheduled = false
     /// Timestamps of the last composer keystroke / last transcript scroll. The
     /// fold cadence checks these against a window instead of spawning a per-event

@@ -52,16 +52,18 @@ final class MarkdownEntityStore {
     private var prewarming: Set<String> = []
     /// SCROLL CONTENTION GUARD (jank regression, 2026-09-10): a fast scroll
     /// through cold history fires the leading pass over its whole window —
-    /// without a cap that launches every uncached row at once as high-QoS
-    /// detached parses competing with the main thread. 3 keeps the pipeline
-    /// full without saturating the cores; skipped rows retry on the next
-    /// recompute as slots free (self-throttling), and the view's lazy .task
-    /// (userInitiated) remains the backstop for what's actually visible.
-    /// The in-flight cap applies to PRODUCING only — the TOUCH pass above it
-    /// is unconditional: capping the touch too would strip the leading edge's
-    /// eviction protection exactly when the cache is under scroll pressure
-    /// (the "dropping keys" failure the HUD eviction counter watches for).
-    private static let prewarmMaxInFlight = 3
+    /// without a cap that launches every uncached row at once. 3 bounds
+    /// concurrent prewarm parses (their priority is the SAME as the view's —
+    /// a lower QoS would invert through the single-flight join); skipped
+    /// rows retry on the next recompute as slots free, and the view's lazy
+    /// .task remains the backstop for what's actually visible. TUNABLE from
+    /// Advanced settings (0 = prewarm produce-off, touch-only — a useful A/B
+    /// position while dialing in the sweet spot). The cap applies to
+    /// PRODUCING only — the TOUCH pass is unconditional (capping it would
+    /// strip the leading edge's eviction protection under scroll pressure).
+    /// SAFETY: nonisolated(unsafe) mutable static — written only from the
+    /// Settings UI and read only on the main actor (the store is @MainActor).
+    nonisolated(unsafe) static var prewarmMaxInFlight = 3
     func prewarm(scope: String, rows: [(id: String, text: String)], style: MarkdownProseStyle) {
         // PASS 1 — TOUCH everything, always (MRU bump = eviction protection,
         // 01M1Y1GK; O(1) per row, no tasks, no cap).
@@ -87,7 +89,7 @@ final class MarkdownEntityStore {
             guard prewarming.insert(row.key).inserted else { continue }
             RenderActivity.prewarmStarted += 1
             Task {
-                _ = await produce(row.key, text: row.text, style: style, priority: .utility)
+                _ = await produce(row.key, text: row.text, style: style)
                 prewarming.remove(row.key)
             }
         }
@@ -97,11 +99,11 @@ final class MarkdownEntityStore {
     /// size). Read-only; for tests + HUD diagnostics.
     var prewarmInFlight: Int { prewarming.count }
 
-    /// priority: the VIEW's lazy path runs .userInitiated (the user is looking
-    /// at that row NOW); PREWARM runs .utility + capped (see prewarm) so a
-    /// scroll through cold history can't spawn a burst of high-QoS parses
-    /// that competes with the main thread for cores (scroll-jank regression,
-    /// 2026-09-10).
+    /// SINGLE-PRIORITY by construction (no `priority` param): a single-flight
+    /// JOIN must never downgrade the caller — the view's render path awaiting
+    /// a utility-QoS prewarm parse WAS the top Instruments wait (2026-09-10:
+    /// MarkdownEntitiesView:73, 390ms+). Concurrency is bounded by the
+    /// prewarm cap + single-flight, not QoS; parses are short (~300µs s).
     /// SINGLE-FLIGHT (per-key): EVERY caller — the view's lazy .task and all
     /// prewarm triggers — funnels through here. A key already parsing is
     /// JOINED (await the running task), never re-spawned. Kills the in-flight
@@ -110,8 +112,7 @@ final class MarkdownEntityStore {
     /// materializing view each spawned their own parse of the same text
     /// (duplicate userInitiated bursts while scrolling, 2026-09-10).
     private var inflight: [String: Task<[MarkdownEntity], Never>] = [:]
-    func produce(_ key: String, text: String, style: MarkdownProseStyle,
-                 priority: TaskPriority = .userInitiated) async -> [MarkdownEntity] {
+    func produce(_ key: String, text: String, style: MarkdownProseStyle) async -> [MarkdownEntity] {
         if let hit = lru.hit(key) { return hit }   // touch: stamp MRU, O(1)
         if let running = inflight[key] {           // single-flight: JOIN, don't re-spawn
             RenderActivity.produceJoined += 1
@@ -119,7 +120,7 @@ final class MarkdownEntityStore {
         }
         RenderActivity.produceStarted += 1
         let t0 = DispatchTime.now().uptimeNanoseconds
-        let task = Task.detached(priority: priority) {
+        let task = Task.detached(priority: .userInitiated) {
             // SELF gauge = parse CPU only, timed inside the closure (bg write —
             // RenderActivity's documented best-effort racy-tally contract).
             let c0 = DispatchTime.now().uptimeNanoseconds

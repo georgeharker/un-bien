@@ -9,6 +9,7 @@ import UnBienCore
 /// `log stream --level debug --predicate 'subsystem == "un-bien" AND category == "scroll"'`
 private let scrollLog = Logger(subsystem: "un-bien", category: "scroll")
 private func dbgScrollLog(_ message: String) {
+    guard dbgTraceScroll else { return }   // gated: Instruments trace volume
     scrollLog.info("\(message, privacy: .public)")
 }
 #else

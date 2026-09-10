@@ -37,7 +37,7 @@ struct DebugActivityHUD: View {
             Text("\u{21BB} window   \u{2298} reset   + extend")
             Text("\u{25A6} bounds-gen   \u{2195} measure/set")
             Text("\u{29D6} in-flight \u{25B6} started \u{2713} done \u{2302} cache")
-            Text("\u{2668}\u{FE0E} prewarm: pw spawned \u{23F8}\u{FE0E} deferred(cap) j joined")
+            Text("\u{2668}\u{FE0E} prewarm: pw spawned \u{23F8}\u{FE0E} deferred(cap) j joined \u{2708}\u{FE0E} in-flight")
             Text("w=wait(spawn+queue) s=self(parse) \u{00B5}s")
             Text("cb flip=fan-out cross=anchor-crossings scr=scroll hp=height-probe")
             Text("tap to close").foregroundStyle(.gray)
@@ -63,13 +63,16 @@ struct DebugActivityHUD: View {
         let prodRow = "\u{2699} \u{29D6}\(raw[0] - raw[1]) \u{25B6}\(num(0)) \u{2713}\(num(1))"
             + " w\(RenderActivity.produceWaitMicros)\u{00B5}s+s\(RenderActivity.produceSelfMicros)\u{00B5}s"
         let warmRow = "\u{2668}\u{FE0E} pw\(RenderActivity.prewarmStarted) \u{23F8}\u{FE0E}\(RenderActivity.prewarmDeferred)"
-            + " j\(RenderActivity.produceJoined) \(RenderActivity.produceLastMicros)\u{00B5}s wall"
+            + " j\(RenderActivity.produceJoined) \u{2708}\u{FE0E}\(MarkdownEntityStore.shared.prewarmInFlight)"
+            + " \(RenderActivity.produceLastMicros)\u{00B5}s wall"
         rows = [
             (prodRow, moved(0, 1)),
             (warmRow, moved(0, 1)),
             ("\u{2315} \u{29D6}\(raw[5] - raw[6]) \u{25B6}\(num(5)) \u{2713}\(num(6)) \u{2302}\(num(7)) S\(num(11))", moved(5, 6, 7, 11)),
             ("\u{21BA} st\(RenderActivity.walkStarts) tm\(RenderActivity.walkTerminals) sl\(RenderActivity.walkStalls) \(RenderActivity.lastWalkInfo)", false),
-            ("\u{21BB} \(num(2)) \(RenderActivity.lastWindowMicros)\u{00B5}s n\(RenderActivity.nearCount)", moved(2)),
+            ("\u{21BB} \(num(2)) \(RenderActivity.lastWindowMicros)\u{00B5}s n\(RenderActivity.nearCount)"
+                + " f\(RenderActivity.lastFoldMicros)\u{00B5}s\u{00B7}\(RenderActivity.lastFoldBytes / 1024)kB b\(RenderActivity.foldFlushedByBytes)",
+                moved(2)),
             ("\u{2318} d\(RenderActivity.scrollDir) ent\(RenderActivity.entityCacheCount) ev\(RenderActivity.entityCacheEvicted)", false),
             ("\u{2298} \(num(3)) \(rr) \(ro)\u{2192}\(rn) c\(rc) dp:\(dp)", moved(3)),
             ("+ \(num(4))", moved(4)),

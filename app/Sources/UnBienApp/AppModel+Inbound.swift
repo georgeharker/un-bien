@@ -210,16 +210,40 @@ extension AppModel {
     }
 
     /// Flush one session's pending frames — ONE reducer fetch, N applies,
-    /// ONE publish (the batch lands as a single transcripts update).
+    /// ONE publish (the batch lands as a single transcripts update). Gauges
+    /// fold duration + buffered bytes (HUD: the main-block cost of a flush).
     private func flushFoldFrames(for key: String) {
         guard let pending = pendingFoldFrames.removeValue(forKey: key),
               !pending.isEmpty else { return }
+        let bytes = pendingFoldBytes.removeValue(forKey: key) ?? 0
+        let t0 = DispatchTime.now().uptimeNanoseconds
         var reducer = envelopeReducers[key] ?? EnvelopeReducer()
         reducer.setHideReasoning(!showThinking)
         for frame in pending {
             reducer.apply(frame.env)
         }
         commitFold(key, reducer)
+        RenderActivity.lastFoldMicros = Int((DispatchTime.now().uptimeNanoseconds - t0) / 1000)
+        RenderActivity.lastFoldBytes = bytes
+    }
+
+    /// Buffer a coalescable frame (stream delta or non-terminal walk page).
+    /// Bounded by BYTES as well as time (2026-09-10): crossing
+    /// foldFlushMaxBytes flushes this session immediately — the same flush the
+    /// timer would perform, just smaller, so ordering/barrier semantics are
+    /// untouched and the largest single main-actor fold is bounded no matter
+    /// how bursty delivery gets. Byte weight = the frame's base64 ct length
+    /// (already in memory; ≈ payload × 4/3). A single frame larger than the
+    /// ceiling still folds whole (one bounded item, never split).
+    private func bufferFoldFrame(key: String, env: EnvelopeMessage,
+                                 envelope: RoutedEnvelope, relayID: UUID) {
+        pendingFoldFrames[key, default: []].append((env: env, envelope: envelope, relayID: relayID))
+        let bytes = (pendingFoldBytes[key] ?? 0) + envelope.ct.count
+        pendingFoldBytes[key] = bytes
+        scheduleFoldFlush()
+        guard bytes > Self.foldFlushMaxBytes else { return }
+        RenderActivity.foldFlushedByBytes += 1
+        flushFoldFrames(for: key)
     }
 
     private func flushAllFoldFrames() {
@@ -425,9 +449,7 @@ extension AppModel {
         // during a full walk everything already defers to the terminal replay,
         // and the replayed deltas pass back through here and coalesce too.
         if isStreamDelta(env), fullWalkInFlight[key] == nil {
-            pendingFoldFrames[key, default: []].append(
-                (env: env, envelope: envelope, relayID: relayID))
-            scheduleFoldFlush()
+            bufferFoldFrame(key: key, env: env, envelope: envelope, relayID: relayID)
             return
         }
         // BACKFILL PAGE COALESCER (perf #2, device repro 2026-09-18: per-page
@@ -439,9 +461,7 @@ extension AppModel {
         // breaker) run IMMEDIATELY via handleRpcResponses — they don't depend
         // on the fold, and the walk must keep moving at network speed.
         if isBackfillPage(env) {
-            pendingFoldFrames[key, default: []].append(
-                (env: env, envelope: envelope, relayID: relayID))
-            scheduleFoldFlush()
+            bufferFoldFrame(key: key, env: env, envelope: envelope, relayID: relayID)
             handleRpcResponses(env: env, key: key, envelope: envelope, relayID: relayID)
             return
         }
@@ -793,11 +813,17 @@ extension AppModel {
 
     private func handle(control event: RelayControlIn, relayID: UUID) {
         switch event {
-        case let .error(code, _, peer):
+        case let .error(code, detail, peer):
             // Relay-origin refusal (e.g. a rooms_check unknown_peer for an unpaired
             // machine, design 01M1ZE43): attribute it to the machine so the UI can
             // prompt re-pair instead of showing an empty/absent listing.
             if let peer { handlePeerError(code: code, peer: peer, relayID: relayID) }
+            else {
+                // Sender-addressed refusal (payload_too_large / invalid_envelope,
+                // silent-drop fix 2026-09-10): no peer attribution — log it so an
+                // oversized send is traceable instead of the message vanishing.
+                log.warning("relay error code=\(code ?? "?", privacy: .public) detail=\(detail ?? "", privacy: .public)")
+            }
         case let .rooms(peer, rooms):
             // Authoritative per-peer snapshot (rooms_check on subscribe): RECONCILE,
             // don't just add. Drop any session for this (relay, peer) whose room
