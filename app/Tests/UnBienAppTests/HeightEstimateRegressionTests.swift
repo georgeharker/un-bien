@@ -24,7 +24,7 @@ final class HeightEstimateRegressionTests: XCTestCase {
     private let theme = ThemeID.oneDark.theme
     private lazy var typography = Typography()
     private lazy var style = markdownProseStyle(theme: theme, typography: typography)
-    private let widths: [Double] = [430, 760]   // phone-ish, tablet-ish
+    private let widths: [Double] = [370, 760]   // iPhone-17-ish portrait content, tablet
 
     // MARK: - Measured truth
 
@@ -72,6 +72,21 @@ final class HeightEstimateRegressionTests: XCTestCase {
             ("list-loose", "- one\n- two\n- three", 50),
             ("list-tight", "- a\n- b\n- c\n- d\n- e", 50),
             ("table", "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |", 60),
+            ("trigger-inline-code-dense",
+             """
+             Right — the truth from `EntityStack` itself, via `grep -nE` on the
+             `.padding(12)` calls and the `VStack(spacing: 8)` in `body`:
+
+             | Item | reality | estimate |
+             |---|---|---|
+             | inter-entity gap | `spacing: 8` flat | `paraGap 12` wrong |
+             | code block | `.padding(12)` = 24 vertical | `codeChrome 48` wrong |
+             | list items | `isTight ? 2 : 8` | flat `4` wrong |
+
+             The `DiffProducer` path is `tool-card-only` — `hunks` + `budget:
+             Int = 800` — while `markdownEstimateMetrics` scans fences with
+             `ceil(chars / charsPerLine)` and `monospacedSystemFont` metrics.
+             """, 90),
             ("table-wide-wraps",
              "| column one | column two | column three | column four |\n"
              + "|---|---|---|---|\n"

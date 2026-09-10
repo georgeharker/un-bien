@@ -330,6 +330,17 @@ public final class AppModel: ObservableObject {
             return Self.foldFlushNanosScroll
         }
         if let typed = lastComposerTypingAt, now - typed < Self.typingBusyWindow {
+            // TYPING WHILE STREAMING (device trigger, 2026-09-10: rich-markdown
+            // output — tables/code — made typing "awful" even after every other
+            // main-thread fix): each flush of a rich stream re-styles the
+            // growing table cells + re-lays-out the streaming row's EntityStack,
+            // so the typing tier backs off to scroll coarseness whenever a
+            // stream is actively buffered. Pure cadence — no semantics change;
+            // buffered frames still land via the trailing flush + message_end
+            // barrier.
+            if !pendingFoldFrames.isEmpty {
+                return Self.foldFlushNanosScroll
+            }
             return Self.foldFlushNanosTyping
         }
         return Self.foldFlushNanos

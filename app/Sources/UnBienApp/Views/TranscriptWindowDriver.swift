@@ -115,6 +115,10 @@ final class TranscriptWindowDriver {
     /// ToolCardFacts (expansion seeded EXACTLY as ToolCardView does — cards
     /// OPEN by default per the pref). View-fed; the driver stays facts-agnostic.
     var toolFactsFor: ((String) -> RowHeightEstimator.ToolCardFacts?)?
+    /// CODE-SEGMENT warm (A-tier): (code, language) -> warms the content-
+    /// addressed HighlightProducer slot the row's AsyncAttributedText reads at
+    /// attach — no plain flash, no swap re-layout. View-fed (needs theme).
+    var codeWarmFor: ((String, String?) -> Void)?
     /// Content width for the height-estimate side channel (analytic tier) —
     /// fed from the transcript viewport probe alongside viewportHeight.
     var prewarmWidth: Double = 0
@@ -342,11 +346,13 @@ final class TranscriptWindowDriver {
               style: MarkdownProseStyle? = nil,
               warmPairFor: ((String) -> (id: String, text: String, images: [WireImage])?)? = nil,
               toolFactsFor: ((String) -> RowHeightEstimator.ToolCardFacts?)? = nil,
+              codeWarmFor: ((String, String?) -> Void)? = nil,
               width: Double = 0) {
         if !scope.isEmpty { sessionScope = scope }
         if let style { prewarmStyle = style }
         if let warmPairFor { self.warmPairFor = warmPairFor }
         if let toolFactsFor { self.toolFactsFor = toolFactsFor }
+        if let codeWarmFor { self.codeWarmFor = codeWarmFor }
         if width > 0 { prewarmWidth = width }
         update(order: order)
         recomputeIfNeeded()
@@ -455,7 +461,8 @@ final class TranscriptWindowDriver {
             onEstimate: { bubble, estimate in
                 guard let rowID = rowByBubble[bubble] else { return }
                 self.seedEstimate(rowID: rowID, estimate: estimate)
-            })
+            },
+            warmCode: codeWarmFor)
     }
 
     /// Coalescing text-tier estimator flight (2026-09-10 fix: the first cut

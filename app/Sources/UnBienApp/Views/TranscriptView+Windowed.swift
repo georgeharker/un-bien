@@ -152,9 +152,20 @@ struct TranscriptStackView: View, Equatable {
                                                 default: expandRich && ToolCardView.isRich(card))
                 return (item.id, RowHeightEstimator.toolCardFacts(for: card, expanded: expanded))
             }, uniquingKeysWith: { first, _ in first })
+        // CODE-SEGMENT warm factory: builds the SAME content-addressed
+        // HighlightProducer EntityStack constructs (theme + mono metrics), so
+        // warming hits the exact AsyncAttributedText cache slot at attach.
+        let codeWarm: (String, String?) -> Void = { code, lang in
+            let producer = HighlightProducer(
+                code: code, language: lang, style: theme.codeHighlightStyle,
+                font: typography.monoPlatformFont())
+            let scope = sessionScope
+            Task { _ = await AttributedTextCache.shared.attributed(producer, scope: scope) }
+        }
         let _ = driver.sync(order: items.map(\.id), scope: sessionScope, style: style,
                             warmPairFor: { warmPairs[$0] ?? nil },
                             toolFactsFor: { toolFacts[$0] ?? nil },
+                            codeWarmFor: codeWarm,
                             width: estimateWidth)
         VStack(alignment: .leading, spacing: 12) {
             ForEach(Array(items.enumerated()), id: \.element.id) { pair in

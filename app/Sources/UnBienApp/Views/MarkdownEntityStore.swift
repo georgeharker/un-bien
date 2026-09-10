@@ -72,7 +72,8 @@ final class MarkdownEntityStore {
     /// out (the fold trigger has no width; its rows are visible/immediate).
     func prewarm(scope: String, rows: [(id: String, text: String, images: [WireImage])],
                  style: MarkdownProseStyle, width: Double = 0,
-                 onEstimate: ((String, Double) -> Void)? = nil) {
+                 onEstimate: ((String, Double) -> Void)? = nil,
+                 warmCode: ((String, String?) -> Void)? = nil) {
         // PASS 1 — TOUCH everything, always (MRU bump = eviction protection,
         // 01M1Y1GK; O(1) per row, no tasks, no cap). The touched count feeds the
         // HUD `t` gauge — a fully-warm scroll moves no OTHER prewarm token.
@@ -112,8 +113,19 @@ final class MarkdownEntityStore {
             RenderActivity.prewarmStarted += 1
             let rowID = row.id
             Task {
-                _ = await produce(row.key, text: row.text, style: style, width: width,
-                                  onEstimate: { onEstimate?(rowID, $0) })
+                let entities = await produce(row.key, text: row.text, style: style, width: width,
+                                              onEstimate: { onEstimate?(rowID, $0) })
+                // CODE-SEGMENT WARM (A-tier, scroll-jank trigger 2026-09-10):
+                // content-addressed HighlightProducer keys mean warming here
+                // HITS the exact slot AsyncAttributedText reads at attach —
+                // no plain-text flash, no swap re-layout, no eval-queue wait.
+                if let warmCode {
+                    for entity in entities {
+                        if case let .code(language, text) = entity {
+                            warmCode(text, language)
+                        }
+                    }
+                }
                 prewarming.remove(row.key)
             }
         }
