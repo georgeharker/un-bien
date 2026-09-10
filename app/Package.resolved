@@ -1,5 +1,5 @@
 {
-  "originHash" : "ded6fb54244fce2dc4ac79ac4b6ac3a31a67b34340edcdc0b090c896788031ab",
+  "originHash" : "22b92cced6125291c89f514069b4531fe6cfaf425b6f825e4807d7770ee08eb3",
   "pins" : [
     {
       "identity" : "highlighterswift",
@@ -34,7 +34,7 @@
       "location" : "https://github.com/georgeharker/swift-markdown-ui",
       "state" : {
         "branch" : "main",
-        "revision" : "579cf5d09d3637746eecbb6426c032e7db161fc0"
+        "revision" : "74ed594c9902896feed6f00e65fbc67a8f26d793"
       }
     }
   ],
