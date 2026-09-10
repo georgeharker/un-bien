@@ -632,13 +632,13 @@ public final class AppModel: ObservableObject {
     func prewarmSettledEntities(key: String) {
         let items = transcripts[key]?.items ?? []
         guard !items.isEmpty else { return }
-        var rows: [(id: String, text: String)] = []
+        var rows: [(id: String, text: String, images: [WireImage])] = []
         for item in items.suffix(8) {
             switch item {
-            case .assistant(let b) where !b.streaming && !b.text.isEmpty:
-                rows.append((id: b.id, text: b.text))
-            case .user(let u) where !u.text.isEmpty:
-                rows.append((id: u.id, text: u.text))
+            case .assistant(let b) where !b.streaming && (!b.text.isEmpty || !b.images.isEmpty):
+                rows.append((id: b.id, text: b.text, images: b.images))
+            case .user(let u) where !u.text.isEmpty || !u.images.isEmpty:
+                rows.append((id: u.id, text: u.text, images: u.images))
             default: continue
             }
         }

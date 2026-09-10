@@ -107,10 +107,17 @@ final class TranscriptWindowDriver {
     var sessionScope = ""
     var prewarmStyle: MarkdownProseStyle?
     /// Given a ROW id (this driver's vocabulary, role-prefixed), resolve the
-    /// entity-warm pair (bubble id + text), or nil for rows that must never
-    /// be warmed (still-streaming bubbles — cache-poison rule; non-bubble
+    /// entity-warm pair (bubble id + text + images), or nil for rows that must
+    /// never be warmed (still-streaming bubbles — cache-poison rule; non-bubble
     /// rows). Keeps the driver ids-only.
-    var warmPairFor: ((String) -> (id: String, text: String)?)?
+    var warmPairFor: ((String) -> (id: String, text: String, images: [WireImage])?)?
+    /// Content width for the height-estimate side channel (analytic tier) —
+    /// fed from the transcript viewport probe alongside viewportHeight.
+    var prewarmWidth: Double = 0
+    /// TRUE while a USER scroll gesture (drag / momentum) is in flight — set
+    /// from TranscriptView's phase handler. Feeds the height-delta-during-scroll
+    /// diagnosis (id-anchor reassertion vs deceleration physics).
+    var scrollGestureActive = false
     private var scrollY: Double?
     private var viewportHeight: Double?
     private var viewportHeightAtGeneration: Double?
@@ -221,7 +228,30 @@ final class TranscriptWindowDriver {
     /// the sentinel megapoints down (the "can't scroll to the bottom" hang).
     func record(id: String, height: Double) {
         RenderActivity.boundsMeasured += 1
-        guard height > 0, bounds.height(id: id) != height else { return }
+        guard height > 0, let oldHeight = bounds.height(id: id), oldHeight != height else {
+            // FIRST-EVER measure (no reserved height) is also a content-mutation
+            // event for the layout — count it in the gesture gauge too.
+            guard height > 0 else { return }
+            if scrollGestureActive {
+                RenderActivity.heightDeltasWhileScrolling += 1
+                RenderActivity.heightDeltaPointsWhileScrolling += Int(height)
+            }
+            return
+        }
+        if scrollGestureActive {
+            RenderActivity.heightDeltasWhileScrolling += 1
+            RenderActivity.heightDeltaPointsWhileScrolling += Int(abs(height - oldHeight))
+        }
+        // Estimator accuracy (analytic tier): the real measure landed on an
+        // estimate-seeded row — accumulate |Δ| so `eΔ` keeps the estimator
+        // honest. Remove: measured truth supersedes, never the reverse.
+        if let estimated = estimateSeeded.removeValue(forKey: id) {
+            RenderActivity.heightEstimatesMeasured += 1
+            RenderActivity.heightEstimateErrSum += Int(abs(height - estimated))
+            // SIGNED bias (measured − estimate): positive = estimates SHORT
+            // (add chrome), negative = TALL (remove) — directs calibration.
+            RenderActivity.heightEstimateBiasSum += Int(height - estimated)
+        }
         #if DEBUG
         if height > 20_000 {
             dbgDriverLog("SUSPECT height \(Int(height))pt id=\(id) — garbage measure? contentHeight inflated")
@@ -307,10 +337,12 @@ final class TranscriptWindowDriver {
 
     func sync(order: [String], scope: String = "",
               style: MarkdownProseStyle? = nil,
-              warmPairFor: ((String) -> (id: String, text: String)?)? = nil) {
+              warmPairFor: ((String) -> (id: String, text: String, images: [WireImage])?)? = nil,
+              width: Double = 0) {
         if !scope.isEmpty { sessionScope = scope }
         if let style { prewarmStyle = style }
         if let warmPairFor { self.warmPairFor = warmPairFor }
+        if width > 0 { prewarmWidth = width }
         update(order: order)
         recomputeIfNeeded()
     }
@@ -387,15 +419,43 @@ final class TranscriptWindowDriver {
             leading = Array(near)
         }
         // The driver stays ids-only: the view-fed resolver translates its
-        // ROW ids to warm pairs and returns nil for never-warm rows.
+        // ROW ids to warm pairs and returns nil for never-warm rows. The
+        // bubble→row map routes the estimate side channel back (analytic
+        // height tier: seed the bounds registry BEFORE first materialization
+        // so the seed→real correction lands far beneath the reassertion
+        // threshold — the hd/p-diagnosed glide killer).
         guard let style = prewarmStyle, !sessionScope.isEmpty,
               let resolver = warmPairFor else { return }
-        var rows: [(id: String, text: String)] = []
+        var rows: [(id: String, text: String, images: [WireImage])] = []
+        var rowByBubble: [String: String] = [:]
         rows.reserveCapacity(leading.count)
         for id in leading {
-            if let pair = resolver(id), !pair.text.isEmpty { rows.append(pair) }
+            if let pair = resolver(id), !pair.text.isEmpty || !pair.images.isEmpty {
+                rows.append(pair)
+                rowByBubble[pair.id] = id
+            }
         }
-        MarkdownEntityStore.shared.prewarm(scope: sessionScope, rows: rows, style: style)
+        guard !rows.isEmpty else { return }
+        MarkdownEntityStore.shared.prewarm(
+            scope: sessionScope, rows: rows, style: style, width: prewarmWidth,
+            onEstimate: { bubble, estimate in
+                guard let rowID = rowByBubble[bubble] else { return }
+                self.seedEstimate(rowID: rowID, estimate: estimate)
+            })
+    }
+
+    /// Seed the bounds registry with an ANALYTIC estimate (prefill at
+    /// entity-produce time). Only when nothing better exists: a measured
+    /// height or a persisted seed ALWAYS wins, and the estimate never
+    /// persists — it exists to shrink the first-measure mutation (device
+    /// truth: 274pt avg → target ≪ 50pt). Accuracy is gauged when the real
+    /// measure lands (`eΔ` on the HUD) — the estimator stays honest.
+    private var estimateSeeded: [String: Double] = [:]
+    func seedEstimate(rowID: String, estimate: Double) {
+        guard estimate > 0, bounds.height(id: rowID) == nil else { return }
+        bounds.record(id: rowID, height: estimate)
+        estimateSeeded[rowID] = estimate
+        RenderActivity.heightEstimatesSeeded += 1
     }
 
     /// The window's center row index by the current anchor (rendered-state truth).

@@ -22,6 +22,9 @@ extension TranscriptView {
             items: items,
             contentGeneration: model.transcripts[session.id]?.contentGeneration ?? 0,
             branchPoints: model.transcripts[session.id]?.branchPointIds ?? [],
+            // Content width for the analytic height tier — the driver's
+            // prewarmWidth is fed by the viewport probe.
+            estimateWidth: windowDriver.prewarmWidth,
             driver: windowDriver,
             themeID: model.themeID, theme: theme, typography: typography,
             expandRich: model.expandRichToolResults,
@@ -43,10 +46,15 @@ extension TranscriptView {
                 .onAppear {
                     viewportHeight = geo.size.height
                     windowDriver.update(viewportHeight: geo.size.height)
+                    windowDriver.prewarmWidth = min(geo.size.width, 1100) - 32
                 }
                 .onChange(of: geo.size.height) { _, h in
                     viewportHeight = h
                     windowDriver.update(viewportHeight: h)
+                }
+                .onChange(of: geo.size.width) { _, w in
+                    // Width feed for the analytic height tier (rotation/split).
+                    windowDriver.prewarmWidth = min(w, 1100) - 32
                 }
         }
     }
@@ -82,6 +90,8 @@ struct TranscriptStackView: View, Equatable {
     let items: [TranscriptItem]
     let contentGeneration: Int
     let branchPoints: Set<String>
+    // Content width for the analytic height tier's estimate channel (0 = off).
+    let estimateWidth: Double
     // Session scope for the driver's leading-pass PREWARM keys (design
     // 01M24A9NR) — the same session scoping MarkdownEntitiesView keys under.
     @Environment(\.sessionScope) private var sessionScope
@@ -113,22 +123,24 @@ struct TranscriptStackView: View, Equatable {
         // Inserted/re-keyed husks get correct membership BEFORE the ForEach.
         let style = MarkdownStyleCache.style(theme: theme, typography: typography)
         // Leading-window prewarm resolver (design 01M24A9NR): row id → the
-        // (bubble id, text) pair to warm. TEXT-FINAL rows only — a
+        // (bubble id, text, images) warm pair. TEXT-FINAL rows only — a
         // still-streaming bubble must NEVER be warmed (its key is stable
         // across streaming; a partial parse would poison the cache slot).
+        // Images ride the pair for the analytic height tier + ImageCache warm.
         // O(n) per rebuild, same order as the order map beside it.
         let warmPairs = Dictionary(
-            items.compactMap { item -> (String, (id: String, text: String))? in
+            items.compactMap { item -> (String, (id: String, text: String, images: [WireImage]))? in
                 switch item {
-                case .assistant(let b) where !b.streaming && !b.text.isEmpty:
-                    return (item.id, (id: b.id, text: b.text))
-                case .user(let u) where !u.text.isEmpty:
-                    return (item.id, (id: u.id, text: u.text))
+                case .assistant(let b) where !b.streaming && (!b.text.isEmpty || !b.images.isEmpty):
+                    return (item.id, (id: b.id, text: b.text, images: b.images))
+                case .user(let u) where !u.text.isEmpty || !u.images.isEmpty:
+                    return (item.id, (id: u.id, text: u.text, images: u.images))
                 default: return nil
                 }
             }, uniquingKeysWith: { first, _ in first })
         let _ = driver.sync(order: items.map(\.id), scope: sessionScope, style: style,
-                            warmPairFor: { warmPairs[$0] ?? nil })
+                            warmPairFor: { warmPairs[$0] ?? nil },
+                            width: estimateWidth)
         VStack(alignment: .leading, spacing: 12) {
             ForEach(Array(items.enumerated()), id: \.element.id) { pair in
                 HuskRow(item: pair.element, index: pair.offset, driver: driver,

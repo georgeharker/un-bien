@@ -26,6 +26,32 @@ public enum RenderActivity {
     public nonisolated(unsafe) static var lastFoldMicros = 0
     public nonisolated(unsafe) static var lastFoldBytes = 0
     public nonisolated(unsafe) static var foldFlushedByBytes = 0
+    /// Prewarm TOUCHED row-hits from the last leading pass (warm rows bumped to
+    /// MRU, no parse) — the missing gauge: a fully-warm scroll moves NO other
+    /// prewarm token, which read as "dead" when it was actually all-hits
+    /// (2026-09-10). Nonzero during scroll = the pass is alive and everything
+    /// it saw was already cached.
+    public nonisolated(unsafe) static var prewarmTouched = 0
+    /// HEIGHT-DELTA-DURING-SCROLL diagnosis (2026-09-10 hypothesis: a seed→real
+    /// height correction mid-momentum forces SwiftUI's id-anchor reassertion to
+    /// fight deceleration physics — the fast-scroll glide killer). Count +
+    /// cumulative points of height mutations (first-ever measures included)
+    /// applied while a user gesture was active. SPIKING during fast scroll =
+    /// hypothesis confirmed → height-commit gate / estimator seeding.
+    public nonisolated(unsafe) static var heightDeltasWhileScrolling = 0
+    public nonisolated(unsafe) static var heightDeltaPointsWhileScrolling = 0
+    /// ANALYTIC height tier (estimator-seeded reserves): how many estimates
+    /// were seeded into the bounds registry, how many have since been
+    /// superseded by real measures, and the cumulative |measure − estimate|
+    /// (the HUD eΔ avg keeps the estimator honest — calibrate the literals
+    /// against it).
+    public nonisolated(unsafe) static var heightEstimatesSeeded = 0
+    public nonisolated(unsafe) static var heightEstimatesMeasured = 0
+    public nonisolated(unsafe) static var heightEstimateErrSum = 0
+    /// SIGNED estimator bias (measured − estimate, cumulative): positive =
+    /// estimates systematically SHORT (add chrome/padding), negative = TALL.
+    // Directs literal calibration — eΔ alone can't say which way.
+    public nonisolated(unsafe) static var heightEstimateBiasSum = 0
     /// PREWARM-triggered parses actually launched (post cap), and ones DEFERRED
     /// by the in-flight cap (scroll-contention guard) — deferred climbing while
     /// scrolling is the self-throttle working; deferred climbing at REST would

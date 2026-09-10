@@ -154,6 +154,13 @@ struct TranscriptView: View {
     /// user intent (extracted from the body chain for the type-checker).
     private func handleScrollPhase(_ newPhase: ScrollPhase) {
         lastScrollPhase = newPhase
+        // Height-delta diagnosis (2026-09-10): a seed→real height correction
+        // landing mid-gesture/momentum forces SwiftUI's id-anchor reassertion
+        // to fight the deceleration physics — the fast-scroll glide killer
+        // hypothesis. The driver only needs "is a gesture active" (.animating
+        // is programmatic, NOT user scroll).
+        windowDriver.scrollGestureActive =
+            newPhase == .tracking || newPhase == .interacting || newPhase == .decelerating
         switch newPhase {
         case .tracking, .interacting, .decelerating:
             if !didRestoreScroll {

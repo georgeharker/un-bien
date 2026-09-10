@@ -64,16 +64,38 @@ final class MarkdownEntityStore {
     /// SAFETY: nonisolated(unsafe) mutable static — written only from the
     /// Settings UI and read only on the main actor (the store is @MainActor).
     nonisolated(unsafe) static var prewarmMaxInFlight = 3
-    func prewarm(scope: String, rows: [(id: String, text: String)], style: MarkdownProseStyle) {
+    /// rows: (bubble id, text, images). width > 0 enables the height-estimate
+    /// side channel (analytic tier, RowHeightEstimator): the detached pass
+    /// computes an estimate (warming ImageCache as a side effect) and hands it
+    /// back tagged with the row id via onEstimate — the caller seeds its bounds
+    /// registry so first materialization barely mutates content. width 0 = opt
+    /// out (the fold trigger has no width; its rows are visible/immediate).
+    func prewarm(scope: String, rows: [(id: String, text: String, images: [WireImage])],
+                 style: MarkdownProseStyle, width: Double = 0,
+                 onEstimate: ((String, Double) -> Void)? = nil) {
         // PASS 1 — TOUCH everything, always (MRU bump = eviction protection,
-        // 01M1Y1GK; O(1) per row, no tasks, no cap).
-        var cold: [(key: String, text: String)] = []
-        for row in rows where !row.text.isEmpty {
+        // 01M1Y1GK; O(1) per row, no tasks, no cap). The touched count feeds the
+        // HUD `t` gauge — a fully-warm scroll moves no OTHER prewarm token.
+        // NOTE: rows with images but EMPTY text still warm (image decode) —
+        // they just never enter the entity LRU.
+        var cold: [(key: String, id: String, text: String, images: [WireImage])] = []
+        var touched = 0
+        for row in rows where !row.text.isEmpty || !row.images.isEmpty {
             let key = Self.key(scope: scope, id: row.id, styleHash: style.hashValue)
-            if lru.hit(key) != nil { continue }
-            cold.append((key: key, text: row.text))
+            if !row.text.isEmpty, lru.hit(key) != nil {
+                touched += 1
+                // Cached entities don't need a produce — but the image warm +
+                // estimate side channel still applies (cheap, capped below).
+                if width > 0, let onEstimate {
+                    estimateOnly(row: row, key: key, style: style, width: width, onEstimate: onEstimate)
+                }
+                continue
+            }
+            cold.append((key: key, id: row.id, text: row.text, images: row.images))
         }
-        // PASS 2 — PRODUCE the cold rows up to the in-flight cap, utility QoS.
+        if touched > 0 { RenderActivity.prewarmTouched = touched }
+        // PASS 2 — PRODUCE the cold rows up to the in-flight cap (same priority
+        // as the view — a lower QoS would invert through the single-flight join).
         // produce's single-flight (`inflight`) is consulted first: if the
         // VIEW's own .task is already parsing this row, prewarm neither spawns
         // nor spends a cap slot — that parse will cache it. `prewarming` then
@@ -88,10 +110,31 @@ final class MarkdownEntityStore {
             }
             guard prewarming.insert(row.key).inserted else { continue }
             RenderActivity.prewarmStarted += 1
+            let rowID = row.id
             Task {
-                _ = await produce(row.key, text: row.text, style: style)
+                _ = await produce(row.key, text: row.text, style: style, width: width,
+                                  onEstimate: { onEstimate?(rowID, $0) })
                 prewarming.remove(row.key)
             }
+        }
+    }
+
+    /// Warm images + estimate for a row whose ENTITIES are already cached
+    /// (pass-1 hit): decode images into ImageCache off-main and hand back the
+    /// estimate without re-parsing. Image-only rows land here too.
+    private func estimateOnly(row: (id: String, text: String, images: [WireImage]),
+                              key: String, style: MarkdownProseStyle, width: Double,
+                              onEstimate: @escaping (String, Double) -> Void) {
+        guard prewarming.insert(key).inserted else { return }   // reuse the cap
+        let rowID = row.id
+        Task {
+            let entities = cached(key) ?? []
+            let est = await Task.detached(priority: .userInitiated) {
+                RowHeightEstimator.estimate(entities, images: row.images,
+                                            style: style, width: width)
+            }.value
+            prewarming.remove(key)
+            if est > 0 { onEstimate(rowID, est) }
         }
     }
 
@@ -111,25 +154,29 @@ final class MarkdownEntityStore {
     /// on "is it cached?" answers NO right up until it is — prewarm + a
     /// materializing view each spawned their own parse of the same text
     /// (duplicate userInitiated bursts while scrolling, 2026-09-10).
-    private var inflight: [String: Task<[MarkdownEntity], Never>] = [:]
-    func produce(_ key: String, text: String, style: MarkdownProseStyle) async -> [MarkdownEntity] {
+    private var inflight: [String: Task<([MarkdownEntity], Double), Never>] = [:]
+    func produce(_ key: String, text: String, style: MarkdownProseStyle,
+                 width: Double = 0, onEstimate: ((Double) -> Void)? = nil) async -> [MarkdownEntity] {
         if let hit = lru.hit(key) { return hit }   // touch: stamp MRU, O(1)
         if let running = inflight[key] {           // single-flight: JOIN, don't re-spawn
             RenderActivity.produceJoined += 1
-            return await running.value
+            return await running.value.0
         }
         RenderActivity.produceStarted += 1
         let t0 = DispatchTime.now().uptimeNanoseconds
         let task = Task.detached(priority: .userInitiated) {
-            // SELF gauge = parse CPU only, timed inside the closure (bg write —
-            // RenderActivity's documented best-effort racy-tally contract).
             let c0 = DispatchTime.now().uptimeNanoseconds
             let made = markdownEntities(text, style: style)
             RenderActivity.produceSelfMicros = Int((DispatchTime.now().uptimeNanoseconds - c0) / 1000)
-            return made
+            // Height-estimate side channel (analytic tier): same detached pass
+            // (image warming included) when the caller supplied a width.
+            let estimate = width > 0
+                ? RowHeightEstimator.estimate(made, images: [], style: style, width: width)
+                : 0
+            return (made, estimate)
         }
         inflight[key] = task
-        let made = await task.value
+        let (made, estimate) = await task.value
         inflight[key] = nil
         // WALL = spawn + queue + parse + hop-back; WAIT = wall − self ≈ pure
         // contention (QoS preemption / pool busy). wait ≫ self while throttled.
@@ -139,6 +186,7 @@ final class MarkdownEntityStore {
         RenderActivity.produceFinished += 1
         RenderActivity.entityCacheCount = lru.count
         RenderActivity.entityCacheEvicted = lru.evictedTotal
+        if estimate > 0 { onEstimate?(estimate) }
         return made
     }
 }

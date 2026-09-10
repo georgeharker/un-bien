@@ -48,8 +48,8 @@ final class MarkdownEntityStoreTests: XCTestCase {
 
         let started = RenderActivity.produceStarted
         store.prewarm(scope: scope,
-                      rows: [(id: warmID, text: "already warm **row**"),
-                             (id: coldID, text: "cold **row**")],
+                      rows: [(id: warmID, text: "already warm **row**", images: [WireImage]()),
+                             (id: coldID, text: "cold **row**", images: [WireImage]())],
                       style: style)
         // The cold row's produce is fire-and-forget — poll for it, bounded.
         for _ in 0..<200 where store.cached(coldKey) == nil {
@@ -66,7 +66,7 @@ final class MarkdownEntityStoreTests: XCTestCase {
         await drainPrewarm()
         let scope = "t3-\(UUID().uuidString)"
         let rows = (0..<6).map { (id: "a-\(UUID().uuidString)-\($0)",
-                                  text: "row \($0) **markdown** list") }
+                                 text: "row \($0) **markdown** list", images: [WireImage]()) }
         let started = RenderActivity.prewarmStarted
         let deferred = RenderActivity.prewarmDeferred
         store.prewarm(scope: scope, rows: rows, style: style)
