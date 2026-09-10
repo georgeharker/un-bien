@@ -86,6 +86,12 @@ struct Inner {
     subscribers_of: HashMap<String, HashSet<String>>,
     /// subscriptions_by[Y] = set of peer_ids that Y is watching (for efficient cleanup).
     subscriptions_by: HashMap<String, HashSet<String>>,
+    /// requested_by[Y] = the RAW (unfiltered) set Y asked to watch in
+    /// subscribe_rooms — INTENT, kept so a subscribe-before-pairing can be
+    /// re-derived into an effective subscription the moment a pairing_set grants
+    /// access (order-independent proactive push, design 01M23Z6MK). subscribers_of
+    /// only ever holds the filtered/effective set; this holds what was asked for.
+    requested_by: HashMap<String, HashSet<String>>,
 }
 
 /// Tracks who has subscribed to room announcements for which peer_ids.
@@ -139,11 +145,62 @@ impl RoomManager {
     /// Removes all subscriptions for `subscriber` (called on disconnect to prevent leaks).
     pub async fn unsubscribe_all(&self, subscriber: &str) {
         let mut g = self.inner.lock().await;
+        g.requested_by.remove(subscriber);
         if let Some(peers) = g.subscriptions_by.remove(subscriber) {
             for peer in &peers {
                 if let Some(set) = g.subscribers_of.get_mut(peer) {
                     set.remove(subscriber);
                 }
+            }
+        }
+    }
+
+    /// Record `subscriber`'s RAW (unfiltered) subscribe request — what it asked
+    /// to watch, before the fail-closed allow-list filter. Held so a later
+    /// pairing_set can re-derive an effective subscription (design 01M23Z6MK).
+    /// Empty = forget the intent.
+    pub async fn set_requested(&self, subscriber: String, peers: Vec<String>) {
+        let mut g = self.inner.lock().await;
+        let set: HashSet<String> = peers.into_iter().collect();
+        if set.is_empty() {
+            g.requested_by.remove(&subscriber);
+        } else {
+            g.requested_by.insert(subscriber, set);
+        }
+    }
+
+    /// Recompute `machine`'s live subscriber set = (everyone who REQUESTED
+    /// `machine`) ∩ `allowed`. Called on every pairing_set push, so a
+    /// subscribe-before-pairing is honored the instant the allow-list grants it,
+    /// and a revoked owner is dropped — order-independent proactive push
+    /// (design 01M23Z6MK). Keeps both indexes (subscribers_of / subscriptions_by)
+    /// consistent.
+    pub async fn reconcile_subscribers(&self, machine: &str, allowed: &HashSet<String>) {
+        let mut g = self.inner.lock().await;
+        let desired: HashSet<String> = g
+            .requested_by
+            .iter()
+            .filter(|(_, peers)| peers.contains(machine))
+            .map(|(sub, _)| sub.clone())
+            .filter(|sub| allowed.contains(sub))
+            .collect();
+        let current: HashSet<String> = g.subscribers_of.get(machine).cloned().unwrap_or_default();
+        for sub in desired.difference(&current) {
+            g.subscribers_of
+                .entry(machine.to_string())
+                .or_default()
+                .insert(sub.clone());
+            g.subscriptions_by
+                .entry(sub.clone())
+                .or_default()
+                .insert(machine.to_string());
+        }
+        for sub in current.difference(&desired) {
+            if let Some(set) = g.subscribers_of.get_mut(machine) {
+                set.remove(sub);
+            }
+            if let Some(set) = g.subscriptions_by.get_mut(sub) {
+                set.remove(machine);
             }
         }
     }
@@ -187,5 +244,42 @@ mod tests {
         rm.unsubscribe_all("B").await;
         assert!(rm.subscribers_of("A").await.is_empty());
         assert!(rm.subscribers_of("C").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reconcile_honors_subscribe_before_pairing_then_revoke() {
+        let rm = RoomManager::new();
+        // B asks to watch A, but A hasn't allowed B yet -> filtered to empty,
+        // so no effective subscription (the fail-closed subscribe path).
+        rm.set_requested("B".into(), vec!["A".into()]).await;
+        rm.subscribe("B".into(), vec![]).await;
+        assert!(
+            !rm.subscribers_of("A").await.contains(&"B".to_string()),
+            "not subscribed until A allows B"
+        );
+        // A pushes its allow-list including B -> reconcile subscribes B
+        // retroactively, WITHOUT B reconnecting (design 01M23Z6MK).
+        let allow_b: HashSet<String> = ["B".to_string()].into_iter().collect();
+        rm.reconcile_subscribers("A", &allow_b).await;
+        assert!(
+            rm.subscribers_of("A").await.contains(&"B".to_string()),
+            "granted on pairing_set -> now a live subscriber"
+        );
+        // A revokes B -> reconcile drops it.
+        rm.reconcile_subscribers("A", &HashSet::new()).await;
+        assert!(
+            !rm.subscribers_of("A").await.contains(&"B".to_string()),
+            "revoked -> dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn reconcile_ignores_a_machine_never_requested() {
+        let rm = RoomManager::new();
+        // B never asked to watch A; an allow-list that names B must NOT
+        // conjure a subscription (only re-derives what was requested).
+        let allow_b: HashSet<String> = ["B".to_string()].into_iter().collect();
+        rm.reconcile_subscribers("A", &allow_b).await;
+        assert!(rm.subscribers_of("A").await.is_empty());
     }
 }
