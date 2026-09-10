@@ -5,6 +5,7 @@ import UnBienCore
 /// (system Camera or an external open). The QR carries no relay (DESIGN: `r`
 /// dropped), so the user picks which configured relay to pair against — or adds
 /// one first. Dismiss to cancel.
+@MainActor
 struct ChooseRelayPairSheet: View {
     let invite: PairingInvite
     @EnvironmentObject var model: AppModel

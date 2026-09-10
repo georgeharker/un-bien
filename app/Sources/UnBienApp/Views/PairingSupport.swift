@@ -5,6 +5,9 @@ import UIKit
 #endif
 
 /// This device's default pairing name (shown pre-filled in the pair sheets).
+/// MainActor-isolated: UIDevice.current.name is MainActor on iOS (the iOS
+/// build warned on the nonisolated global read).
+@MainActor
 var defaultPairingDeviceName: String {
     #if os(iOS)
     return UIDevice.current.name

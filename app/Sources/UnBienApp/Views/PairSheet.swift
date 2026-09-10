@@ -4,6 +4,7 @@ import UnBienCore
 /// Pairing — scan the `unbien://pair?…` QR with the camera (iOS) or paste the
 /// code (cross-platform). The paste fallback is the parity floor (DESIGN §12)
 /// and the only path that also works on macOS.
+@MainActor
 struct PairSheet: View {
     let relay: RelayConfig
     @EnvironmentObject var model: AppModel
