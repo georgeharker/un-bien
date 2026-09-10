@@ -25,15 +25,21 @@ import UIKit
 /// estimator drift is visible, never silent. Constants are v1 literals —
 /// calibrate against eΔ.
 enum RowHeightEstimator {
-    // v1 tuning literals (calibrated against the device eΔ gauge, 2026-09-10:
-    // first cut averaged 27pt SHORT — a systematic row-chrome underestimate):
+    // Chrome comes from TranscriptMetrics — the SAME symbols the views apply
+    // (drift structurally impossible). Only line-height factors and the
+    // tight/loose list midpoint remain here (estimate-only interpolations).
     static let lineBodyFactor: Double = 1.35      // body line-height × baseSize
     static let lineMonoFactor: Double = 1.30      // code line-height × baseSize
-    static let codeChrome: Double = 48            // code block padding (12×2) + margins (8×2) + bubble chrome
-    static let paraGap: Double = 12               // between markdown blocks
-    static let rowChrome: Double = 30             // row/bubble padding + margins (44 overshot: b −19 → trim)
-    static let headingExtra: Double = 10          // heading margins above wrapped prose
-    static let imageCap: Double = 480             // WireImageView's maxWidth/maxHeight
+    static var paraGap: Double { TranscriptMetrics.entitySpacing }
+    static var rowChrome: Double { TranscriptMetrics.assistantRowChrome }
+    static var headingExtra: Double { TranscriptMetrics.headingTopPadding }
+    static var listItemGap: Double {
+        (TranscriptMetrics.listItemGapTight + TranscriptMetrics.listItemGapLoose) / 2
+    }
+    static var quoteChrome: Double { TranscriptMetrics.quoteChrome }
+    static var codeChrome: Double { TranscriptMetrics.codeBlockChrome }
+    static var imageCap: Double { TranscriptMetrics.imageCap }
+    static var imageSpacing: Double { TranscriptMetrics.imageSpacing }
     static let unknownImageHeight: Double = 480   // undecodable/unknown dims: reserve the cap
 
     /// ESTIMATE the rendered height of a settled row. width = CONTENT width
@@ -50,10 +56,108 @@ enum RowHeightEstimator {
             total += entity(e, style: style, width: width)
         }
         for (i, img) in images.enumerated() {
-            if i > 0 || total > 0 { total += 8 }
+            if i > 0 || total > 0 { total += imageSpacing }
             total += imageHeight(img, width: width)
         }
         return total + rowChrome
+    }
+
+    /// TOOL-CARD estimate — a FURNITURE COMPOSITION, not lines+constant: the
+    /// card is a DisclosureGroup (collapsed = header-only ≈ 44, content-blind),
+    /// and its expanded body carries per-section furniture (diff switcher,
+    /// labels, spacings) + text lines + images. Facts come from the view-side
+    /// resolver, which owns the card data AND the persisted expansion state.
+    struct ToolCardFacts {
+        var expanded: Bool
+        var hasSwitcher: Bool        // hunks AND content both present
+        var labeledSections: Int     // "CONTENT"/"input"/"output"/"error" rows
+        var textLines: Int           // mono text lines (content/args/output/error)
+        var imageCount: Int
+        var imageAspects: [Double]   // w/h per image (warmed decode; 0 = unknown)
+        init(expanded: Bool, hasSwitcher: Bool = false, labeledSections: Int = 0,
+             textLines: Int = 0, imageCount: Int = 0, imageAspects: [Double] = []) {
+            self.expanded = expanded; self.hasSwitcher = hasSwitcher
+            self.labeledSections = labeledSections; self.textLines = textLines
+            self.imageCount = imageCount; self.imageAspects = imageAspects
+        }
+    }
+
+    static func estimateToolCard(_ facts: ToolCardFacts, style: MarkdownProseStyle,
+                                 width: Double) -> Double {
+        let monoLine = lineHeight(size: style.codeSize ?? style.baseSize, name: style.codeFontName)
+        let bodyLine = lineHeight(size: style.baseSize, name: style.fontName)
+        var h = TranscriptMetrics.toolCardCollapsedChrome   // padding + header (+ images below)
+        guard facts.expanded else { return h + imageTerms(facts, width: width) }
+        h = TranscriptMetrics.toolCardExpandedBase
+        var sections = 1
+        if facts.hasSwitcher {
+            h += DiffContentToggle.estimatedHeight   // estimate OWNED by the component
+            sections += 1
+        }
+        h += Double(facts.labeledSections) * TranscriptMetrics.toolCardSectionLabelHeight
+        h += Double(facts.textLines) * monoLine
+        // Args sections render in body font; mono lines dominate — the blend is
+        // approximated by mono (cards are overwhelmingly mono).
+        h += Double(max(sections - 1, 0)) * TranscriptMetrics.toolCardSectionSpacing
+        return h + imageTerms(facts, width: width)
+    }
+
+    private static func imageTerms(_ facts: ToolCardFacts, width: Double) -> Double {
+        guard facts.imageCount > 0 else { return 0 }
+        var total = 0.0
+        for i in 0..<facts.imageCount {
+            if i > 0 { total += TranscriptMetrics.imageSpacing }
+            let fitWidth = min(width, TranscriptMetrics.imageCap)
+            let aspect = i < facts.imageAspects.count ? facts.imageAspects[i] : 0
+            total += aspect > 0 ? min(Double(TranscriptMetrics.imageCap), fitWidth / aspect)
+                                : Double(TranscriptMetrics.imageCap)
+        }
+        return total
+    }
+
+    /// TEXT-TIER estimate (the uncapped fast cut): composes chrome over the
+    /// fork's `markdownEstimateMetrics` breakdown — no entity parse, no LRU
+    /// dependency, microseconds per row. Mono/table line heights come from
+    /// REAL font metrics (the fork owns the fonts; we own the chrome).
+    static func estimateText(_ text: String, images: [WireImage],
+                             style: MarkdownProseStyle, width: Double) -> Double {
+        guard width > 0 else { return 0 }
+        let m = markdownEstimateMetrics(text, style: style, width: width)
+        let monoLine = Self.lineHeight(size: style.baseSize, name: style.codeFontName)
+        let bodyLine = Self.lineHeight(size: style.baseSize, name: style.fontName)
+        var blocks = m.proseBlocks + m.codeBlocks + m.headings
+        if m.tableRows > 0 { blocks += 1 }
+        if m.listItems > 0 { blocks += 1 }
+        if m.quoteLines > 0 { blocks += 1 }
+        // Composed step-by-step (a single chained expression trips the
+        // type-checker): text metrics, then per-kind chrome, then gaps.
+        var total: Double = m.textHeight
+        total += Double(m.codeLines) * monoLine
+        total += Double(m.codeBlocks) * codeChrome
+        total += Double(m.tableRows) * (bodyLine + 8)
+        total += Double(m.listItems) * listItemGap
+        total += Double(m.quoteLines) * quoteChrome
+        total += Double(max(blocks - 1, 0)) * paraGap
+        for (i, img) in images.enumerated() {
+            if i > 0 || total > 0 { total += imageSpacing }
+            total += imageHeight(img, width: width)
+        }
+        return total + rowChrome
+    }
+
+    /// Real line height from font metrics (ascent+descent+leading) for the
+    /// style's font at size — replaces ×-factor guesses where it matters.
+    /// (macOS NSFont has no lineHeight: ascent+descent+leading.)
+    static func lineHeight(size: Double, name: String?) -> Double {
+        #if os(macOS)
+        let font: NSFont = name.flatMap { NSFont(name: $0, size: size) }
+            ?? NSFont.systemFont(ofSize: size)
+        return font.ascender + font.descender.magnitude + font.leading
+        #else
+        let font: UIFont = name.flatMap { UIFont(name: $0, size: size) }
+            ?? UIFont.systemFont(ofSize: size)
+        return font.lineHeight
+        #endif
     }
 
     /// One entity's height contribution.
@@ -79,7 +183,7 @@ enum RowHeightEstimator {
             }
             return h
         case .blockquote(let children):
-            return estimate(children, images: [], style: style, width: max(0, width - 20)) + 12
+            return estimate(children, images: [], style: style, width: max(0, width - 20)) + quoteChrome
         case .details(let summary, _):
             // Fixed-height callout (never collapsible by design): summary + bounded.
             return textHeight(String(summary.characters), size: style.baseSize,

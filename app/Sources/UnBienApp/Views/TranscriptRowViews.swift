@@ -77,6 +77,9 @@ struct TranscriptRow: View, Equatable {
     private func assistantView(_ bubble: AssistantBubble) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
+                // "Pi" header — natural height ≈ TranscriptMetrics.assistantHeaderHeight:
+                // CHANGE THAT CONSTANT if the caption font/weight changes (it is
+                // ESTIMATE-ONLY — no literal here to share).
                 Text("Pi").font(.caption.weight(.semibold)).foregroundStyle(theme.toolAccent)
                 if bubble.streaming {
                     ProgressView().controlSize(.mini)
@@ -154,7 +157,8 @@ private struct WireImageView: View {
             }
             #endif
         }
-        .frame(maxWidth: 480, maxHeight: 480, alignment: .leading)
+        .frame(maxWidth: TranscriptMetrics.imageCap, maxHeight: TranscriptMetrics.imageCap,
+               alignment: .leading)
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
@@ -375,7 +379,13 @@ private struct ReasoningBlockView: View {
 /// pure SwiftUI. Deliberately NOT a segmented Picker: that bridges to a
 /// UISegmentedControl, whose per-attach construction hitched edit cards as they
 /// scrolled into the window. Text + a Capsule cost effectively nothing to build.
-private struct DiffContentToggle: View {
+struct DiffContentToggle: View {
+    /// ESTIMATE-OWNED by this component (analytic height tier): the toggle's
+    /// natural height. CHANGE THIS IF THE VIEW CHANGES (padding/segment size) —
+    /// RowHeightEstimator reads it directly, so the estimate lives WITH the
+    /// render code it estimates.
+    static let estimatedHeight: Double = 30
+
     @Binding var showContent: Bool
     let theme: AppTheme
 
@@ -404,7 +414,7 @@ private struct DiffContentToggle: View {
     }
 }
 
-private struct ToolCardView: View {
+struct ToolCardView: View {
     let card: ToolCard
     let theme: AppTheme
     let typography: Typography
@@ -421,6 +431,39 @@ private struct ToolCardView: View {
     // intact); the store is touched only on materialize (read) + toggle (write).
     @State private var expanded: Bool
     @State private var showContent: Bool
+    // DERIVATION CACHE (typing-during-output fix, 2026-09-10): inputHunks /
+    // contentText / args+result pretty-strings used to re-derive in `body` on
+    // EVERY re-render — and a RUNNING tool's growing result made
+    // `result.prettyString` O(output-so-far) per fold flush (O(n²) over a tool
+    // run, on main, while the user types). Cached per card VALUE (Equatable);
+    // while `state == .running` the big strings derive from a budget PREFIX
+    // only (the display truncates anyway — SHOW ALL mid-run is meaningless),
+    // settling to the full derivation once the tool ends.
+    private struct CardDerivations {
+        let hunks: [JSONValue]?
+        let content: (text: String, lang: String?)?
+        let argsPretty: String
+        let outputPretty: String?
+    }
+    @State private var derivationCache: (card: ToolCard, running: Bool, d: CardDerivations)?
+
+    private var derived: CardDerivations {
+        let running = card.state == .running
+        if let c = derivationCache, c.card == card, c.running == running {
+            return c.d
+        }
+        let prefixLimit = 8_000   // ≫ any display budget; SHOW ALL waits for settle
+        let d = CardDerivations(
+            hunks: inputHunks,
+            content: contentText,
+            argsPretty: JSONValue.object(card.args).prettyString,
+            outputPretty: card.result.map { running
+                ? String($0.prettyString.prefix(prefixLimit))
+                : $0.prettyString }
+        )
+        derivationCache = (card, running, d)
+        return d
+    }
 
     init(card: ToolCard, theme: AppTheme, typography: Typography,
          expandRich: Bool, hideInputRich: Bool, store: CardUIState, themeID: ThemeID) {
@@ -488,7 +531,7 @@ private struct ToolCardView: View {
         VStack(alignment: .leading, spacing: 8) {
             DisclosureGroup(isExpanded: $expanded) {
                 VStack(alignment: .leading, spacing: 6) {
-                    if let hunks = inputHunks, let content = contentText {
+                    if let hunks = derived.hunks, let content = derived.content {
                         // Both present (live edit): toggle between the diff and
                         // the new text as a code block. Default Diff. A lightweight
                         // SwiftUI toggle, NOT .pickerStyle(.segmented) — a segmented
@@ -510,15 +553,15 @@ private struct ToolCardView: View {
                             diffView(hunks)
                         }
                     } else {
-                        if let hunks = inputHunks {
+                        if let hunks = derived.hunks {
                             diffView(hunks)
-                        } else if contentText == nil, !card.args.isEmpty,
+                        } else if derived.content == nil, !card.args.isEmpty,
                                   !(hideInputRich && !knownOutputBlocks.isEmpty) {
-                            labeled("input", JSONValue.object(card.args).prettyString)
+                            labeled("input", derived.argsPretty)
                         }
                         if !knownOutputBlocks.isEmpty {
                             outputBlocksView
-                        } else if let content = contentText {
+                        } else if let content = derived.content {
                             // Replay floor: no live diff, so show the new text
                             // (from persisted args) as a code block.
                             VStack(alignment: .leading, spacing: 2) {
@@ -526,8 +569,8 @@ private struct ToolCardView: View {
                                     .foregroundStyle(theme.secondaryText)
                                 codeView(content.text, lang: content.lang)
                             }
-                        } else if let result = card.result {
-                            labeled("output", result.prettyString)
+                        } else if let output = derived.outputPretty {
+                            labeled("output", output)
                         }
                     }
                     if let error = card.error {
@@ -540,6 +583,9 @@ private struct ToolCardView: View {
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: icon).foregroundStyle(color)
+                    // Tool-name header row — natural height ≈ TranscriptMetrics
+                    // .toolCardHeaderHeight: CHANGE THAT CONSTANT if the callout
+                    // font/size changes (ESTIMATE-ONLY — no literal to share).
                     Text(card.tool).font(.callout.weight(.medium)).foregroundStyle(theme.text)
                 }
             }
@@ -661,6 +707,9 @@ private struct ToolCardView: View {
 
     private func labeled(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
+            // Section-label row — natural height ≈ TranscriptMetrics
+            // .toolCardSectionLabelHeight: CHANGE THAT CONSTANT if this label
+            // style changes (ESTIMATE-ONLY — no literal to share).
             Text(label.uppercased()).font(.system(size: 9, weight: .bold))
                 .foregroundStyle(theme.secondaryText)
             BudgetedContent(text: value, budget: toolBudget) { budgeted in
@@ -717,7 +766,8 @@ private struct ToolCardView: View {
     }
 }
 
-private extension JSONValue {
+extension JSONValue {
+    /// Pretty-printed JSON (shared: card rendering + the tool-facts resolver).
     var prettyString: String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes, .sortedKeys]

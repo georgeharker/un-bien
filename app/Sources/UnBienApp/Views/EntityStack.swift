@@ -20,7 +20,7 @@ struct EntityStack: View {
     let typography: Typography
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: TranscriptMetrics.entitySpacing) {
             ForEach(Array(entities.enumerated()), id: \.offset) { _, entity in
                 entityView(entity)
             }
@@ -38,7 +38,8 @@ struct EntityStack: View {
         case .heading(let level, let text):
             Text(text).textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, level <= 2 ? 8 : 4)
+                .padding(.top, level <= 2 ? TranscriptMetrics.headingTopPadding
+                         : TranscriptMetrics.headingTopPadding / 2)
 
         case .code(let language, let source):
             // Wrap long lines instead of a horizontal ScrollView. A ScrollView
@@ -50,7 +51,7 @@ struct EntityStack: View {
                 font: typography.monoPlatformFont()))
                 .font(typography.monoFont())
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
+                .padding(TranscriptMetrics.codeBlockPadding)
                 .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
 
         case .table(let model):
@@ -66,12 +67,13 @@ struct EntityStack: View {
                     }
                 }
             }
-            .padding(8)
+            .padding(TranscriptMetrics.quotePadding)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(theme.surface.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
 
         case .list(let model):
-            VStack(alignment: .leading, spacing: model.isTight ? 2 : 8) {
+            VStack(alignment: .leading, spacing: model.isTight ? TranscriptMetrics.listItemGapTight
+                                              : TranscriptMetrics.listItemGapLoose) {
                 ForEach(Array(model.items.enumerated()), id: \.offset) { _, item in
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text(item.marker).foregroundStyle(theme.secondaryText)
@@ -87,6 +89,7 @@ struct EntityStack: View {
                 EntityStack(entities: children, theme: theme, typography: typography)
             }
             .fixedSize(horizontal: false, vertical: true)
+            .padding(TranscriptMetrics.quotePadding)
 
         case .details(let summary, let children):
             VStack(alignment: .leading, spacing: 6) {

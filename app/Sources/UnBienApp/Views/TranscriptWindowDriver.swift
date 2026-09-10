@@ -111,6 +111,10 @@ final class TranscriptWindowDriver {
     /// never be warmed (still-streaming bubbles — cache-poison rule; non-bubble
     /// rows). Keeps the driver ids-only.
     var warmPairFor: ((String) -> (id: String, text: String, images: [WireImage])?)?
+    /// TOOL-ROW facts resolver (the last estimate-covered row kind): row id →
+    /// ToolCardFacts (expansion seeded EXACTLY as ToolCardView does — cards
+    /// OPEN by default per the pref). View-fed; the driver stays facts-agnostic.
+    var toolFactsFor: ((String) -> RowHeightEstimator.ToolCardFacts?)?
     /// Content width for the height-estimate side channel (analytic tier) —
     /// fed from the transcript viewport probe alongside viewportHeight.
     var prewarmWidth: Double = 0
@@ -228,29 +232,28 @@ final class TranscriptWindowDriver {
     /// the sentinel megapoints down (the "can't scroll to the bottom" hang).
     func record(id: String, height: Double) {
         RenderActivity.boundsMeasured += 1
-        guard height > 0, let oldHeight = bounds.height(id: id), oldHeight != height else {
-            // FIRST-EVER measure (no reserved height) is also a content-mutation
-            // event for the layout — count it in the gesture gauge too.
-            guard height > 0 else { return }
-            if scrollGestureActive {
-                RenderActivity.heightDeltasWhileScrolling += 1
-                RenderActivity.heightDeltaPointsWhileScrolling += Int(height)
-            }
-            return
-        }
-        if scrollGestureActive {
+        guard height > 0 else { return }
+        let oldHeight = bounds.height(id: id)
+        // Gesture-mutation gauge: BOTH first-ever measures (no reserved height
+        // — the layout jumps by the full height) and seed→real corrections
+        // count; no-op re-measures don't. (STRUCTURAL FIX 2026-09-10: the
+        // hd-gauge edit made first measures RETURN EARLY — before
+        // bounds.record — so unseeded rows never recorded and re-measured on
+        // every probe forever: the 4-5× measure-count inflation + distorted
+        // accuracy gauges. All record-worthy paths now reach bounds.record.)
+        if scrollGestureActive, oldHeight != height {
             RenderActivity.heightDeltasWhileScrolling += 1
-            RenderActivity.heightDeltaPointsWhileScrolling += Int(abs(height - oldHeight))
+            RenderActivity.heightDeltaPointsWhileScrolling += Int(oldHeight.map { abs(height - $0) } ?? height)
         }
+        guard oldHeight != height else { return }   // no-op re-measure
         // Estimator accuracy (analytic tier): the real measure landed on an
-        // estimate-seeded row — accumulate |Δ| so `eΔ` keeps the estimator
-        // honest. Remove: measured truth supersedes, never the reverse.
+        // estimate-seeded row — accumulate |Δ| (eΔ) and the signed bias (b).
+        // Both updated from the SAME (height, estimate) pair — |b| ≤ eΔ always.
         if let estimated = estimateSeeded.removeValue(forKey: id) {
             RenderActivity.heightEstimatesMeasured += 1
-            RenderActivity.heightEstimateErrSum += Int(abs(height - estimated))
-            // SIGNED bias (measured − estimate): positive = estimates SHORT
-            // (add chrome), negative = TALL (remove) — directs calibration.
-            RenderActivity.heightEstimateBiasSum += Int(height - estimated)
+            let delta = height - estimated
+            RenderActivity.heightEstimateErrSum += Int(abs(delta))
+            RenderActivity.heightEstimateBiasSum += Int(delta)
         }
         #if DEBUG
         if height > 20_000 {
@@ -338,10 +341,12 @@ final class TranscriptWindowDriver {
     func sync(order: [String], scope: String = "",
               style: MarkdownProseStyle? = nil,
               warmPairFor: ((String) -> (id: String, text: String, images: [WireImage])?)? = nil,
+              toolFactsFor: ((String) -> RowHeightEstimator.ToolCardFacts?)? = nil,
               width: Double = 0) {
         if !scope.isEmpty { sessionScope = scope }
         if let style { prewarmStyle = style }
         if let warmPairFor { self.warmPairFor = warmPairFor }
+        if let toolFactsFor { self.toolFactsFor = toolFactsFor }
         if width > 0 { prewarmWidth = width }
         update(order: order)
         recomputeIfNeeded()
@@ -436,12 +441,101 @@ final class TranscriptWindowDriver {
             }
         }
         guard !rows.isEmpty else { return }
+        // TEXT-TIER ESTIMATES (the uncapped fast cut): compose over the fork's
+        // markdownEstimateMetrics for EVERY leading row — no parse dependency,
+        // microseconds each, one sequential detached task (concurrency 1, no
+        // burst). Seeds land as computed; the capped entity-parse estimate
+        // below only fills rows this pass somehow missed.
+        if prewarmWidth > 0 {
+            estimateTextTier(rows: rows, rowByBubble: rowByBubble, style: style,
+                             leading: leading)
+        }
         MarkdownEntityStore.shared.prewarm(
             scope: sessionScope, rows: rows, style: style, width: prewarmWidth,
             onEstimate: { bubble, estimate in
                 guard let rowID = rowByBubble[bubble] else { return }
                 self.seedEstimate(rowID: rowID, estimate: estimate)
             })
+    }
+
+    /// Coalescing text-tier estimator flight (2026-09-10 fix: the first cut
+    /// DROPPED re-entries while a flight ran — a fast fling outran it and rows
+    /// attached unseeded, hd 433/p 158k regression). Re-entries now REPLACE the
+    /// pending window; the moment a flight ends, the latest one runs — the
+    /// tier always chases the NEWEST scroll position, never a stale one, and
+    /// never drops work. Rows are ordered DIRECTION-FIRST (attach-imminent
+    /// before trailing) so a flight cut short by the next recompute still
+    /// seeded the rows that matter most.
+    private var textTierInFlight = false
+    /// One pending text-tier flight (coalesced): rows to estimate + the
+    /// bubble→row map + tool-card facts + the style.
+    private struct PendingTier {
+        let rows: [(id: String, text: String, images: [WireImage])]
+        let rowByBubble: [String: String]
+        let style: MarkdownProseStyle
+        let toolRows: [(id: String, facts: RowHeightEstimator.ToolCardFacts)]
+    }
+    private var pendingTextTier: PendingTier?
+    private func estimateTextTier(rows: [(id: String, text: String, images: [WireImage])],
+                                  rowByBubble: [String: String],
+                                  style: MarkdownProseStyle,
+                                  leading: [String]) {
+        // TOOL ROWS ride the same flight (the last uncovered kind): facts from
+        // the view-fed resolver, composed by estimateToolCard.
+        let toolRows: [(id: String, facts: RowHeightEstimator.ToolCardFacts)] = leading.compactMap {
+            guard let factsFor = toolFactsFor, let facts = factsFor($0) else { return nil }
+            return (id: $0, facts: facts)
+        }
+        // Direction-first ordering: the edge we're scrolling TOWARD estimates
+        // first (those rows attach next; trailing rows have pages of margin).
+        let ordered: [(id: String, text: String, images: [WireImage])]
+        if scrollDirection != 0 {
+            let dir = scrollDirection
+            ordered = rows.sorted { a, b in
+                let ia = orderIndex[rowByBubble[a.id] ?? a.id] ?? 0
+                let ib = orderIndex[rowByBubble[b.id] ?? b.id] ?? 0
+                return dir > 0 ? ia > ib : ia < ib
+            }
+        } else {
+            ordered = rows
+        }
+        pendingTextTier = PendingTier(rows: ordered, rowByBubble: rowByBubble,
+                                      style: style, toolRows: toolRows)
+        guard !textTierInFlight else { return }   // running flight picks this up on completion
+        runPendingTextTier()
+    }
+
+    private func runPendingTextTier() {
+        guard let pending = pendingTextTier else { return }
+        pendingTextTier = nil
+        textTierInFlight = true
+        let width = prewarmWidth
+        let rows = pending.rows
+        let rowByBubble = pending.rowByBubble
+        let style = pending.style
+        let toolRows = pending.toolRows
+        Task {
+            await Task.detached(priority: .userInitiated) {
+                for row in rows {
+                    let est = RowHeightEstimator.estimateText(row.text, images: row.images,
+                                                              style: style, width: width)
+                    if est > 0, let rowID = rowByBubble[row.id] {
+                        await MainActor.run { self.seedEstimate(rowID: rowID, estimate: est) }
+                    }
+                }
+                for tool in toolRows {
+                    let est = RowHeightEstimator.estimateToolCard(tool.facts, style: style,
+                                                                 width: width)
+                    if est > 0 {
+                        await MainActor.run { self.seedEstimate(rowID: tool.id, estimate: est) }
+                    }
+                }
+            }.value
+            textTierInFlight = false
+            // A recompute replaced the window while we flew — chase it NOW,
+            // never drop it (the old drop-on-busy was the fast-fling regression).
+            if pendingTextTier != nil { runPendingTextTier() }
+        }
     }
 
     /// Seed the bounds registry with an ANALYTIC estimate (prefill at
@@ -452,7 +546,14 @@ final class TranscriptWindowDriver {
     /// measure lands (`eΔ` on the HUD) — the estimator stays honest.
     private var estimateSeeded: [String: Double] = [:]
     func seedEstimate(rowID: String, estimate: Double) {
-        guard estimate > 0, bounds.height(id: rowID) == nil else { return }
+        guard estimate > 0 else { return }
+        // An estimate may be CORRECTED by a later, better estimate (e.g. a card
+        // settling rich → the facts flip collapsed→expanded; a re-flight with
+        // fresher facts) — estimateSeeded membership proves the existing bounds
+        // entry is OURS, not a measure or a persisted seed. Measured truth and
+        // persisted seeds always win and are never overwritten.
+        let ours = estimateSeeded[rowID] != nil
+        guard bounds.height(id: rowID) == nil || ours else { return }
         bounds.record(id: rowID, height: estimate)
         estimateSeeded[rowID] = estimate
         RenderActivity.heightEstimatesSeeded += 1

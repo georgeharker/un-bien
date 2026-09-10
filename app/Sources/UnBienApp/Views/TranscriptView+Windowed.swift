@@ -95,6 +95,7 @@ struct TranscriptStackView: View, Equatable {
     // Session scope for the driver's leading-pass PREWARM keys (design
     // 01M24A9NR) — the same session scoping MarkdownEntitiesView keys under.
     @Environment(\.sessionScope) private var sessionScope
+    @Environment(\.cardUIState) private var cardUI
     let driver: TranscriptWindowDriver
     let themeID: ThemeID
     let theme: AppTheme
@@ -138,8 +139,47 @@ struct TranscriptStackView: View, Equatable {
                 default: return nil
                 }
             }, uniquingKeysWith: { first, _ in first })
+        // TOOL-CARD facts resolver (the last uncovered row kind): expansion
+        // seeds EXACTLY as ToolCardView does (store override ?? expandRich &&
+        // isRich — cards OPEN by default per the pref), so the estimate matches
+        // the disclosure state the materialized card actually renders in.
+        let toolFacts = Dictionary(
+            items.compactMap { item -> (String, RowHeightEstimator.ToolCardFacts)? in
+                guard case let .tool(card) = item else { return nil }
+                let contentKeys = ["content", "contents", "text", "new_string", "new_str", "newText"]
+                let hasContent = contentKeys.contains {
+                    (card.args[$0]?.stringValue ?? "").isEmpty == false
+                }
+                let hasHunks = !(card.hunks ?? []).isEmpty
+                var facts = RowHeightEstimator.ToolCardFacts(
+                    expanded: cardUI.expanded(card.toolCallID,
+                                              default: expandRich && ToolCardView.isRich(card)),
+                    hasSwitcher: hasHunks && hasContent,
+                    labeledSections: (card.args.isEmpty || hasHunks || hasContent ? 0 : 1)
+                        + (card.result != nil && !hasContent ? 1 : 0)
+                        + (card.error != nil ? 1 : 0),
+                    textLines: 0,
+                    imageCount: card.images.count)
+                // Mono text lines: the content text if present, else the result
+                // string (prefix-bounded while RUNNING — the full-string line
+                // count was O(output) per rebuild on main).
+                let body: String
+                if hasContent {
+                    body = contentKeys.compactMap { card.args[$0]?.stringValue }.first ?? ""
+                } else if let result = card.result {
+                    body = card.state == .running
+                        ? String(result.prettyString.prefix(4_000))
+                        : result.prettyString
+                } else {
+                    body = ""
+                }
+                facts.textLines = body.isEmpty ? 0 : body.split(separator: "\n",
+                                                                 omittingEmptySubsequences: false).count
+                return (item.id, facts)
+            }, uniquingKeysWith: { first, _ in first })
         let _ = driver.sync(order: items.map(\.id), scope: sessionScope, style: style,
                             warmPairFor: { warmPairs[$0] ?? nil },
+                            toolFactsFor: { toolFacts[$0] ?? nil },
                             width: estimateWidth)
         VStack(alignment: .leading, spacing: 12) {
             ForEach(Array(items.enumerated()), id: \.element.id) { pair in

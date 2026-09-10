@@ -216,5 +216,9 @@ func markdownProseStyle(theme: AppTheme, typography: Typography) -> MarkdownPros
                        codeColor: theme.text, codeBackground: theme.surface,
                        codeFontName: typography.monoFontName,
                        quoteColor: theme.secondaryText,
-                       fontName: typography.bodyFontName)
+                       fontName: typography.bodyFontName,
+                       // The renderer sizes BLOCK code from codeSize (not
+                       // bodySize) — the analytic tier must match (wrap-aware
+                       // code counting + mono line height both key off it).
+                       codeSize: typography.codeSize)
 }
