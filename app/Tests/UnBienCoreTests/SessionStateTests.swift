@@ -309,7 +309,8 @@ final class SessionStateTests: XCTestCase {
         state.applyRPC(.object(["type": .string("message_end"),
                                 "message": .object(["role": .string("user"), "timestamp": .number(300),
                                                     "content": .string("newest")])]))
-        XCTAssertEqual(state.items.map(\.id), ["user:u1"], "live birth is a pending seq synthetic")
+        XCTAssertEqual(state.items.count, 1)
+        XCTAssertTrue(state.items[0].id.hasPrefix("user:u-"), "live birth is a pending UUID synthetic")
         // The walk's first page arrives → reset → entries fold in log order.
         state.resetTranscript()
         state.applyEntries([
@@ -335,7 +336,8 @@ final class SessionStateTests: XCTestCase {
         state.applyRPC(.object(["type": .string("message_end"),
                                 "message": .object(["role": .string("user"), "timestamp": .number(500),
                                                     "content": .string("newest live")])]))
-        XCTAssertEqual(state.items.map(\.id), ["user:u1"])
+        XCTAssertEqual(state.items.count, 1)
+        XCTAssertTrue(state.items[0].id.hasPrefix("user:u-"))
 
         // A delta arrives carrying an OLDER gap entry (its live frame was never
         // seen) PLUS the pending's own entry, in log order — the exact shape a
@@ -570,7 +572,7 @@ final class EntryBornErrorNoticeTests: XCTestCase {
         ]))
         // The error notice must sit BEFORE the live pending row, not after it.
         let ids = s.items.map(\.id)
-        let liveIdx = ids.firstIndex(of: "user:u1")   // live pending (second user row)
+        let liveIdx = ids.firstIndex { $0.hasPrefix("user:u-") }   // live pending (UUID synthetic)
         let errorIdx = s.items.lastIndex { if case .notice = $0 { return true } else { return false } }
         XCTAssertNotNil(liveIdx)
         XCTAssertNotNil(errorIdx)

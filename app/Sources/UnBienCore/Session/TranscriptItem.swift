@@ -1,5 +1,45 @@
 import Foundation
 
+/// ROW-id creation — the ONE source of the role-prefix format. The row id is
+/// the transcript's join key (height registry, window driver order/near sets,
+/// flip inboxes, scroll anchors, pending/rekey bookkeeping, debug traces),
+/// and several sites must RECONSTRUCT it from a bubble/entry id — inline
+/// `"\(role):\(id)"` formatting anywhere else can drift out of sync with
+/// `TranscriptItem.id`. Every construction routes through here.
+public enum RowID {
+    public static func user(_ bubbleID: String) -> String { "user:\(bubbleID)" }
+    public static func assistant(_ bubbleID: String) -> String { "assistant:\(bubbleID)" }
+    public static func reasoning(_ blockID: String) -> String { "reasoning:\(blockID)" }
+    public static func tool(_ toolCallID: String) -> String { "tool:\(toolCallID)" }
+    public static func compaction(_ markerID: String) -> String { "compaction:\(markerID)" }
+    public static func notice(_ noticeID: String) -> String { "notice:\(noticeID)" }
+}
+
+/// Synthetic-id MINTS — the ONLY place placeholder ids are created (design
+/// 01M2435 for the UUID live-row synthetics; the seq-based ones are ephemeral
+/// notice/demo rows never keyed in the render caches). No inline id formatting
+/// anywhere else — the same single-source discipline as `RowID` (role-prefixed
+/// ROW ids) and the cache key builders. Lives beside `RowID` so this file is
+/// the session's complete id-format vocabulary.
+public enum SyntheticID {
+    /// Live-row placeholders — globally unique per row; the `a-`/`u-`/`r-`
+    /// prefix marks the synthetic id-space (a pi entry id is bare hex; the
+    /// dash is the tell).
+    public static func assistant() -> String { "a-\(UUID().uuidString)" }
+    public static func user() -> String { "u-\(UUID().uuidString)" }
+    public static func reasoning() -> String { "r-\(UUID().uuidString)" }
+    /// Ephemeral notice ids (kind prefix + per-reducer seq; never cached).
+    public static func notice(_ kind: String, seq: Int) -> String { "\(kind)\(seq)" }
+    /// Entry-identity error notice (dedups a live error against its replay).
+    public static func error(identify: String, hash: String) -> String { "err\(identify)\(hash)" }
+    /// Live-born compaction marker (no pi entry id yet).
+    public static func compaction(seq: Int) -> String { "\(seq)" }
+    /// DEMO transcripts only — deterministic per turn so demo previews and
+    /// tests stay stable across runs (NOT the live synthetic scheme).
+    public static func demoUser(_ turn: Int) -> String { "u\(turn)" }
+    public static func demoAssistant(_ turn: Int) -> String { "a\(turn)" }
+}
+
 /// One rendered row in a session transcript. The reducer (``SessionState``)
 /// produces an ordered list of these from history replay + the live stream.
 public enum TranscriptItem: Equatable, Sendable, Identifiable {
@@ -12,12 +52,12 @@ public enum TranscriptItem: Equatable, Sendable, Identifiable {
 
     public var id: String {
         switch self {
-        case let .user(bubble): return "user:\(bubble.id)"
-        case let .reasoning(block): return "reasoning:\(block.id)"
-        case let .assistant(bubble): return "assistant:\(bubble.id)"
-        case let .tool(card): return "tool:\(card.toolCallID)"
-        case let .compaction(marker): return "compaction:\(marker.id)"
-        case let .notice(notice): return "notice:\(notice.id)"
+        case let .user(bubble): return RowID.user(bubble.id)
+        case let .reasoning(block): return RowID.reasoning(block.id)
+        case let .assistant(bubble): return RowID.assistant(bubble.id)
+        case let .tool(card): return RowID.tool(card.toolCallID)
+        case let .compaction(marker): return RowID.compaction(marker.id)
+        case let .notice(notice): return RowID.notice(notice.id)
         }
     }
 

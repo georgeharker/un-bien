@@ -221,6 +221,7 @@ extension AppModel {
         }
         envelopeReducers[key] = reducer
         transcripts[key] = reducer.session
+        prewarmSettledEntities(key: key)
     }
 
     private func flushAllFoldFrames() {
@@ -325,6 +326,7 @@ extension AppModel {
         reducer.apply(EnvelopeMessage(rpc: ub))
         envelopeReducers[key] = reducer
         transcripts[key] = reducer.session
+        prewarmSettledEntities(key: key)
         // NAME PULL (pre-release 2026-09-18, user: "both should do a session
         /// name sync"): the sync terminator carries the session's CURRENT
         /// display name — the AUTHORITATIVE name path for BOTH platforms, so
@@ -460,11 +462,13 @@ extension AppModel {
             liveFrameBuffer[key, default: []].append((env: env, envelope: envelope, relayID: relayID))
             envelopeReducers[key] = reducer
             transcripts[key] = reducer.session
+            prewarmSettledEntities(key: key)
             return
         }
         reducer.apply(env)
         envelopeReducers[key] = reducer
         transcripts[key] = reducer.session
+        prewarmSettledEntities(key: key)
         // A shut-down session's pending ask is dead by construction
         // (the bridge is disposed and pi-ask emits no `completed` for
         // disposed flows) — drop the modal so a stale ask can't pop
@@ -495,6 +499,7 @@ extension AppModel {
                 reducer.applyEntries([], leafId: leafId, authoritative: true)
                 envelopeReducers[key] = reducer
                 transcripts[key] = reducer.session
+                prewarmSettledEntities(key: key)
             }
         }
         if let evt = env.evt, evt.channel == "panel",
@@ -729,12 +734,14 @@ extension AppModel {
               let role = env.rpc?["message"]?["role"]?.stringValue,
               role == "user" || role == "assistant",
               let since = envelopeReducers[key]?.leafId,
+              let session = sessions[key],
               let conn = connections[relayID] else { return }
-        let refetchID = UUID().uuidString
-        if deltaRefetchIDs.count > 500 { deltaRefetchIDs.removeAll(keepingCapacity: true) }
-        deltaRefetchIDs.insert(refetchID)
-        Task { try? await conn.send(.getEntries(id: refetchID, since: since),
-                                     toPeer: envelope.peer, room: envelope.room) }
+        // Pull the just-settled tail's DURABLE ids as a gated delta WALK that
+        // pages to the empty terminal + derives — re-keying live 'a<seq>' rows to
+        // their entry ids (design 01M2435). The old bare one-shot never paged, so
+        // it never derived and rows stayed synthetic (no fork/branch, branch
+        // render collision). activeWalks supersede coalesces overlapping turns.
+        startDeltaWalk(session, connection: conn, since: since)
     }
 
     /// End the active-walk bookkeeping (terminal / error / give-up / loop
@@ -780,6 +787,7 @@ extension AppModel {
         reducer.appendNotice(code: code, message: message)
         envelopeReducers[key] = reducer
         transcripts[key] = reducer.session
+        prewarmSettledEntities(key: key)
     }
 
     /// Retract a session's ended state (banner + input lock): the session was

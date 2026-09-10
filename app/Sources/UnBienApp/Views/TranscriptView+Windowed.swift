@@ -82,6 +82,9 @@ struct TranscriptStackView: View, Equatable {
     let items: [TranscriptItem]
     let contentGeneration: Int
     let branchPoints: Set<String>
+    // Session scope for the driver's leading-pass PREWARM keys (design
+    // 01M24A9NR) — the same session scoping MarkdownEntitiesView keys under.
+    @Environment(\.sessionScope) private var sessionScope
     let driver: TranscriptWindowDriver
     let themeID: ThemeID
     let theme: AppTheme
@@ -108,8 +111,25 @@ struct TranscriptStackView: View, Equatable {
         // Sync runs on a REAL rebuild only (a skipped scroll never reaches here,
         // and order is unchanged on a scroll anyway → update(order:) no-ops).
         // Inserted/re-keyed husks get correct membership BEFORE the ForEach.
+        let style = MarkdownStyleCache.style(theme: theme, typography: typography)
+        // Leading-window prewarm resolver (design 01M24A9NR): row id → the
+        // (bubble id, text) pair to warm. TEXT-FINAL rows only — a
+        // still-streaming bubble must NEVER be warmed (its key is stable
+        // across streaming; a partial parse would poison the cache slot).
+        // O(n) per rebuild, same order as the order map beside it.
+        let warmPairs = Dictionary(
+            items.compactMap { item -> (String, (id: String, text: String))? in
+                switch item {
+                case .assistant(let b) where !b.streaming && !b.text.isEmpty:
+                    return (item.id, (id: b.id, text: b.text))
+                case .user(let u) where !u.text.isEmpty:
+                    return (item.id, (id: u.id, text: u.text))
+                default: return nil
+                }
+            }, uniquingKeysWith: { first, _ in first })
         let _ = driver.sync(order: items.map(\.id),
-                            styleHash: MarkdownStyleCache.style(theme: theme, typography: typography).hashValue)
+                            styleHash: style.hashValue, scope: sessionScope, style: style,
+                            warmPairFor: { warmPairs[$0] ?? nil })
         VStack(alignment: .leading, spacing: 12) {
             ForEach(Array(items.enumerated()), id: \.element.id) { pair in
                 HuskRow(item: pair.element, index: pair.offset, driver: driver,

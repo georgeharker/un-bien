@@ -8,6 +8,23 @@ import Foundation
 public enum RenderActivity {
     /// Off-main entity parses kicked off (MarkdownEntityStore.produce).
     public nonisolated(unsafe) static var produceStarted = 0
+    /// produce calls that JOINED an already-running parse for the same key
+    /// (single-flight dedup) — nonzero while scrolling means the dedup is
+    /// SAVING a duplicate parse. Design 01M24A9NR.
+    public nonisolated(unsafe) static var produceJoined = 0
+    /// Split gauges for the LAST produce: SELF = parse CPU (timed INSIDE the
+    /// detached closure, bg-written — best-effort per this enum's contract);
+    /// WAIT = wall − self (spawn + queue + hop-back). WAIT ≫ SELF = contention
+    /// (pool busy / QoS preemption), not a slow parse. produceLastMicros stays
+    /// the WALL total.
+    public nonisolated(unsafe) static var produceSelfMicros = 0
+    public nonisolated(unsafe) static var produceWaitMicros = 0
+    /// PREWARM-triggered parses actually launched (post cap), and ones DEFERRED
+    /// by the in-flight cap (scroll-contention guard) — deferred climbing while
+    /// scrolling is the self-throttle working; deferred climbing at REST would
+    /// mean the cap starves the leading pass. Design 01M24A9NR.
+    public nonisolated(unsafe) static var prewarmStarted = 0
+    public nonisolated(unsafe) static var prewarmDeferred = 0
     /// Off-main entity parses that completed + cached.
     public nonisolated(unsafe) static var produceFinished = 0
     /// Window membership recomputes that actually ran (past the early-outs).

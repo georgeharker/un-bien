@@ -15,7 +15,7 @@ struct DebugActivityHUD: View {
         Group {
             if showLegend { legend } else { counters }
         }
-        .font(.system(size: 16, weight: .bold, design: .monospaced))
+        .font(.system(size: 15, weight: .bold, design: .monospaced))
         .padding(8)
         .background(.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 8))
         .onTapGesture { showLegend.toggle() }
@@ -37,6 +37,8 @@ struct DebugActivityHUD: View {
             Text("\u{21BB} window   \u{2298} reset   + extend")
             Text("\u{25A6} bounds-gen   \u{2195} measure/set")
             Text("\u{29D6} in-flight \u{25B6} started \u{2713} done \u{2302} cache")
+            Text("\u{2668}\u{FE0E} prewarm: pw spawned \u{23F8}\u{FE0E} deferred(cap) j joined")
+            Text("w=wait(spawn+queue) s=self(parse) \u{00B5}s")
             Text("cb flip=fan-out cross=anchor-crossings scr=scroll hp=height-probe")
             Text("tap to close").foregroundStyle(.gray)
         }
@@ -58,8 +60,13 @@ struct DebugActivityHUD: View {
         let rr = RenderActivity.lastResetReason, dp = RenderActivity.lastDerivePath
         let ro = RenderActivity.lastResetOldCount, rn = RenderActivity.lastResetNewCount
         let rc = RenderActivity.lastResetCommonPrefix
+        let prodRow = "\u{2699} \u{29D6}\(raw[0] - raw[1]) \u{25B6}\(num(0)) \u{2713}\(num(1))"
+            + " w\(RenderActivity.produceWaitMicros)\u{00B5}s+s\(RenderActivity.produceSelfMicros)\u{00B5}s"
+        let warmRow = "\u{2668}\u{FE0E} pw\(RenderActivity.prewarmStarted) \u{23F8}\u{FE0E}\(RenderActivity.prewarmDeferred)"
+            + " j\(RenderActivity.produceJoined) \(RenderActivity.produceLastMicros)\u{00B5}s wall"
         rows = [
-            ("\u{2699} \u{29D6}\(raw[0] - raw[1]) \u{25B6}\(num(0)) \u{2713}\(num(1)) \(RenderActivity.produceLastMicros)\u{00B5}s", moved(0, 1)),
+            (prodRow, moved(0, 1)),
+            (warmRow, moved(0, 1)),
             ("\u{2315} \u{29D6}\(raw[5] - raw[6]) \u{25B6}\(num(5)) \u{2713}\(num(6)) \u{2302}\(num(7)) S\(num(11)) R\(num(12))", moved(5, 6, 7, 11, 12)),
             ("\u{21BA} st\(RenderActivity.walkStarts) tm\(RenderActivity.walkTerminals) sl\(RenderActivity.walkStalls) \(RenderActivity.lastWalkInfo)", false),
             ("\u{21BB} \(num(2)) \(RenderActivity.lastWindowMicros)\u{00B5}s n\(RenderActivity.nearCount)", moved(2)),

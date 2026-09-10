@@ -126,18 +126,15 @@ public struct EnvelopeReducer {
             RenderActivity.getEntriesRetired += 1
             // Native pi get_entries: reduce the raw entry log into the transcript
             // (idempotent via identify) + keep the leaf cursor for a delta refetch.
-            // STAGE 0 leaf beacon: a PARTIAL page's leafId is its last entry's
-            // id (the resume CURSOR) — deriving from it would build a partial
-            // path. Trust leafId as the ACTIVE LEAF only when the page
-            // COMPLETES the log: entries empty (the walk terminal —
-            // unambiguous), or leafId != the page's last entry id (a
-            // completing page whose active leaf isn't the log's final entry —
-            // the branchy case; the rare corner where the moved leaf IS the
-            // final entry resolves on the next empty terminal).
+            // DERIVE ONLY on the empty TERMINAL page (design 01M2435): an empty
+            // page's leafId is unambiguously the true active leaf. A non-empty
+            // page is index-only — whether a mid-history backfill page (leafId =
+            // resume cursor) or a forward tail page (leafId = tip), the frame
+            // can't tell them apart, and the paging loop always reaches the
+            // empty terminal, so deriving there needs no leaf==last guessing.
             if let entries = rpc["data"]?["entries"]?.arrayValue {
                 let leaf = rpc["data"]?["leafId"]?.stringValue
-                let trusted = entries.isEmpty || leaf != entries.last?["id"]?.stringValue
-                session.applyEntries(entries, leafId: trusted ? leaf : nil)
+                session.applyEntries(entries, leafId: entries.isEmpty ? leaf : nil)
             }
             if let leaf = rpc["data"]?["leafId"]?.stringValue { leafId = leaf }
         case "response":

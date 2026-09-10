@@ -527,6 +527,7 @@ public final class AppModel: ObservableObject {
                 reducer.applyEntries(cached.entries, leafId: cached.leafId)
                 envelopeReducers[session.id] = reducer
                 transcripts[session.id] = reducer.session
+                prewarmSettledEntities(key: session.id)
                 since = cached.leafId
                 let foldMs = Int(-t0.timeIntervalSinceNow * 1000)
                 let leafTail = String(cached.leafId.suffix(8))
@@ -577,6 +578,55 @@ public final class AppModel: ObservableObject {
         // The response folds through EnvelopeReducer.applyState -> reconcile.
         try? await connection.send(.getState(id: UUID().uuidString),
                                    toPeer: session.peerEPK, room: session.roomID)
+    }
+
+    /// Start a gated DELTA walk (design 01M2435): get_entries(since:) as an
+    /// activeWalks-covered PAGING walk that runs to the empty terminal (which
+    /// derives the active path + re-keys live rows to durable ids) — NOT a bare
+    /// one-shot, which never paged to the terminal and stranded rows on
+    /// synthetic ids. Supersedes any in-flight walk (last-writer-wins) and is
+    /// watchdog-covered. Unlike requestReconstruction it sends NO
+    /// session_sync/get_state — this is the per-message_end tail sync only.
+    func startDeltaWalk(_ session: LiveSession, connection: RelayConnection, since: String) {
+        let walkID = UUID().uuidString
+        backfilledSessions.remove(session.id)
+        activeWalks[session.id] = walkID
+        walkLastActivity[session.id] = Date()
+        scheduleWalkWatchdog(session: session, walkID: walkID)
+        RenderActivity.walkStarts += 1
+        Task { try? await connection.send(.getEntries(id: walkID, since: since),
+                                          toPeer: session.peerEPK, room: session.roomID) }
+    }
+
+    /// PREWARM fold trigger (design 01M24A9NR): after every transcript fold
+    /// (AppModel+Inbound call sites), start the entity parse for the tail's
+    /// SETTLED bubbles so the first paint of a just-settled / just-re-keyed
+    /// row is a cache HIT (no styledMarkdown fallback flash). Covers BOTH
+    /// cold moments — the message_end settle AND the synthetic→durable re-key
+    /// (a NEW key the walk fold just minted). TEXT-FINAL rows only: a
+    /// still-streaming bubble must NEVER be warmed (its key is stable across
+    /// streaming — a partial parse would poison the slot; the view's
+    /// .task(id: key) never refires at settle to repair it). Repeat calls are
+    /// ~free (prewarm dedups via lru-hit + in-flight guard), so firing on
+    /// every fold — streaming deltas included — costs a few O(1) hits on
+    /// already-warm rows.
+    /// (applying from AppModel+Inbound's fold sites — same type, other file.)
+    func prewarmSettledEntities(key: String) {
+        let items = transcripts[key]?.items ?? []
+        guard !items.isEmpty else { return }
+        var rows: [(id: String, text: String)] = []
+        for item in items.suffix(8) {
+            switch item {
+            case .assistant(let b) where !b.streaming && !b.text.isEmpty:
+                rows.append((id: b.id, text: b.text))
+            case .user(let u) where !u.text.isEmpty:
+                rows.append((id: u.id, text: u.text))
+            default: continue
+            }
+        }
+        guard !rows.isEmpty else { return }
+        let style = MarkdownStyleCache.style(theme: theme, typography: typography)
+        MarkdownEntityStore.shared.prewarm(scope: key, rows: rows, style: style)
     }
 
     /// Walk-stall watchdog: a LOST walk response (a silently-dead socket — an

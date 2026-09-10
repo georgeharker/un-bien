@@ -312,7 +312,7 @@ private struct WarmAttributedText: View {
 
     var body: some View {
         Color.clear.frame(width: 0, height: 0)
-            .task(id: "\(sessionScope)\u{1}\(producer.cacheKey)") {
+            .task(id: AttributedTextCache.scopedKey(sessionScope, producer.cacheKey)) {
                 if AttributedTextCache.shared.cached(producer, scope: sessionScope) == nil {
                     _ = await AttributedTextCache.shared.attributed(producer, scope: sessionScope)
                 }
@@ -331,7 +331,7 @@ struct AsyncAttributedText: View {
                 Text(hit)
             } else {
                 Text(producer.plainText)
-                    .task(id: "\(sessionScope)\u{1}\(producer.cacheKey)") {
+                    .task(id: AttributedTextCache.scopedKey(sessionScope, producer.cacheKey)) {
                         landed = await AttributedTextCache.shared.attributed(producer, scope: sessionScope)
                     }
             }

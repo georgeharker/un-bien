@@ -187,16 +187,17 @@ final class EnvelopeReducerTests: XCTestCase {
     /// (no wire aux at all) still enriches tool output. The reducer synthesizes
     /// tool_execution_end from the toolResult entry → fillToolCard → classify.
     func testGetEntriesReplayEnrichesOutput() throws {
-        // Stage 0: entries carry id+parentId (pi's real shape); a completing
-        // page is a TRUSTED beacon only when the leaf is not the final entry —
-        // so the fixture ends with an off-path model_change after the leaf.
+        // Entries carry id+parentId (pi's real shape). Derive fires on the
+        // EMPTY TERMINAL page (design 01M2435): the first page indexes entries
+        // (index-only), the empty terminal derives the path → fillToolCard →
+        // classify. So the fixture feeds the page THEN an empty terminal.
         let assistant = #"{"type":"message","id":"e1","parentId":"","message":{"role":"assistant","content":[{"type":"toolCall","id":"tcR","name":"edit","arguments":{}}]}}"#
         let toolResult = #"{"type":"message","id":"e2","parentId":"e1","message":{"role":"toolResult","toolCallId":"tcR","content":"@@ -1 +1 @@\n-x\n+y","isError":false}}"#
-        let trailing = #"{"type":"model_change","id":"e3","parentId":"e2"}"#
-        let line = #"{"rpc":{"type":"response","command":"get_entries","data":{"entries":["# + assistant + "," + toolResult + "," + trailing + #"],"leafId":"e2"}}}"#
-        let msg = try JSONDecoder().decode(EnvelopeMessage.self, from: Data(line.utf8))
+        let page = #"{"rpc":{"type":"response","command":"get_entries","data":{"entries":["# + assistant + "," + toolResult + #"],"leafId":"e2"}}}"#
+        let terminal = #"{"rpc":{"type":"response","command":"get_entries","data":{"entries":[],"leafId":"e2"}}}"#
         var reducer = EnvelopeReducer()
-        reducer.apply(msg)
+        reducer.apply(try JSONDecoder().decode(EnvelopeMessage.self, from: Data(page.utf8)))
+        reducer.apply(try JSONDecoder().decode(EnvelopeMessage.self, from: Data(terminal.utf8)))
 
         let card = try XCTUnwrap(toolCards(reducer.session).first)
         XCTAssertEqual(card.tool, "edit")

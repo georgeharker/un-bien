@@ -56,8 +56,7 @@ struct MarkdownEntitiesView: View {
     // palette/font/size change re-produces without hand-listing each field.
     private var style: MarkdownProseStyle { MarkdownStyleCache.style(theme: theme, typography: typography) }
     private var key: String {
-        let scoped = sessionScope.isEmpty ? id : "\(sessionScope)\u{1}\(id)"
-        return MarkdownEntityStore.key(rowID: scoped, styleHash: style.hashValue)
+        MarkdownEntityStore.key(scope: sessionScope, id: id, styleHash: style.hashValue)
     }
 
     var body: some View {

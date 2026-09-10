@@ -128,14 +128,11 @@ public struct SessionState: Equatable, Sendable {
         derivePath(from: leaf, authoritative: pendingRepathAuthoritative)
         renderPendingPathEntries()
     }
-    private var userSeq = 0    // live user-row synthetics (u1, u2, …)
     private var compactionSeq = 0
-    private var reasoningSeq = 0
     private var noticeSeq = 0
     /// LAST message_update frame applied — full-frame delta dedup: identical
     /// frames are redeliveries (a real event's usage.output increments).
     private var lastMessageUpdateFrame: JSONValue?
-    private var assistantSeq = 0
     // rpc-envelope reduction state
     private var rpcTurn: String?
     private var rpcTurnSeq = 0
@@ -174,9 +171,9 @@ public struct SessionState: Equatable, Sendable {
         toolIndex.removeAll()
         openAssistantIndex = nil
         openReasoningIndex = nil
-        userSeq = 0
-        assistantSeq = 0
-        reasoningSeq = 0
+        // No seq counters to reset (design 01M2435): live-row synthetic ids are
+        // per-row UUIDs — globally unique, so a post-branch line can never alias
+        // a prior line's session-scoped render-cache entry (the sibling flash).
     }
 
     /// Append a one-off informational notice row. Used by the APP-side routing
@@ -200,7 +197,7 @@ public struct SessionState: Equatable, Sendable {
             return
         }
         noticeSeq += 1
-        if append(.notice(NoticeItem(id: "ext\(noticeSeq)", code: code, message: message))) {
+        if append(.notice(NoticeItem(id: SyntheticID.notice("ext", seq: noticeSeq), code: code, message: message))) {
             liveArrivals += 1
         }
     }
@@ -304,8 +301,7 @@ public struct SessionState: Equatable, Sendable {
             block.streaming = true
             items[index] = .reasoning(block)
         } else {
-            reasoningSeq += 1
-            _ = append(.reasoning(ReasoningBlock(id: "\(reasoningSeq)", text: delta, streaming: true)))
+            _ = append(.reasoning(ReasoningBlock(id: SyntheticID.reasoning(), text: delta, streaming: true)))
             openReasoningIndex = items.count - 1
         }
         activeTurnID = inReplyTo
@@ -318,8 +314,7 @@ public struct SessionState: Equatable, Sendable {
             bubble.streaming = true
             items[index] = .assistant(bubble)
         } else {
-            assistantSeq += 1
-            _ = append(.assistant(AssistantBubble(id: "a\(assistantSeq)", inReplyTo: inReplyTo,
+            _ = append(.assistant(AssistantBubble(id: SyntheticID.assistant(), inReplyTo: inReplyTo,
                                               text: delta, streaming: true)))
             openAssistantIndex = items.count - 1
         }
@@ -353,7 +348,7 @@ public struct SessionState: Equatable, Sendable {
         let inserted = fromEntry
             ? insertBeforeLiveTail(.tool(ToolCard(toolCallID: toolCallID, tool: tool, args: args)))
             : append(.tool(ToolCard(toolCallID: toolCallID, tool: tool, args: args)))
-        toolIndex[toolCallID] = rowIndex["tool:\(toolCallID)"] ?? items.count - 1
+        toolIndex[toolCallID] = rowIndex[RowID.tool(toolCallID)] ?? items.count - 1
         return inserted
     }
 
@@ -401,7 +396,7 @@ public struct SessionState: Equatable, Sendable {
         // Entry-born markers key on the entry id (replay dedup — a replayed
         // live marker used to DUPLICATE the row); live ones keep the seq id.
         if entryID == nil { compactionSeq += 1 }
-        let id = entryID ?? "\(compactionSeq)"
+        let id = entryID ?? SyntheticID.compaction(seq: compactionSeq)
         // Entry-born markers ride the log position (before the live tail);
         // live ones append (a "now" event).
         if entryID != nil {
@@ -508,7 +503,7 @@ public struct SessionState: Equatable, Sendable {
             noticeSeq += 1
             let action = frame["action"]?.stringValue ?? "action"
             let err = frame["error"]?.stringValue ?? "failed"
-            if append(.notice(NoticeItem(id: "act\(noticeSeq)", code: "action_error",
+            if append(.notice(NoticeItem(id: SyntheticID.notice("act", seq: noticeSeq), code: "action_error",
                                          message: "\(action) failed: \(err)"))) {
                 liveArrivals += 1
             }
@@ -516,7 +511,7 @@ public struct SessionState: Equatable, Sendable {
             // Enveloped error reply (e.g. malformed models.json on list_models):
             // same notice surface as a provider error.
             noticeSeq += 1
-            if append(.notice(NoticeItem(id: "n\(noticeSeq)", code: frame["code"]?.stringValue ?? "error",
+            if append(.notice(NoticeItem(id: SyntheticID.notice("n", seq: noticeSeq), code: frame["code"]?.stringValue ?? "error",
                                          message: frame["message"]?.stringValue ?? ""))) {
                 liveArrivals += 1
             }
@@ -550,17 +545,16 @@ public struct SessionState: Equatable, Sendable {
             let text = message?["content"]?.joinedText() ?? ""
             let images = Self.imagesFromContent(message?["content"])
             if let entryID {
-                let rowID = "user:\(entryID)"
+                let rowID = RowID.user(entryID)
                 let inserted = insertBeforeLiveTail(.user(UserBubble(id: entryID, text: text, images: images,
                                                                     replayStable: true)))
                 if inserted { identifyIndex[Self.identify(message)] = rowID }
                 return inserted
             }
-            // LIVE birth: pending seq synthetic until the delta lands the id.
-            userSeq += 1
-            let synthetic = "u\(userSeq)"
-            identifyIndex[Self.identify(message)] = "user:\(synthetic)"
-            pendingRowIDs.insert("user:\(synthetic)")
+            // LIVE birth: pending per-row UUID synthetic until the delta lands the id.
+            let synthetic = SyntheticID.user()
+            identifyIndex[Self.identify(message)] = RowID.user(synthetic)
+            pendingRowIDs.insert(RowID.user(synthetic))
             return append(.user(UserBubble(id: synthetic, text: text, images: images,
                                            replayStable: false)))
         case "assistant":
@@ -579,7 +573,7 @@ public struct SessionState: Equatable, Sendable {
                 // to below the normal messages"). LIVE errors append (a "now"
                 // event belongs at the tail).
                 let text = message?["errorMessage"]?.stringValue ?? "Provider error"
-                let errorID = "err\(Self.identify(message))\(Self.stableHash(text))"
+                let errorID = SyntheticID.error(identify: Self.identify(message), hash: Self.stableHash(text))
                 if entryID != nil {
                     return insertBeforeLiveTail(.notice(NoticeItem(id: errorID, code: "provider_error",
                                                                    message: text)))
@@ -598,7 +592,8 @@ public struct SessionState: Equatable, Sendable {
                     // this branch is OFF: a replayed settled message is NOT the
                     // open live bubble — append it directly instead.
                     if let rowID = settleOpenAssistant(images: images) {
-                        identifyIndex[Self.identify(message)] = rowID
+                        let idk = Self.identify(message)
+                        identifyIndex[idk] = rowID
                         pendingRowIDs.insert(rowID)
                     }
                     closeOpenAssistant()
@@ -612,7 +607,7 @@ public struct SessionState: Equatable, Sendable {
                     guard !text.isEmpty || !images.isEmpty else { return false }
                     let key = Self.identify(message)
                     let bubbleID = entryID ?? "\(key)-a"
-                    let rowID = "assistant:\(bubbleID)"
+                    let rowID = RowID.assistant(bubbleID)
                     let inserted = entryID != nil
                         ? insertBeforeLiveTail(.assistant(AssistantBubble(id: bubbleID, inReplyTo: turn,
                                                                          text: text, streaming: false,
@@ -639,7 +634,7 @@ public struct SessionState: Equatable, Sendable {
             // extensions' display-intended custom messages).
             if message?["display"]?.boolValue == false { return false }
             noticeSeq += 1
-            return append(.notice(NoticeItem(id: "custom\(noticeSeq)", code: "custom",
+            return append(.notice(NoticeItem(id: SyntheticID.notice("custom", seq: noticeSeq), code: "custom",
                                              message: message?["content"]?.joinedText() ?? "")))
         default:
             return false  // toolResult is rendered via tool_execution_*, not as a row
@@ -936,7 +931,7 @@ public struct SessionState: Equatable, Sendable {
         guard let index = rowIndex[rowID] else { return nil }
         switch items[index] {
         case let .user(old):
-            let newRowID = "user:\(entryID)"
+            let newRowID = RowID.user(entryID)
             guard !appendedIDs.contains(newRowID) else { return nil }
             appendedIDs.remove(rowID)
             rowIndex.removeValue(forKey: rowID)
@@ -947,7 +942,7 @@ public struct SessionState: Equatable, Sendable {
             rowIndex[newRowID] = index
             return newRowID
         case let .assistant(old):
-            let newRowID = "assistant:\(entryID)"
+            let newRowID = RowID.assistant(entryID)
             guard !appendedIDs.contains(newRowID) else { return nil }
             appendedIDs.remove(rowID)
             rowIndex.removeValue(forKey: rowID)
@@ -975,10 +970,10 @@ public extension SessionState {
     static func demo(turns: Int = 140) -> SessionState {
         var state = SessionState()
         for turn in 0..<turns {
-            _ = state.append(.user(UserBubble(id: "u\(turn)",
+            _ = state.append(.user(UserBubble(id: SyntheticID.demoUser(turn),
                 text: "Question \(turn): explain the thing in some detail.")))
             _ = state.append(.assistant(AssistantBubble(
-                id: "a\(turn)", inReplyTo: "u\(turn)",
+                id: SyntheticID.demoAssistant(turn), inReplyTo: SyntheticID.demoUser(turn),
                 text: "Answer \(turn): some **markdown** with a list\n\n- one\n- two\n\nand code:\n\n```swift\nlet value = \(turn)\nprint(value)\n```\n",
                 streaming: false)))
             _ = state.append(.tool(ToolCard(

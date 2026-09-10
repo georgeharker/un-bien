@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import MarkdownUI
 import os
 import UnBienCore
 
@@ -99,8 +100,19 @@ final class TranscriptWindowDriver {
     private var previousAnchorIndex: Int?
     private var previousScrollY: Double?
     /// Hash of the active MarkdownProseStyle (fed by the view via sync) so the
-    /// leading-window protection reconstructs the entity cache keys.
+    /// leading-window pass reconstructs the entity cache keys.
     var currentStyleHash = 0
+    /// PREWARM inputs (design 01M24A9NR): the leading pass calls the shared
+    /// MarkdownEntityStore.prewarm — the scoped key needs the session scope
+    /// and the produce needs the style + row TEXT, none of which this
+    /// ids-only driver derives. All fed from TranscriptStackView via sync.
+    var sessionScope = ""
+    var prewarmStyle: MarkdownProseStyle?
+    /// Given a ROW id (this driver's vocabulary, role-prefixed), resolve the
+    /// entity-warm pair (bubble id + text), or nil for rows that must never
+    /// be warmed (still-streaming bubbles — cache-poison rule; non-bubble
+    /// rows). Keeps the driver ids-only.
+    var warmPairFor: ((String) -> (id: String, text: String)?)?
     private var scrollY: Double?
     private var viewportHeight: Double?
     private var viewportHeightAtGeneration: Double?
@@ -295,8 +307,13 @@ final class TranscriptWindowDriver {
         dirty = true
     }
 
-    func sync(order: [String], styleHash: Int = 0) {
+    func sync(order: [String], styleHash: Int = 0, scope: String = "",
+              style: MarkdownProseStyle? = nil,
+              warmPairFor: ((String) -> (id: String, text: String)?)? = nil) {
         if styleHash != 0 { currentStyleHash = styleHash }
+        if !scope.isEmpty { sessionScope = scope }
+        if let style { prewarmStyle = style }
+        if let warmPairFor { self.warmPairFor = warmPairFor }
         update(order: order)
         recomputeIfNeeded()
     }
@@ -354,10 +371,12 @@ final class TranscriptWindowDriver {
         #endif
     }
 
-    /// Keep the direction-of-travel window edge warm: bump those entity keys to
-    /// MRU so cache eviction discards only what we've LEFT BEHIND, never what
-    /// we're scrolling TOWARD (01M1Y1GK). Idle (dir 0) protects the whole
-    /// visible window. O(window), all O(1) hits; a no-op under cap.
+    /// Keep the direction-of-travel window edge warm (01M1Y1GK, extended by
+    /// the prewarm design 01M24A9NR): PRODUCE the leading rows ahead of
+    /// materialization — a materialized husk then renders from a cache HIT
+    /// (no fallback flash) — and the lru-hit inside prewarm is the MRU bump,
+    /// so eviction still discards only what we've LEFT BEHIND, never what
+    /// we're scrolling TOWARD. Idle (dir 0) warms the whole visible window.
     private func protectLeadingWindow() {
         guard !near.isEmpty else { return }
         RenderActivity.scrollDir = scrollDirection
@@ -370,7 +389,16 @@ final class TranscriptWindowDriver {
         } else {
             leading = Array(near)
         }
-        MarkdownEntityStore.shared.touchLeading(leading, styleHash: currentStyleHash)
+        // The driver stays ids-only: the view-fed resolver translates its
+        // ROW ids to warm pairs and returns nil for never-warm rows.
+        guard let style = prewarmStyle, !sessionScope.isEmpty,
+              let resolver = warmPairFor else { return }
+        var rows: [(id: String, text: String)] = []
+        rows.reserveCapacity(leading.count)
+        for id in leading {
+            if let pair = resolver(id), !pair.text.isEmpty { rows.append(pair) }
+        }
+        MarkdownEntityStore.shared.prewarm(scope: sessionScope, rows: rows, style: style)
     }
 
     /// The window's center row index by the current anchor (rendered-state truth).
