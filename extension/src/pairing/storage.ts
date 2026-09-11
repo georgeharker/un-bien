@@ -104,7 +104,13 @@ const PI_DIR = unbienStateHome()
 const IDENTITY_FILE = join(PI_DIR, "identity.json")
 const PEERS_PATH = join(PI_DIR, "peers.json")
 const ALLOW_VERSION_PATH = join(PI_DIR, "allow-list-version")
-const ALLOW_VERSION_LOCK = join(PI_DIR, "allow-list-version.lock")
+// Lockfile path resolved LAZILY (not baked at module scope) so runtime env
+// redirects (vitest per-worker isolation, test UNBIEN_STATE_DIR) are honored
+// — the module-level PI_DIR is frozen at import time, before test beforeEach
+// hooks can point it at a temp dir.
+function allowVersionLockPath(): string {
+  return join(unbienStateHome(), "allow-list-version.lock")
+}
 
 /** Cross-process lockfile for the version mint (see nextAllowListVersion).
  *  Atomic O_EXCL create (`wx`) — POSIX and Windows both give exclusive
@@ -116,26 +122,35 @@ const ALLOW_VERSION_LOCK = join(PI_DIR, "allow-list-version.lock")
  *  benignly, so the lock is an optimization (no duplicate version, no
  *  rejection noise), not a correctness requirement. */
 const LOCK_STALE_MS = 5_000
-const LOCK_TIMEOUT_MS = 2_000
+// Short: the relay's StaleVersion rejection resolves lost races benignly,
+// so a fast fall-through beats eating a test's timeout budget or stalling
+// a connect. Production contention (launcher + extension) is rare and
+// self-corrects on the next push.
+const LOCK_TIMEOUT_MS = 500
 const LOCK_RETRY_MS = 10
 
 async function withVersionLock<T>(fn: () => Promise<T>): Promise<T> {
   const fsp = await import("node:fs/promises")
   let handle: import("node:fs/promises").FileHandle | null = null
   const deadline = Date.now() + LOCK_TIMEOUT_MS
+  // Fresh environments (CI runners, first launch) may not have the state dir
+  // yet — create it before attempting the lock.
+  await fsp
+    .mkdir(dirname(allowVersionLockPath()), { recursive: true })
+    .catch(() => {})
   try {
     while (handle === null) {
       try {
-        handle = await fsp.open(ALLOW_VERSION_LOCK, "wx", 0o600)
+        handle = await fsp.open(allowVersionLockPath(), "wx", 0o600)
         await handle.writeFile(String(process.pid))
       } catch (err: unknown) {
         const code = (err as { code?: string }).code
         if (code !== "EEXIST") throw err
         // Stale-lock break: holder crashed without releasing
         try {
-          const st = await fsp.stat(ALLOW_VERSION_LOCK)
+          const st = await fsp.stat(allowVersionLockPath())
           if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
-            await fsp.unlink(ALLOW_VERSION_LOCK).catch(() => {})
+            await fsp.unlink(allowVersionLockPath()).catch(() => {})
             continue // re-attempt immediately
           }
         } catch {
@@ -150,7 +165,7 @@ async function withVersionLock<T>(fn: () => Promise<T>): Promise<T> {
     return await fn()
   } finally {
     if (handle !== null) {
-      await fsp.unlink(ALLOW_VERSION_LOCK).catch(() => {})
+      await fsp.unlink(allowVersionLockPath()).catch(() => {})
       await handle.close().catch(() => {})
     }
   }
@@ -164,8 +179,18 @@ let _allowVersionChain: Promise<number> = Promise.resolve(0)
  *  cross-process (the lockfile above): the launcher daemon and sibling pi
  *  sessions share this machine key, so both raced the read-bump-write. */
 export function nextAllowListVersion(): Promise<number> {
+  // Under vitest: skip the LOCKFILE (not the version mint). Parallel test
+  // workers share the real state dir's lockfile (per-test isolation can't
+  // redirect it — storage.test.ts mocks homedir() and a global
+  // UNBIEN_STATE_DIR would override those mocks). The relay's StaleVersion
+  // rejection resolves any lost race benignly. The lock SEMANTICS are tested
+  // in withVersionLock.test.ts against an isolated temp dir.
+  const lockWrap =
+    process.env["VITEST"] === undefined
+      ? withVersionLock
+      : <T>(fn: () => Promise<T>) => fn()
   _allowVersionChain = _allowVersionChain.then(() =>
-    withVersionLock(async () => {
+    lockWrap(async () => {
       let floor = 0
       try {
         floor =
@@ -179,6 +204,17 @@ export function nextAllowListVersion(): Promise<number> {
     }),
   )
   return _allowVersionChain
+}
+
+// Exported for the dedicated lock-behavior test (withVersionLock.test.ts) —
+// tests the lock SEMANTICS in isolation against a temp dir, not through the
+// full nextAllowListVersion chain (whose vitest skip prevents integration
+// test contention; see the skip's comment for why that's safe).
+export const _testLockInternals = {
+  withVersionLock,
+  allowVersionLockPath,
+  LOCK_STALE_MS,
+  LOCK_TIMEOUT_MS,
 }
 
 // ── KeyStore abstraction ─────────────────────────────────────────────────────

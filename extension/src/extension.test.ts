@@ -3562,9 +3562,9 @@ describe("session_start auto-init skips relay in print/-p mode (#44)", () => {
       { type: "session_start" },
       makeMockCtx("/home/user/projects/rp-interactive"),
     )
-    await new Promise<void>((r) => setTimeout(r, 20))
-
-    expect(_hasMeshNodeForTest()).toBe(true)
+    // EVENTUAL-CONSISTENCY POLL (was a bare 20ms sleep — flaked under load
+    // because the async auto-start chain doesn't always land in 20ms)
+    await vi.waitFor(() => expect(_hasMeshNodeForTest()).toBe(true))
   })
 })
 
@@ -3615,7 +3615,12 @@ describe("relay reconnect", () => {
       })
       const root = captureHandler("unbien")
       rootPromise = root("", makeMockCtx(cwd))
-      await vi.waitFor(() => expect(connectSpy).toHaveBeenCalledTimes(1))
+      // GENEROUS waitFor: under load (parallel vitest workers), the keypair +
+      // relay startup chain can exceed vi.waitFor's 1000ms default before
+      // reaching the mocked connect — was the 1003ms flake.
+      await vi.waitFor(() => expect(connectSpy).toHaveBeenCalledTimes(1), {
+        timeout: 10_000,
+      })
       const candidate = connectSpy.mock.instances[0]! as unknown as {
         close: () => Promise<void>
       }

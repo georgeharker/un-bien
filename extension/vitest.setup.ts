@@ -28,5 +28,14 @@ for (const key of [
   "UNBIEN_STATE_DIR",
   "XDG_STATE_HOME",
 ]) {
-  delete process.env[key];
+  delete process.env[key]
 }
+
+// NOTE: we deliberately do NOT pin a per-worker UNBIEN_STATE_DIR here — it
+// has the HIGHEST precedence in unbienStateHome() and would override the
+// homedir() mocks that pairing/storage.test.ts sets up for its own isolation.
+// The version-lockfile contention across workers is handled at the source:
+// withVersionLock resolves its path lazily (honors per-test env redirects)
+// and falls through to unlocked after 500ms, so a sibling worker holding the
+// lock delays (not blocks) the mint — the relay's StaleVersion rejection
+// resolves any lost race benignly.
