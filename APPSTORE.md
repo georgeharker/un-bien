@@ -87,7 +87,7 @@ docs workflow on push). Content matches the privacy manifest: nothing
 collected, nothing tracked, no fixed servers; local storage + keychain;
 user-hosted relays (with the trust-model caveat).
 
-### 7. 🔲 Reviewability — the app is inert without infrastructure
+### 7. ✅ Reviewability — the app is inert without infrastructure
 
 Un Bien is useless to a reviewer without a self-hosted relay **and** a machine
 running Pi. Without a path to exercise it, submission is an immediate rejection.
@@ -162,12 +162,12 @@ Cut to 30–60 s; land it unlisted and put the URL in the review notes.
 
 ## Standard submission work
 
-### 8. 🔲 App Store Connect records
+### 8. ✅ App Store Connect records
 
 Create iOS + macOS records: primary/secondary category, age-rating
 questionnaire, support URL, marketing URL, copyright.
 
-### 9. 🔲 Screenshots (capture pipeline ready — shoot + upload)
+### 9. ✅ Screenshots (shot + uploaded)
 
 **Tooling:** `scripts/appstore-screenshots.sh` — `setup iphone` boots the 6.9"
 iPhone 17 Pro Max simulator (1320×2864), builds + installs + launches the app
@@ -191,7 +191,7 @@ Mac shots: run `UnBien-macOS` directly + the system capture tool.
 iPhone 6.9" is REQUIRED; iPad 13" required (universal family); Mac for the
 macOS platform. ASC accepts the native simulator dimensions directly.
 
-### 10. 🔲 Store metadata (copy drafted — paste into ASC)
+### 10. ✅ Store metadata (in ASC)
 
 - **Name:** Un Bien
 - **Subtitle** (≤30): Your Pi agents, on your phone
@@ -263,7 +263,7 @@ when the wrong transcript is open.
 1.0, submit per platform. Optional: launch-chip test (needs the launcher
 daemon).
 
-### 14. 🔲 Review notes copy (drafted — paste into ASC "App Review Information → Notes", per platform)
+### 14. ✅ Review notes copy (in ASC "App Review Information → Notes", per platform)
 
 > **What this app is.** Un Bien is the remote client for the Pi coding agent —
 > an open-source, self-hosted AI coding assistant. If you know the mobile
