@@ -274,6 +274,9 @@ and lists what is actionable now. It is driven by the plan tooling on the
 machine, so it reflects whatever the agent is actually tracking rather than
 anything the app invents.
 
+Both pi-subagents extensions should work - [`@gotgenes/pi-subagents`](https://github.com/gotgenes/pi-packages) and [`@tintinweb/pi-subagents`](https://github.com/tintinweb/pi-subagents)
+For plans, the protocol is pi-event driven.  (Cribsheet)[https://docs.georgeharker.com/cribsheet/main/] memory system along with (pi-plan)[https://github.com/georgeharker/pi-plan] supports this protocol and sends events on the event bus which un-bien picks up.
+
 ---
 
 ## Where to go next
