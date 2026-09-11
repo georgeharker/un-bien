@@ -83,8 +83,10 @@ struct TranscriptView: View {
     @State var windowDriver = TranscriptWindowDriver()
     /// Live window-size sweep (Settings — design 01M127NC4): DETACH pages; attach
     /// tracks one page narrower. Default 3 = the shipped window ("min what we have").
-    @AppStorage("transcriptWindowPages") private var windowPages = 3
+    @AppStorage("transcriptWindowPages") private var windowPages = 8
+    #if UNBIEN_DIAGNOSTICS
     @AppStorage("debugActivityHUD") private var debugActivityHUD = false
+    #endif
     // Per-tool-card UI state (expand + Diff/Content), held ABOVE the windowed
     // rows so it survives dematerialize/rematerialize. Plain @State (not
     // @StateObject) — CardUIState is non-observed storage; ToolCardView reads
@@ -341,7 +343,9 @@ struct TranscriptView: View {
                     transcriptStack
                 }
             .overlay(alignment: .topTrailing) {
+                #if UNBIEN_DIAGNOSTICS
                 if debugActivityHUD { DebugActivityHUD().padding(8) }
+                #endif
             }
             // Per-card expand/toggle state that survives row windowing
             // (ToolCardView reads/writes it keyed by toolCallID).

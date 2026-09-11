@@ -173,13 +173,13 @@ public final class AttributedTextCache: @unchecked Sendable {
     // LRU: SeqStampLRU (shared with MarkdownEntityStore) — touch O(1), find-min
     // victim search on PURGE only. This cache guards it with `lock` (genuinely
     // cross-thread); the entity store uses the same type bare (@MainActor).
-    private var lru = SeqStampLRU<String, NSAttributedString>(cap: 400)
+    private var lru = SeqStampLRU<String, NSAttributedString>(cap: 800)
     private var engines: [String: Highlighter] = [:]      // main-path pool (highlighted)
     private let lock = OSAllocatedUnfairLock()
     private let pressureSource = DispatchSource.makeMemoryPressureSource(
         eventMask: [.warning, .critical], queue: .global(qos: .utility))
 
-    /// Max cached blocks. Configurable (Settings); default 400. Trades memory
+    /// Max cached blocks. Configurable (Settings); default 800. Trades memory
     /// for scroll smoothness on long sessions.
     public var cacheLimit: Int {
         get { lock.lock(); defer { lock.unlock() }; return lru.cap }

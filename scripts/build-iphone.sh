@@ -51,6 +51,11 @@ echo "==> device: $DEVICE_NAME ($UDID)"
 # RELEASE by default (2026-09-10: device perf/battery profiling needs the
 # shipping optimization level; Debug's os_log volume also bloats Instruments
 # traces). Override back with:  UNBIEN_IOS_CONFIG=Debug ./scripts/build-iphone.sh
+#
+# UNBIEN_DIAGNOSTICS is injected below because this Release build IS the
+# profiling build: the HUD and the developer-only tunables have to survive it.
+# An App Store archive runs plain Release and so compiles them out — diagnostics
+# are opt-in, so forgetting a step yields the shipping build, not a leaky one.
 CONFIG="${UNBIEN_IOS_CONFIG:-Release}"
 # Output goes to a FILE first: piping xcodebuild into tail would mask its exit
 # status under /bin/sh (no pipefail), and a failed build used to fall through
@@ -65,6 +70,7 @@ if ! xcodebuild \
   -destination "platform=iOS,id=$UDID" \
   -derivedDataPath "$DERIVED" \
   -allowProvisioningUpdates \
+  SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) UNBIEN_DIAGNOSTICS' \
   build >"$BUILD_LOG" 2>&1; then
   tail -30 "$BUILD_LOG"
   echo "ERROR: build failed — NOT installing the stale .app from a previous build"

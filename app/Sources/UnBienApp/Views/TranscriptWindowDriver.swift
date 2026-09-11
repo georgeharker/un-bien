@@ -64,7 +64,7 @@ final class TranscriptWindowDriver {
     /// index window would swing between 20 screens and half a screen of render
     /// budget; pages are predictable budget + prefetch margin.
     /// Attach pages — the near window's normal spread around the anchor.
-    var attachPages: Double = 2
+    var attachPages: Double = 7
     /// Detach pages — HYSTERESIS (proven in the L3 harness, P2): a row that
     /// is ALREADY NEAR is retained while within this wider band, even when a
     /// recompute (measurement cascades landing real heights after the seed
@@ -72,7 +72,7 @@ final class TranscriptWindowDriver {
     /// the attach band. New rows attach only within `attachPages`. True
     /// hysteresis = attach ∪ (near ∩ keep), NOT a plain union (a plain union
     /// is just a wider window — it flaps at its own edge).
-    var detachPages: Double = 3
+    var detachPages: Double = 8
     /// Inter-row spacing — MUST match the stack's `VStack(spacing:)`.
     var spacing: Double = 12
     /// Reserved height for never-measured rows. Deliberately SMALL:
@@ -368,7 +368,8 @@ final class TranscriptWindowDriver {
     /// Live-apply a window size (Settings sweep — design 01M127NC4 cheap
     /// diagnostic): `pages` is the DETACH (retention) band; the attach band
     /// tracks one page narrower to preserve the hysteresis gap. Floors at the
-    /// shipped 2/3 so the minimum is "what we have".
+    /// narrowest supported band rather than the default, so a user can still
+    /// trade retention for memory.
     func applyWindowPages(_ pages: Double) {
         detachPages = max(3, pages)
         attachPages = max(2, detachPages - 1)

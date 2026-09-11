@@ -303,7 +303,7 @@ public final class AppModel: ObservableObject {
     /// from Advanced settings (KiB stepper).
     /// SAFETY: nonisolated(unsafe) mutable static — written only from the
     /// Settings UI and read only on the main actor (folds are main-actor).
-    nonisolated(unsafe) static var foldFlushMaxBytes = 1024 * 1024
+    nonisolated(unsafe) static var foldFlushMaxBytes = 2048 * 1024
     var pendingFoldFrames: [String: [(env: EnvelopeMessage,
                                       envelope: RoutedEnvelope,
                                       relayID: UUID)]] = [:]

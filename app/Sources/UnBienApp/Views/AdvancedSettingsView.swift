@@ -5,13 +5,17 @@ import UnBienCore
 /// main page stays uncluttered: render-cache sizes, the transcript window, and
 /// the debug activity HUD.
 struct AdvancedSettingsView: View {
-    @AppStorage("renderCacheBlocks") private var cacheBlocks = 400
+    // Defaults are the values these were tuned to on device. They apply only
+    // to installs that never set them; an existing preference always wins.
+    @AppStorage("renderCacheBlocks") private var cacheBlocks = 800
     @AppStorage("renderCacheImages") private var cacheImages = 200
-    @AppStorage("renderCacheMessages") private var cacheMessages = 400
-    @AppStorage("transcriptWindowPages") private var windowPages = 3
-    @AppStorage("prewarmMaxInFlight") private var prewarmInFlight = 3
-    @AppStorage("foldFlushMaxKiB") private var foldFlushKiB = 1024
+    @AppStorage("renderCacheMessages") private var cacheMessages = 1600
+    @AppStorage("transcriptWindowPages") private var windowPages = 8
+    @AppStorage("prewarmMaxInFlight") private var prewarmInFlight = 8
+    @AppStorage("foldFlushMaxKiB") private var foldFlushKiB = 2048
+    #if UNBIEN_DIAGNOSTICS
     @AppStorage("debugActivityHUD") private var debugActivityHUD = false
+    #endif
 
     var body: some View {
         Form {
@@ -23,6 +27,7 @@ struct AdvancedSettingsView: View {
                 Stepper("Markdown cache: \(cacheMessages) messages", value: $cacheMessages, in: 50...2000, step: 50)
                     .onChange(of: cacheMessages) { _, new in MarkdownEntityStore.shared.cap = new }
                 Stepper("Transcript window: \(windowPages) pages", value: $windowPages, in: 3...16, step: 1)
+                #if UNBIEN_DIAGNOSTICS
                 Stepper("Prewarm in-flight: \(prewarmInFlight)", value: $prewarmInFlight, in: 0...16, step: 1)
                     .onChange(of: prewarmInFlight) { _, new in
                         MarkdownEntityStore.prewarmMaxInFlight = new
@@ -31,17 +36,16 @@ struct AdvancedSettingsView: View {
                     .onChange(of: foldFlushKiB) { _, new in
                         AppModel.foldFlushMaxBytes = new * 1024
                     }
+                #endif
             } header: {
                 Text("Performance")
             } footer: {
                 Text("Larger caches keep more highlighted code and decoded images in memory "
                      + "for smoother scrolling on long sessions. A wider transcript window keeps "
                      + "more rows materialised around the viewport - fewer re-renders on "
-                     + "back-and-forth scroll, at the cost of more live rows. Prewarm in-flight "
-                     + "bounds concurrent ahead-of-view markdown parses (0 = warm-off; the view "
-                     + "still produces on demand). Fold flush ceiling bounds the largest single "
-                     + "transcript fold - smaller = snappier typing under load, more publishes.")
+                     + "back-and-forth scroll, at the cost of more live rows.")
             }
+            #if UNBIEN_DIAGNOSTICS
             Section {
                 Toggle("Debug activity HUD", isOn: $debugActivityHUD)
             } header: {
@@ -50,6 +54,7 @@ struct AdvancedSettingsView: View {
                 Text("Live counters (produce / window / reset / extend) overlaid on the "
                      + "transcript. Deltas drop to zero at steady state.")
             }
+            #endif
         }
         .formStyle(.grouped)
         .navigationTitle("Advanced")

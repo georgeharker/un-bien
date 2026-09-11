@@ -14,9 +14,9 @@ final class MarkdownEntityStore {
     /// is on the main thread too, so render and store CAN'T RACE. Only the pure
     /// markdownEntities parse is off-main (Task.detached) and it touches NO store
     /// state — the cache read/write brackets the await back on the main actor.
-    private var lru = SeqStampLRU<String, [MarkdownEntity]>(cap: 400)
+    private var lru = SeqStampLRU<String, [MarkdownEntity]>(cap: 1600)
     /// Max cached MESSAGES (per-bubble entity lists). Configurable (Settings);
-    /// default 400 — the per-BUBBLE tier alongside AttributedTextCache.cacheLimit
+    /// default 1600 — the per-BUBBLE tier alongside AttributedTextCache.cacheLimit
     /// (per-BLOCK). Lowering it trims immediately (SeqStampLRU.cap didSet).
     var cap: Int {
         get { lru.cap }
@@ -52,7 +52,7 @@ final class MarkdownEntityStore {
     private var prewarming: Set<String> = []
     /// SCROLL CONTENTION GUARD (jank regression, 2026-09-10): a fast scroll
     /// through cold history fires the leading pass over its whole window —
-    /// without a cap that launches every uncached row at once. 3 bounds
+    /// without a cap that launches every uncached row at once. The cap bounds
     /// concurrent prewarm parses (their priority is the SAME as the view's —
     /// a lower QoS would invert through the single-flight join); skipped
     /// rows retry on the next recompute as slots free, and the view's lazy
@@ -63,7 +63,7 @@ final class MarkdownEntityStore {
     /// strip the leading edge's eviction protection under scroll pressure).
     /// SAFETY: nonisolated(unsafe) mutable static — written only from the
     /// Settings UI and read only on the main actor (the store is @MainActor).
-    nonisolated(unsafe) static var prewarmMaxInFlight = 3
+    nonisolated(unsafe) static var prewarmMaxInFlight = 8
     /// rows: (bubble id, text, images). width > 0 enables the height-estimate
     /// side channel (analytic tier, RowHeightEstimator): the detached pass
     /// computes an estimate (warming ImageCache as a side effect) and hands it

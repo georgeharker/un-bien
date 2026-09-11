@@ -60,18 +60,24 @@ final class MarkdownEntityStoreTests: XCTestCase {
                        "warm row TOUCHED (no spawn); only the cold row produced")
     }
 
-    /// The in-flight cap: 6 cold rows, cap 3 → exactly 3 spawned, 3 deferred
-    /// (the guard counts ALL remaining cold rows, not just the first).
+    /// The in-flight cap: twice the cap in cold rows → exactly `cap` spawned and
+    /// the rest deferred (the guard counts ALL remaining cold rows, not just the
+    /// first). The cap is PINNED here rather than read from the shipping
+    /// default, so retuning that default cannot silently retarget this test.
     func testPrewarmCapThrottles() async {
         await drainPrewarm()
+        let cap = 3
+        let previousCap = MarkdownEntityStore.prewarmMaxInFlight
+        MarkdownEntityStore.prewarmMaxInFlight = cap
+        defer { MarkdownEntityStore.prewarmMaxInFlight = previousCap }
         let scope = "t3-\(UUID().uuidString)"
-        let rows = (0..<6).map { (id: "a-\(UUID().uuidString)-\($0)",
+        let rows = (0..<(cap * 2)).map { (id: "a-\(UUID().uuidString)-\($0)",
                                  text: "row \($0) **markdown** list", images: [WireImage]()) }
         let started = RenderActivity.prewarmStarted
         let deferred = RenderActivity.prewarmDeferred
         store.prewarm(scope: scope, rows: rows, style: style)
-        XCTAssertEqual(RenderActivity.prewarmStarted - started, 3)
-        XCTAssertEqual(RenderActivity.prewarmDeferred - deferred, 3)
+        XCTAssertEqual(RenderActivity.prewarmStarted - started, cap)
+        XCTAssertEqual(RenderActivity.prewarmDeferred - deferred, cap)
     }
 
     /// Single-flight: a produce for a key already parsing is JOINED, not

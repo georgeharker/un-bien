@@ -84,6 +84,15 @@ targets:
         # signing set by hand in Xcode. Team B8V3694RNX (George Harker).
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: B8V3694RNX
+      configs:
+        # Diagnostics are OPT-IN so the shipping configuration is what you get
+        # by doing nothing. Device profiling builds Release (it needs the
+        # shipping optimization level), so `#if DEBUG` would strip the HUD from
+        # exactly the builds it exists for — scripts/build-iphone.sh injects
+        # this condition into its Release build instead. An App Store archive
+        # defines nothing and compiles the diagnostics out.
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) DEBUG UNBIEN_DIAGNOSTICS
 
   UnBien-macOS:
     type: application
@@ -136,3 +145,6 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: B8V3694RNX
+      configs:
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) DEBUG UNBIEN_DIAGNOSTICS
