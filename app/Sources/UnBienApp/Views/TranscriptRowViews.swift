@@ -448,11 +448,22 @@ struct ToolCardView: View {
         let argsPretty: String
         let outputPretty: String?
     }
-    @State private var derivationCache: (card: ToolCard, running: Bool, d: CardDerivations)?
+    /// A REFERENCE box, not a `@State` value. `derived` is read from `body`,
+    /// so writing the memo through a value-typed `@State` is "modifying state
+    /// during view update" — undefined behaviour, and SwiftUI says so at
+    /// runtime. A class lets the memo be filled in place without SwiftUI
+    /// treating it as a state change, which is correct here: the cache is a
+    /// pure function of `card`, and the view already re-renders when `card`
+    /// changes (TranscriptRow is Equatable on it). The box only avoids
+    /// re-deriving within a render.
+    private final class DerivationBox {
+        var cached: (card: ToolCard, running: Bool, d: CardDerivations)?
+    }
+    @State private var derivationBox = DerivationBox()
 
     private var derived: CardDerivations {
         let running = card.state == .running
-        if let c = derivationCache, c.card == card, c.running == running {
+        if let c = derivationBox.cached, c.card == card, c.running == running {
             return c.d
         }
         let prefixLimit = 8_000   // ≫ any display budget; SHOW ALL waits for settle
@@ -464,7 +475,7 @@ struct ToolCardView: View {
                 ? String($0.prettyString.prefix(prefixLimit))
                 : $0.prettyString }
         )
-        derivationCache = (card, running, d)
+        derivationBox.cached = (card, running, d)
         return d
     }
 
@@ -489,7 +500,7 @@ struct ToolCardView: View {
     // will — identity-keyed slots cannot tolerate mismatches)
     /// The new text an edit/write applies, from persisted args (lang inferred
     /// from the path arg). Nonisolated-safe: pure card data.
-    static func content(for card: ToolCard) -> (text: String, lang: String?)? {
+    nonisolated static func content(for card: ToolCard) -> (text: String, lang: String?)? {
         for key in ["content", "contents", "text", "new_string", "new_str", "newText"] {
             if let text = card.args[key]?.stringValue, !text.isEmpty {
                 return (text, contentLang(for: card))
@@ -502,7 +513,7 @@ struct ToolCardView: View {
         return nil
     }
 
-    static func contentLang(for card: ToolCard) -> String? {
+    nonisolated static func contentLang(for card: ToolCard) -> String? {
         for key in ["path", "file", "filename", "filepath"] {
             if let path = card.args[key]?.stringValue {
                 return ToolOutputClassifier.language(forPath: path)

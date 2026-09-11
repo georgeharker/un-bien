@@ -162,7 +162,6 @@ enum RowHeightEstimator {
     static func estimateToolCard(_ facts: ToolCardFacts, style: MarkdownProseStyle,
                                  width: Double) -> Double {
         let monoLine = lineHeight(size: style.codeSize ?? style.baseSize, name: style.codeFontName, mono: true)
-        let bodyLine = lineHeight(size: style.baseSize, name: style.fontName)
         var h = TranscriptMetrics.toolCardCollapsedChrome   // padding + header (+ images below)
         guard facts.expanded else { return h + imageTerms(facts, width: width) }
         h = TranscriptMetrics.toolCardExpandedBase
