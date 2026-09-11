@@ -110,11 +110,11 @@ final class TranscriptWindowDriver {
     /// entity-warm pair (bubble id + text + images), or nil for rows that must
     /// never be warmed (still-streaming bubbles — cache-poison rule; non-bubble
     /// rows). Keeps the driver ids-only.
-    var warmPairFor: ((String) -> (id: String, text: String, images: [WireImage])?)?
+    var warmPairFor: ((String) -> RowHeightEstimator.WarmRow?)?
     /// TOOL-ROW facts resolver (the last estimate-covered row kind): row id →
     /// ToolCardFacts (expansion seeded EXACTLY as ToolCardView does — cards
     /// OPEN by default per the pref). View-fed; the driver stays facts-agnostic.
-    var toolFactsFor: ((String) -> RowHeightEstimator.ToolCardFacts?)?
+    var toolFactsFor: ((String) -> RowHeightEstimator.ToolWarmSpec?)?
     /// CODE-SEGMENT warm (A-tier): (code, language) -> warms the content-
     /// addressed HighlightProducer slot the row's AsyncAttributedText reads at
     /// attach — no plain flash, no swap re-layout. View-fed (needs theme).
@@ -246,8 +246,15 @@ final class TranscriptWindowDriver {
         // every probe forever: the 4-5× measure-count inflation + distorted
         // accuracy gauges. All record-worthy paths now reach bounds.record.)
         if scrollGestureActive, oldHeight != height {
+            let delta = Int(oldHeight.map { abs(height - $0) } ?? height)
             RenderActivity.heightDeltasWhileScrolling += 1
-            RenderActivity.heightDeltaPointsWhileScrolling += Int(oldHeight.map { abs(height - $0) } ?? height)
+            RenderActivity.heightDeltaPointsWhileScrolling += delta
+            // Name the row behind the spike (hd/p only say how bad).
+            if delta > RenderActivity.worstHeightDelta {
+                RenderActivity.worstHeightDelta = delta
+                RenderActivity.worstHeightDeltaRow = id
+                RenderActivity.worstHeightDeltaWasSeeded = estimateSeeded[id] != nil
+            }
         }
         guard oldHeight != height else { return }   // no-op re-measure
         // Estimator accuracy (analytic tier): the real measure landed on an
@@ -344,8 +351,8 @@ final class TranscriptWindowDriver {
 
     func sync(order: [String], scope: String = "",
               style: MarkdownProseStyle? = nil,
-              warmPairFor: ((String) -> (id: String, text: String, images: [WireImage])?)? = nil,
-              toolFactsFor: ((String) -> RowHeightEstimator.ToolCardFacts?)? = nil,
+              warmPairFor: ((String) -> RowHeightEstimator.WarmRow?)? = nil,
+              toolFactsFor: ((String) -> RowHeightEstimator.ToolWarmSpec?)? = nil,
               codeWarmFor: ((String, String?) -> Void)? = nil,
               width: Double = 0) {
         if !scope.isEmpty { sessionScope = scope }
@@ -437,7 +444,7 @@ final class TranscriptWindowDriver {
         // threshold — the hd/p-diagnosed glide killer).
         guard let style = prewarmStyle, !sessionScope.isEmpty,
               let resolver = warmPairFor else { return }
-        var rows: [(id: String, text: String, images: [WireImage])] = []
+        var rows: [RowHeightEstimator.WarmRow] = []
         var rowByBubble: [String: String] = [:]
         rows.reserveCapacity(leading.count)
         for id in leading {
@@ -456,8 +463,11 @@ final class TranscriptWindowDriver {
             estimateTextTier(rows: rows, rowByBubble: rowByBubble, style: style,
                              leading: leading)
         }
+        // The entity store parses text; row SHAPE is the estimator's concern.
         MarkdownEntityStore.shared.prewarm(
-            scope: sessionScope, rows: rows, style: style, width: prewarmWidth,
+            scope: sessionScope,
+            rows: rows.map { (id: $0.id, text: $0.text, images: $0.images) },
+            style: style, width: prewarmWidth,
             onEstimate: { bubble, estimate in
                 guard let rowID = rowByBubble[bubble] else { return }
                 self.seedEstimate(rowID: rowID, estimate: estimate)
@@ -467,35 +477,58 @@ final class TranscriptWindowDriver {
 
     /// Coalescing text-tier estimator flight (2026-09-10 fix: the first cut
     /// DROPPED re-entries while a flight ran — a fast fling outran it and rows
-    /// attached unseeded, hd 433/p 158k regression). Re-entries now REPLACE the
-    /// pending window; the moment a flight ends, the latest one runs — the
-    /// tier always chases the NEWEST scroll position, never a stale one, and
-    /// never drops work. Rows are ordered DIRECTION-FIRST (attach-imminent
-    /// before trailing) so a flight cut short by the next recompute still
-    /// seeded the rows that matter most.
-    private var textTierInFlight = false
+    /// attached unseeded, hd 433/p 158k regression). Re-entries REPLACE the
+    /// pending window and the drain loop takes the latest one — the tier always
+    /// chases the NEWEST scroll position, never a stale one, and never drops
+    /// work. Rows are ordered DIRECTION-FIRST (attach-imminent before trailing)
+    /// so a flight cut short by a newer window still seeded the rows that
+    /// matter most — which is also why abandoning the tail mid-window is safe.
+    ///
     /// One pending text-tier flight (coalesced): rows to estimate + the
-    /// bubble→row map + tool-card facts + the style.
+    /// bubble→row map + tool-card facts + the style. The tool payload is SPLIT
+    /// by isolation, not by row: `toolEstimates` is pure values and crosses to
+    /// the estimator, `toolWarms` is main-actor-only and never leaves.
     private struct PendingTier {
-        let rows: [(id: String, text: String, images: [WireImage])]
+        let rows: [RowHeightEstimator.WarmRow]
         let rowByBubble: [String: String]
         let style: MarkdownProseStyle
-        let toolRows: [(id: String, facts: RowHeightEstimator.ToolCardFacts)]
+        let toolEstimates: [(id: String, facts: RowHeightEstimator.ToolCardFacts)]
+        let toolWarms: [@MainActor () -> Void]
     }
     private var pendingTextTier: PendingTier?
-    private func estimateTextTier(rows: [(id: String, text: String, images: [WireImage])],
+    /// The ONE owned drain task (replaces the `textTierInFlight` flag): a flag
+    /// cleared after an await sticks `true` forever if the flight ever exits
+    /// unexpectedly, silently killing the tier for the view's lifetime. A task
+    /// handle can't desync, and it gives teardown something to cancel.
+    private var textTierTask: Task<Void, Never>?
+    /// Seeds are applied to the registry in CHUNKS of this size. One main-actor
+    /// hop per chunk instead of per row: a leading window of N rows used to do
+    /// N hops, each contending with the very scroll this tier exists to smooth.
+    /// Chunked rather than one final batch so direction-first rows (the ones
+    /// about to attach) still land early.
+    private static let seedChunk = 16
+    /// Warm closures fired per flight. Speculative work, so it is metered;
+    /// the rest re-offer on the next recompute as the window moves.
+    private static let warmBurst = 24
+    private func estimateTextTier(rows: [RowHeightEstimator.WarmRow],
                                   rowByBubble: [String: String],
                                   style: MarkdownProseStyle,
                                   leading: [String]) {
-        // TOOL ROWS ride the same flight (the last uncovered kind): facts from
-        // the view-fed resolver, composed by estimateToolCard.
-        let toolRows: [(id: String, facts: RowHeightEstimator.ToolCardFacts)] = leading.compactMap {
-            guard let factsFor = toolFactsFor, let facts = factsFor($0) else { return nil }
-            return (id: $0, facts: facts)
+        // TOOL ROWS ride the same flight (the last uncovered kind): facts +
+        // PREWARM closures from the view-fed resolver, kept in SEPARATE lists
+        // so the estimator never sees a closure.
+        var toolEstimates: [(id: String, facts: RowHeightEstimator.ToolCardFacts)] = []
+        var toolWarms: [@MainActor () -> Void] = []
+        if let factsFor = toolFactsFor {
+            for id in leading {
+                guard let spec = factsFor(id) else { continue }
+                toolEstimates.append((id: id, facts: spec.facts))
+                if let warm = spec.warm { toolWarms.append(warm) }
+            }
         }
         // Direction-first ordering: the edge we're scrolling TOWARD estimates
         // first (those rows attach next; trailing rows have pages of margin).
-        let ordered: [(id: String, text: String, images: [WireImage])]
+        let ordered: [RowHeightEstimator.WarmRow]
         if scrollDirection != 0 {
             let dir = scrollDirection
             ordered = rows.sorted { a, b in
@@ -507,41 +540,81 @@ final class TranscriptWindowDriver {
             ordered = rows
         }
         pendingTextTier = PendingTier(rows: ordered, rowByBubble: rowByBubble,
-                                      style: style, toolRows: toolRows)
-        guard !textTierInFlight else { return }   // running flight picks this up on completion
-        runPendingTextTier()
+                                      style: style, toolEstimates: toolEstimates,
+                                      toolWarms: toolWarms)
+        if textTierTask == nil { textTierTask = Task { await drainTextTier() } }
     }
 
-    private func runPendingTextTier() {
-        guard let pending = pendingTextTier else { return }
+    /// Abandon in-flight estimator work (view teardown). Speculative by
+    /// definition — nothing downstream needs its result once the view is gone.
+    func stop() {
+        textTierTask?.cancel()
+        textTierTask = nil
         pendingTextTier = nil
-        textTierInFlight = true
+    }
+
+    /// The drain loop IS the coalescing: each pass takes the latest pending
+    /// window, so a re-entry mid-flight is picked up the moment this one ends —
+    /// never dropped (the old drop-on-busy was the fast-fling regression),
+    /// never recursed through nested Task closures.
+    private func drainTextTier() async {
+        defer { textTierTask = nil }
+        while let pending = pendingTextTier, !Task.isCancelled {
+            pendingTextTier = nil
+            // Warms stay on the MAIN actor — they spawn their own producer
+            // tasks, and they are the half that cannot cross the boundary.
+            for warm in pending.toolWarms.prefix(Self.warmBurst) { warm() }
+            await runTier(pending)
+        }
+    }
+
+    private func runTier(_ pending: PendingTier) async {
         let width = prewarmWidth
-        let rows = pending.rows
-        let rowByBubble = pending.rowByBubble
         let style = pending.style
-        let toolRows = pending.toolRows
-        Task {
-            await Task.detached(priority: .userInitiated) {
-                for row in rows {
+        let rowByBubble = pending.rowByBubble
+        var start = 0
+        while start < pending.rows.count {
+            let slice = Array(pending.rows[start ..< min(start + Self.seedChunk,
+                                                         pending.rows.count)])
+            // The detached closure captures ONLY Sendable values and RETURNS
+            // the batch — no `self`, no per-row hop back.
+            let seeds = await Task.detached(priority: .userInitiated) { () -> [(String, Double)] in
+                var out: [(String, Double)] = []
+                out.reserveCapacity(slice.count)
+                for row in slice {
+                    if Task.isCancelled { break }
                     let est = RowHeightEstimator.estimateText(row.text, images: row.images,
-                                                              style: style, width: width)
-                    if est > 0, let rowID = rowByBubble[row.id] {
-                        await MainActor.run { self.seedEstimate(rowID: rowID, estimate: est) }
-                    }
+                                                              style: style, width: width,
+                                                              spec: row.spec)
+                    if est > 0, let rowID = rowByBubble[row.id] { out.append((rowID, est)) }
                 }
-                for tool in toolRows {
+                return out
+            }.value
+            for (rowID, est) in seeds { seedEstimate(rowID: rowID, estimate: est) }
+            // A newer window landed — abandon the rest of this one and chase it.
+            // Rows are direction-ordered, so what we already seeded is what was
+            // about to attach; the tail had pages of margin anyway.
+            if Task.isCancelled || pendingTextTier != nil { return }
+            start += Self.seedChunk
+        }
+        start = 0
+        while start < pending.toolEstimates.count {
+            let slice = Array(pending.toolEstimates[start ..< min(start + Self.seedChunk,
+                                                                  pending.toolEstimates.count)])
+            let seeds = await Task.detached(priority: .userInitiated) { () -> [(String, Double)] in
+                var out: [(String, Double)] = []
+                out.reserveCapacity(slice.count)
+                for tool in slice {
+                    if Task.isCancelled { break }
                     let est = RowHeightEstimator.estimateToolCard(tool.facts, style: style,
                                                                  width: width)
-                    if est > 0 {
-                        await MainActor.run { self.seedEstimate(rowID: tool.id, estimate: est) }
-                    }
+                    if est > 0 { out.append((tool.id, est)) }
                 }
+                return out
             }.value
-            textTierInFlight = false
-            // A recompute replaced the window while we flew — chase it NOW,
-            // never drop it (the old drop-on-busy was the fast-fling regression).
-            if pendingTextTier != nil { runPendingTextTier() }
+            for (rowID, est) in seeds { seedEstimate(rowID: rowID, estimate: est) }
+            if Task.isCancelled || pendingTextTier != nil { return }
+            start += Self.seedChunk
         }
     }
 

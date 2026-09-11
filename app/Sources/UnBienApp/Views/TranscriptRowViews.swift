@@ -266,7 +266,8 @@ private struct SVGWebView: UIViewRepresentable {
 /// Parse cost scales ~linearly: 32K ≈ 4ms/row worst-case device.
 private let markdownBudget = 32_000
 private let reasoningBudget = 16_000
-private let toolBudget = 8_000
+// Shared: card rendering + the prewarm resolver must truncate identically.
+let toolBudget = 8_000
 
 /// Budgeted content with an in-place expand: truncated rows render the
 /// prefix + a SHOW ALL button (one user-initiated full parse — rare and
@@ -384,7 +385,9 @@ struct DiffContentToggle: View {
     /// natural height. CHANGE THIS IF THE VIEW CHANGES (padding/segment size) —
     /// RowHeightEstimator reads it directly, so the estimate lives WITH the
     /// render code it estimates.
-    static let estimatedHeight: Double = 30
+    /// Nonisolated: the estimator reads this from its off-main flight, so
+    /// View-conformance MainActor inference would make the read illegal.
+    nonisolated static let estimatedHeight: Double = 30
 
     @Binding var showContent: Bool
     let theme: AppTheme
@@ -481,6 +484,131 @@ struct ToolCardView: View {
 
     /// A card is "rich" when it has a renderable output block, an input diff, or
     /// new content from args — i.e. something better than raw JSON to show.
+    // MARK: - Shared card derivations (view + prewarm resolver both call these;
+    // single source guarantees the warm builds the EXACT producers the card
+    // will — identity-keyed slots cannot tolerate mismatches)
+    /// The new text an edit/write applies, from persisted args (lang inferred
+    /// from the path arg). Nonisolated-safe: pure card data.
+    static func content(for card: ToolCard) -> (text: String, lang: String?)? {
+        for key in ["content", "contents", "text", "new_string", "new_str", "newText"] {
+            if let text = card.args[key]?.stringValue, !text.isEmpty {
+                return (text, contentLang(for: card))
+            }
+        }
+        let newTexts = editPairs(card.args).compactMap { $0.new }
+        if !newTexts.isEmpty {
+            return (newTexts.joined(separator: "\n"), contentLang(for: card))
+        }
+        return nil
+    }
+
+    static func contentLang(for card: ToolCard) -> String? {
+        for key in ["path", "file", "filename", "filepath"] {
+            if let path = card.args[key]?.stringValue {
+                return ToolOutputClassifier.language(forPath: path)
+            }
+        }
+        return nil
+    }
+
+    /// The content-face HighlightProducer — EXACTLY as the card builds it
+    /// (budget truncation + @source/@source-all identity). nil = no content.
+    static func contentProducer(for card: ToolCard, theme: AppTheme,
+                                typography: Typography, toolBudget: Int) -> HighlightProducer? {
+        guard let content = content(for: card) else { return nil }
+        let truncated = content.text.count > toolBudget
+        return HighlightProducer(
+            code: truncated ? String(content.text.prefix(toolBudget)) : content.text,
+            language: content.lang, style: theme.codeHighlightStyle,
+            font: typography.monoPlatformFont(),
+            identity: "\(card.toolCallID)\u{1}@source" + (truncated ? "" : "-all"))
+    }
+
+    /// The hunks the diff face RENDERS: LIVE aux.hunks when present, otherwise
+    /// DERIVED from the persisted args. Shared with `inputHunks` so the warm
+    /// and the card can't disagree — warming only the live case left replay
+    /// sessions (where hunks are always derived) with a cold diff on every
+    /// card, which is exactly the cold-scroll case warming exists for.
+    nonisolated static func hunks(for card: ToolCard) -> [JSONValue]? {
+        if let hunks = card.hunks, !hunks.isEmpty { return hunks }
+        var derived: [JSONValue] = []
+        for pair in editPairs(card.args) {
+            var lines: [JSONValue] = []
+            if let old = pair.old, !old.isEmpty {
+                lines += old.split(separator: "\n", omittingEmptySubsequences: false).map {
+                    JSONValue.object(["kind": .string("remove"), "text": .string(String($0))])
+                }
+            }
+            if let new = pair.new, !new.isEmpty {
+                lines += new.split(separator: "\n", omittingEmptySubsequences: false).map {
+                    JSONValue.object(["kind": .string("add"), "text": .string(String($0))])
+                }
+            }
+            if !lines.isEmpty { derived.append(.object(["lines": .array(lines)])) }
+        }
+        return derived.isEmpty ? nil : derived
+    }
+
+    /// The output blocks the card actually RENDERS (v1 + renderable kinds).
+    nonisolated static func outputBlocks(for card: ToolCard) -> [JSONValue] {
+        guard card.output?["v"]?.intValue == 1,
+              let blocks = card.output?["blocks"]?.arrayValue else { return [] }
+        return blocks.filter { renderableKinds.contains($0["kind"]?.stringValue ?? "") }
+    }
+
+    /// How many 9pt section labels ("DIFF"/"CONTENT"/"input"/"output"/"error")
+    /// the expanded body renders — MIRRORS the body's branch structure so the
+    /// estimate counts the labels the card draws. Two were invisible to the
+    /// estimator before: "DIFF" and "CONTENT" (both short-circuited by the
+    /// hunks/content guards), and `hideInputRich` was ignored entirely, so the
+    /// "input" label was counted even in the default config that hides it.
+    /// Whether the expanded body renders the raw-args "input" section. Shared
+    /// so the estimate counts its LINES, not just its label.
+    nonisolated static func showsInputSection(for card: ToolCard, hideInputRich: Bool) -> Bool {
+        guard hunks(for: card) == nil, content(for: card) == nil,
+              !card.args.isEmpty else { return false }
+        return !(hideInputRich && !outputBlocks(for: card).isEmpty)
+    }
+
+    nonisolated static func sectionLabels(for card: ToolCard, hideInputRich: Bool) -> Int {
+        let hunks = hunks(for: card)
+        let content = content(for: card)
+        let blocks = outputBlocks(for: card)
+        var n = 0
+        if hunks != nil, content != nil {
+            n += 1   // switcher renders ONE face; Diff is the default → "DIFF"
+        } else {
+            if hunks != nil {
+                n += 1                       // "DIFF"
+            } else if showsInputSection(for: card, hideInputRich: hideInputRich) {
+                n += 1                       // "input"
+            }
+            if !blocks.isEmpty {
+                // A "DIFF" label belongs to the hunks face only; the historical
+                // text face renders bare, as code blocks do.
+                n += blocks.filter {
+                    $0["kind"]?.stringValue == "diff"
+                        && !($0["hunks"]?.arrayValue ?? []).isEmpty
+                }.count
+            } else if content != nil {
+                n += 1                       // "CONTENT"
+            } else if card.result != nil {
+                n += 1                       // "output"
+            }
+        }
+        if card.error != nil { n += 1 }       // "error"
+        return n
+    }
+
+    /// The diff-face DiffProducer — live OR derived hunks, same key either way
+    /// (`<themeID>\u{1}<toolCallID>\u{1}@diff`).
+    static func diffProducer(for card: ToolCard, theme: AppTheme,
+                             themeID: ThemeID) -> DiffProducer? {
+        guard let hunks = hunks(for: card) else { return nil }
+        return DiffProducer(toolCallID: card.toolCallID, themeID: "\(themeID)", hunks: hunks,
+                            add: theme.success, remove: theme.error, context: theme.secondaryText)
+    }
+
     static func isRich(_ card: ToolCard) -> Bool {
         if card.output?["v"]?.intValue == 1,
            let blocks = card.output?["blocks"]?.arrayValue,
@@ -500,7 +628,7 @@ struct ToolCardView: View {
 
     /// First non-empty string arg among `keys` (static: shared by isRich and
     /// the instance views).
-    static func stringArg(_ dict: [String: JSONValue], _ keys: [String]) -> String? {
+    nonisolated static func stringArg(_ dict: [String: JSONValue], _ keys: [String]) -> String? {
         for key in keys {
             if let s = dict[key]?.stringValue, !s.isEmpty { return s }
         }
@@ -510,7 +638,9 @@ struct ToolCardView: View {
     /// The edit args' old/new pairs — BOTH shapes: a single edit at the top
     /// level (camelCase + snake_case variants) and the `edits[]` array of
     /// pairs. Empty when the args aren't edit-shaped.
-    static func editPairs(_ args: [String: JSONValue]) -> [(old: String?, new: String?)] {
+    /// Nonisolated: pure derivation over card args, so the estimator (which
+    /// builds facts outside the main actor) can share the view's exact logic.
+    nonisolated static func editPairs(_ args: [String: JSONValue]) -> [(old: String?, new: String?)] {
         var pairs: [(old: String?, new: String?)] = []
         func pair(_ dict: [String: JSONValue]) -> (String?, String?)? {
             let old = stringArg(dict, ["oldText", "old_text", "old_string", "oldString"])
@@ -627,56 +757,31 @@ struct ToolCardView: View {
     // the persisted args (replay never carries sidecars — and run 2026-09-18
     // the live wire didn't either). The derivation shows the edit's substance
     // (− old / + new) without the on-disk context lines the extension adds.
-    private var inputHunks: [JSONValue]? {
-        if let hunks = card.hunks, !hunks.isEmpty { return hunks }
-        var hunks: [JSONValue] = []
-        for pair in Self.editPairs(card.args) {
-            var lines: [JSONValue] = []
-            if let old = pair.old, !old.isEmpty {
-                lines += old.split(separator: "\n", omittingEmptySubsequences: false).map {
-                    JSONValue.object(["kind": .string("remove"), "text": .string(String($0))])
-                }
-            }
-            if let new = pair.new, !new.isEmpty {
-                lines += new.split(separator: "\n", omittingEmptySubsequences: false).map {
-                    JSONValue.object(["kind": .string("add"), "text": .string(String($0))])
-                }
-            }
-            if !lines.isEmpty { hunks.append(.object(["lines": .array(lines)])) }
-        }
-        return hunks.isEmpty ? nil : hunks
-    }
+    private var inputHunks: [JSONValue]? { Self.hunks(for: card) }
 
     // The new text an edit/write is applying, from persisted args — the Content
     // view / replay floor. `lang` inferred from the target file path. For
     // edits[]-shaped tools the new texts nest inside the array — join them.
     private var contentText: (text: String, lang: String?)? {
-        for key in ["content", "contents", "text", "new_string", "new_str", "newText"] {
-            if let text = card.args[key]?.stringValue, !text.isEmpty {
-                return (text, contentLang)
-            }
-        }
-        let newTexts = Self.editPairs(card.args).compactMap { $0.new }
-        if !newTexts.isEmpty {
-            return (newTexts.joined(separator: "\n"), contentLang)
-        }
-        return nil
+        Self.content(for: card)
     }
 
     private var contentLang: String? {
-        for key in ["path", "file", "filename", "filepath"] {
-            if let path = card.args[key]?.stringValue {
-                return ToolOutputClassifier.language(forPath: path)
-            }
-        }
-        return nil
+        Self.contentLang(for: card)
     }
 
     @ViewBuilder private var outputBlocksView: some View {
         ForEach(Array(knownOutputBlocks.enumerated()), id: \.offset) { _, block in
             switch block["kind"]?.stringValue {
             case "diff":
-                if let hunks = block["hunks"]?.arrayValue, !hunks.isEmpty { diffView(hunks) }
+                if let hunks = block["hunks"]?.arrayValue, !hunks.isEmpty {
+                    diffView(hunks)
+                } else if let text = block["text"]?.stringValue, !text.isEmpty {
+                    // Historical blocks carry rendered diff TEXT where live ones
+                    // carry structured hunks. Both must draw; highlight as diff
+                    // so +/- lines still read as a diff.
+                    codeView(text, lang: "diff")
+                }
             case "code":
                 if let text = block["text"]?.stringValue, !text.isEmpty {
                     codeView(text, lang: block["lang"]?.stringValue)
@@ -721,12 +826,8 @@ struct ToolCardView: View {
     // Renderable blocks from the versioned `aux.output` container. Guards on
     // `v==1` and keeps only kinds the app knows how to draw; unknown kinds are
     // skipped so an empty result falls back to raw JSON.
-    private static let renderableKinds: Set<String> = ["diff", "code"]
-    private var knownOutputBlocks: [JSONValue] {
-        guard card.output?["v"]?.intValue == 1,
-              let blocks = card.output?["blocks"]?.arrayValue else { return [] }
-        return blocks.filter { Self.renderableKinds.contains($0["kind"]?.stringValue ?? "") }
-    }
+    nonisolated static let renderableKinds: Set<String> = ["diff", "code"]
+    private var knownOutputBlocks: [JSONValue] { Self.outputBlocks(for: card) }
 
     // `code` block: plain output text syntax-highlighted via the shared
     // Syntax-highlighted code via the shared windowed cache (HighlightProducer,

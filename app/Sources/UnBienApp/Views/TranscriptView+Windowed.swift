@@ -30,7 +30,7 @@ extension TranscriptView {
             expandRich: model.expandRichToolResults,
             hideInputRich: model.hideInputWhenRich,
             isDemo: model.isDemo(session),
-            sentinelBusy: model.activeTurnID(for: session) != nil && !model.hasEnded(session),
+            sentinelBusy: model.isBusy(for: session) && !model.hasEnded(session),
             onFork: { entryID in Task { await model.forkFromEntry(session, entryID: entryID) } },
             onBranch: { entryID, prefill in
                 Task { await model.branchFromEntry(session, entryID: entryID, prefill: prefill) }
@@ -118,6 +118,35 @@ struct TranscriptStackView: View, Equatable {
             && l.branchPoints == r.branchPoints
     }
 
+    /// The card's PREWARM closure: the EXACT producers the materialized card
+    /// builds (ToolCardView statics = single source; shared toolBudget
+    /// truncates identically, which the @source/@source-all identity key
+    /// depends on). Main-actor by type — it spawns its own producer tasks and
+    /// must never ride into the driver's off-main estimator flight.
+    /// Extracted from `body`: inline, it overwhelmed the type checker.
+    @MainActor
+    private static func cardWarm(card: ToolCard, theme: AppTheme, themeID: ThemeID,
+                                 typography: Typography,
+                                 scope: String) -> (@MainActor () -> Void)? {
+        let diff = ToolCardView.diffProducer(for: card, theme: theme, themeID: themeID)
+        let content = ToolCardView.contentProducer(for: card, theme: theme,
+                                                   typography: typography,
+                                                   toolBudget: toolBudget)
+        guard diff != nil || content != nil else { return nil }
+        return {
+            if let diff {
+                Task.detached(priority: .userInitiated) {
+                    _ = await AttributedTextCache.shared.attributed(diff, scope: scope)
+                }
+            }
+            if let content {
+                Task.detached(priority: .userInitiated) {
+                    _ = await AttributedTextCache.shared.attributed(content, scope: scope)
+                }
+            }
+        }
+    }
+
     var body: some View {
         // Sync runs on a REAL rebuild only (a skipped scroll never reaches here,
         // and order is unchanged on a scroll anyway → update(order:) no-ops).
@@ -130,12 +159,15 @@ struct TranscriptStackView: View, Equatable {
         // Images ride the pair for the analytic height tier + ImageCache warm.
         // O(n) per rebuild, same order as the order map beside it.
         let warmPairs = Dictionary(
-            items.compactMap { item -> (String, (id: String, text: String, images: [WireImage]))? in
+            items.compactMap { item -> (String, RowHeightEstimator.WarmRow)? in
                 switch item {
                 case .assistant(let b) where !b.streaming && (!b.text.isEmpty || !b.images.isEmpty):
-                    return (item.id, (id: b.id, text: b.text, images: b.images))
+                    return (item.id, .init(id: b.id, text: b.text, images: b.images,
+                                           spec: .assistant))
                 case .user(let u) where !u.text.isEmpty || !u.images.isEmpty:
-                    return (item.id, (id: u.id, text: u.text, images: u.images))
+                    // A user bubble is a padded surface, not an assistant row.
+                    return (item.id, .init(id: u.id, text: u.text, images: u.images,
+                                           spec: .user))
                 default: return nil
                 }
             }, uniquingKeysWith: { first, _ in first })
@@ -146,12 +178,16 @@ struct TranscriptStackView: View, Equatable {
         // TOOL-CARD facts (shared builder — the regression harness exercises
         // the SAME path, so tests and production can't diverge).
         let toolFacts = Dictionary(
-            items.compactMap { item -> (String, RowHeightEstimator.ToolCardFacts)? in
+            items.compactMap { item -> (String, RowHeightEstimator.ToolWarmSpec)? in
                 guard case let .tool(card) = item else { return nil }
                 let expanded = cardUI.expanded(card.toolCallID,
                                                 default: expandRich && ToolCardView.isRich(card))
-                return (item.id, RowHeightEstimator.toolCardFacts(for: card, expanded: expanded,
-                                                                  width: driver.prewarmWidth))
+                let facts = RowHeightEstimator.toolCardFacts(for: card, expanded: expanded,
+                                                             hideInputRich: hideInputRich)
+                // Warm fires for LEADING rows only (driver-gated).
+                let warm = Self.cardWarm(card: card, theme: theme, themeID: themeID,
+                                         typography: typography, scope: sessionScope)
+                return (item.id, RowHeightEstimator.ToolWarmSpec(facts: facts, warm: warm))
             }, uniquingKeysWith: { first, _ in first })
         // CODE-SEGMENT warm factory: builds the SAME content-addressed
         // HighlightProducer EntityStack constructs (theme + mono metrics), so

@@ -100,18 +100,22 @@ public struct DiffProducer: AttributedTextProducer {
     public func produce() -> NSAttributedString? {
         let out = NSMutableAttributedString()
         let addC = PlatformColor(add), remC = PlatformColor(remove), ctxC = PlatformColor(context)
+        // SEPARATOR, not terminator: a trailing "\n" makes Text lay out a
+        // phantom final line — a stray blank row under every diff, and a
+        // systematic +1 line the height estimate can't see.
         var count = 0
         walk: for hunk in hunks {
             for line in hunk["lines"]?.arrayValue ?? [] {
                 if count >= budget {
-                    out.append(NSAttributedString(string: "  \u{22EF} (diff truncated)\n",
+                    out.append(NSAttributedString(string: "\n  \u{22EF} (diff truncated)",
                                                   attributes: [.foregroundColor: ctxC]))
                     break walk
                 }
                 let kind = line["kind"]?.stringValue ?? ""
                 let color = kind == "remove" ? remC : kind == "add" ? addC : ctxC
                 out.append(NSAttributedString(
-                    string: Self.prefix(kind) + (line["text"]?.stringValue ?? "") + "\n",
+                    string: (count > 0 ? "\n" : "")
+                        + Self.prefix(kind) + (line["text"]?.stringValue ?? ""),
                     attributes: [.foregroundColor: color]))
                 count += 1
             }

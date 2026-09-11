@@ -65,6 +65,10 @@ public struct RootView: View {
                 // each relay and reconnect the dead ones, which re-runs
                 // reconstruction for open sessions (the stalled-walk heal).
                 model.healConnectionsOnForeground()
+                // A session backgrounded ACROSS a turn keeps a healthy socket,
+                // so the heal above never re-asks for its state and the busy
+                // surfaces stay wrong in whichever direction we missed.
+                model.refreshBusyState()
             }
         }
         .sheet(item: $model.pendingPairing) { pending in

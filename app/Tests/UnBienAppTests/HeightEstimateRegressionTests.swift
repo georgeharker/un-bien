@@ -53,9 +53,53 @@ final class HeightEstimateRegressionTests: XCTestCase {
         }
     }
 
-    private func toolCardRow(_ card: ToolCard, expandRich: Bool) -> some View {
+    /// Drive every producer the card will render through the shared cache
+    /// BEFORE measuring. `AsyncAttributedText` falls back to
+    /// `Text(producer.plainText)` on a miss and `DiffProducer.plainText` is
+    /// "", so a COLD first measurement renders an empty diff and reads short.
+    /// That — not DisclosureGroup — is what made each diff card's first touch
+    /// unmeasurable while every later touch (warm process-wide cache) was fine.
+    private func prewarm(_ card: ToolCard) async {
+        if let diff = ToolCardView.diffProducer(for: card, theme: theme, themeID: .oneDark) {
+            _ = await AttributedTextCache.shared.attributed(diff)
+        }
+        if let content = ToolCardView.contentProducer(for: card, theme: theme,
+                                                      typography: typography,
+                                                      toolBudget: toolBudget) {
+            _ = await AttributedTextCache.shared.attributed(content)
+        }
+        for block in ToolCardView.outputBlocks(for: card) {
+            switch block["kind"]?.stringValue {
+            case "code":
+                guard let text = block["text"]?.stringValue, !text.isEmpty else { continue }
+                _ = await AttributedTextCache.shared.attributed(HighlightProducer(
+                    code: String(text.prefix(toolBudget)), language: block["lang"]?.stringValue,
+                    style: theme.codeHighlightStyle, font: typography.monoPlatformFont()))
+            case "diff":
+                if let hunks = block["hunks"]?.arrayValue, !hunks.isEmpty {
+                    _ = await AttributedTextCache.shared.attributed(DiffProducer(
+                        toolCallID: card.toolCallID, themeID: "\(ThemeID.oneDark)", hunks: hunks,
+                        add: theme.success, remove: theme.error, context: theme.secondaryText))
+                } else if let text = block["text"]?.stringValue, !text.isEmpty {
+                    _ = await AttributedTextCache.shared.attributed(HighlightProducer(
+                        code: String(text.prefix(toolBudget)), language: "diff",
+                        style: theme.codeHighlightStyle, font: typography.monoPlatformFont()))
+                }
+            default: continue
+            }
+        }
+    }
+
+    private func toolCardRow(_ card: ToolCard, expandRich: Bool,
+                             hideInputRich: Bool) -> some View {
+        toolCardRow(card, expandRich: expandRich, hideInputRich: hideInputRich,
+                    typography: typography)
+    }
+
+    private func toolCardRow(_ card: ToolCard, expandRich: Bool, hideInputRich: Bool,
+                            typography: Typography) -> some View {
         ToolCardView(card: card, theme: theme, typography: typography,
-                     expandRich: expandRich, hideInputRich: true,
+                     expandRich: expandRich, hideInputRich: hideInputRich,
                      store: CardUIState(), themeID: .oneDark)
     }
 
@@ -237,7 +281,7 @@ final class HeightEstimateRegressionTests: XCTestCase {
         }
     }
 
-    func testToolCardCorpus() {
+    func testToolCardCorpus() async {
         func hunk(_ lines: [(String, String)]) -> JSONValue {
             .object(["lines": .array(lines.map { kind, text in
                 .object(["kind": .string(kind), "text": .string(text)])
@@ -250,10 +294,43 @@ final class HeightEstimateRegressionTests: XCTestCase {
             "v": .number(1),
             "blocks": .array([.object(["kind": .string("code"), "text": .string("out1\nout2\nout3"), "lang": .string("bash")])]),
         ])
+        // OUTPUT-as-diff: the shape the corpus was missing. A `diff` block
+        // carries `hunks`, not `text`, so it contributed zero estimated lines
+        // while rendering a full diff — invisible here until this case existed.
+        let diffOutput: JSONValue = .object([
+            "v": .number(1),
+            "blocks": .array([.object([
+                "kind": .string("diff"),
+                "hunks": .array([hunk([
+                    ("context", "@@ tool output diff @@"),
+                    ("remove", "  let oldValue = computeTheThing(withAVeryLongArgumentName: true)"),
+                    ("add", "  let newValue = computeTheThing(withAVeryLongArgumentName: false)"),
+                    ("context", "  return newValue"),
+                ])]),
+            ])]),
+        ])
+        // HISTORICAL diff output: text instead of hunks. Replay carries this
+        // shape, and it wraps like any other long code line.
+        let historicalDiffOutput: JSONValue = .object([
+            "v": .number(1),
+            "blocks": .array([.object([
+                "kind": .string("diff"),
+                "text": .string("""
+                @@ historical @@
+                -  let oldValue = computeTheThing(withAVeryLongArgumentName: true)
+                +  let newValue = computeTheThing(withAVeryLongArgumentName: false)
+                   return newValue
+                """),
+            ])]),
+        ])
         let cases: [(String, ToolCard, Double)] = [
+            // BUDGETS (2026-09-11): tightened 40-100 -> 12 after the wrap,
+            // section-label, hideInputRich, trailing-newline and cold-cache
+            // fixes brought worst-case error to 6.1pt. The old budgets were
+            // wide enough to pass a 10x regression in silence.
             ("card-collapsed-plain",
              ToolCard(toolCallID: "t1", tool: "bash", args: ["command": .string("ls -la")],
-                      result: .string("file1\nfile2"), state: .ok), 40),
+                      result: .string("file1\nfile2"), state: .ok), 12),
             ("card-diff-wrapping",
              ToolCard(toolCallID: "t7", tool: "edit", args: [:], result: nil,
                       state: .ok,
@@ -265,48 +342,133 @@ final class HeightEstimateRegressionTests: XCTestCase {
                         ("add", "    // 01M24A9NR) — the same session scoping MarkdownEntitiesView keys under."),
                         ("add", "    @Environment(\\.sessionScope) private var sessionScope"),
                         ("add", "    @Environment(\\.cardUIState) private var cardUI"),
-                      ])]), 90),
+                      ])]), 12),
             ("card-diff",
              ToolCard(toolCallID: "t2", tool: "edit", args: [:], result: nil,
-                      state: .ok, hunks: diffHunks), 90),
+                      state: .ok, hunks: diffHunks), 12),
             ("card-code-output",
              ToolCard(toolCallID: "t3", tool: "bash", args: ["command": .string("make")],
-                      result: nil, state: .ok, output: codeOutput), 90),
+                      result: nil, state: .ok, output: codeOutput), 12),
+            ("card-diff-output",
+             ToolCard(toolCallID: "t8", tool: "bash", args: ["command": .string("git diff")],
+                      result: nil, state: .ok, output: diffOutput), 12),
+            ("card-diff-historical",
+             ToolCard(toolCallID: "t9", tool: "bash", args: ["command": .string("git show")],
+                      result: nil, state: .ok, output: historicalDiffOutput), 12),
             ("card-switcher",
              ToolCard(toolCallID: "t4", tool: "edit",
                       args: ["path": .string("/a.swift"), "new_string": .string("let x = 2\nlet y = 3")],
-                      state: .ok, hunks: diffHunks), 100),
+                      state: .ok, hunks: diffHunks), 12),
             ("card-running",
              ToolCard(toolCallID: "t5", tool: "bash", args: ["command": .string("sleep 1")],
-                      result: .string("partial output line\nmore output"), state: .running), 80),
+                      result: .string("partial output line\nmore output"), state: .running), 12),
             ("card-error",
              ToolCard(toolCallID: "t6", tool: "bash", args: [:],
-                      error: "exit 1", state: .failed), 60),
+                      error: "exit 1", state: .failed), 12),
         ]
+        // BOTH pref states: hideInputRich gates the "input" section, so an
+        // estimator blind to it is wrong in exactly one of them.
         for width in widths {
+          for hideInputRich in [true, false] {
             for (id, card, budget) in cases {
                 let rich = ToolCardView.isRich(card)
-                let rendered = measure(toolCardRow(card, expandRich: true), width: width)
+                await prewarm(card)
+                let rendered = measure(toolCardRow(card, expandRich: true,
+                                                   hideInputRich: hideInputRich), width: width)
                 let facts = RowHeightEstimator.toolCardFacts(
-                    for: card, expanded: true && rich)   // expandRich default true
+                    for: card, expanded: true && rich,   // expandRich default true
+                    hideInputRich: hideInputRich)
                 _ = rich
                 let est = RowHeightEstimator.estimateToolCard(facts, style: style, width: width)
                 let delta = rendered - est
-                // TRUTH GUARD: NSHostingView.fittingSize does not measure a
-                // DisclosureGroup's EXPANDED content (diff cards read a constant
-                // ~74 regardless of hunk count). Skip assertion when the truth
-                // is unmeasurable — the estimate prints for inspection, and the
-                // DEVICE eΔ/b gauges remain the ground truth for cards.
-                if facts.expanded, rendered < 90 {
-                    print(String(format: "HEST w=%3.0f %-22s TRUTH-UNMEASURED (DisclosureGroup artifact) est=%7.1f",
-                                 width, (id as NSString).utf8String!, est))
-                    continue
-                }
+                let id = "\(id)\(hideInputRich ? "" : "/show-input")"
+                // (The old TRUTH GUARD here blamed NSHostingView/DisclosureGroup
+                // for diff cards measuring short. It was a COLD CACHE: a producer
+                // miss renders Text(plainText), and DiffProducer.plainText is "".
+                // prewarm() above fixes it, so every case is measurable now.)
                 print(String(format: "HEST w=%3.0f %-22s rich=%d rendered=%7.1f est=%7.1f Δ=%+7.1f",
                              width, (id as NSString).utf8String!, rich ? 1 : 0, rendered, est, delta))
                 XCTAssertLessThan(abs(delta), budget,
                                   "\(id) @\(Int(width)): rendered \(Int(rendered)) vs est \(Int(est)) (Δ\(Int(delta)))")
                 XCTAssertLessThan(abs(delta), 200, "\(id) @\(Int(width)): CATASTROPHIC drift")
+            }
+          }
+        }
+    }
+
+    // MARK: - Write cards / wrap
+
+    /// WRITE-CARD WRAP. A write card renders a whole file as a code block, so
+    /// its height is dominated by how its lines WRAP, not how many there are.
+    /// A real-session survey put this kind at mean |d| 1160pt and worst 2546pt
+    /// — by far the largest estimator error, and big enough to shove the
+    /// viewport mid-scroll when the real measure lands.
+    ///
+    /// The shapes here are modelled on that survey's worst offenders (long
+    /// prose lines, mean ~90 chars, max ~600) rather than copied from it, plus
+    /// the two cases a character-count wrap model gets wrong on its own terms:
+    /// unbreakable tokens wider than the line, and content past `toolBudget`
+    /// where the card truncates and offers SHOW ALL.
+    ///
+    /// Swept across text scales because a wrap model that is only right at one
+    /// font size is not a wrap model.
+    func testToolWriteWrapCorpus() async {
+        func repeated(_ unit: String, lines: Int) -> String {
+            (0..<lines).map { "\($0) " + unit }.joined(separator: "\n")
+        }
+        // ~90 chars average with a long tail, the survey's profile.
+        let prose = (0..<40).map { i -> String in
+            i % 4 == 0
+                ? "Short note \(i)."
+                : "Paragraph \(i) explaining a decision at some length so that the line must wrap "
+                    + "several times at phone width and exercise the greedy fill properly."
+        }.joined(separator: "\n")
+        // Tokens wider than the content column: the hard-break path.
+        let identifiers = repeated(
+            "let resultOfCallingSomething = computeTheThing(withAnExtremelyLongArgumentLabel:)",
+            lines: 20)
+        let overBudget = repeated(
+            "filler line that is comfortably long enough to wrap at least twice over",
+            lines: 260)   // > toolBudget characters
+
+        // BUDGETS: absolute points, but the residual here is PER-LINE — the
+        // estimate still lands ~4% short on wrapped line COUNT, so a card with
+        // more lines misses by more. These gate the 2546pt-class error this
+        // test exists for; closing the 4% needs the render's true content
+        // column, which the harness cannot observe directly.
+        let cases: [(String, String, Double)] = [   // (id, content, budget-pt)
+            ("write-short", "let a = 1\nlet b = 2", 12),
+            ("write-prose-wrap", prose, 120),
+            ("write-long-identifiers", identifiers, 60),
+            ("write-over-budget", overBudget, 200),
+        ]
+        XCTAssertGreaterThan(overBudget.count, toolBudget, "over-budget case must truncate")
+
+        for scale in [1.0, 1.15] {
+            let typography = Typography(textScale: scale)
+            let style = markdownProseStyle(theme: theme, typography: typography)
+            for (id, content, budget) in cases {
+                let card = ToolCard(
+                    toolCallID: "w-\(id)-\(scale)", tool: "write",
+                    args: ["path": .string("/tmp/\(id).swift"), "content": .string(content)],
+                    result: nil, state: .ok)
+                if let producer = ToolCardView.contentProducer(
+                    for: card, theme: theme, typography: typography, toolBudget: toolBudget) {
+                    _ = await AttributedTextCache.shared.attributed(producer)
+                }
+                let rendered = measure(
+                    toolCardRow(card, expandRich: true, hideInputRich: true,
+                                typography: typography),
+                    width: 370)
+                let facts = RowHeightEstimator.toolCardFacts(
+                    for: card, expanded: ToolCardView.isRich(card), hideInputRich: true)
+                let est = RowHeightEstimator.estimateToolCard(facts, style: style, width: 370)
+                let delta = rendered - est
+                print(String(format: "HWRAP scale=%.2f %-24s rendered=%8.1f est=%8.1f d=%+8.1f",
+                             scale, (id as NSString).utf8String!, rendered, est, delta))
+                XCTAssertLessThan(abs(delta), budget,
+                                  "\(id) @scale \(scale): rendered \(Int(rendered)) "
+                                  + "vs est \(Int(est)) (d\(Int(delta)))")
             }
         }
     }

@@ -81,6 +81,13 @@ struct DebugActivityHUD: View {
                 + " es\(RenderActivity.heightEstimatesSeeded)e\u{394}\(RenderActivity.heightEstimatesMeasured > 0 ? RenderActivity.heightEstimateErrSum / RenderActivity.heightEstimatesMeasured : 0)"
                 + "b\(RenderActivity.heightEstimatesMeasured > 0 ? RenderActivity.heightEstimateBiasSum / RenderActivity.heightEstimatesMeasured : 0)",
                 moved(9, 10)),
+            // WORST height-delta offender: which row spiked hd/p, how far, and
+            // whether it had an estimate at all (!seed = coverage gap, not
+            // calibration). Row id is tail-trimmed to fit the HUD.
+            ("\u{26A0} \(RenderActivity.worstHeightDelta)pt"
+                + " \(RenderActivity.worstHeightDeltaWasSeeded ? "seed" : "NOSEED")"
+                + " \(RenderActivity.worstHeightDeltaRow.suffix(18))",
+             false),
             ("cb flip\(num(12)) cross\(num(13)) scr\(num(14)) hp\(num(15))", moved(12, 13, 14, 15))
         ]
         prev = raw

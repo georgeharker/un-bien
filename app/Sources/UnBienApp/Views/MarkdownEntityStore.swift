@@ -86,7 +86,8 @@ final class MarkdownEntityStore {
             if !row.text.isEmpty, lru.hit(key) != nil {
                 touched += 1
                 // Cached entities don't need a produce — but the image warm +
-                // estimate side channel still applies (cheap, capped below).
+                // estimate side channel still applies (cheap, and deliberately
+                // NOT capped: a row that misses its seed shifts the view).
                 if width > 0, let onEstimate {
                     estimateOnly(row: row, key: key, style: style, width: width, onEstimate: onEstimate)
                 }
@@ -131,13 +132,22 @@ final class MarkdownEntityStore {
         }
     }
 
+    /// Estimate-only dedup — a SEPARATE set from `prewarming`, not the budget.
+    /// Bounding and de-duplicating are different jobs: this pass is cheap (no
+    /// parse) and load-bearing (a row without a bounds seed shifts the view),
+    /// so it must run for every warm row on every recompute. Sharing the parse
+    /// budget's set made pass 1 spend pass 2's slots, so a mostly-warm window
+    /// deferred every cold row — starving the very seeds this delivers, while
+    /// the ⏸ gauge reported healthy backpressure.
+    private var estimating: Set<String> = []
+
     /// Warm images + estimate for a row whose ENTITIES are already cached
     /// (pass-1 hit): decode images into ImageCache off-main and hand back the
     /// estimate without re-parsing. Image-only rows land here too.
     private func estimateOnly(row: (id: String, text: String, images: [WireImage]),
                               key: String, style: MarkdownProseStyle, width: Double,
                               onEstimate: @escaping (String, Double) -> Void) {
-        guard prewarming.insert(key).inserted else { return }   // reuse the cap
+        guard estimating.insert(key).inserted else { return }   // dedup, NOT the cap
         let rowID = row.id
         Task {
             let entities = cached(key) ?? []
@@ -145,7 +155,7 @@ final class MarkdownEntityStore {
                 RowHeightEstimator.estimate(entities, images: row.images,
                                             style: style, width: width)
             }.value
-            prewarming.remove(key)
+            estimating.remove(key)
             if est > 0 { onEstimate(rowID, est) }
         }
     }
@@ -157,8 +167,11 @@ final class MarkdownEntityStore {
     /// SINGLE-PRIORITY by construction (no `priority` param): a single-flight
     /// JOIN must never downgrade the caller — the view's render path awaiting
     /// a utility-QoS prewarm parse WAS the top Instruments wait (2026-09-10:
-    /// MarkdownEntitiesView:73, 390ms+). Concurrency is bounded by the
-    /// prewarm cap + single-flight, not QoS; parses are short (~300µs s).
+    /// MarkdownEntitiesView:73, 390ms+). DEMAND IS DELIBERATELY UNCAPPED: the
+    /// budget governs SPECULATION only — if a row is materializing we need it
+    /// now, and metering it would just make visible rows wait. Only prewarm's
+    /// own pass 2 meters against `prewarming`; the single-flight join below is
+    /// the only thing that bounds a demand caller. Parses are short (~300µs).
     /// SINGLE-FLIGHT (per-key): EVERY caller — the view's lazy .task and all
     /// prewarm triggers — funnels through here. A key already parsing is
     /// JOINED (await the running task), never re-spawned. Kills the in-flight

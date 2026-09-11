@@ -40,6 +40,13 @@ enum TranscriptMetrics {
     static let assistantHeaderSpacing: CGFloat = 4
     /// ESTIMATE-ONLY: total assistant row chrome (header + spacing + slack).
     static let assistantRowChrome: Double = 24
+    /// Padding inside the user bubble's surface (all sides).
+    static let userBubblePadding: CGFloat = 10
+    /// ESTIMATE-ONLY: total user row chrome. A user bubble is NOT an assistant
+    /// row with a different caption — its text sits inside a padded surface, so
+    /// it carries the caption and spacing PLUS that padding on both axes.
+    static let userRowChrome: Double = assistantHeaderHeight
+        + Double(assistantHeaderSpacing) + Double(userBubblePadding) * 2
 
     // Images (WireImageView):
     /// Render cap (maxWidth/maxHeight) for inline images.

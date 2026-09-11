@@ -40,6 +40,15 @@ public enum RenderActivity {
     /// hypothesis confirmed → height-commit gate / estimator seeding.
     public nonisolated(unsafe) static var heightDeltasWhileScrolling = 0
     public nonisolated(unsafe) static var heightDeltaPointsWhileScrolling = 0
+    /// WORST-OFFENDER ATTRIBUTION for the above (hd/p answers "how bad", never
+    /// "which row"). Always-on rather than DEBUG-gated because device profiling
+    /// runs the RELEASE build, where dbgDriverLog is compiled out. `wasSeeded`
+    /// separates the two causes that hd conflates: an UNSEEDED row attaching at
+    /// the 44pt fallback (coverage gap — some row kind gets no estimate at all)
+    /// versus a seeded row whose estimate was simply wrong (calibration).
+    public nonisolated(unsafe) static var worstHeightDelta = 0
+    public nonisolated(unsafe) static var worstHeightDeltaRow = ""
+    public nonisolated(unsafe) static var worstHeightDeltaWasSeeded = false
     /// ANALYTIC height tier (estimator-seeded reserves): how many estimates
     /// were seeded into the bounds registry, how many have since been
     /// superseded by real measures, and the cumulative |measure − estimate|

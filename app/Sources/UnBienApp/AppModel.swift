@@ -905,6 +905,28 @@ public final class AppModel: ObservableObject {
         transcripts[session.id]?.activeTurnID
     }
 
+    /// Whether the peer is working — the busy-surface question. Broader than
+    /// `activeTurnID`, which only knows about turns whose start we witnessed;
+    /// a status refetch can report busy for one we didn't.
+    public func isBusy(for session: LiveSession) -> Bool {
+        guard let state = transcripts[session.id] else { return false }
+        return state.activeTurnID != nil || state.peerBusy
+    }
+
+    /// Re-ask every open session for its authoritative state. The reconstruction
+    /// paths already do this, but they only run when a socket is found DEAD; a
+    /// session backgrounded across a whole turn keeps a live socket and so
+    /// never re-asks, which is exactly when the busy flag has gone stale.
+    public func refreshBusyState() {
+        for session in openSessions.values {
+            guard let connection = connections[session.relayID] else { continue }
+            Task {
+                try? await connection.send(.getState(id: UUID().uuidString),
+                                           toPeer: session.peerEPK, room: session.roomID)
+            }
+        }
+    }
+
     /// Whether the paired pi advertised a capability for this session. Default
     /// FALSE when no handshake was received (older pi) — the app gates UI off.
     public func supports(_ capability: String, session: LiveSession) -> Bool {

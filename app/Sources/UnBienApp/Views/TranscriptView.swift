@@ -515,6 +515,9 @@ struct TranscriptView: View {
             }
             model.rememberHeights(stableHeights(), session: session)
             model.flushScrollMemory()
+            // Capture FIRST, then abandon speculative estimator work — nothing
+            // downstream needs a seed for a view that's gone.
+            windowDriver.stop()
         }
         .task { await model.openSession(session) }
         // Session tree browser (design 01M1FTV2 append 8): full-screen when the
