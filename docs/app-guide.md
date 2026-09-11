@@ -15,7 +15,7 @@ neither.
 
 ## First run — your Owner key
 
-![The welcome screen, offering to create an Owner key](images/01-welcome.png)
+![The welcome screen, offering to create an Owner key](images/01-welcome.png){width=40% fig-align="center"}
 
 The app opens on a single decision. The **Owner key** is your identity across
 every relay and machine you ever pair — not an account, not a login, and not
@@ -38,13 +38,13 @@ if you want one identity across your devices.
 
 ## Demo mode — look around first
 
-![The Sessions list showing the built-in Demo group](images/02-demo-home.png)
+![The Sessions list showing the built-in Demo group](images/02-demo-home.png){width=40% fig-align="center"}
 
 Before any relay exists, the list shows a **Demo** group with canned sessions.
 It is a real transcript rendered by the real UI — tool cards, diffs, syntax
 highlighting — with no network behind it.
 
-![A demo transcript, marked read-only](images/03-demo.png)
+![A demo transcript, marked read-only](images/03-demo.png){width=40% fig-align="center"}
 
 The banner says **Demo data — canned transcript, read-only**, and the composer
 is disabled to match. It is worth opening once: the tool cards here are the
@@ -68,7 +68,7 @@ On the Sessions screen, the toolbar has three buttons:
 
 Tap **+** and give the relay a name and a URL.
 
-![The relay sheet: a display name and the relay URL](images/04-relay-add2.png)
+![The relay sheet: a display name and the relay URL](images/04-relay-add2.png){width=40% fig-align="center"}
 
 The **name** is yours — a label for the list, nothing more. The **URL** is the
 address your _phone_ can reach, which is not always the address your machine
@@ -81,7 +81,7 @@ Reopening this sheet later (**Relay settings** on the relay's card) is also how
 you remove one. Removing a relay **also drops the machines paired on it** — the
 pairings live per-relay, so you would need to pair again.
 
-![Sessions with a relay added but nothing paired yet](images/05-home-prepair.png)
+![Sessions with a relay added but nothing paired yet](images/05-home-prepair.png){width=40% fig-align="center"}
 
 With the relay saved you get a green **online** dot and an empty group: _"No
 live sessions — pair a machine or start Pi with un-bien."_ Online means the app
@@ -103,7 +103,7 @@ On the machine, in Pi:
 
 Then tap **Pair a machine** in the app.
 
-![The pairing sheet, with a code field, a QR scanner and a device name](images/06-pair.png)
+![The pairing sheet, with a code field, a QR scanner and a device name](images/06-pair.png){width=40% fig-align="center"}
 
 Two ways across, and they are equivalent:
 
@@ -118,7 +118,7 @@ would name in `/unbien revoke`. Tap **Pair**.
 > The pairing code is single-use and short-lived. If it expires, re-run
 > `/unbien pair`.
 
-![Sessions after pairing, showing a live session and a machine](images/07-home-postpair.png)
+![Sessions after pairing, showing a live session and a machine](images/07-home-postpair.png){width=40% fig-align="center"}
 
 After pairing the group fills in, and it holds **two different kinds of row**:
 
@@ -134,7 +134,7 @@ After pairing the group fills in, and it holds **two different kinds of row**:
 
 ## Reading a transcript
 
-![A transcript: user bubble, thought card, tool card, assistant prose](images/09-transcript2.png)
+![A transcript: user bubble, thought card, tool card, assistant prose](images/09-transcript2.png){width=40% fig-align="center"}
 
 Top to bottom, the pieces:
 
@@ -166,7 +166,7 @@ model, thinking level, token usage, and whether the context has been compacted.
 Agents can stop and ask. When one does, the question arrives on your phone as a
 sheet you answer directly — you are not reduced to watching a terminal wait.
 
-![The Questions sheet: a multiple-choice ask with per-option explanations](images/24-ask.png)
+![The Questions sheet: a multiple-choice ask with per-option explanations](images/24-ask.png){width=40% fig-align="center"}
 
 Pick an option, optionally **Add a note**, and **Submit**. The answer goes back
 to the agent and the turn continues.
@@ -185,7 +185,7 @@ Two things worth knowing:
 
 When the agent delegates, the subagent shows up in three places at once.
 
-![A subagent call inside the transcript](images/10-transcript-subagent.png)
+![A subagent call inside the transcript](images/10-transcript-subagent.png){width=40% fig-align="center"}
 
 **In the transcript**, as a `subagent` tool card with a status glyph. While the
 turn runs, the composer's send button becomes a red **stop** — that is your
@@ -195,12 +195,12 @@ Notice the **people icon** in the nav bar, with a dot on it. That is a
 **panel** — a side surface the machine publishes, not a fixed part of the app.
 The dot means it has changed since you last looked.
 
-![The Agents panel, listing a running subagent](images/11-agent-view.png)
+![The Agents panel, listing a running subagent](images/11-agent-view.png){width=40% fig-align="center"}
 
 **In the Agents panel**, each subagent is listed with its id, start time and
 live status (`running` here).
 
-![The Sessions list with a subagent nested under its parent](images/12-home-subagent.png)
+![The Sessions list with a subagent nested under its parent](images/12-home-subagent.png){width=40% fig-align="center"}
 
 **And on the Sessions list**, nested under its parent with a `↳` and a status
 glyph — spinning gears for running, a check when done, a cross if it failed.
@@ -211,7 +211,7 @@ session in its own right.
 
 ## Managing sessions
 
-![The session context menu: clone, rename, end](images/13-home-clone-delete.png)
+![The session context menu: clone, rename, end](images/13-home-clone-delete.png){width=40% fig-align="center"}
 
 Long-press any session row:
 
@@ -229,7 +229,7 @@ which drops it locally without touching the machine.
 
 You can restart the conversation from any earlier point. Long-press a message:
 
-![The message context menu: copy, fork, branch](images/14-transcript-fork-clone.png)
+![The message context menu: copy, fork, branch](images/14-transcript-fork-clone.png){width=40% fig-align="center"}
 
 - **Copy** — the message text.
 - **Fork From Here** — a _new session_ that inherits history up to this point.
@@ -240,18 +240,18 @@ The distinction is where the result lives: a **fork** gives you a separate
 session in the list; a **branch** stays in this session and becomes navigable
 history.
 
-![After forking, the composer waits for the new first message](images/15-transcript-postfork.png)
+![After forking, the composer waits for the new first message](images/15-transcript-postfork.png){width=40% fig-align="center"}
 
 Either way you land with the history above you and the composer ready for the
 message that takes a different direction.
 
-![A branched session, with the branch icon now in the nav bar](images/21-transcript-postbranch3.png)
+![A branched session, with the branch icon now in the nav bar](images/21-transcript-postbranch3.png){width=40% fig-align="center"}
 
 Once a session has branches, a **branch icon** appears in the nav bar. It is
 not there before — its presence is itself the signal that this session has more
 than one path through it.
 
-![The session tree, filtered to All or Leaves](images/22-transcript-treenav.png)
+![The session tree, filtered to All or Leaves](images/22-transcript-treenav.png){width=40% fig-align="center"}
 
 Tapping it opens the **session tree**: every entry in the conversation, with
 the branch points marked and alternate paths dimmed. The **All / Leaves**
@@ -267,7 +267,7 @@ Panels are surfaces the **machine** publishes; they appear as nav-bar buttons
 only when a session actually has them, each with a dot when it has unseen
 changes. Agents (above) is one. Plan is the other.
 
-![The Plan panel, with counts and available work](images/23-plan.png)
+![The Plan panel, with counts and available work](images/23-plan.png){width=40% fig-align="center"}
 
 The Plan panel summarises the work queue — _ready · active · blocked · done_ —
 and lists what is actionable now. It is driven by the plan tooling on the
