@@ -7,6 +7,14 @@ use tracing::info;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // --version / -V: the first diagnostic question under the deploy-stale-
+    // binary trap is "which build is running" — print and exit.
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 && (args[1] == "--version" || args[1] == "-V") {
+        println!("unbien-relay {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     init_tracing();
 
     let port: u16 = std::env::var("UNBIEN_RELAY_PORT")

@@ -11,9 +11,33 @@
  *   pnpm build && node dist/bin/launcher.js
  * (An OS-service unit for keepalive is a separate install step.)
  */
+import { readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
+import { dirname, join } from "node:path"
 import { startLauncher } from "../launcher/launcher.js"
 
+/** Package version for --version reporting (the deploy-stale-binary trap
+ *  makes "which build is running" the first diagnostic question). */
+function version(): string {
+  try {
+    // ESM: walk up from dist/bin/ to the package root
+    const here = dirname(fileURLToPath(import.meta.url))
+    const pkg = JSON.parse(
+      readFileSync(join(here, "..", "..", "package.json"), "utf8"),
+    ) as { version?: string }
+    return pkg.version ?? "unknown"
+  } catch {
+    return "unknown"
+  }
+}
+
 async function main(): Promise<void> {
+  const arg = process.argv[2]
+  if (arg === "--version" || arg === "-V") {
+    // eslint-disable-next-line no-console
+    console.log(`un-bien launcher ${version()}`)
+    return
+  }
   const handle = await startLauncher()
   // eslint-disable-next-line no-console
   console.log(
