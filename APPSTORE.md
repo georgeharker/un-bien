@@ -338,14 +338,14 @@ Attach to your Pi coding-agent sessions from your phone - stream transcripts, wa
 
 ## Description
 
-Un Bien is a native iOS/macOS client for the Pi coding agent (http://pi.dev). Pair your phone with your own machines over a relay you host, then attach to running agent sessions: live transcripts with styled edit diffs and tool results, inline images, thinking blocks, plan & subagent panels — and an interactive prompt for ask-style clarifications. Steer mid-turn or queue follow-ups; launch new sessions on paired machines (opt-in, machine-side).
+Un Bien is a native iOS/macOS client for the Pi coding agent (<http://pi.dev>). Pair your phone with your own machines over a relay you host, then attach to running agent sessions: live transcripts with styled edit diffs and tool results, inline images, thinking blocks, plan & subagent panels — and an interactive prompt for ask-style clarifications. Steer mid-turn or queue follow-ups; launch new sessions on paired machines (opt-in, machine-side).
 
 Self-hosted by design: there is no Un Bien cloud, no account, and no telemetry — your relay, your keys, your machines. Includes a read-only demo mode so you can look around without any setup.
 
 Get started (self-hosting in ~5 minutes):
-https://docs.georgeharker.com/un-bien/main/docs/install.html
-App guide: 
-https://docs.georgeharker.com/un-bien/main/docs/app-guide.html
+<https://docs.georgeharker.com/un-bien/main/docs/install.html>
+App guide:
+<https://docs.georgeharker.com/un-bien/main/docs/app-guide.html>
 
 ## Keywords
 
@@ -353,7 +353,7 @@ pi,agent,coding,developer,ai,remote,terminal,relay,transcript,mesh
 
 ## URL
 
-https://docs.georgeharker.com/un-bien/main
+<https://docs.georgeharker.com/un-bien/main>
 
 ## Version
 
@@ -367,7 +367,7 @@ George Harker
 
 Un-bien functions like claude code's remote functionality, or remote-pi (also for Pi) which are both on the app store.
 
-It's target audience is for developers using Pi who would like to be able to access it via their phone.  Un-bien remotely controls pi and allows interaction to be directed from the phone, and LLm output to be read there.
+It's target audience is for developers using Pi who would like to be able to access it via their phone. Un-bien remotely controls pi and allows interaction to be directed from the phone, and LLm output to be read there.
 
 Unlike claude code, there is no centralized server. Pi is a developer AI harness for using a model you choose in an agentic way you define. As part of this philosophy, un-bien is an extension for Pi and provides remote connect functionality when paired with this iOS app. Some user setup is required.
 
@@ -375,24 +375,24 @@ This app is a client for the user's own self-hosted infrastructure: it connects 
 
 The app is fully exercisable without any infrastructure: it ships a built-in demo mode (on by default on a fresh install, also via Settings → Demo) — canned sessions replayed through the app's real rendering pipeline: transcripts, tool-call cards, an interactive clarification prompt, and a nested subagent view.
 
-Real setup instructions (public, with a 5-minute quickstart — relay, agent, pairing): https://docs.georgeharker.com/un-bien/main/docs/install.html
+Real setup instructions (public, with a 5-minute quickstart — relay, agent, pairing): <https://docs.georgeharker.com/un-bien/main/docs/install.html>
 
-App guide: https://docs.georgeharker.com/un-bien/main/docs/app-guide.html
+App guide: <https://docs.georgeharker.com/un-bien/main/docs/app-guide.html>
 
 App Transport Security: the app connects only to user-configured, self-hosted relay endpoints (localhost, LAN, VPN, or the user's own server). No
 fixed hosts exist to enumerate, and the app makes no connections beyond the relay address the user enters.
 
 Export compliance: standard cryptographic functions only (CryptoKit Ed25519 + TLS) — exempt; declared in Info.plist.
 
-Privacy: the app collects nothing — no analytics, no accounts, no tracking. Policy: https://docs.georgeharker.com/un-bien/main/docs/privacy.html
+Privacy: the app collects nothing — no analytics, no accounts, no tracking. Policy: <https://docs.georgeharker.com/un-bien/main/docs/privacy.html>
 
-The attached demo video can be replicated assumin you have Pi (http://pi.dev) installed, have installed un-bien `pi install un-bien`, some features demonstrated require additional extensions (subagents and plans). A relay must have been set up - see docs.
+The attached demo video can be replicated assumin you have Pi (<http://pi.dev>) installed, have installed un-bien `pi install un-bien`, some features demonstrated require additional extensions (subagents and plans). A relay must have been set up - see docs.
 
 ## Notes Mac
 
 Un-bien functions like claude code's remote functionality, or remote-pi (also for Pi) which are both on the app store.
 
-It's target audience is for developers using Pi who would like to be able to access it via their phone or another mac.  Un-bien remotely controls pi and allows interaction to be directed from the phone, and LLm output to be read there.
+It's target audience is for developers using Pi who would like to be able to access it via their phone or another mac. Un-bien remotely controls pi and allows interaction to be directed from the phone, and LLm output to be read there.
 
 Unlike claude code, there is no centralized server. Pi is a developer AI harness for using a model you choose in an agentic way you define. As part of this philosophy, un-bien is an extension for Pi and provides remote connect functionality when paired with this mac app. Some user setup is required.
 
@@ -400,16 +400,15 @@ This app is a client for the user's own self-hosted infrastructure: it connects 
 
 The app is fully exercisable without any infrastructure: it ships a built-in demo mode (on by default on a fresh install, also via Settings → Demo) — canned sessions replayed through the app's real rendering pipeline: transcripts, tool-call cards, an interactive clarification prompt, and a nested subagent view.
 
-Real setup instructions (public, with a 5-minute quickstart — relay, agent, pairing): https://docs.georgeharker.com/un-bien/main/docs/install.html
+Real setup instructions (public, with a 5-minute quickstart — relay, agent, pairing): <https://docs.georgeharker.com/un-bien/main/docs/install.html>
 
-App guide: https://docs.georgeharker.com/un-bien/main/docs/app-guide.html
+App guide: <https://docs.georgeharker.com/un-bien/main/docs/app-guide.html>
 
 App Transport Security: the app connects only to user-configured, self-hosted relay endpoints (localhost, LAN, VPN, or the user's own server). No
 fixed hosts exist to enumerate, and the app makes no connections beyond the relay address the user enters.
 
 Export compliance: standard cryptographic functions only (CryptoKit Ed25519 + TLS) — exempt; declared in Info.plist.
 
-Privacy: the app collects nothing — no analytics, no accounts, no tracking. Policy: https://docs.georgeharker.com/un-bien/main/docs/privacy.html
+Privacy: the app collects nothing — no analytics, no accounts, no tracking. Policy: <https://docs.georgeharker.com/un-bien/main/docs/privacy.html>
 
-The attached demo video can be replicated assumin you have Pi (http://pi.dev) installed, have installed un-bien `pi install un-bien`, some features demonstrated require additional extensions (subagents and plans). A relay must have been set up - see docs.
-
+The attached demo video can be replicated assumin you have Pi (<http://pi.dev>) installed, have installed un-bien `pi install un-bien`, some features demonstrated require additional extensions (subagents and plans). A relay must have been set up - see docs.
