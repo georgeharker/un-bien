@@ -2,7 +2,13 @@ import { Buffer } from "node:buffer"
 import { hostname, homedir } from "node:os"
 import { RelayClient } from "../transport/relay_client.js"
 import { PlainPeerChannel } from "../transport/peer_channel.js"
-import { getOrCreateEd25519Keypair } from "../pairing/storage.js"
+import {
+  getOrCreateEd25519Keypair,
+  listPeers,
+  pairingAllowList,
+  nextAllowListVersion,
+} from "../pairing/storage.js"
+import { buildSignedAllowList } from "../pairing/signed_allow_list.js"
 import { roomIdForControl } from "../rooms.js"
 import { _findKnownPeer } from "../pairing/peer_trust.js"
 import { _launchSession, _expandTilde, launchDirAllowed } from "../launch.js"
@@ -239,6 +245,24 @@ export async function startLauncher(): Promise<LauncherHandle> {
       // caps ride room_meta so the app filters the control room from the announce.
       roomMeta: { name: hostname(), cwd: homedir(), caps: [...DAEMON_CAPS] },
     })
+    // ALLOW-LIST PARITY (design 01M23MKVG + 01M23MB5D): the launcher is the
+    // machine's THIRD connect path but the ONLY one live on a pi-less machine —
+    // without its own signed pairing_set push, a fresh relay (or wiped DB)
+    // leaves it unreachable until a pi session happens to start. Same machine
+    // key = same signer = exactly as authoritative as the extension's push.
+    // The relay's monotonic StaleVersion rejection makes a concurrent push
+    // from a sibling extension benign (higher version wins, no downgrade).
+    try {
+      const [peers, version] = await Promise.all([
+        listPeers(),
+        nextAllowListVersion(),
+      ])
+      const owners = pairingAllowList(peers)
+      const { blob, sig } = buildSignedAllowList(kp, owners, version)
+      r.sendControl({ type: "pairing_set", blob, sig })
+    } catch (err) {
+      envLog(`launcher pairing_set push failed: ${String(err)}`)
+    }
     envLog(
       `launcher: connected to control room ${roomId} (epk ${epk.slice(0, 12)}…)`,
     )

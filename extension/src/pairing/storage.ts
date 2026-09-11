@@ -104,27 +104,80 @@ const PI_DIR = unbienStateHome()
 const IDENTITY_FILE = join(PI_DIR, "identity.json")
 const PEERS_PATH = join(PI_DIR, "peers.json")
 const ALLOW_VERSION_PATH = join(PI_DIR, "allow-list-version")
+const ALLOW_VERSION_LOCK = join(PI_DIR, "allow-list-version.lock")
+
+/** Cross-process lockfile for the version mint (see nextAllowListVersion).
+ *  Atomic O_EXCL create (`wx`) — POSIX and Windows both give exclusive
+ *  creation semantics. The holder writes its PID; a stale lock (holder
+ *  crashed without releasing) is broken after LOCK_STALE_MS so a dead
+ *  process can never wedge the mint forever. Best-effort: if the lock
+ *  cannot be acquired within LOCK_TIMEOUT_MS we proceed WITHOUT it — the
+ *  relay's monotonic StaleVersion rejection already resolves a lost race
+ *  benignly, so the lock is an optimization (no duplicate version, no
+ *  rejection noise), not a correctness requirement. */
+const LOCK_STALE_MS = 5_000
+const LOCK_TIMEOUT_MS = 2_000
+const LOCK_RETRY_MS = 10
+
+async function withVersionLock<T>(fn: () => Promise<T>): Promise<T> {
+  const fsp = await import("node:fs/promises")
+  let handle: import("node:fs/promises").FileHandle | null = null
+  const deadline = Date.now() + LOCK_TIMEOUT_MS
+  try {
+    while (handle === null) {
+      try {
+        handle = await fsp.open(ALLOW_VERSION_LOCK, "wx", 0o600)
+        await handle.writeFile(String(process.pid))
+      } catch (err: unknown) {
+        const code = (err as { code?: string }).code
+        if (code !== "EEXIST") throw err
+        // Stale-lock break: holder crashed without releasing
+        try {
+          const st = await fsp.stat(ALLOW_VERSION_LOCK)
+          if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
+            await fsp.unlink(ALLOW_VERSION_LOCK).catch(() => {})
+            continue // re-attempt immediately
+          }
+        } catch {
+          /* lock vanished between open-fail and stat — retry */
+        }
+        if (Date.now() >= deadline) {
+          return fn() // proceed unlocked — benign (see doc above)
+        }
+        await new Promise((r) => setTimeout(r, LOCK_RETRY_MS))
+      }
+    }
+    return await fn()
+  } finally {
+    if (handle !== null) {
+      await fsp.unlink(ALLOW_VERSION_LOCK).catch(() => {})
+      await handle.close().catch(() => {})
+    }
+  }
+}
 
 let _allowVersionChain: Promise<number> = Promise.resolve(0)
 /** Strictly-increasing, restart-persistent version for the machine-signed
  *  allow-list (design 01M23MKVG). Floored at Date.now() so a newer push always
  *  outranks an older one — the relay's monotonic check then rejects any replay
- *  of a stale signed blob. Serialized per-process against its own read-bump-write
- *  race; cross-process races (sibling pi sessions sharing this machine key) are
- *  resolved by the relay keeping the higher version. */
+ *  of a stale signed blob. Serialized per-process (the promise chain) AND
+ *  cross-process (the lockfile above): the launcher daemon and sibling pi
+ *  sessions share this machine key, so both raced the read-bump-write. */
 export function nextAllowListVersion(): Promise<number> {
-  _allowVersionChain = _allowVersionChain.then(async () => {
-    let floor = 0
-    try {
-      floor =
-        Number.parseInt(await readFile(ALLOW_VERSION_PATH, "utf8"), 10) || 0
-    } catch {
-      /* first use — no version file yet */
-    }
-    const next = Math.max(Date.now(), floor + 1)
-    await writeFile(ALLOW_VERSION_PATH, String(next), { mode: 0o600 })
-    return next
-  })
+  _allowVersionChain = _allowVersionChain.then(() =>
+    withVersionLock(async () => {
+      let floor = 0
+      try {
+        floor =
+          Number.parseInt(await readFile(ALLOW_VERSION_PATH, "utf8"), 10) || 0
+      } catch {
+        /* first use — no version file yet */
+      }
+      const next = Math.max(Date.now(), floor + 1)
+      await writeFile(ALLOW_VERSION_PATH, String(next), { mode: 0o600 })
+      return next
+    }),
+  )
   return _allowVersionChain
 }
 
