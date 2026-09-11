@@ -47,6 +47,7 @@ multiple Pi sessions on your machines can discover and message each other.
 | ------------------------------------------------ | -------------------------------------- |
 | Get the big picture                              | [Overview (README)](README.md)         |
 | Install & set everything up                      | [Install & setup](docs/install.md)     |
+| Find my way around the app                       | [App guide](docs/app-guide.md)         |
 | Use the extension & commands                     | [Extension guide](extension/README.md) |
 | Go deeper (design, protocol, building & signing) | [Design & development](docs/design.md) |
 

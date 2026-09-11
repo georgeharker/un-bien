@@ -370,6 +370,10 @@ launch a new session.
 
 Manage devices with `/unbien devices` and `/unbien revoke <shortid>`.
 
+From here on it's the app: the [App guide](app-guide.md) walks the onboarding
+flow and the surfaces — adding a relay, reading a transcript, subagents,
+forking and branching.
+
 ---
 
 ## Where things live
