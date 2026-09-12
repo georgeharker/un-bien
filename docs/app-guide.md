@@ -122,9 +122,9 @@ would name in `/unbien revoke`. Tap **Pair**.
 
 After pairing the group fills in, and it holds **two different kinds of row**:
 
-- **Sessions** — `geohar` with its working directory `/Users/geohar`. Tap to
-  attach.
-- **Machines** — `cascade`, with a monitor icon and _"searching for daemon…"_.
+- **Sessions** — `<username>` with its working directory `/Users/<username>`.
+  Tap to attach.
+- **Machines** — `<hostname>`, with a monitor icon and _"searching for daemon…"_.
   This is a paired machine with no live Pi session. If the
   [launcher](../launcher/README.md) is installed and remote launch is enabled
   for a directory, you can start a session on it from here; the spinner is the
