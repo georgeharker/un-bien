@@ -215,6 +215,23 @@ describe("createRpcEnvelope — wiring", () => {
     for (const name of RPC_EVENT_NAMES) expect(handlers.has(name)).toBe(true)
   })
 
+  it("registers against a host whose API methods need their receiver", () => {
+    // pi hands the factory an object-literal api that closes over its state, so
+    // a detached `on` works there. omp hands over a class instance whose methods
+    // read `this.extension`: calling `on` unbound throws, which aborts the whole
+    // extension load (`undefined is not an object (evaluating 'this.extension')`).
+    class ClassBasedPi {
+      readonly handlers = new Map<string, (payload: unknown) => void>()
+      on(event: string, handler: (payload: unknown) => void): void {
+        this.handlers.set(event, handler)
+      }
+    }
+    const host = new ClassBasedPi()
+    createRpcEnvelope(host as unknown as ExtensionAPI, () => {})
+    for (const name of RPC_EVENT_NAMES)
+      expect(host.handlers.has(name)).toBe(true)
+  })
+
   it("broadcasts the frame when an event fires", () => {
     const { pi, handlers } = fakePi()
     const out: unknown[] = []
