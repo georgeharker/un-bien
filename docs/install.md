@@ -34,7 +34,10 @@ to look around first.)
 
 ### 1. Run a relay (any host your phone can reach)
 
-Needs a Rust toolchain ([rustup](https://rustup.rs)):
+On macOS or Linux with Homebrew, the [Homebrew guide](homebrew.md) installs
+the relay and runs it as a login service.
+
+For a direct Cargo installation, use a Rust toolchain ([rustup](https://rustup.rs)):
 
 ```bash
 cargo install un-bien-relay   # compiles the binary (a few minutes)

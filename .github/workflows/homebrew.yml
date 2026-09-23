@@ -1,0 +1,54 @@
+---
+name: Homebrew
+
+"on":
+  push:
+    branches: [main]
+    paths:
+      - "HomebrewFormula/**"
+      - ".github/workflows/homebrew.yml"
+  pull_request:
+    paths:
+      - "HomebrewFormula/**"
+      - ".github/workflows/homebrew.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: homebrew-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      HOMEBREW_NO_ANALYTICS: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: Homebrew/actions/setup-homebrew@main
+
+      # Tap the checked-out PR revision, including changes to the formula.
+      # An explicit URL lets the source repository double as the tap.
+      - name: Tap this checkout
+        run: brew tap --custom-remote georgeharker/un-bien "$GITHUB_WORKSPACE"
+
+      - name: Check formula style
+        run: brew style "$(brew --repository georgeharker/un-bien)/HomebrewFormula/unbien-relay.rb"
+
+      - name: Build the published release
+        run: brew install --build-from-source georgeharker/un-bien/unbien-relay
+
+      - name: Audit the formula
+        run: brew audit --strict georgeharker/un-bien/unbien-relay
+
+      - name: Test health endpoint and database initialization
+        run: brew test georgeharker/un-bien/unbien-relay

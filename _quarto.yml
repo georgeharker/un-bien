@@ -8,6 +8,7 @@ project:
     - index.md
     - README.md # README files must be listed explicitly; globs skip them
     - docs/install.md
+    - docs/homebrew.md
     - docs/app-guide.md
     - docs/changelog.md
     - docs/privacy.md
@@ -88,6 +89,8 @@ website:
         contents:
           - text: "Self-host the relay"
             href: relay/README.md
+          - text: "Homebrew relay installation"
+            href: docs/homebrew.md
           - text: "Machine launcher daemon"
             href: launcher/README.md
           - text: "Terminal client (CLI)"

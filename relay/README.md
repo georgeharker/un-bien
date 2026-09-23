@@ -96,6 +96,12 @@ strongly recommend running your own relay.**
 Running your own relay removes the shared Relay operator from the trust path and
 places the TLS endpoint, executable, and storage under infrastructure you control.
 
+### Homebrew (macOS / Linux)
+
+Install the native relay and manage it with `brew services` using the
+[Homebrew guide](../docs/homebrew.md). It covers persistent state, configuration,
+upgrades, and switching from an existing installation.
+
 ### Docker (quickest)
 
 ```bash
