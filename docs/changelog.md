@@ -58,6 +58,20 @@ requirements where they matter.
 
 ## Extension (@geohar/un-bien)
 
+### 0.20.15 (2026-09-24)
+
+- **herdr compatibility with herdr >=0.9.1** — `workspace create` no longer
+  sends the removed `--json` flag (newer herdr rejects it outright, which
+  made every herdr remote-launch fail before reaching the pane). Output is
+  JSON by default; the response shape is unchanged. (PR #4, joshkaspar)
+- **Launcher/relay services no longer guess a wrong `PI_CODING_AGENT_DIR`**
+  — when the var is unset in the installing shell, generated launchd/systemd
+  units previously baked in `~/.config/pi/agent`, silently overriding the
+  correct `~/.pi` fallback and crash-looping the service with "no relay
+  configured". Units now snapshot `""` and resolve exactly as the installing
+  shell does. Shared resolver extracted to one function used by both
+  installers. (PR #5, joshkaspar)
+
 ### 0.20.14 (2026-09-23)
 
 - **Resume works on the herdr backend** — herdr passes trailing argv
