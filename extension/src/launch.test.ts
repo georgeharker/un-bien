@@ -78,7 +78,9 @@ describe("launch backends — tmux/herdr argv + tilde expansion", () => {
     ])
   })
 
-  test("remote launch: herdr workspace-create argv is a safe array, cwd + label, JSON", () => {
+  test("remote launch: herdr workspace-create argv is a safe array, cwd + label", () => {
+    // No --json flag: herdr >=0.9.1 removed it and outputs JSON by default
+    // (older builds rejected it outright with "unknown option: --json").
     expect(_buildHerdrWorkspaceArgs("pi-foo", "/tmp/work")).toEqual([
       "workspace",
       "create",
@@ -87,7 +89,6 @@ describe("launch backends — tmux/herdr argv + tilde expansion", () => {
       "--label",
       "pi-foo",
       "--no-focus",
-      "--json",
     ])
   })
 

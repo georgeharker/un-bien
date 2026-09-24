@@ -107,8 +107,11 @@ function _safeHerdrName(name: string | undefined, fallback: string): string {
   return clean.slice(0, 32).replace(/-+$/g, "") || "pi"
 }
 
-/** argv for creating a detached herdr workspace in `cwd` (JSON response).
- *  ARRAY (never a shell string) so cwd/label can't inject. Exported for tests. */
+/** argv for creating a detached herdr workspace in `cwd`. No `--json` flag:
+ *  herdr >=0.9.1 removed it (output is JSON by default) and rejects it
+ *  outright ("unknown option: --json"), which made every remote-launch
+ *  fail before this hit the pane. ARRAY (never a shell string) so
+ *  cwd/label can't inject. Exported for tests. */
 export function _buildHerdrWorkspaceArgs(label: string, cwd: string): string[] {
   return [
     "workspace",
@@ -118,7 +121,6 @@ export function _buildHerdrWorkspaceArgs(label: string, cwd: string): string[] {
     "--label",
     label,
     "--no-focus",
-    "--json",
   ]
 }
 
@@ -131,7 +133,8 @@ export function _buildHerdrAgentStartArgs(
   return ["agent", "start", agentName, "--kind", "pi", "--pane", paneId]
 }
 
-/** Extract `.result.root_pane.pane_id` from `herdr workspace create --json`. */
+/** Extract `.result.root_pane.pane_id` from `herdr workspace create`'s
+ *  (default-JSON, as of herdr >=0.9.1) stdout. */
 export function _herdrPaneIdFromCreate(stdout: string): string | null {
   try {
     const j = JSON.parse(stdout) as {
