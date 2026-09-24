@@ -101,6 +101,19 @@ describe("launch backends — tmux/herdr argv + tilde expansion", () => {
       "--pane",
       "pane-42",
     ])
+    // No extra argv -> no bare `--` (herdr docs: args AFTER `--` pass through;
+    // a trailing empty `--` is unnecessary).
+    expect(_buildHerdrAgentStartArgs("pi-foo", "pane-42")).not.toContain("--")
+  })
+
+  test("remote launch: herdr agent-start passes resume argv after `--` (tmux parity)", () => {
+    const argv = _buildHerdrAgentStartArgs("pi-foo", "pane-42", [
+      "--session",
+      "01a0128d",
+    ])
+    const idx = argv.indexOf("--")
+    expect(idx).toBeGreaterThan(argv.indexOf("--pane"))
+    expect(argv.slice(idx + 1)).toEqual(["--session", "01a0128d"])
   })
 
   test("remote launch: herdr pane id is parsed from `workspace create --json`", () => {
@@ -148,8 +161,14 @@ describe("launch backends — resume passthrough", () => {
     expect(argv).not.toContain("--session")
   })
 
-  test("herdr + resume is a clear error (no arg passthrough yet)", () => {
-    const err = _launchSession("herdr", "/tmp/proj", undefined, "01a0128d")
-    expect(err).toMatch(/resume.*herdr/i)
+  test("herdr + resume is NOT refused (argv passthrough supported)", () => {
+    // herdr `agent start -- <args>` passes trailing args to pi unchanged, so
+    // herdr resumes exactly like tmux. A NONEXISTENT cwd proves the old
+    // resume-gate is gone: validation now reaches the cwd check (error there)
+    // instead of the resume refusal firing first — with zero launch side
+    // effects on machines that DO have herdr installed.
+    const err = _launchSession("herdr", "/tmp/herdr-argv-passthrough-does-not-exist", undefined, "01a0128d")
+    expect(err).toMatch(/cwd does not exist/)
+    expect(err).not.toMatch(/resume/i)
   })
 })

@@ -123,12 +123,16 @@ export function _buildHerdrWorkspaceArgs(label: string, cwd: string): string[] {
 }
 
 /** argv for exec-launching `pi` as a named herdr agent in an existing pane —
- *  herdr's canonical-executable launch (NOT keystroke injection). */
+ *  herdr's canonical-executable launch (NOT keystroke injection). `extraArgv`
+ *  rides after `--` (herdr passes trailing args UNCHANGED to the kind's
+ *  executable — how `pi --session <id>` reaches pi for resume parity). */
 export function _buildHerdrAgentStartArgs(
   agentName: string,
   paneId: string,
+  extraArgv: string[] = [],
 ): string[] {
-  return ["agent", "start", agentName, "--kind", "pi", "--pane", paneId]
+  const passthrough = extraArgv.length > 0 ? ["--", ...extraArgv] : []
+  return ["agent", "start", agentName, "--kind", "pi", "--pane", paneId, ...passthrough]
 }
 
 /** Extract `.result.root_pane.pane_id` from `herdr workspace create --json`. */
@@ -162,10 +166,10 @@ function _backendAvailable(backend: "tmux" | "herdr"): boolean {
 function _execFileCapture(
   cmd: string,
   args: string[],
-  opts: { env?: NodeJS.ProcessEnv } = {},
+  opts: { env?: NodeJS.ProcessEnv; timeout?: number } = {},
 ): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { timeout: 15_000, env: opts.env }, (err, stdout) => {
+    execFile(cmd, args, { timeout: opts.timeout ?? 15_000, env: opts.env }, (err, stdout) => {
       if (err) reject(err)
       else resolve(stdout)
     })
@@ -175,13 +179,16 @@ function _execFileCapture(
 /**
  * herdr launch (clean exec, no keystrokes): create a detached workspace in
  * `cwd`, then start `pi` as its agent via herdr's canonical-executable path
- * (`agent start --kind pi`). Fire-and-forget — the launched pi joins the relay
- * and the app attaches there; create/start errors are logged, not returned.
+ * (`agent start --kind pi -- [extra argv]`). extraArgv carries `--session`
+ * for the resume flow (herdr `--` passthrough, tmux parity). Fire-and-forget
+ * — the launched pi joins the relay and the app attaches there; create/start
+ * errors are logged, not returned.
  */
 async function _launchHerdr(
   cwd: string,
   agentName: string,
   launchReq?: string,
+  extraArgv: string[] = [],
 ): Promise<void> {
   // launchReq rides the spawn env: herdr's `agent start --kind pi` spawns pi
   // as a child, which inherits this env, so the extension's roomMeta can echo
@@ -200,7 +207,15 @@ async function _launchHerdr(
       envLog("herdr launch: no root_pane_id in `workspace create` output")
       return
     }
-    await _execFileCapture("herdr", _buildHerdrAgentStartArgs(agentName, paneId), spawnEnv)
+    // `agent start` is NOT fire-and-forget in herdr: it returns only after
+    // herdr detects the agent and marks it ready (up to 30s default). Our
+    // exec budget must exceed that, or a slow-starting pi gets killed by
+    // OUR timeout while herdr is still detecting.
+    await _execFileCapture(
+      "herdr",
+      _buildHerdrAgentStartArgs(agentName, paneId, extraArgv),
+      { ...spawnEnv, timeout: 45_000 },
+    )
     envLog(`herdr launch: agent '${agentName}' started in pane ${paneId}`)
   } catch (error) {
     envLog(
@@ -245,10 +260,6 @@ export function _launchSession(
   if (mode !== "tmux" && mode !== "herdr") {
     return `unknown launch mode '${mode}'`
   }
-  if (resume && mode === "herdr") {
-    // herdr's workspace plumbing passes no args through to pi yet.
-    return "resume is not supported on the herdr backend yet (tmux only)"
-  }
   if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
     return `cwd does not exist or is not a directory: ${cwd}`
   }
@@ -257,7 +268,13 @@ export function _launchSession(
   }
   if (mode === "herdr") {
     const agentName = _safeHerdrName(name, `pi-${basename(cwd) || "session"}`)
-    void _launchHerdr(cwd, agentName, launchReq)
+    // Resume parity with tmux: herdr passes trailing argv after `--`
+    // UNCHANGED to the kind's executable, so `pi --session <id>` reaches pi.
+    const resumeArgv =
+      typeof resume === "string" && resume.trim().length > 0
+        ? ["--session", resume.trim()]
+        : []
+    void _launchHerdr(cwd, agentName, launchReq, resumeArgv)
     return null
   }
   // One shared, named tmux session; each launch is a WINDOW in it (single
