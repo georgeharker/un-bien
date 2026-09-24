@@ -1,7 +1,7 @@
 {
   "name": "@geohar/un-bien-launcher",
-  "version": "0.1.16",
-  "description": "unbien-launcher — the un-bien machine-presence launcher daemon. A lightweight mesh peer (not a Pi session) that lets a paired app launch a Pi session on this machine even when no Pi is running here. Part of the un-bien monorepo; wraps the presence core exported by @geohar/un-bien.",
+  "version": "0.1.17",
+  "description": "unbien-launcher \u2014 the un-bien machine-presence launcher daemon. A lightweight mesh peer (not a Pi session) that lets a paired app launch a Pi session on this machine even when no Pi is running here. Part of the un-bien monorepo; wraps the presence core exported by @geohar/un-bien.",
   "type": "module",
   "bin": {
     "unbien-launcher": "dist/index.js"
