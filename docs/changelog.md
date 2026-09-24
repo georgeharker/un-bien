@@ -58,6 +58,15 @@ requirements where they matter.
 
 ## Extension (@geohar/un-bien)
 
+### 0.20.14 (2026-09-23)
+
+- **Resume works on the herdr backend** — herdr passes trailing argv
+  after `--` to the agent's executable, so remote resume now sends
+  `pi --session <id>` exactly like tmux (the "resume is tmux only"
+  refusal is gone). Also: the herdr `agent start` exec timeout raised
+  to 45s — herdr waits up to 30s for agent detection, and the old 15s
+  budget could kill a slow-starting launch mid-detection.
+
 ### 0.20.9 (2026-09-20)
 
 - **TUI built-in slash intercept** for remote clients: `/compact
