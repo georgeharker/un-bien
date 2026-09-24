@@ -24,7 +24,11 @@
 
 import { execFile, execFileSync } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
-import { renderUnbienEnvPlist, renderUnbienEnvSystemd } from "./install.js"
+import {
+  renderUnbienEnvPlist,
+  renderUnbienEnvSystemd,
+  resolvePiAgentDirSnapshot,
+} from "./install.js"
 import { dirname, join } from "node:path"
 import { userInfo } from "node:os"
 import { homedir } from "node:os"
@@ -242,12 +246,7 @@ export async function installRelayService(opts: {
     port,
     home: homedir(),
     logPath: relayLogPath(),
-    // Snapshot the installing shell's PI agent dir so the service resolves
-    // config the same way the user's terminal does (launchd's env is sparse
-    // and would otherwise fall back to ~/.pi).
-    piAgentDir:
-      process.env.PI_CODING_AGENT_DIR ??
-      join(homedir(), ".config", "pi", "agent"),
+    piAgentDir: resolvePiAgentDirSnapshot(),
     unbienEnvPlist: renderUnbienEnvPlist(),
     unbienEnvSystemd: renderUnbienEnvSystemd(),
     sessionDir: process.env.PI_CODING_AGENT_SESSION_DIR ?? "",
