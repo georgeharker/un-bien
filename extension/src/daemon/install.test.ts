@@ -28,6 +28,7 @@ import {
   launchdPlistPath,
   linkCliBinaries,
   renderTemplate,
+  resolvePiAgentDirSnapshot,
   systemdUnitPath,
   unlinkCliBinaries,
   userLocalBinDir,
@@ -261,6 +262,34 @@ describe("defaultRenderVars", () => {
     expect(isAbsolute(vars.home)).toBe(true)
     expect(vars.user.length).toBeGreaterThan(0)
     expect(vars.path.length).toBeGreaterThan(0)
+  })
+})
+
+describe("resolvePiAgentDirSnapshot", () => {
+  const SAVED = process.env["PI_CODING_AGENT_DIR"]
+  afterEach(() => {
+    if (SAVED === undefined) delete process.env["PI_CODING_AGENT_DIR"]
+    else process.env["PI_CODING_AGENT_DIR"] = SAVED
+  })
+
+  test("unset in the installing shell → \"\" (not a guessed path)", () => {
+    // unbienConfigHome() (paths.ts) treats "" exactly like unset and falls
+    // back to ~/.pi — the same place the installing shell itself resolves
+    // against — so "" reproduces that resolution exactly.
+    delete process.env["PI_CODING_AGENT_DIR"]
+    expect(resolvePiAgentDirSnapshot()).toBe("")
+  })
+
+  test("set in the installing shell → passed through unchanged", () => {
+    process.env["PI_CODING_AGENT_DIR"] = "/custom/agent/dir"
+    expect(resolvePiAgentDirSnapshot()).toBe("/custom/agent/dir")
+  })
+
+  test("defaultRenderVars().piAgentDir delegates to the same resolver", () => {
+    delete process.env["PI_CODING_AGENT_DIR"]
+    expect(defaultRenderVars().piAgentDir).toBe("")
+    process.env["PI_CODING_AGENT_DIR"] = "/custom/agent/dir"
+    expect(defaultRenderVars().piAgentDir).toBe("/custom/agent/dir")
   })
 })
 

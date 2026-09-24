@@ -229,6 +229,21 @@ export interface RenderVars {
   unbienEnvSystemd: string
 }
 
+/**
+ * Snapshot the installing shell's `PI_CODING_AGENT_DIR` for baking into a
+ * generated service unit — launchd/systemd environments are sparse and
+ * won't otherwise inherit it. Returns `""`, not a guessed path, when unset:
+ * `unbienConfigHome()` (paths.ts) treats `""` exactly like unset and falls
+ * back to `~/.pi`, the same thing the installing shell itself resolves
+ * against — so `""` reproduces the installing shell's resolution exactly,
+ * where any concrete guess risks disagreeing with it. Shared by both
+ * service installers (install.ts for the launcher, relayService.ts for the
+ * relay) so there's one definition to keep correct.
+ */
+export function resolvePiAgentDirSnapshot(): string {
+  return process.env["PI_CODING_AGENT_DIR"] ?? ""
+}
+
 export function defaultRenderVars(): RenderVars {
   return {
     node: findNodeBinary(),
@@ -238,12 +253,7 @@ export function defaultRenderVars(): RenderVars {
     path: process.env["PATH"] ?? "/usr/local/bin:/usr/bin:/bin",
     vbs: vbsLauncherPath(),
     logPath: launcherLogPath(),
-    // The daemon resolves config the way the user's terminal does: snapshot
-    // the installing shell's PI agent dir (launchd/systemd envs are sparse
-    // and would otherwise fall back to ~/.pi and find nothing).
-    piAgentDir:
-      process.env["PI_CODING_AGENT_DIR"] ??
-      join(homedir(), ".config", "pi", "agent"),
+    piAgentDir: resolvePiAgentDirSnapshot(),
     // The daemon lists stored sessions — it must read the SAME session store
     // the user's pi writes (the env session dir, when set).
     sessionDir: process.env["PI_CODING_AGENT_SESSION_DIR"] ?? "",
