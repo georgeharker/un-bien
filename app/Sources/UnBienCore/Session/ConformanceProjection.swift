@@ -130,3 +130,53 @@ public extension SessionState {
         ])
     }
 }
+public extension EnvelopeReducer {
+    /// Reducer-level projection: the session items/flags PLUS the {evt}-plane
+    /// and extension_ui side-state (subagents panel, plan snapshot, pending
+    /// asks). Scenarios that exercise panels/asks assert against these fields.
+    func conformanceProjection() -> JSONValue {
+        var base = session.conformanceProjection()
+        guard case .object(var obj) = base else { return base }
+
+        var subagents: [JSONValue] = []
+        for entry in self.subagents {
+            var sub: [String: JSONValue] = [
+                "id": .string(Conformance.scrub(entry.id)),
+                "status": .string(entry.status),
+            ]
+            if let type = entry.type { sub["type"] = .string(Conformance.scrub(type)) }
+            if let description = entry.description {
+                sub["description"] = .string(Conformance.scrub(description))
+            }
+            if let result = entry.result { sub["result"] = .string(Conformance.scrub(result)) }
+            if let error = entry.error { sub["error"] = .string(Conformance.scrub(error)) }
+            subagents.append(.object(sub))
+        }
+        obj["subagents"] = .array(subagents)
+
+        if let plan {
+            obj["plan"] = .object([
+                "project": plan.project.map { .string(Conformance.scrub($0)) } ?? .null,
+                "itemCount": .number(Double(plan.itemCount)),
+            ])
+        }
+
+        var asks: [JSONValue] = []
+        for ask in pendingAsks {
+            var askObj: [String: JSONValue] = [
+                "id": .string(Conformance.scrub(ask.id)),
+                "method": .string(ask.method),
+            ]
+            if let title = ask.title { askObj["title"] = .string(Conformance.scrub(title)) }
+            if let options = ask.options {
+                askObj["options"] = .array(options.map { .string(Conformance.scrub($0)) })
+            }
+            asks.append(.object(askObj))
+        }
+        if !asks.isEmpty { obj["pendingAsks"] = .array(asks) }
+
+        obj["leafId"] = leafId.map { .string(Conformance.scrub($0)) } ?? .null
+        base = .object(obj)
+        return base
+    }
+}

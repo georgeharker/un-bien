@@ -1,0 +1,7 @@
+{
+  "origin": "synthetic",
+  "source": "authored — app-side ToolOutputClassifier classifies the persisted result (no wire aux for output; design 01M177AF)",
+  "captured": "2026-09-25",
+  "modes": ["live"],
+  "description": "bash output classified app-side into a highlighted code block (blocks=[code])."
+}

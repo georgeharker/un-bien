@@ -40,8 +40,21 @@ across modes and across implementations**.
       "blocks": ["diff"|"code"|...], "images": 0 },
     { "kind": "compaction", "row": "<row-id>" }
   ],
-  "flags": { "streaming": false, "ended": false }
+  "flags": { "streaming": false, "ended": false },
+  "subagents": [ { "id": "<scrubbed>", "status": "started|steered|completed|failed",
+                   "description": "<scrubbed>", "result": "<scrubbed>", "error": "<scrubbed>" } ],
+  "plan": { "project": "<scrubbed>", "itemCount": 2 },
+  "pendingAsks": [ { "id": "<scrubbed>", "method": "select", "title": "<scrubbed>", "options": ["<scrubbed>"] } ],
+  "leafId": "<scrubbed entry id | null>"
 }
+```
+
+Reducer-level fields (`subagents`, `plan`, `pendingAsks`) come from the
+`{evt}` plane (`subagents:*`, `plan:snapshot`) and the extension_ui side-state
+(`extension_ui_request` select flows) folded by `EnvelopeReducer` — present
+when the scenario exercises panels/asks, absent otherwise. `leafId` is the
+delta-refetch cursor. `version` bumps when the vocabulary changes — runners
+assert the version they implement.
 ```
 
 - `items` is in render order. `n` is implicit (array index + 1).

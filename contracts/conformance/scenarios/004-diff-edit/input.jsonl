@@ -1,0 +1,2 @@
+{"rpc":{"type":"tool_execution_start","toolCallId":"t-call-1","toolName":"edit","args":{"path":"src/x.swift","old_string":"let a = 1","new_string":"let a = 2"}},"aux":{"hunks":[{"lines":[{"type":"-","text":"let a = 1"},{"type":"+","text":"let a = 2"}]}]}}
+{"rpc":{"type":"tool_execution_end","toolCallId":"t-call-1","result":"ok"}}

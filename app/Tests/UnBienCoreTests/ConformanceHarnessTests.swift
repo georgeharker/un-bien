@@ -47,10 +47,10 @@ final class ConformanceHarnessTests: XCTestCase {
         }
     }
 
-    private func replayLive(_ frames: [EnvelopeMessage]) throws -> SessionState {
+    private func replayLive(_ frames: [EnvelopeMessage]) throws -> EnvelopeReducer {
         var reducer = EnvelopeReducer()
         reducer.apply(frames)
-        return reducer.session
+        return reducer
     }
 
     func testScenariosConform() throws {
@@ -61,8 +61,8 @@ final class ConformanceHarnessTests: XCTestCase {
         for dir in dirs {
             let name = dir.lastPathComponent
             let frames = try loadInput(dir.appendingPathComponent("input.jsonl"))
-            let session = try replayLive(frames)
-            let projection = session.conformanceProjection()
+            let reducer = try replayLive(frames)
+            let projection = reducer.conformanceProjection()
 
             let expectedURL = dir.appendingPathComponent("expected.json")
             if regenerate {

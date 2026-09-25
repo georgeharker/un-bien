@@ -1,0 +1,7 @@
+{
+  "origin": "synthetic",
+  "source": "authored — shapes per rpc_envelope enrich seam (aux.hunks post-enrichment) + EnvelopeReducer attach",
+  "captured": "2026-09-25",
+  "modes": ["live"],
+  "description": "Edit-family tool call: aux.hunks ride the wire post-enrichment; the card renders the diff block (blocks=[hunks])."
+}

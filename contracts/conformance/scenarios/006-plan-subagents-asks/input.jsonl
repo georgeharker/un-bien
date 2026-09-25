@@ -1,0 +1,4 @@
+{"evt":{"channel":"plan:snapshot","data":{"project":"un-bien","items":[{"id":"1","kind":"task","name":"ship it","deps":[]},{"id":"2","kind":"task","name":"verify","deps":["1"]}]}}}
+{"evt":{"channel":"subagents:started","data":{"id":"sa-1","type":"explore","description":"scan the module"}}}
+{"evt":{"channel":"subagents:completed","data":{"id":"sa-1","result":"3 findings"}}}
+{"rpc":{"type":"extension_ui_request","id":"ask-flow-1","method":"select","title":"Pick one (test)","options":["Alpha","Beta"]}}

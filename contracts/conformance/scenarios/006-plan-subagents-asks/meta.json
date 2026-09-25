@@ -1,0 +1,7 @@
+{
+  "origin": "synthetic",
+  "source": "authored — evt shapes per EnvelopeReducer.applyEvt; select ask per the extension_ui bridge wire shape",
+  "captured": "2026-09-25",
+  "modes": ["live"],
+  "description": "Panels + asks: plan snapshot, subagent lifecycle, and a pending select ask folded into reducer side-state."
+}
