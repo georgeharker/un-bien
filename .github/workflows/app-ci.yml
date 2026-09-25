@@ -76,21 +76,22 @@ jobs:
         working-directory: app
         run: |
           set -o pipefail
-          # Simulator names drift between runner images — try in order.
-          for dest in \
-            "platform=iOS Simulator,name=iPhone 17,OS=latest" \
-            "platform=iOS Simulator,name=iPhone 16,OS=latest" \
-            "platform=iOS Simulator,name=iPhone 15,OS=latest"; do
-            echo "==> trying destination: $dest"
-            if xcodebuild test \
-                -scheme UnBien-iOS \
-                -destination "$dest" \
-                -only-testing:UnBienCoreTestsHost \
-                2>&1 | xcbeautify -q; then
-              echo "==> PASSED on $dest"
-              exit 0
-            fi
-            echo "==> failed on $dest, trying next"
-          done
-          echo "ERROR: no working simulator destination"
-          exit 1
+          # Dynamic destination discovery: runner images rotate and simulator
+          # names/OS versions drift (the hardcoded iPhone 17/16/15 chain failed
+          # wholesale on the 2026-09-25 image rotation). Pick the first
+          # AVAILABLE iPhone from simctl — version-agnostic.
+          UDID=$(xcrun simctl list devices available \
+            | grep "iPhone" \
+            | grep -oE "[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}" \
+            | head -1)
+          if [ -z "$UDID" ]; then
+            echo "ERROR: no available iPhone simulator found"
+            xcrun simctl list devices available
+            exit 1
+          fi
+          echo "==> using simulator $UDID"
+          xcodebuild test \
+            -scheme UnBien-iOS \
+            -destination "id=$UDID" \
+            -only-testing:UnBienCoreTestsHost \
+            2>&1 | xcbeautify -q
