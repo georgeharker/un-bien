@@ -2311,6 +2311,53 @@ describe("session sync", () => {
     })
   })
 
+  test("session_sync replays pending asks ENVELOPED — bare ServerMessage is dropped by the app", async () => {
+    await _pairForTest("peer-ss-1")
+    _setSessionStartedAtForTest(null)
+    const harness = captureEventHarness()
+    // Open a pending pi-ask flow: the bridge registers it + broadcasts live.
+    harness.emitBus("@eko24ive/pi-ask:started", {
+      version: 1,
+      flowId: "flow-replay-1",
+      source: "tool",
+      title: "Replay me",
+      questions: [
+        {
+          id: "q1",
+          prompt: "Pick one",
+          label: "Pick one",
+          type: "single",
+          required: true,
+          options: [{ value: "a", label: "A" }],
+        },
+      ],
+    })
+
+    const sendsBefore = relayRef.current!.send.mock.calls.length
+    await emitEnvelopeSync("peer-ss-1", "req-2")
+    const sent = relayRef
+      .current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string)
+
+    // The replayed ask MUST ride the {rpc} envelope. The app's handleRouted
+    // discriminates by shape ({rpc|evt|ub}) and drops bare ServerMessage
+    // frames — a bare replay never reached the ask sheet, and the terminator
+    // then retired the still-pending prompt as "stale" (the "ask not
+    // displayed on phone" bug). The live ask path is enveloped; replay must
+    // mirror it.
+    const enveloped = rpcFramesFrom(sent).filter(
+      (f) => f["type"] === "extension_ui_request",
+    )
+    expect(enveloped.length).toBeGreaterThanOrEqual(1)
+    expect(enveloped.at(-1)).toMatchObject({
+      id: "flow-replay-1",
+      method: "select",
+      title: "Replay me",
+    })
+    // The terminator still lands AFTER the replay (replay → panels → end).
+    expect(syncEndFrame(sent)).toMatchObject({ in_reply_to: "req-2" })
+  })
+
   test("pair_ok carries session_started_at = _sessionStartedAt", async () => {
     const beforePair = Date.now()
     await _pairForTest("peer-ss-5")

@@ -1166,7 +1166,13 @@ function _routeUnBienPlaneFrom(
     // 01M15FMQ: separate the rpc transcript (get_entries) from un-bien panel/ui
     // state, each an independent app-driven request issued on open + reconnect.
     for (const req of _extensionUiBridge?.pendingRequests() ?? [])
-      sender.send(req)
+      // ENVELOPE the replay: the app's handleRouted only dispatches
+      // {rpc|evt|ub} frames — a bare extension_ui_request fell through both
+      // branches and was silently dropped, so every session_sync replay was
+      // a no-op and the terminator then retired the still-pending prompt as
+      // "stale" (the "ask not displayed on phone" bug, 2026-09-25). The live
+      // ask path sends the same shape enveloped ({rpc}); mirror it here.
+      sender.sendEnvelope({ rpc: req })
     const panels = _panelBridge?.pendingPanels() ?? []
     for (const panel of panels)
       sender.sendEnvelope({ evt: { channel: "panel", data: panel } })
