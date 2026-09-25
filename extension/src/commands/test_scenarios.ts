@@ -27,11 +27,13 @@ export interface TestScenarioDeps {
   emitBus: (channel: string, data: unknown) => void
 }
 
-/** The pi-events-bus emitter, bound to the live `_pi` handle. */
-export function makeTestBusEmitter(pi: ExtensionAPI | null): (channel: string, data: unknown) => void {
+/** The pi-events-bus emitter — reads the live `_pi` handle at CALL time
+ *  (accessor, not snapshot: `_pi` is reassigned by session replacement and
+ *  tests). */
+export function makeTestBusEmitter(piAccessor: () => ExtensionAPI | null): (channel: string, data: unknown) => void {
   return (channel: string, data: unknown) => {
     try {
-      ;(pi as PiEventBusInternals | null)?.events?.emit(channel, data)
+      ;(piAccessor() as PiEventBusInternals | null)?.events?.emit(channel, data)
     } catch {
       /* bus absent — best effort */
     }

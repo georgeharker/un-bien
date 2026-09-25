@@ -1528,7 +1528,7 @@ const deps: CommandDeps = {
   getState: _getState,
   runTestScenario: (scenario) =>
     runTestScenario(
-      { broadcast: (env) => _broadcastEnvelope(relayDeps, env), emitBus: makeTestBusEmitter(_pi) },
+      { broadcast: (env) => _broadcastEnvelope(relayDeps, env), emitBus: makeTestBusEmitter(() => _pi) },
       scenario,
     ),
   safeNotify: _safeNotify,
