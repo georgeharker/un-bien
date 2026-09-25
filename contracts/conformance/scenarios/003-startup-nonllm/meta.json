@@ -1,0 +1,7 @@
+{
+  "origin": "real-capture",
+  "source": "app/Tests/Fixtures/rpc-stream/startup-nonllm.jsonl",
+  "captured": "2026-09",
+  "modes": ["live"],
+  "description": "Non-LLM startup slice: extension_ui notifications + status frames without a turn."
+}

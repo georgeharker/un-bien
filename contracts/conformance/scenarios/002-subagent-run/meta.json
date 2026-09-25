@@ -1,0 +1,7 @@
+{
+  "origin": "real-capture",
+  "source": "app/Tests/Fixtures/rpc-stream/subagent-run.envelope.jsonl",
+  "captured": "2026-09",
+  "modes": ["live"],
+  "description": "Real enveloped subagent run (447 frames, both {rpc} and {evt:{channel:\"subagents:*\"}} planes folded). Reality-check for the subagent shape family."
+}

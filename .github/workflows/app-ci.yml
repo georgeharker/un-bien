@@ -31,6 +31,32 @@ jobs:
         working-directory: app
         run: swift test
 
+  # The extension's vitest suite (protocol/reducers/mesh) — previously the
+  # one suite not in CI. Node-only: rides ubuntu (no signing needed). Runs
+  # the TS emit-direction conformance runner against the shared corpus.
+  extension-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 25
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm -C extension exec tsc --noEmit
+
+      - name: Vitest (extension suite, incl. conformance emit-direction)
+        run: pnpm -C extension test
+
   # The issue #2 regression suite, run INSIDE the app's test host on the
   # iOS simulator — the only place the real (entitled) keychain is
   # reachable in CI. Simulates fresh install -> pair -> restart at the
