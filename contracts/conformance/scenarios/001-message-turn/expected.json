@@ -1,0 +1,1 @@
+{"flags":{"streaming":false,"ended":false},"items":[{"text":"Reply with exactly the two words: hello world","kind":"user","images":0,"row":"user#1"},{"text":"hello world","kind":"assistant","row":"assistant#1","streaming":false,"images":0}],"version":1}

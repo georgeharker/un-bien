@@ -1,0 +1,7 @@
+{
+  "origin": "real-capture",
+  "source": "app/Tests/Fixtures/rpc-stream/message-turn-clean.jsonl",
+  "captured": "2026-09",
+  "modes": ["live"],
+  "description": "One clean assistant turn: notifications in, prompt, streaming deltas, settle. Seed scenario (normalized from the pre-existing rpc-stream capture)."
+}
