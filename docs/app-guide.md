@@ -182,6 +182,14 @@ Two things worth knowing:
 - Either end can answer. If you reply on the machine instead, the sheet on the
   phone dismisses itself.
 
+Questions asked while the app is **backgrounded** are not lost: iOS suspends
+the relay socket in the background (and live pushes during that window are
+missed), so on return the app replays anything still pending — reopen the
+session (or just bring the app to the foreground) and a question the agent is
+still waiting on re-presents itself. Very long-unanswered asks expire on the
+machine after ten minutes with a warning notice; answer on the machine's
+terminal if a retried ask stops appearing.
+
 ---
 
 ## Subagents

@@ -1176,8 +1176,19 @@ function _routeUnBienPlaneFrom(
     const panels = _panelBridge?.pendingPanels() ?? []
     for (const panel of panels)
       sender.sendEnvelope({ evt: { channel: "panel", data: panel } })
+    // Per-replay-ask detail (plan 01M1D112Z8JVW part 3): method + id make a
+    // session_sync replay distinguishable from the live ask in the envelope
+    // log — same triage story as _uiBroadcast's enriched line.
+    for (const req of _extensionUiBridge?.pendingRequests() ?? []) {
+      const r = req as { method?: string; notify_type?: string; id?: string }
+      envLog(
+        `session_sync ui replay: method=${r.method ?? "?"}`
+        + (r.notify_type ? ` notify_type=${r.notify_type}` : "")
+        + ` id=${r.id ?? "?"}`,
+      )
+    }
     envLog(
-      `session_sync(ub): panels=${panels.length} + ui (transcript is the app's get_entries rpc)`,
+      `session_sync(ub): panels=${panels.length} + ui=${(_extensionUiBridge?.pendingRequests() ?? []).length} (transcript is the app's get_entries rpc)`,
     )
     // Terminator/ack on the ub plane; carries the session clock so the app can
     // detect a pi restart. `truncated`/`limit` are gone (a replay concern;

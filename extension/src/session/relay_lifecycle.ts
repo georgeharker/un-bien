@@ -254,10 +254,24 @@ export function _broadcastEnvelope(
   {
     // Observability only (not a route gate): watch the {rpc|evt} wire during
     // e2e bring-up. Frame type only — payloads can be large / carry images.
+    // EXCEPTION: extension_ui frames are SMALL and their method/notify_type
+    // id is the whole triage story (ask vs dismissal-notify vs TTL warning
+    // are indistinguishable by frame type — plan 01M1D112Z8JVW part 3, used
+    // in the 2026-09-25 ask-backfill investigation).
     const kind = env.rpc
       ? `rpc:${(env.rpc as { type?: string }).type ?? "?"}`
       : `evt:${env.evt?.channel ?? "?"}`
-    envLog(`envelope -> ${deps.activePeers.size} peer(s): ${kind}`)
+    if ((env.rpc as { type?: string } | undefined)?.type === "extension_ui_request") {
+      const r = env.rpc as { method?: string; notify_type?: string; id?: string }
+      envLog(
+        `envelope -> ${deps.activePeers.size} peer(s): rpc:extension_ui_request`
+        + ` method=${r.method ?? "?"}`
+        + (r.notify_type ? ` notify_type=${r.notify_type}` : "")
+        + ` id=${r.id ?? "?"}`,
+      )
+    } else {
+      envLog(`envelope -> ${deps.activePeers.size} peer(s): ${kind}`)
+    }
   }
   for (const ch of deps.activePeers.values()) {
     try {
