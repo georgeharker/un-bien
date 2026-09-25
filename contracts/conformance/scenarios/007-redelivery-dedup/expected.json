@@ -1,0 +1,1 @@
+{"subagents":[],"flags":{"streaming":false,"ended":false},"items":[{"text":"Reply with exactly the two words: hello world","images":0,"row":"user#1","kind":"user"},{"text":"hello world","images":0,"row":"assistant#1","kind":"assistant","streaming":false}],"leafId":"51379bfd","version":1}

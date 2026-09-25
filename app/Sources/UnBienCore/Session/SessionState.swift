@@ -710,6 +710,11 @@ public struct SessionState: Equatable, Sendable {
             entriesById[id] = entry
             entryParent[id] = entry["parentId"]?.stringValue ?? ""
         }
+        // The deferred repath (truncated walk) fires here — AFTER the page's
+        // entries merge, so the fuller ancestry is visible (corpus 009: the
+        // completing page's beacon equals the held leaf, so only this deferred
+        // derive would ever re-derive the stranded path).
+        applyPendingRepath()
         if let beacon = leafId, beacon != activeLeafId, entriesById[beacon] != nil {
             derivePath(from: beacon, authoritative: authoritative)
         }
@@ -733,8 +738,18 @@ public struct SessionState: Equatable, Sendable {
             if parent.isEmpty { reachedRoot = true; break }
             cursor = parent
         }
-        // Truncated walk (missing parentId, not a root): ancestry not backfilled — defer + hold the stale leaf so the next fold re-derives.
-        if !reachedRoot, pathOrder != nil { RenderActivity.lastDerivePath = "defer-trunc"; pendingRepathLeaf = leaf; pendingRepathAuthoritative = authoritative; return }
+        // Truncated walk (missing parentId, not a root): ancestry not
+        // backfilled — defer + hold the stale leaf so the next fold re-derives.
+        // Applies to the FIRST derivation too: a truncated initial page must
+        // not render a partial path it can never complete (corpus 009: the
+        // completing page's beacon equals activeLeafId, so only the deferred
+        // repath would ever re-derive — without this the path strands empty).
+        if !reachedRoot {
+            RenderActivity.lastDerivePath = "defer-trunc"
+            pendingRepathLeaf = leaf
+            pendingRepathAuthoritative = authoritative
+            return
+        }
         let newOrder = Array(chain.reversed())
         guard Set(newOrder) != pathIds else { activeLeafId = leaf; RenderActivity.lastDerivePath = "nochange"; return }
         let firstDerivation = pathOrder == nil

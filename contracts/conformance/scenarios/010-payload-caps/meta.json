@@ -1,0 +1,9 @@
+{
+  "origin": "synthetic",
+  "source": "authored \u2014 a 200KB bash result vs the 128KB per-block cap (ToolOutputClassifier.capBlocks)",
+  "captured": "2026-09-25",
+  "modes": [
+    "live"
+  ],
+  "description": "Oversized single block (>128KB): the classifier skips it whole (capBlocks), the card falls back to raw \u2014 nothing unbounded."
+}

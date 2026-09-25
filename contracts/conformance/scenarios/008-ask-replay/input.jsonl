@@ -1,0 +1,2 @@
+{"rpc":{"type":"extension_ui_request","id":"ask-flow-1","method":"select","title":"Pick one","options":["Alpha","Beta"]}}
+{"rpc":{"type":"extension_ui_request","id":"ask-flow-1","method":"select","title":"Pick one","options":["Alpha","Beta"]}}

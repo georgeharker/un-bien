@@ -1,0 +1,9 @@
+{
+  "origin": "synthetic",
+  "source": "authored \u2014 terminal-page derive rule (design 01M2435) + truncated-derivation deferral",
+  "captured": "2026-09-25",
+  "modes": [
+    "live"
+  ],
+  "description": "Backfill paging edge: page 1 carries the leaf WITHOUT its ancestry; the empty terminal derives \u2192 truncated \u2192 DEFER (no partial path). A later fold supplies the ancestry; the deferred repath completes e1\u2192e4. Pins: (a) derive only on the empty terminal page, (b) truncated first derivation must not strand the path."
+}

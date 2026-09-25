@@ -1,0 +1,7 @@
+{
+  "origin": "synthetic",
+  "source": "authored — the full-frame delta-dedup contract (lastMessageUpdateFrame): identical message_update frames are redeliveries",
+  "captured": "2026-09-25",
+  "modes": ["live"],
+  "description": "Identical message_update redelivered: applied once, not twice — the delta must not double-apply and the projection must be unchanged by the duplicate."
+}

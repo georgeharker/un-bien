@@ -1,0 +1,7 @@
+{
+  "origin": "synthetic",
+  "source": "authored — the ask-replay race: the SAME pending ask re-broadcast on a session_sync replay (reconnect) must not duplicate the reducer's pending-ask state",
+  "captured": "2026-09-25",
+  "modes": ["live"],
+  "description": "Replay-after-represent: one ask, delivered twice (original + session_sync replay) — pendingAsks must hold ONE entry keyed by id."
+}

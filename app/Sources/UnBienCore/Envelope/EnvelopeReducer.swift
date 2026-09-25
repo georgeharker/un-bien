@@ -177,11 +177,18 @@ public struct EnvelopeReducer {
         case "setTitle":
             title = rpc["title"]?.stringValue
         case "select", "confirm", "input", "editor":
-            pendingAsks.append(PendingAsk(id: rpc["id"]?.stringValue ?? "",
-                                          method: rpc["method"]?.stringValue ?? "",
-                                          title: rpc["title"]?.stringValue,
-                                          message: rpc["message"]?.stringValue,
-                                          options: rpc["options"]?.arrayValue?.compactMap { $0.stringValue }))
+            // Dedupe by id (ask-replay edge, corpus 008): a session_sync replay
+            // re-broadcasts the SAME pending ask with the same id — REPLACE, not
+            // append, or every reconnect with a live ask accumulates another
+            // identical entry in the reducer's side-state.
+            let askID = rpc["id"]?.stringValue ?? ""
+            var asks = pendingAsks.filter { $0.id != askID }
+            asks.append(PendingAsk(id: askID,
+                                   method: rpc["method"]?.stringValue ?? "",
+                                   title: rpc["title"]?.stringValue,
+                                   message: rpc["message"]?.stringValue,
+                                   options: rpc["options"]?.arrayValue?.compactMap { $0.stringValue }))
+            pendingAsks = asks
         default:
             break
         }

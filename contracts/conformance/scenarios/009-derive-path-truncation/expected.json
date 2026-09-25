@@ -1,0 +1,1 @@
+{"flags":{"streaming":false,"ended":false},"subagents":[],"leafId":"e4","items":[{"row":"e1","kind":"user","images":0,"text":"the prompt"},{"streaming":false,"row":"e2","kind":"assistant","images":0,"text":"working"},{"streaming":false,"row":"e4","kind":"assistant","images":0,"text":"branch tip (ancestry missing yet)"}],"version":1}

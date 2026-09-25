@@ -1,1 +1,1 @@
-{"flags":{"ended":false,"streaming":false},"version":1,"subagents":[],"items":[{"row":"t-call-1","state":"ok","blocks":["hunks"],"images":0,"tool":"edit","kind":"tool"}],"leafId":null}
+{"leafId":null,"version":1,"items":[{"row":"t-call-1","state":"ok","blocks":["hunks"],"images":0,"kind":"tool","tool":"edit"}],"flags":{"ended":false,"streaming":false},"subagents":[]}
