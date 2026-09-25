@@ -693,13 +693,22 @@ struct TranscriptView: View {
     @ViewBuilder
     private var statusStrip: some View {
         let state = model.transcripts[session.id]
-        let modelName = model.currentModel[session.id]?.name ?? session.model
+        // Collapsed model label includes the provider (plan: same-named models
+        // from different providers must be distinguishable at a glance, matching
+        // the menu rows' "name — provider" format). Falls back to the session's
+        // raw model string before the roster reply lands.
+        let modelLabel: String? = {
+            if let wireModel = model.currentModel[session.id] {
+                return "\(wireModel.name) — \(wireModel.provider)"
+            }
+            return session.model
+        }()
         let usage = state?.latestUsage
         let compacted = state?.lastCompaction != nil
-        if modelName != nil || usage != nil || compacted {
+        if modelLabel != nil || usage != nil || compacted {
             HStack(spacing: 12) {
-                if let modelName {
-                    Label(modelName, systemImage: "cpu").lineLimit(1)
+                if let modelLabel {
+                    Label(modelLabel, systemImage: "cpu").lineLimit(1)
                 }
                 if let usage {
                     Label("\(usage.inputTokens)↑ \(usage.outputTokens)↓", systemImage: "number")
