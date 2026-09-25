@@ -58,6 +58,16 @@ requirements where they matter.
 
 ## Extension (@geohar/un-bien)
 
+### 0.20.16 (2026-09-25)
+
+- **Fixed: ask_user prompts missing on the phone after a session
+  re-open/reconnect** — the `session_sync` replay of pending asks rode a
+  bare ServerMessage frame, which the app's envelope router silently
+  drops; every replay was a no-op and the terminator then retired the
+  still-pending prompt as "stale" ~1s after opening the session. The
+  replay now rides the same `{rpc}` envelope as the live ask path, so a
+  flow asked while you were away appears on the next open/reconnect.
+
 ### 0.20.15 (2026-09-24)
 
 - **herdr compatibility with herdr >=0.9.1** — `workspace create` no longer
