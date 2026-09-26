@@ -58,6 +58,25 @@ requirements where they matter.
 
 ## Extension (@geohar/un-bien)
 
+### 0.20.17 (2026-09-25)
+
+- **Hardening: per-session state, keyed by pi sessionId** — the extension's
+  remaining module-level singletons (`myRoomId`/`myRoomMeta`,
+  `sessionStartedAt`, `currentModel`/`currentThinking`, and the base event
+  ctx) moved into the per-session `SessionState` record. pi re-activates
+  in-process for every subagent, and a subagent's `session_start`/turn
+  events used to overwrite the root session's values with the child's
+  (latent since 0.1 — mostly benign because the room projection is
+  root-only, but it demonstrably broke root-scoped notifies via a clobbered
+  ctx, and mixed per-session data whenever values genuinely differed). All
+  per-session data is now contextualized; the remaining module globals are
+  root-lifecycle/process-level by construction behind ownership gates.
+  No user-facing behavior change expected.
+- **Internal: `index.ts` decomposition** — the plane routers ({rpc}
+  dispatch + un-bien plane) moved to `src/routing.ts` behind the
+  accessor-deps pattern (index.ts ~2500 lines, down from 6600).
+  Behaviour-preserving.
+
 ### 0.20.16 (2026-09-25)
 
 - **Fixed: ask_user prompts missing on the phone after a session
