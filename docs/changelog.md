@@ -58,6 +58,25 @@ requirements where they matter.
 
 ## Extension (@geohar/un-bien)
 
+### 0.20.18 (2026-09-26)
+
+- **Fixed: rooms sporadically announced without a name after a session
+  replacement** — `0.20.17` keyed the relay-room projection
+  (`myRoomId`/`myRoomMeta`/`sessionStartedAt`) on the rotating pi session
+  id, so every New/Fork/Clone/Reload lazily created a fresh session record
+  and nulled the projection until the async relay connect repopulated it.
+  In that window a reconnect announced a NAMELESS room — the relay fell
+  back to its default room name and the app showed a placeholder tile until
+  a manual refresh re-pulled the live name. The projection is a
+  root-process singleton by contract (`_goIdle` preserves it across
+  stop/start; `session_shutdown` never cleared it), so keying it on the sid
+  that rotates on every replacement contradicted the teardown contract.
+  The root record is now ONE stable singleton; `session_start` adopts the
+  new sid before its per-session writes; `session_shutdown` clears only the
+  base ctx. New/Fork/Clone/Reload now re-announce with their own name and
+  no update is ever addressed to the dead old room. No-clobber invariant
+  for subagent children unchanged.
+
 ### 0.20.17 (2026-09-25)
 
 - **Hardening: per-session state, keyed by pi sessionId** — the extension's
