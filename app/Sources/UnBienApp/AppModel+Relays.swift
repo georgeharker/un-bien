@@ -66,6 +66,22 @@ extension AppModel {
     }
 
     private func connect(_ relay: RelayConfig) async {
+        // Insecure-transport notice (plan 01M14ZS3): plaintext ws:// relays are
+        // user-specified — fine on localhost/Tailscale, risky elsewhere. One
+        // warning per relay per app-run (not per reconnect).
+        let lower = relay.url.lowercased()
+        if lower.hasPrefix("ws://") || lower.hasPrefix("http://"),
+           insecureRelayWarned.insert(relay.id).inserted {
+            let hostPart = relay.url
+                .replacingOccurrences(of: "ws://", with: "")
+                .replacingOccurrences(of: "http://", with: "")
+            let host = hostPart.split(separator: "/").first.map(String.init) ?? hostPart
+            let isLocal = host.hasPrefix("127.0.0.1") || host.hasPrefix("localhost")
+            let scope = isLocal ? "fine for a local relay" : "fine on Tailscale/LAN — avoid on public networks"
+            pushTransientNotice(
+                message: "Relay '\(relay.name)' is not TLS-encrypted — \(scope).",
+                level: "warning")
+        }
         guard let owner, let url = relay.webSocketURL else { return }
         reconnectTasks[relay.id]?.cancel()
         reconnectTasks[relay.id] = nil
@@ -427,7 +443,8 @@ extension AppModel {
                                   sessionID: sessionID,
                                   name: room.name, cwd: room.cwd, model: nil,
                                   parentSessionID: room.parentSessionID,
-                                  parentRoomID: room.parent, subagentID: room.subagentID)
+                                  parentRoomID: room.parent, subagentID: room.subagentID,
+                                  startedAt: room.startedAt)
         // Manual dismissal (plan 01M18X3B): an ended chat the user removed
         // stays hidden — a snapshot re-listing or re-announce is the room
         // LINGERING at the relay, not liveness. Only proof of life (a fresh

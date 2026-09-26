@@ -539,6 +539,20 @@ private struct RelayHeader: View {
 
 private struct SessionRow: View {
     let session: LiveSession
+    /// Shared formatter (plan 01M18VA5X3M6T): relative delta on Home rows.
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
+
+    /// "36m ago" style age from the session's start; nil before the started
+    /// wire value lands (pair_ok / room_meta.started_at).
+    private var ageText: String? {
+        guard let startedAt = session.startedAt, startedAt > 0 else { return nil }
+        let date = Date(timeIntervalSince1970: Double(startedAt) / 1000)
+        return Self.relativeFormatter.localizedString(for: date, relativeTo: Date())
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -546,8 +560,13 @@ private struct SessionRow: View {
             if let cwd = session.cwd {
                 Text(cwd).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
-            if let model = session.model {
-                Text(model).font(.caption2).foregroundStyle(.tertiary)
+            HStack(spacing: 6) {
+                if let age = ageText {
+                    Text(age).font(.caption2).foregroundStyle(.tertiary)
+                }
+                if let model = session.model {
+                    Text(model).font(.caption2).foregroundStyle(.tertiary)
+                }
             }
         }
     }

@@ -126,6 +126,8 @@ public final class AppModel: ObservableObject {
     /// was dropped — reconciled at `session_sync_end` in AppModel+Inbound.
     /// Deliberately NOT @Published: internal routing state, no view observes it.
     var askSyncWindows: [String: AskSyncWindow] = [:]
+    /// Relays already warned about plaintext transport this app-run (one notice per relay).
+    var insecureRelayWarned = Set<UUID>()
     /// Pending queued follow-up messages per session (pi-native `queue_update`).
     @Published public var queued: [String: [QueuedMessageItem]] = [:]
     /// rpc request/reply correlation (plan 01M1A39Y4G): continuations parked by

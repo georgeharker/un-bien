@@ -33,6 +33,9 @@ public struct LiveSession: Identifiable, Equatable, Hashable, Sendable {
     /// this session's own connection via `get_session_info` (design 01M18PCM) —
     /// not room_meta. nil until the pull answers.
     public var status: String? = nil
+    /// Session start (epoch ms, from pair_ok / room_meta.started_at) — feeds
+    /// the Home row's relative-age display (plan 01M18VA5X3M6T).
+    public var startedAt: Int? = nil
 
     /// Identity = pi sessionId, NOT the routing roomId.
     public var id: String { "\(relayID.uuidString):\(peerEPK):\(sessionID)" }
