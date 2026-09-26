@@ -196,8 +196,6 @@ let _relayUrl: string | null = null // URL used by current _relay connection
 const _activePeers = new Map<string, PlainPeerChannel>()
 let _peerShort = "" // shortid of the most recently attached peer (UX hint only)
 
-let _myRoomId: string | null = null // this Pi's room id (derived from the session id)
-
 /** True when a relay start was DEFERRED because no session id existed yet
  *  (design 01M1CAW0). The root session_start handler re-runs the start once
  *  the session id becomes available. */
@@ -217,22 +215,6 @@ function _deriveRoomId(_cwd: string, _name: string): string | null {
   const sid = _rootState().sessionManager?.getSessionId()
   return sid ? roomIdForSession(sid) : null
 }
-
-// Plan/28 Wave D.1: `thinking` published alongside `model` so the app's
-// Quick Actions sheet hydrates the thinking segmented control on first
-// open instead of starting null. The SDK fires `thinking_level_select`
-// on every change (initial load + user toggle), mirrored to room_meta
-// the same way model is — apps subscribe to one channel for both.
-let _myRoomMeta: {
-  name: string
-  cwd: string
-  model?: string
-  thinking?: ThinkingLevel
-  working?: boolean
-  sessionId?: string
-} | null = null
-let _currentModel: string | undefined // last-known model name
-let _currentThinking: ThinkingLevel | undefined // last-known thinking level
 
 // ── Agent-network session (plano 19) ──────────────────────────────────────────
 // MeshNode owns both the local UDS mesh (SessionPeer) and the optional
@@ -304,7 +286,7 @@ function _refreshSessionPeerCount(
 
 /** Friendly model name for room_meta (plano 18). undefined when SDK has none yet. */
 function _currentModelName(): string | undefined {
-  return _currentModel
+  return _rootState().currentModel ?? undefined
 }
 
 /**
@@ -317,12 +299,13 @@ function _currentModelName(): string | undefined {
  * otherwise never surface their model.
  */
 function _setCurrentModel(name: string): void {
-  _currentModel = name
-  if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, model: name }
-  if (_relay && _myRoomId) {
+  const st = _rootState()
+  st.currentModel = name
+  if (st.myRoomMeta) st.myRoomMeta = { ...st.myRoomMeta, model: name }
+  if (_relay && st.myRoomId) {
     _relay.sendControl({
       type: "room_meta_update",
-      room_id: _myRoomId,
+      room_id: st.myRoomId,
       meta: { model: name },
     })
   }
@@ -336,11 +319,12 @@ function _setCurrentModel(name: string): void {
  * so room_meta.working must be bracketed manually around compaction.
  */
 function _publishWorking(working: boolean): void {
-  if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working }
-  if (_relay && _myRoomId) {
+  const st = _rootState()
+  if (st.myRoomMeta) st.myRoomMeta = { ...st.myRoomMeta, working }
+  if (_relay && st.myRoomId) {
     _relay.sendControl({
       type: "room_meta_update",
-      room_id: _myRoomId,
+      room_id: st.myRoomId,
       meta: { working },
     })
   }
@@ -423,7 +407,7 @@ function _attachBridgeIfReady(): void {
 
 /**
  * Prefer an explicit ctx, else the always-fresh session_start ctx
- * (`_lastEventCtx`, re-captured on every session_start so it is never a stale
+ * (the root record's baseCtx, re-captured on every session_start so it is never stale
  * capture). Relay/async paths reach the ctx-only surfaces (ui/abort/compact)
  * through this, since they fire outside any live pi event.
  * @see https://github.com/jacobaraujo7/remote_pi/issues/55
@@ -431,7 +415,7 @@ function _attachBridgeIfReady(): void {
 function _liveCtx(
   preferred?: { ui?: unknown } | null,
 ): { ui?: unknown } | null {
-  return preferred ?? _lastEventCtx ?? null
+  return preferred ?? _rootState().baseCtx ?? null
 }
 
 /**
@@ -525,11 +509,6 @@ function _refreshFooter(
   }
 }
 
-// Epoch ms when the state machine entered 'started' (last /unbien start).
-// Used by session_sync to let the app detect Pi restarts (and force a full
-// replay). Cleared on _goIdle.
-let _sessionStartedAt: number | null = null
-
 // _sessionManager lives PER-SESSION in _stateFor(sid); the root session's record
 // backs reconstruction — the app reads the transcript via the native get_entries
 // rpc over _rootState().sessionManager.getEntries() (captured from event ctx;
@@ -554,6 +533,18 @@ let _meshDrainScheduled = false
 // session's record. Subagent records accumulate (held for later surfacing);
 // a root-only broadcast gate keeps app display identical for now. This mirrors
 // pi's own per-AgentSession model rather than a flat extension-authored projection.
+/** The room_meta projection this session publishes to its relay room
+ *  (plan/28 Wave D.1 + plan/32). Only the ROOT session projects; subagent
+ *  children mint their own RelayClients and never touch the root's. */
+type RoomMetaProjection = {
+  name: string
+  cwd: string
+  model?: string
+  thinking?: ThinkingLevel
+  working?: boolean
+  sessionId?: string
+}
+
 interface SessionState {
   turnId: string | null
   working: boolean
@@ -561,6 +552,18 @@ interface SessionState {
   sessionManager: ExtensionContext["sessionManager"] | null
   model: string | null
   thinking: ThinkingLevel | null
+  // Per-session room/ctx state (plan 01M18RNH: retire root global-singletons —
+  // a subagent's session_start/event handlers must never clobber the root's).
+  /** Model name cached for room_meta publication (distinct from `model`, the
+   *  per-turn observed value — the turn_start seed copies model → here once). */
+  currentModel: string | null
+  myRoomId: string | null
+  myRoomMeta: RoomMetaProjection | null
+  /** Epoch ms when this session's relay entered 'started' (last /unbien start). */
+  sessionStartedAt: number | null
+  /** This session's base ctx (compact/abort/ui fallback outside live events);
+   *  base-ctx resolution reads the ROOT's. */
+  baseCtx: Pick<ExtensionContext, "compact" | "abort" | "ui"> | null
 }
 const _sessions = new Map<string, SessionState>()
 // The session bound to the app room. null until the ROOT session_start fires;
@@ -580,6 +583,11 @@ function _stateFor(sid: string): SessionState {
       sessionManager: null,
       model: null,
       thinking: null,
+      currentModel: null,
+      myRoomId: null,
+      myRoomMeta: null,
+      sessionStartedAt: null,
+      baseCtx: null,
     }
     _sessions.set(sid, st)
   }
@@ -721,8 +729,8 @@ const planeDeps: PlaneRouterDeps = {
   extensionUiBridge: () => _extensionUiBridge,
   panelBridge: () => _panelBridge,
   subagentRooms: () => _subagentRooms,
-  sessionStartedAt: () => _sessionStartedAt ?? 0,
-  myRoomMeta: () => _myRoomMeta,
+  sessionStartedAt: () => _rootState().sessionStartedAt ?? 0,
+  myRoomMeta: () => _rootState().myRoomMeta,
   rootState: () => _rootState(),
   safeNotify: _safeNotify,
   liveCtx: () => _liveCtx(),
@@ -876,8 +884,6 @@ function _probeCtx(label: string, ctx: unknown): void {
 // base-ctx methods (no newSession — that's command-ctx only); command-only ops
 // (fork/new/branch) reach a command ctx by self-dispatching a slash command
 // instead of retaining one.
-let _lastEventCtx: Pick<ExtensionContext, "compact" | "abort" | "ui"> | null =
-  null
 const _noopCtx = { ui: { notify: () => undefined }, abort: () => undefined }
 
 // A single Pi process can load this extension TWICE in the SAME session:
@@ -956,7 +962,7 @@ const imageDeps: ImagePipelineDeps = {
   },
   rootState: _rootState,
   get myRoomMeta() {
-    return _myRoomMeta
+    return _rootState().myRoomMeta
   },
   wakeAgent: _wakeAgent,
 }
@@ -973,7 +979,7 @@ const rpcDeps: RpcHandlersDeps = {
   },
   rootState: _rootState,
   get lastEventCtx() {
-    return _lastEventCtx
+    return _rootState().baseCtx
   },
   imageDeps,
   wakeAgent: _wakeAgent,
@@ -1056,13 +1062,13 @@ const relayDeps: RelayLifecycleDeps = {
     return _cachedEd25519
   },
   get myRoomId() {
-    return _myRoomId
+    return _rootState().myRoomId
   },
   get myRoomMeta() {
-    return _myRoomMeta
+    return _rootState().myRoomMeta
   },
   get sessionStartedAt() {
-    return _sessionStartedAt
+    return _rootState().sessionStartedAt
   },
   sessionCwd: () => {
     const sm = _rootState().sessionManager
@@ -1155,30 +1161,30 @@ const deps: CommandDeps = {
     _cachedEd25519 = v
   },
   get currentModel() {
-    return _currentModel
+    return _rootState().currentModel ?? undefined
   },
   set currentModel(v) {
-    _currentModel = v
+    _rootState().currentModel = v ?? null
   },
   get currentThinking() {
-    return _currentThinking
+    return _rootState().thinking ?? undefined
   },
   abortCurrentTurn: () => _abortCurrentTurn(),
   cancelPendingAsks: () => _extensionUiBridge?.cancelAllPending() ?? 0,
   set currentThinking(v) {
-    _currentThinking = v
+    _rootState().thinking = v ?? null
   },
   get myRoomId() {
-    return _myRoomId
+    return _rootState().myRoomId
   },
   set myRoomId(v) {
-    _myRoomId = v
+    _rootState().myRoomId = v
   },
   get myRoomMeta() {
-    return _myRoomMeta
+    return _rootState().myRoomMeta
   },
   set myRoomMeta(v) {
-    _myRoomMeta = v
+    _rootState().myRoomMeta = v
   },
   get peerShort() {
     return _peerShort
@@ -1187,10 +1193,10 @@ const deps: CommandDeps = {
     _peerShort = v
   },
   get sessionStartedAt() {
-    return _sessionStartedAt
+    return _rootState().sessionStartedAt
   },
   set sessionStartedAt(v) {
-    _sessionStartedAt = v
+    _rootState().sessionStartedAt = v
   },
   get cwdLock() {
     return _cwdLock
@@ -1265,7 +1271,7 @@ const deps: CommandDeps = {
     return _disposed
   },
   get lastEventCtx() {
-    return _lastEventCtx
+    return _rootState().baseCtx
   },
   get pi() {
     return _pi
@@ -1359,10 +1365,10 @@ const _testHooks = createTestHooks({
     _lockedName = v
   },
   set sessionStartedAt(v: number | null) {
-    _sessionStartedAt = v
+    _rootState().sessionStartedAt = v
   },
   set currentModel(v: string | undefined) {
-    _currentModel = v
+    _rootState().currentModel = v ?? null
   },
   set pi(v: ExtensionAPI | null) {
     _pi = v
@@ -1470,7 +1476,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     )
     _subagentRooms?.dispose()
     _subagentRooms = initSubagentRooms(pi, {
-      getParentRoomId: () => _myRoomId,
+      getParentRoomId: () => _rootState().myRoomId,
       getParentSessionId: () => _rootSessionId,
       broadcastPanel: (msg) => _panelBroadcast(relayDeps, msg),
     })
@@ -1556,16 +1562,16 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   pi.on("thinking_level_select", (event, ctx) => {
     const level = event?.level as ThinkingLevel | undefined
     if (!level) return
-    // Cache per-sid; only the ROOT projects to _currentThinking + room_meta.
+    // Cache per-sid; only the ROOT projects to room_meta.
     const sid = _sidOf(ctx)
-    _stateFor(sid).thinking = level
+    const st = _stateFor(sid)
+    st.thinking = level
     if (_isNonRootSid(sid)) return
-    _currentThinking = level
-    if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, thinking: level }
-    if (!_relay || !_myRoomId) return
+    if (st.myRoomMeta) st.myRoomMeta = { ...st.myRoomMeta, thinking: level }
+    if (!_relay || !st.myRoomId) return
     _relay.sendControl({
       type: "room_meta_update",
-      room_id: _myRoomId,
+      room_id: st.myRoomId,
       meta: { thinking: level },
     })
   })
@@ -1641,31 +1647,32 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       }
     }
     if (_isNonRootSid(sid)) return // room_meta projection is root-only
-    // Root projection: seed the global model + room_meta hello from the root's
+    // Root projection: seed the room_meta model + hello from the root's
     // cached model, once.
-    if (!_currentModel && st.model) _setCurrentModel(st.model)
+    if (!st.currentModel && st.model) _setCurrentModel(st.model)
     // Plan/32 Part B: publish working=true as room_meta (raw, no debounce —
     // the debounce lives in the app). Same shape as the model/thinking updates.
-    // _myRoomMeta is the ROOM projection (driven only by the root session).
-    if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working: true }
-    if (_relay && _myRoomId) {
+    // myRoomMeta is the ROOM projection (driven only by the root session).
+    if (st.myRoomMeta) st.myRoomMeta = { ...st.myRoomMeta, working: true }
+    if (_relay && st.myRoomId) {
       _relay.sendControl({
         type: "room_meta_update",
-        room_id: _myRoomId,
+        room_id: st.myRoomId,
         meta: { working: true },
       })
     }
   })
   pi.on("turn_end", (_event, ctx) => {
     const sid = _sidOf(ctx)
-    _stateFor(sid).working = false
+    const st = _stateFor(sid)
+    st.working = false
     if (_isNonRootSid(sid)) return // room_meta is root-only
     // Plan/32 Part B: publish working=false as room_meta (raw, no debounce).
-    if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working: false }
-    if (_relay && _myRoomId) {
+    if (st.myRoomMeta) st.myRoomMeta = { ...st.myRoomMeta, working: false }
+    if (_relay && st.myRoomId) {
       _relay.sendControl({
         type: "room_meta_update",
-        room_id: _myRoomId,
+        room_id: st.myRoomId,
         meta: { working: false },
       })
     }
@@ -1712,7 +1719,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     if (typeof name !== "string" || name.length === 0) return
     if (_isNonRootSid(_sidOf(ctx))) return
     _sessionName = name
-    if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, name }
+    const st = _rootState()
+    if (st.myRoomMeta) st.myRoomMeta = { ...st.myRoomMeta, name }
     _broadcastEnvelope(relayDeps, {
       evt: { channel: "session_info", data: { name } },
     })
@@ -1721,10 +1729,10 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // reaches attached peers, so pre-attach the Home tile went stale until open
     // or reconnect. Relay >=0.6.0 merges + fans `name`; older relays drop the
     // unknown field (harmless — attached peers still get the evt). Design 01M1SPN7.
-    if (_relay && _myRoomId) {
+    if (_relay && st.myRoomId) {
       _relay.sendControl({
         type: "room_meta_update",
-        room_id: _myRoomId,
+        room_id: st.myRoomId,
         meta: { name },
       })
     }
@@ -1759,11 +1767,11 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // session_start with their own ctx). Each records its OWN sessionManager —
     // no cross-session clobber (was the unguarded `_sessionManager = ...` bug).
     const sid = _sidOf(ctx)
-    // The module BASE ctx (compact/notify fallback when no fresh ctx is passed)
-    // is the ROOT's — a subagent child's ctx must NOT clobber it, same
-    // no-cross-session-clobber rule as the per-sid sessionManager. Otherwise a
-    // subagent steals the base ctx and root-scoped notifies silently drop.
-    if (!_isNonRootSid(sid)) _lastEventCtx = ctx
+    // Base ctx (compact/notify fallback when no fresh ctx is passed) is
+    // PER-SESSION (plan 01M18RNH) — each session_start records its OWN; the
+    // base-ctx resolution reads the ROOT's, so a child's ctx never leaks
+    // (structurally replaces the old `!_isNonRootSid` guard + global).
+    _stateFor(sid).baseCtx = ctx ?? null
     // EVENT-CTX TARGETED PROBE (run 2026-09-18, round 3): the ctx objects
     // are guarded (throwing getters — proxies), so full reflection
     // under-reports or throws. Per-property access, each caught, is the
@@ -1809,7 +1817,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         )
       if (!_subagentRooms)
         _subagentRooms = initSubagentRooms(pi, {
-          getParentRoomId: () => _myRoomId,
+          getParentRoomId: () => _rootState().myRoomId,
           getParentSessionId: () => _rootSessionId,
           broadcastPanel: (msg) => _panelBroadcast(relayDeps, msg),
         })
@@ -1978,8 +1986,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     }
     // Drop the captured event ctx immediately. On module-reuse hosts the same
     // instance survives session replacement; the next session_start re-binds
-    // `_lastEventCtx` for the new session.
-    _lastEventCtx = null
+    // the root record's baseCtx for the new session.
+    _rootState().baseCtx = null
     // No bye reason: the process keeps running and the fresh instance re-joins
     // the SAME relay room, so an explicit offline→online flap would be wrong.
     // Revoke producer/Relay/bridge authority while the global node is still
@@ -2201,7 +2209,7 @@ function _abortCurrentTurn(
   fallbackCtx?: Pick<ExtensionContext, "abort">,
 ): boolean {
   const candidates: Array<Pick<ExtensionContext, "abort"> | null | undefined> =
-    [_lastEventCtx, fallbackCtx]
+    [_rootState().baseCtx, fallbackCtx]
 
   for (const candidate of candidates) {
     if (!candidate || candidate === _noopCtx) continue

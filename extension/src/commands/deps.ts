@@ -12,7 +12,7 @@ import type { RelayClient } from "../transport/relay_client.js"
 import type { PlainPeerChannel } from "../transport/peer_channel.js"
 import type { ThinkingLevel } from "../protocol/types.js"
 
-/** App↔Pi room meta projected by the ROOT session (see index.ts `_myRoomMeta`). */
+/** App↔Pi room meta projected by the ROOT session (see index.ts `SessionState.myRoomMeta`). */
 export type RoomMeta = {
   name: string
   cwd: string

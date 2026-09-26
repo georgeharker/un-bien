@@ -8,7 +8,7 @@
  * hand the multimodal content to the agent via sendUserMessage.
  *
  * Seam: index.ts (composition root) owns the mutable module state this
- * pipeline reads (`_pi`, `_myRoomMeta`, the root session record) and the
+ * pipeline reads (`_pi`, the root session record's `myRoomMeta`) and the
  * `_wakeAgent` helper; they are threaded through `ImagePipelineDeps`. This
  * module MUST NOT import `../index.js` (circular import). The
  * pending-preview buffer is pipeline-local and lives here in module scope.

@@ -8,7 +8,7 @@
  *
  * Seam: index.ts (composition root) owns the mutable module state and the
  * SDK-handoff helpers these handlers touch (`_pi`, the root session record,
- * `_lastEventCtx`, `_wakeAgent`, `_abortCurrentTurn`, the image
+ * `lastEventCtx`, `_wakeAgent`, `_abortCurrentTurn`, the image
  * pipeline); they are threaded through `RpcHandlersDeps`. This module MUST
  * NOT import `../index.js` (circular import).
  *

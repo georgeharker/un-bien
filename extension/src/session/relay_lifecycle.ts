@@ -412,7 +412,7 @@ export function _goIdle(deps: RelayLifecycleDeps): void {
 
 /**
  * Called when the relay WS closes unexpectedly (network drop, relay restart,
- * etc.). Does a **partial** teardown — keeps `_sessionStartedAt`, `_messageBuffer`,
+ * etc.). Does a **partial** teardown — keeps `sessionStartedAt`, `_messageBuffer`,
  * `_relayUrl`, `_cachedEd25519`, `_peerShort` so the session can resume on
  * reconnect — and schedules an `_attemptReconnect`.
  *
