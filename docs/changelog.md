@@ -58,6 +58,20 @@ requirements where they matter.
 
 ## Extension (@geohar/un-bien)
 
+### 0.20.19 (2026-09-26)
+
+- **Fixed: room tiles sporadically showed `myRoomMeta` after opening a chat
+  (refresh fixed it)** — `session_sync_end` pushed the session name as
+  `deps.myRoomMeta?.name`, but in the plane-router deps `myRoomMeta` is an
+  accessor *function* (`() => _rootState().myRoomMeta`), not the meta object.
+  So `?.name` read the JavaScript function's own `.name` property — the literal
+  string `"myRoomMeta"` — and the app applied it to the tile on every open +
+  reconnect. `rooms_check` (pull-to-refresh) overwrote it with the real name
+  from the relay, so the tile self-healed on refresh. One-character fix from
+  the routing carve: call the accessor (`deps.myRoomMeta()?.name`). Regression
+  test asserts `session_sync_end.session_name` is the room's display name and
+  is never the literal `myRoomMeta`.
+
 ### 0.20.18 (2026-09-26)
 
 - **Fixed: rooms sporadically announced without a name after a session
