@@ -565,7 +565,40 @@ interface SessionState {
    *  base-ctx resolution reads the ROOT's. */
   baseCtx: Pick<ExtensionContext, "compact" | "abort" | "ui"> | null
 }
+/** A freshly-zeroed session record (root or subagent child). */
+function _freshSessionState(): SessionState {
+  return {
+    turnId: null,
+    working: false,
+    agentRun: { active: false, generation: 0 },
+    sessionManager: null,
+    model: null,
+    thinking: null,
+    currentModel: null,
+    myRoomId: null,
+    myRoomMeta: null,
+    sessionStartedAt: null,
+    baseCtx: null,
+  }
+}
+
+// The ROOT session's state — a SINGLE stable record for the process lifetime,
+// NOT an entry keyed by the (rotating) session id. The relay-room projection
+// fields (myRoomId/myRoomMeta/sessionStartedAt) outlive a session replacement
+// by contract: _goIdle preserves them across stop/start, and session_shutdown
+// does not clear them — the relay room survives a New/Fork/Reload within the
+// same process. Keying them on _rootSessionId (as the prior refactor did) reset
+// them to null on every sid rotation, opening a window between session_start
+// and the async _cmdStart where a reconnect/sync announced a NAMELESS room —
+// the relay filled the absent room_meta.name with its default placeholder.
+// session_start now POPULATES the per-session fields (sessionManager/baseCtx/
+// model/thinking/…) in place; session_shutdown clears exactly those. The record
+// itself is never recreated, so the projection rides through a replacement.
+let _rootRecord: SessionState = _freshSessionState()
+// Subagent (non-root) child records, keyed by their own session id. The root
+// is never an entry here — root access routes through _rootRecord.
 const _sessions = new Map<string, SessionState>()
+
 // The session bound to the app room. null until the ROOT session_start fires;
 // while null, everything is treated as root (single-session / test harness).
 let _rootSessionId: string | null = null
@@ -574,28 +607,23 @@ function _rootKey(): string {
   return _rootSessionId ?? "__root__"
 }
 function _stateFor(sid: string): SessionState {
+  if (sid === _rootKey()) return _rootRecord // root → stable singleton
   let st = _sessions.get(sid)
   if (!st) {
-    st = {
-      turnId: null,
-      working: false,
-      agentRun: { active: false, generation: 0 },
-      sessionManager: null,
-      model: null,
-      thinking: null,
-      currentModel: null,
-      myRoomId: null,
-      myRoomMeta: null,
-      sessionStartedAt: null,
-      baseCtx: null,
-    }
+    st = _freshSessionState()
     _sessions.set(sid, st)
   }
   return st
 }
-/** The root session's record (always defined; lazily created). */
+/** The root session's record (stable for the process lifetime). */
 function _rootState(): SessionState {
-  return _stateFor(_rootKey())
+  return _rootRecord
+}
+/** Test-only: replace the root record with a fresh slate (projection fields
+ *  included) so tests don't leak state across boundaries. Production never
+ *  calls this — session_shutdown clears per-session fields in place instead. */
+function _resetRootRecordForTest(): void {
+  _rootRecord = _freshSessionState()
 }
 /** sessionId of the firing handler's ctx, defaulting to the root key. */
 function _sidOf(
@@ -1392,6 +1420,7 @@ const _testHooks = createTestHooks({
   },
   activePeers: _activePeers,
   rootState: _rootState,
+  resetRootRecord: _resetRootRecordForTest,
   seedRootSession(sid: string) {
     _rootSessionId = sid
     _stateFor(sid).sessionManager = {
@@ -1419,6 +1448,7 @@ export const _getCachedPublicKeyForTest = _testHooks.getCachedPublicKeyForTest
 export const _setSessionStartedAtForTest = _testHooks.setSessionStartedAtForTest
 export const _setCurrentModelForTest = _testHooks.setCurrentModelForTest
 export const _getCurrentTurnIdForTest = _testHooks.getCurrentTurnIdForTest
+export const _getRootProjectionForTest = _testHooks.getRootProjectionForTest
 export const _setPiForTest = _testHooks.setPiForTest
 export const _hasPendingReconnect = _testHooks.hasPendingReconnect
 export const _getActivePeerCountForTest = _testHooks.getActivePeerCountForTest
@@ -1767,6 +1797,16 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // session_start with their own ctx). Each records its OWN sessionManager —
     // no cross-session clobber (was the unguarded `_sessionManager = ...` bug).
     const sid = _sidOf(ctx)
+    // Claim root + adopt the root sid BEFORE any _stateFor(sid) write. The root
+    // record is the stable _rootRecord, but _stateFor(sid) only routes there
+    // once sid === _rootKey() — i.e. once _rootSessionId === sid. Writing
+    // baseCtx/sessionManager before the adoption lands them in an orphaned
+    // per-sid map entry (the deferred re-arm then reads _rootState and sees
+    // null). For a subagent child _claimRootSession returns false (root owns
+    // the slot), so _rootSessionId is untouched and _stateFor(sid) correctly
+    // gives the child its own map entry.
+    const isRootClaim = _claimRootSession(pi)
+    if (isRootClaim && ctx?.sessionManager) _rootSessionId = sid
     // Base ctx (compact/notify fallback when no fresh ctx is passed) is
     // PER-SESSION (plan 01M18RNH) — each session_start records its OWN; the
     // base-ctx resolution reads the ROOT's, so a child's ctx never leaks
@@ -1788,7 +1828,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // The root claim also fixes _rootSessionId (re-captured across replacement);
     // only when a real sessionManager is present (ctx-less test events stay in
     // null-root mode where every event is treated as root).
-    if (_claimRootSession(pi)) {
+    if (isRootClaim) {
       if (ctx?.sessionManager) _rootSessionId = sid
       if (!_extensionUiBridge)
         _extensionUiBridge = createExtensionUiBridge(pi, (msg) =>
@@ -1984,9 +2024,18 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       _subagentRooms = null
       _releaseRootSession(pi)
     }
-    // Drop the captured event ctx immediately. On module-reuse hosts the same
-    // instance survives session replacement; the next session_start re-binds
-    // the root record's baseCtx for the new session.
+    // Drop the captured base ctx on the stable root record. On module-reuse
+    // hosts the same instance survives session replacement; the next
+    // session_start re-binds it for the new session. We clear ONLY baseCtx here
+    // (mirroring the pre-01M18RNH global semantics): the relay-room PROJECTION
+    // (myRoomId/myRoomMeta/sessionStartedAt) must survive the replacement by
+    // contract (_goIdle keeps it too; _cmdStart overwrites it on the new
+    // connect), and the other per-session fields (model/thinking/currentModel/
+    // sessionManager/…) are either re-populated by the new session_start + its
+    // events or intentionally fall back to the prior value when the replacement
+    // ctx carries no sessionManager (the ctx-less same-module path). Clearing
+    // sessionManager here, for instance, defers `_cmdStart` (no roomId) and
+    // breaks that path — see the same-module replacement suite.
     _rootState().baseCtx = null
     // No bye reason: the process keeps running and the fresh instance re-joins
     // the SAME relay room, so an explicit offline→online flap would be wrong.

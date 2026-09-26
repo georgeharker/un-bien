@@ -103,6 +103,10 @@ export interface TestHooksDeps {
 
   /** The ROOT session's state record (turnId for cancel routing). */
   rootState(): { turnId: string | null }
+  /** Test-only: replace the stable root record with a fresh slate (projection
+   *  fields included) so tests don't leak state across boundaries. Production
+   *  never calls this — session_shutdown clears per-session fields in place. */
+  resetRootRecord(): void
   /** Seed the ROOT session record + id (test-only session emulation). */
   seedRootSession(sid: string): void
   /** Queue an inbound mesh message for agent delivery. */
@@ -179,6 +183,13 @@ export interface TestHooks {
   hasActivePeerForTest(appPeerIdStd: string): boolean
   /** Test-only entry point for verifying mesh-to-agent delivery semantics. */
   deliverMeshMessageToAgentForTest(env: MeshEnvelope): void
+  /** Test-only: the stable root record's relay-room projection (myRoomId /
+   *  myRoomMeta). Used by the session-rotation regression test to assert the
+   *  projection survives a `_rootSessionId` rotation (plan 01M18RNH). */
+  getRootProjectionForTest(): {
+    myRoomId: string | null
+    myRoomMeta: { name: string } | null
+  }
 }
 
 /** Build the test-hook surface over index.ts's state + helpers. */
@@ -222,6 +233,7 @@ export function createTestHooks(deps: TestHooksDeps): TestHooks {
 
     resetSessionsForTest(): void {
       deps.sessions.clear()
+      deps.resetRootRecord()
       deps.rootSessionId = null
       deps.relayStartDeferred = false
     },
@@ -296,6 +308,19 @@ export function createTestHooks(deps: TestHooksDeps): TestHooks {
 
     deliverMeshMessageToAgentForTest(env: MeshEnvelope): void {
       deps.deliverMeshMessageToAgent(env)
+    },
+
+    getRootProjectionForTest(): {
+      myRoomId: string | null
+      myRoomMeta: { name: string } | null
+    } {
+      // deps.rootState() is typed narrowly (turnId only); the runtime object
+      // is the full SessionState, so read the projection fields by cast.
+      const r = deps.rootState() as unknown as {
+        myRoomId: string | null
+        myRoomMeta: { name: string } | null
+      }
+      return { myRoomId: r.myRoomId, myRoomMeta: r.myRoomMeta }
     },
   }
 }

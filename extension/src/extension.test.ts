@@ -270,6 +270,7 @@ const {
   _setCurrentModelForTest,
   _setPiForTest,
   _getCurrentTurnIdForTest,
+  _getRootProjectionForTest,
   _connectForTest,
   _startRelayForTest,
   _getCachedPublicKeyForTest,
@@ -2124,6 +2125,32 @@ describe("rooms wiring", () => {
       roomIdForSession("test-root-session-2"),
     )
     expect(capturedOpts[2]!.roomId).not.toBe(capturedOpts[0]!.roomId)
+  })
+
+  test("root relay-room projection survives a session-id rotation (plan 01M18RNH regression)", async () => {
+    // f55f116 keyed myRoomId/myRoomMeta on the rotating _rootSessionId, so a
+    // New/Fork/Reload lazily created a fresh record and nulled the projection
+    // until the async _cmdStart repopulated it. A reconnect/sync in that window
+    // announced a NAMELESS room (relay default "MyRoomMeta"). The root record
+    // is now a stable singleton; only the per-session fields rotate. This test
+    // rotates the sid WITHOUT re-connecting (the replacement window) and asserts
+    // the projection is still the value _cmdStart wrote for the prior session.
+    _defaultConnectImpl = async () => undefined
+    captureHandler("unbien")
+    await _connectForTest(makeMockCtx("/tmp/unbien-proj"))
+
+    const before = _getRootProjectionForTest()
+    expect(before.myRoomId).toBeTruthy()
+    expect(before.myRoomMeta?.name).toBeTruthy()
+
+    // Emulate a session replacement landing before _cmdStart repopulates: rotate
+    // the root sid (session_shutdown clears per-session fields; session_start
+    // claims the new id) but do NOT re-run /unbien yet.
+    _seedRootSessionForTest("test-root-session-2")
+
+    const after = _getRootProjectionForTest()
+    expect(after.myRoomId).toBe(before.myRoomId) // projection survived
+    expect(after.myRoomMeta).toEqual(before.myRoomMeta)
   })
 
   test("no room announce before a session id exists — connect deferred, no cwd fallback (design 01M1CAW0)", async () => {
