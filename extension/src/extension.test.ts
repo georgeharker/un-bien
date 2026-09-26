@@ -2338,6 +2338,33 @@ describe("session sync", () => {
     })
   })
 
+  test("session_sync_end session_name is the room display name, not the accessor function name (myRoomMeta regression)", async () => {
+    // routing.ts:156 reads deps.myRoomMeta()?.name. PlaneRouterDeps.myRoomMeta
+    // is an accessor FUNCTION (() => _rootState().myRoomMeta), so the prior
+    // deps.myRoomMeta?.name read the JS function own .name property -- the
+    // literal string "myRoomMeta" -- and session_sync_end pushed that as
+    // session_name. The app applied it; rooms_check (refresh) overwrote it.
+    _defaultConnectImpl = async () => undefined
+    captureHandler("unbien")
+    const cwd = "/tmp/unbien-name-pull"
+    await _connectForTest(makeMockCtx(cwd))
+    await _pairForTest("peer-namepull")
+
+    const sendsBefore = relayRef.current!.send.mock.calls.length
+    await emitEnvelopeSync("peer-namepull", "req-np")
+    const sent = relayRef
+      .current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string)
+    const end = syncEndFrame(sent)
+    expect(end).toBeDefined()
+    const sessionName = end!["session_name"]
+    // Must be the room display name (cwd basename), never the accessor
+    // function own name.
+    expect(sessionName).not.toBe("myRoomMeta")
+    expect(typeof sessionName).toBe("string")
+    expect(sessionName as string).toContain("unbien-name-pull")
+  })
+
   test("session_sync replays pending asks ENVELOPED — bare ServerMessage is dropped by the app", async () => {
     await _pairForTest("peer-ss-1")
     _setSessionStartedAtForTest(null)

@@ -153,7 +153,7 @@ export function routeUnBienPlane(
     // non-live pull disagreed with the live session_info push. myRoomMeta.name
     // is the same value pair_ok sends (deps.displayName) and tracks live
     // renames (session_info_changed updates it), so pull == push now.
-    const displayName = deps.myRoomMeta?.name
+    const displayName = deps.myRoomMeta()?.name
     // Fork auto-nav: a fork-born session's FIRST sync echoes the app's
     // originating fork request id (design: fork switch). take = read+unlink,
     // so it fires once (the app navigates on first receipt; later reconnects
