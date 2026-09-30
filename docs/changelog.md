@@ -58,6 +58,10 @@ requirements where they matter.
 
 ## Extension (@geohar/un-bien)
 
+### 0.20.20 (2026-09-26)
+
+- **Compatibility: declare host-provided packages as `peerDependencies` `"*"` (pi 0.99.1)** — pi 0.99.1 rejects extension packages that list host-provided runtime (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, `typebox`) under `dependencies`; an installed copy can bypass the extension loader and create duplicate runtime modules. Moved the three to `peerDependencies` with a `*` range so the host supplies them and the published tarball no longer ships its own. No behavior change.
+
 ### 0.20.19 (2026-09-26)
 
 - **Fixed: room tiles sporadically showed `myRoomMeta` after opening a chat
