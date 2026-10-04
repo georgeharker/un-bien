@@ -47,7 +47,6 @@ import {
   createExtensionUiBridge,
   wrapStockUi,
   type ExtensionUiBridge,
-  type ExtensionUiResponseWire,
 } from "./extension_ui_bridge.js"
 import { createPanelBridge, type PanelBridge } from "./panel_bridge.js"
 import {
@@ -59,7 +58,6 @@ import {
   createRpcEnvelope,
   type EnvelopeMessage,
 } from "./session/rpc_envelope.js"
-import { dispatchRpcCommand } from "./session/rpc_inbound.js"
 import { envLog } from "./session/debug_log.js"
 import { chainUiNotify, notifyOwners, setOwnerNotifyHook } from "./session/owner_notify.js"
 import { roomIdForSession } from "./rooms.js"
@@ -75,8 +73,6 @@ import {
 import type { AcquiredLock } from "./session/cwd_lock.js"
 import {
   effectiveAutoStartRelay,
-  effectiveAllowRemoteLaunch,
-  effectiveAllowRemoteTerminate,
   loadLocalConfig,
   localConfigExists,
   piSessionName,
@@ -87,12 +83,11 @@ import { updateFooter, type FooterState } from "./ui/footer.js"
 import { fileURLToPath } from "node:url"
 import { realpathSync } from "node:fs"
 import {
-  loadConfig,
   saveConfig,
   isValidRelayUrl,
   isWebSocketScheme,
 } from "./config.js"
-import { _expandTilde, _launchSession, launchDirAllowed } from "./launch.js"
+import { _expandTilde, _launchSession } from "./launch.js"
 import { _enrichToolArgs } from "./enrich_tool_args.js"
 import {
   _findKnownPeer,
@@ -127,12 +122,8 @@ import {
 import { registerUnbienCommands } from "./commands/register.js"
 import { makeTestBusEmitter, runTestScenario } from "./commands/test_scenarios.js"
 import { routeRpcCommand, routeUnBienPlane, type PlaneRouterDeps } from "./routing.js"
-import { takeForkLink } from "./commands/fork_link.js"
 import { createTestHooks } from "./test_hooks.js"
-import {
-  createRpcHandlers,
-  type RpcHandlersDeps,
-} from "./session/rpc_handlers.js"
+import { type RpcHandlersDeps } from "./session/rpc_handlers.js"
 import {
   CTRL_PREFIX,
   _anyPeerActive,
@@ -639,13 +630,6 @@ function _isNonRootSid(sid: string): boolean {
 
 // Module-level pi reference
 let _pi: ExtensionAPI | null = null
-
-// Minimal structural views of pi SDK internals the extension reaches for but the
-// public ExtensionAPI type does not surface. Each names exactly the member(s)
-// known to exist on the concrete AgentSession at runtime.
-interface PiEventBusInternals {
-  events?: { emit(channel: string, data: unknown): void }
-}
 
 // Plan/57 — Bridge to pi-ask's clarification-flow events. null until the
 // extension factory wires it (and null if the SDK exposes no events bus).
@@ -1937,7 +1921,9 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       // `-p`/`--print`, so they still auto-start the relay exactly as before.
       const isPrintMode =
         process.argv.includes("-p") || process.argv.includes("--print")
-      const cwd = isDaemon ? process.cwd() : "cwd" in ctx ? ctx.cwd : undefined
+      let cwd: string | undefined
+      if (isDaemon) cwd = process.cwd()
+      else if ("cwd" in ctx) cwd = ctx.cwd
       if (
         !isPrintMode &&
         cwd &&
@@ -2337,6 +2323,8 @@ export function _routeClientMessageFrom(
       // Already paired — ignore subsequent pair_request to maintain idempotency.
       // (Token is already consumed and peer is in peers.json.)
       break
+    default:
+      break
   }
 }
 
@@ -2489,12 +2477,14 @@ if (_isDirectRun()) {
           `Ambiguous: ${matches.map((peer) => peer.rawHandle.slice(0, 8)).join(", ")}`,
         )
       else {
-        const peer = matches[0]!
-        const { removePeer } = await import("./pairing/storage.js")
-        await removePeer(peer.rawHandle)
-        console.log(
-          `Revoked: ${peer.record.name} (${peer.rawHandle.slice(0, 8)}…)`,
-        )
+        const peer = matches[0]
+        if (peer) {
+          const { removePeer } = await import("./pairing/storage.js")
+          await removePeer(peer.rawHandle)
+          console.log(
+            `Revoked: ${peer.record.name} (${peer.rawHandle.slice(0, 8)}…)`,
+          )
+        }
       }
     } else {
       console.log("Usage: revoke <shortid>")
