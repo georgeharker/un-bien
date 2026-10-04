@@ -58,6 +58,27 @@ requirements where they matter.
 
 ## Extension (@geohar/un-bien)
 
+### 0.20.22 (2026-10-04)
+
+- **Bridge stock `ctx.ui` dialogs to the paired app (first-responder-wins)** —
+  pi-ask is optional, so an extension's raw `ctx.ui.select`/`confirm`/`input`/`editor`
+  (consent gates, elicitation, un-bien's own wizard) previously rendered on the
+  local TUI only and never reached the phone, stranding the mobile user. The UI
+  bridge now wraps pi's shared `ExtensionUIContext` once at `session_start` (one
+  object across all extensions) so every stock dialog races the local TUI against
+  the paired app: whichever answers first wins, the other is dismissed (local win
+  → id-matched notify closes the app modal; app win → the `AbortSignal` closes the
+  local dialog). Same wire contract pi-ask already uses — **no app changes**
+  (the app's `ExtensionUIPromptView` already rendered stock `extension_ui_request`).
+  Disjoint from pi-ask (which renders via `ctx.ui.custom` + its event bus, not
+  `select/confirm/input`); inbound responses route by id space. Restore/reconnect:
+  open dialogs replay on `session_sync`; resolved-while-disconnected ones retire
+  via the app's existing ask-reconcile.
+- **Internal: remove dead imports + fix localized lint warnings in `index.ts`** —
+  nine imports/interface left dead by the routing carve (7866ff5) and per-session
+  refactor (f55f116) removed; a nested ternary, a switch-without-default, and a
+  non-null assertion cleaned. No behavior change.
+
 ### 0.20.21 (2026-09-30)
 
 - **Compatibility: declare host-provided packages as `peerDependencies` `"*"` (pi 0.99.1)** — pi 0.99.1 rejects extension packages that list host-provided runtime (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, `typebox`) under `dependencies`; an installed copy can bypass the extension loader and create duplicate runtime modules. Moved the three to `peerDependencies` with a `*` range so the host supplies them and the published tarball no longer ships its own. No behavior change.
