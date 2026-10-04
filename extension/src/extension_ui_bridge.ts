@@ -19,6 +19,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import type { PlainPeerChannel } from "./transport/peer_channel.js"
+import { randomUUID } from "node:crypto"
 import type {
   AskAnswerWire,
   AskEnrichmentWire,
@@ -26,6 +27,7 @@ import type {
   AskQuestionWire,
   AskQuestionWireType,
   AskResponseEnrichmentWire,
+  ExtensionUiRequestWire,
   ExtensionUiResponseWire,
   ServerMessage,
 } from "./protocol/types.js"
@@ -52,6 +54,33 @@ interface ActiveFlow {
   questions: AskQuestionWire[]
 }
 
+// ── Stock ctx.ui dialogs (no pi-ask) ─────────────────────────────────────────
+// pi-ask is optional. Stock `ctx.ui.select/confirm/input/editor` from ANY
+// extension (including this one's wizard) must also reach the paired app, with
+// first-responder-wins semantics: the local TUI and the remote app both render,
+// whichever answers first resolves the dialog and dismisses the other. pi emits
+// `ui_prompt_start/end` for these but those events carry only {kind,title} — no
+// options and no correlation id — so the bridge drives off the ctx.ui wrap
+// (wrapStockUi), not the events. Id space is crypto.randomUUID(), disjoint
+// from pi-ask flowIds, so inbound responses route unambiguously.
+const STOCK_TTL_MS = 10 * 60 * 1000
+
+/** One stock ctx.ui dialog awaiting an answer from either the local TUI or the
+ *  remote app. `request` is replayed on session_sync so a peer attaching mid-
+ *  dialog sees it. */
+interface StockPending {
+  id: string
+  request: ExtensionUiRequestWire
+  resolve: (value: unknown) => void
+}
+
+/** Build the wire frame for a stock dialog. */
+type StockRequestInput =
+  | { method: "select"; title: string; options: string[] }
+  | { method: "confirm"; title: string; message: string }
+  | { method: "input"; title: string; placeholder?: string }
+  | { method: "editor"; title: string; prefill?: string }
+
 export interface ExtensionUiBridge {
   /** Route an inbound `extension_ui_response` from a peer back to pi-ask. */
   respond(msg: ExtensionUiResponseWire): void
@@ -74,6 +103,14 @@ export interface ExtensionUiBridge {
   cancelAllPending(): number
   /** Drop all subscriptions + state (best-effort teardown). */
   dispose(): void
+  // ── Stock ctx.ui (no pi-ask) ─────────────────────────────────────────────
+  /** Open a stock ctx.ui dialog to the app. Broadcasts an `extension_ui_request`
+   *  and returns a Promise that resolves when the app answers (via `respond`)
+   *  or the TTL fires (undefined), plus the id (for `dismissStock`). */
+  openStock(input: StockRequestInput): { promise: Promise<unknown>; id: string }
+  /** Local TUI (or /stop) won the race: drop the pending entry and notify the
+   *  app to close its modal. No-op if the app already answered. */
+  dismissStock(id: string): void
 }
 
 /**
@@ -135,6 +172,78 @@ export function createExtensionUiBridge(
         })
       }, FLOW_TTL_MS),
     )
+  }
+
+  // Stock ctx.ui dialogs awaiting an answer from the local TUI OR the app.
+  // Disjoint id space (crypto.randomUUID) from pi-ask flowIds.
+  const stockPending = new Map<string, StockPending>()
+  const stockTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+  function clearStockTtl(id: string): void {
+    const t = stockTimers.get(id)
+    if (t !== undefined) {
+      clearTimeout(t)
+      stockTimers.delete(id)
+    }
+  }
+  function armStockTtl(id: string): void {
+    clearStockTtl(id)
+    stockTimers.set(
+      id,
+      setTimeout(() => {
+        if (!stockPending.delete(id)) return // already resolved
+        stockTimers.delete(id)
+        // Resolve the racing wrap with undefined (the caller treats it as
+        // cancelled) and tell the app to drop its modal — same dismiss-notify
+        // shape pi-ask uses, so no new app-side contract.
+        broadcast({
+          type: "extension_ui_request",
+          id,
+          method: "notify",
+          message: "Dialog expired — retry or answer on desktop.",
+          notify_type: "warning",
+        })
+      }, STOCK_TTL_MS),
+    )
+  }
+
+  // Open a stock ctx.ui dialog to the app. Broadcasts the request and returns a
+  // Promise that resolves when the app answers (via respond) OR when the TTL
+  // fires (undefined). The wrap (wrapStockUi) races this against the local TUI.
+  function openStock(
+    input: StockRequestInput,
+  ): { promise: Promise<unknown>; id: string } {
+    const id = randomUUID()
+    const request = buildStockRequest(id, input)
+    const promise = new Promise<unknown>((resolve) => {
+      stockPending.set(id, { id, request, resolve })
+      armStockTtl(id)
+    })
+    broadcast(request)
+    return { promise, id }
+  }
+
+  // Local TUI won the race (or /stop / teardown): drop the pending entry and
+  // tell the app to close its modal. No-op if the app already answered (the
+  // entry is gone), so a late local answer after a remote answer is harmless.
+  function dismissStock(id: string): void {
+    if (!stockPending.delete(id)) return
+    clearStockTtl(id)
+    broadcast({
+      type: "extension_ui_request",
+      id,
+      method: "notify",
+      message: "Resolved.",
+    })
+  }
+
+  // Map an inbound response to the value the stock ctx.ui call should resolve
+  // with: select/input/editor -> value; confirm -> confirmed; cancelled -> undefined.
+  function stockValueOf(msg: ExtensionUiResponseWire): string | boolean | undefined {
+    if ("cancelled" in msg && msg.cancelled) return undefined
+    if ("value" in msg) return msg.value
+    if ("confirmed" in msg) return msg.confirmed
+    return undefined // ask-envelope rich response: not sent for stock dialogs
   }
 
   const unsubStarted = events.on(PI_ASK_STARTED, (raw: unknown) => {
@@ -213,6 +322,16 @@ export function createExtensionUiBridge(
   })
 
   function respond(msg: ExtensionUiResponseWire): void {
+    // Stock ctx.ui dialog: id in stockPending -> the app answered. Resolve the
+    // racing wrap (which aborts the local TUI dialog). The app is the responder,
+    // so no dismiss-notify back to it. A late local answer is a no-op (entry gone).
+    const stock = stockPending.get(msg.id)
+    if (stock) {
+      stockPending.delete(msg.id)
+      clearStockTtl(msg.id)
+      stock.resolve(stockValueOf(msg))
+      return
+    }
     const ask = msg.ask
 
     // Explicit cancel — with or without the ask envelope. A strict client
@@ -289,17 +408,22 @@ export function createExtensionUiBridge(
 
   return {
     respond,
+    openStock,
+    dismissStock,
     // Insertion order = the order the flows opened, so a client replaying more
     // than one renders them oldest-first. pi-ask resolves one flow at a time in
-    // practice, so this is a defensive detail rather than a live case.
-    pendingRequests: () => [...activeFlows.values()].map(requestForFlow),
+    // practice, so this is a defensive detail rather than a live case. Stock
+    // ctx.ui dialogs ride along so a peer attaching mid-dialog sees them.
+    pendingRequests: () =>
+      [...activeFlows.values()]
+        .map(requestForFlow)
+        .concat([...stockPending.values()].map((p) => p.request)),
 
-    /** Cancel EVERY pending flow (slash-command feedback: /stop). Emits a
-     *  cancelled response per flow, which resolves the awaiting extension
-     *  side (its `if (!picked) return` path) and drops it from
-     *  activeFlows. Returns the count cancelled. TUI-rendered raw
-     *  ctx.ui.select dialogs are NOT reachable here (they never entered
-     *  the bridge) — those remain host-side awaits. */
+    /** Cancel EVERY pending flow/dialog (slash-command feedback: /stop). Emits
+     *  a cancelled response per pi-ask flow (resolves the extension side) and
+     *  resolves each stock dialog with undefined + a dismiss-notify (closes the
+     *  app modal; the wrap's race then aborts the local TUI dialog). Returns the
+     *  count cancelled. */
     cancelAllPending(): number {
       let n = 0
       for (const flowId of [...activeFlows.keys()]) {
@@ -310,6 +434,20 @@ export function createExtensionUiBridge(
           /* best-effort per flow */
         }
       }
+      for (const id of [...stockPending.keys()]) {
+        const stock = stockPending.get(id)
+        if (!stock) continue
+        stockPending.delete(id)
+        clearStockTtl(id)
+        stock.resolve(undefined)
+        broadcast({
+          type: "extension_ui_request",
+          id,
+          method: "notify",
+          message: "Resolved.",
+        })
+        n++
+      }
       return n
     },
     dispose() {
@@ -319,7 +457,53 @@ export function createExtensionUiBridge(
       for (const t of flowTimers.values()) clearTimeout(t)
       flowTimers.clear()
       activeFlows.clear()
+      for (const t of stockTimers.values()) clearTimeout(t)
+      stockTimers.clear()
+      // Unblock stock callers on teardown so the wrap's race doesn't dangle.
+      for (const s of stockPending.values()) s.resolve(undefined)
+      stockPending.clear()
     },
+  }
+}
+
+/** Build the wire frame for a stock ctx.ui dialog (no pi-ask envelope). */
+function buildStockRequest(
+  id: string,
+  input: StockRequestInput,
+): ExtensionUiRequestWire {
+  switch (input.method) {
+    case "select":
+      return {
+        type: "extension_ui_request",
+        id,
+        method: "select",
+        title: input.title,
+        options: input.options,
+      }
+    case "confirm":
+      return {
+        type: "extension_ui_request",
+        id,
+        method: "confirm",
+        title: input.title,
+        message: input.message,
+      }
+    case "input":
+      return {
+        type: "extension_ui_request",
+        id,
+        method: "input",
+        title: input.title,
+        placeholder: input.placeholder,
+      }
+    case "editor":
+      return {
+        type: "extension_ui_request",
+        id,
+        method: "editor",
+        title: input.title,
+        prefill: input.prefill,
+      }
   }
 }
 
@@ -451,3 +635,135 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // Re-exported so callers (and tests) can build responses without re-deriving the
 // pi-ask response shape.
 export type { AskResponseEnrichmentWire, ExtensionUiResponseWire }
+
+// ── Stock ctx.ui wrap (first-responder-wins) ───────────────────────────────
+// pi-ask is optional; stock `ctx.ui.select/confirm/input/editor` from ANY
+// extension must also reach the paired app. pi's ExtensionRunner wraps the
+// uiContext once and shares it across extensions (`getUIContext()`), so wrapping
+// `ctx.ui` in our session_start reaches every extension's dialogs. pi still emits
+// `ui_prompt_start/end` under us (our wrap sits outside pi's), so the TUI status
+// indicator is unaffected.
+//
+// Semantics mirror pi-ask: the local TUI and the remote app BOTH render; whichever
+// answers first resolves the dialog and dismisses the other:
+//   - local wins  -> bridge.dismissStock(id) sends a notify (id-matched) so the
+//                    app closes its modal (same contract pi-ask's `completed` uses).
+//   - remote wins -> ac.abort() fires pi's `opts.signal` abort -> pi's
+//                    showExtensionSelector/Confirm/Input resolve undefined + hide.
+// A late loser answer is a no-op: dismissStock and respond both check the pending
+// entry is gone before acting.
+const STOCK_WRAPPED = Symbol("un-bien.stockUiWrapped")
+
+/** Structural view of the ExtensionUIContext methods we wrap. */
+interface StockUiContext {
+  select: (
+    title: string,
+    options: string[],
+    opts?: { signal?: AbortSignal; timeout?: number },
+  ) => Promise<string | undefined>
+  confirm: (
+    title: string,
+    message: string,
+    opts?: { signal?: AbortSignal; timeout?: number },
+  ) => Promise<boolean>
+  input: (
+    title: string,
+    placeholder?: string,
+    opts?: { signal?: AbortSignal; timeout?: number },
+  ) => Promise<string | undefined>
+  editor?: (
+    title: string,
+    prefill?: string,
+    opts?: { signal?: AbortSignal; timeout?: number },
+  ) => Promise<string | undefined>
+}
+
+/** Wrap the shared `ctx.ui` so stock dialogs bridge to the paired app with
+ *  first-responder-wins semantics. Idempotent (a symbol guard prevents double-
+ *  wrapping across session replacements on a module-reuse host). No-op when no
+ *  peer is attached — the call falls through to the original (local TUI), so the
+ *  first-run wizard and headless prompts work unchanged. */
+export function wrapStockUi(
+  ui: StockUiContext | undefined,
+  bridge: ExtensionUiBridge,
+  hasPeer: () => boolean,
+): void {
+  if (!ui || typeof ui.select !== "function") return
+  const marked = ui as StockUiContext & { [STOCK_WRAPPED]?: true }
+  if (marked[STOCK_WRAPPED]) return
+  marked[STOCK_WRAPPED] = true
+
+  const orig = {
+    select: ui.select.bind(ui),
+    confirm: ui.confirm.bind(ui),
+    input: ui.input.bind(ui),
+    editor: ui.editor?.bind(ui),
+  }
+
+  function race(
+    localP: Promise<unknown>,
+    open: () => { promise: Promise<unknown>; id: string },
+    abortLocal: () => void,
+  ): Promise<unknown> {
+    const { promise: remoteP, id } = open()
+    return new Promise<unknown>((resolve) => {
+      localP.then((v) => {
+        bridge.dismissStock(id)
+        resolve(v)
+      })
+      remoteP.then((v) => {
+        abortLocal()
+        resolve(v)
+      })
+    })
+  }
+
+  function chainSignal(opts: { signal?: AbortSignal } | undefined): AbortController {
+    const ac = new AbortController()
+    if (opts?.signal) opts.signal.addEventListener("abort", () => ac.abort(), { once: true })
+    return ac
+  }
+
+  ui.select = ((title: string, options: string[], opts?: { signal?: AbortSignal; timeout?: number }) => {
+    if (!hasPeer()) return orig.select(title, options, opts)
+    const ac = chainSignal(opts)
+    return race(
+      orig.select(title, options, { ...opts, signal: ac.signal }),
+      () => bridge.openStock({ method: "select", title, options }),
+      () => ac.abort(),
+    ) as Promise<string | undefined>
+  }) as StockUiContext["select"]
+
+  ui.confirm = ((title: string, message: string, opts?: { signal?: AbortSignal; timeout?: number }) => {
+    if (!hasPeer()) return orig.confirm(title, message, opts)
+    const ac = chainSignal(opts)
+    return race(
+      orig.confirm(title, message, { ...opts, signal: ac.signal }),
+      () => bridge.openStock({ method: "confirm", title, message }),
+      () => ac.abort(),
+    ) as Promise<boolean>
+  }) as StockUiContext["confirm"]
+
+  ui.input = ((title: string, placeholder?: string, opts?: { signal?: AbortSignal; timeout?: number }) => {
+    if (!hasPeer()) return orig.input(title, placeholder, opts)
+    const ac = chainSignal(opts)
+    return race(
+      orig.input(title, placeholder, { ...opts, signal: ac.signal }),
+      () => bridge.openStock({ method: "input", title, placeholder }),
+      () => ac.abort(),
+    ) as Promise<string | undefined>
+  }) as StockUiContext["input"]
+
+  if (orig.editor) {
+    const origEditor = orig.editor
+    ui.editor = ((title: string, prefill?: string, opts?: { signal?: AbortSignal; timeout?: number }) => {
+      if (!hasPeer()) return origEditor(title, prefill, opts)
+      const ac = chainSignal(opts)
+      return race(
+        origEditor(title, prefill, { ...opts, signal: ac.signal }),
+        () => bridge.openStock({ method: "editor", title, prefill }),
+        () => ac.abort(),
+      ) as Promise<string | undefined>
+    }) as NonNullable<StockUiContext["editor"]>
+  }
+}

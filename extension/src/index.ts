@@ -45,6 +45,7 @@ import type { RelayClient } from "./transport/relay_client.js"
 import type { PlainPeerChannel } from "./transport/peer_channel.js"
 import {
   createExtensionUiBridge,
+  wrapStockUi,
   type ExtensionUiBridge,
   type ExtensionUiResponseWire,
 } from "./extension_ui_bridge.js"
@@ -1833,6 +1834,19 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       if (!_extensionUiBridge)
         _extensionUiBridge = createExtensionUiBridge(pi, (msg) =>
           _uiBroadcast(relayDeps, msg),
+        )
+      // Bridge stock ctx.ui dialogs (select/confirm/input/editor) from ANY
+      // extension to the paired app, first-responder-wins vs the local TUI.
+      // pi-ask is optional; without this, an extension's raw ctx.ui prompts
+      // render only on the local TUI and never reach the phone. The shared
+      // uiContext (pi's getUIContext) means one wrap reaches every extension.
+      // No-op until a peer attaches (hasPeer), so the first-run wizard and
+      // headless prompts stay local. Idempotent across session replacements.
+      if (_extensionUiBridge && ctx?.ui)
+        wrapStockUi(
+          ctx.ui as Parameters<typeof wrapStockUi>[0],
+          _extensionUiBridge,
+          () => _activePeers.size > 0,
         )
       if (!_panelBridge)
         _panelBridge = createPanelBridge(

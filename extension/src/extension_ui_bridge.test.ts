@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { createExtensionUiBridge } from "./extension_ui_bridge.js"
+import { createExtensionUiBridge, wrapStockUi } from "./extension_ui_bridge.js"
 import type {
   ExtensionUiResponseWire,
   ServerMessage,
@@ -540,6 +540,121 @@ describe("extension_ui_bridge", () => {
       vi.advanceTimersByTime(10 * 60 * 1000 + 1)
 
       expect(sent).toHaveLength(0)
+    })
+  })
+
+  // ── Stock ctx.ui wrap (no pi-ask) ─────────────────────────────────────────
+  describe("stock ctx.ui wrap", () => {
+    // A controllable fake ui.select that records the AbortSignal it received
+    // and only resolves when the test drives it (simulating the local TUI).
+    function makeUi() {
+      let resolveSelect: ((v: string | undefined) => void) | undefined
+      let signal: AbortSignal | undefined
+      const select = vi.fn(
+        (_title: string, _options: string[], opts?: { signal?: AbortSignal }) => {
+          signal = opts?.signal
+          return new Promise<string | undefined>((r) => {
+            resolveSelect = r
+          })
+        },
+      )
+      return {
+        ui: { select, confirm: vi.fn(), input: vi.fn() },
+        getSignal: () => signal,
+        resolveLocal: (v: string | undefined) => resolveSelect?.(v),
+      }
+    }
+
+    function lastRequestId(sent: ServerMessage[]): string {
+      const req = [...sent]
+        .reverse()
+        .find(
+          (m) => (m as { type?: string }).type === "extension_ui_request",
+        ) as { id: string; method: string } | undefined
+      if (!req) throw new Error("no extension_ui_request broadcast")
+      return req.id
+    }
+
+    it("no peer -> falls through to the local TUI (no broadcast)", async () => {
+      const sent: ServerMessage[] = []
+      const bus = fakeBus()
+      const bridge = createExtensionUiBridge(fakePi(bus), (m) => sent.push(m))!
+      const { ui } = makeUi()
+      wrapStockUi(ui, bridge, () => false)
+      ui.select("Pick", ["a", "b"])
+      expect(sent).toHaveLength(0) // nothing broadcast — local only
+      expect(bridge.pendingRequests()).toHaveLength(0)
+      bridge.dispose()
+    })
+
+    it("peer + local wins -> resolves local value AND dismiss-notify closes the app modal", async () => {
+      const sent: ServerMessage[] = []
+      const bus = fakeBus()
+      const bridge = createExtensionUiBridge(fakePi(bus), (m) => sent.push(m))!
+      const { ui, resolveLocal } = makeUi()
+      wrapStockUi(ui, bridge, () => true)
+      const p = ui.select("Pick", ["a", "b"])
+      await vi.waitFor(() => expect(bridge.pendingRequests()).toHaveLength(1))
+      const id = lastRequestId(sent)
+      // local TUI answers first
+      resolveLocal("a")
+      await expect(p).resolves.toBe("a")
+      // a dismiss-notify (same id) tells the app to close its modal
+      await vi.waitFor(() => {
+        const notify = [...sent]
+          .reverse()
+          .find((m) => (m as { method?: string }).method === "notify") as
+          | { id: string; message: string }
+          | undefined
+        expect(notify?.id).toBe(id)
+      })
+      expect(bridge.pendingRequests()).toHaveLength(0)
+      bridge.dispose()
+    })
+
+    it("peer + remote wins -> resolves app value AND aborts the local TUI dialog", async () => {
+      const sent: ServerMessage[] = []
+      const bus = fakeBus()
+      const bridge = createExtensionUiBridge(fakePi(bus), (m) => sent.push(m))!
+      const { ui, getSignal } = makeUi()
+      wrapStockUi(ui, bridge, () => true)
+      const p = ui.select("Pick", ["a", "b"])
+      await vi.waitFor(() => expect(bridge.pendingRequests()).toHaveLength(1))
+      const id = lastRequestId(sent)
+      const signal = getSignal()!
+      expect(signal.aborted).toBe(false)
+      // app answers first
+      bridge.respond({ type: "extension_ui_response", id, value: "b" })
+      await expect(p).resolves.toBe("b")
+      // local TUI dialog dismissed via the AbortSignal
+      await vi.waitFor(() => expect(signal.aborted).toBe(true))
+      expect(bridge.pendingRequests()).toHaveLength(0)
+      bridge.dispose()
+    })
+
+    it("stock + pi-ask stay disjoint: a pi-ask flow routes through the event-bus path, not stock", async () => {
+      const sent: ServerMessage[] = []
+      const bus = fakeBus()
+      const bridge = createExtensionUiBridge(fakePi(bus), (m) => sent.push(m))!
+      // pi-ask fires a flow
+      bus.emit("@eko24ive/pi-ask:started", singleQuestionFlow())
+      const flowReq = [...sent]
+        .reverse()
+        .find((m) => (m as { method?: string }).method === "select") as
+        | { id: string; ask?: { flow_id: string } }
+        | undefined
+      expect(flowReq?.id).toBe("tool:tc_1")
+      // a response keyed on the flowId routes to pi-ask (emitSubmit), NOT stock
+      bridge.respond({
+        type: "extension_ui_response",
+        id: "tool:tc_1",
+        value: "Alpha",
+      })
+      const submit = [...bus.emitted]
+        .reverse()
+        .find((e) => e.name === SUBMIT)
+      expect(submit).toBeDefined()
+      bridge.dispose()
     })
   })
 })
