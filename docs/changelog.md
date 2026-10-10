@@ -58,6 +58,27 @@ requirements where they matter.
 
 ## Extension (@geohar/un-bien)
 
+### 0.20.23 (2026-10-10)
+
+- **Cross-mesh robust messaging + inbox pull + in-place rename** —
+  LLM-agnostic (pi + un-bien, any model). No app changes.
+  - **`unknown_peer` ACK**: the local broker returns a fast `unknown_peer`
+    ACK (not a silent 5s timeout) when a peer isn't registered. The relay
+    does the same cross-machine (relay 0.7.4).
+  - **`whoami` tool**: returns the agent's mesh identity (`address`, `name`,
+    `broker`, `socket`). `list_peers` includes a `self` field.
+  - **Inbox pull + wait-until**: `mesh_get_message` / `mesh_list_messages` /
+    `mesh_wait_message` — every inbound mesh message is stored in a
+    `MeshInbox`; a missed push is recoverable; `mesh_wait_message` blocks
+    for a reply by `re` (the `agent_request` replacement).
+  - **Events**: `un-bien:peer_joined` / `peer_left` / `message_received`
+    on `pi.events`.
+  - **In-place rename**: `/name` now re-keys the broker mesh name in-place
+    (no teardown/rejoin, no leader re-election) so `list_peers` reflects
+    the new name immediately — was: needed `/reload`.
+- **Tool names collision-checked**: `whoami` + `mesh_*` vs Claude built-ins
+  - pi-subagents.
+
 ### 0.20.22 (2026-10-04)
 
 - **Bridge stock `ctx.ui` dialogs to the paired app (first-responder-wins)** —
@@ -88,7 +109,7 @@ requirements where they matter.
 - **Fixed: room tiles sporadically showed `myRoomMeta` after opening a chat
   (refresh fixed it)** — `session_sync_end` pushed the session name as
   `deps.myRoomMeta?.name`, but in the plane-router deps `myRoomMeta` is an
-  accessor *function* (`() => _rootState().myRoomMeta`), not the meta object.
+  accessor _function_ (`() => _rootState().myRoomMeta`), not the meta object.
   So `?.name` read the JavaScript function's own `.name` property — the literal
   string `"myRoomMeta"` — and the app applied it to the tile on every open +
   reconnect. `rooms_check` (pull-to-refresh) overwrote it with the real name
@@ -171,7 +192,7 @@ requirements where they matter.
 ### 0.20.9 (2026-09-20)
 
 - **TUI built-in slash intercept** for remote clients: `/compact
-  [instructions]`, `/new`, `/name <name>`, `/thinking <level>`,
+[instructions]`, `/new`, `/name <name>`, `/thinking <level>`,
   `/model <term>` execute against session verbs; the 19 machine-local
   TUI commands (`/settings`, `/export`, `/copy`, `/resume`, `/fork`,
   `/clone`, …) and unknown slash commands refuse with a toast instead of
@@ -197,7 +218,7 @@ requirements where they matter.
 ### 0.20.6 (2026-09-18)
 
 - **App-driven resume support**: `sessions_list`, `session_launch
-  {resume}`, and the `UNBIEN_LAUNCH_REQ` launch-correlation echo
+{resume}`, and the `UNBIEN_LAUNCH_REQ` launch-correlation echo
   (`session_resume` capability advertised by the launcher daemon).
 - Datestamped `launcher.log` + the `debug.launcher` / `debug.relay`
   config prefs (separate from `debug.envelope`).
@@ -214,14 +235,23 @@ The launcher daemon's code ships with the extension; launcher releases
 are repins so standalone `npm i -g @geohar/un-bien-launcher` pulls
 current code.
 
-| Version | Repins to | Date |
-| --- | --- | --- |
-| 0.1.12 | 0.20.9 | 2026-09-20 |
-| 0.1.11 | 0.20.8 | 2026-09-20 |
-| 0.1.10 | 0.20.7 | 2026-09-18 |
-| 0.1.9 | 0.20.5 | 2026-09-18 |
+| Version | Repins to | Date       |
+| ------- | --------- | ---------- |
+| 0.1.12  | 0.20.9    | 2026-09-20 |
+| 0.1.11  | 0.20.8    | 2026-09-20 |
+| 0.1.10  | 0.20.7    | 2026-09-18 |
+| 0.1.9   | 0.20.5    | 2026-09-18 |
 
 ## Relay (un-bien-relay)
+
+### 0.7.4 (2026-10-10)
+
+- **`unknown_peer` transport_error for offline remote** — the relay's
+  pi-forward path now returns `transport_error: unknown_peer` (was:
+  `offline` → the extension timed out 5s) when the target PC isn't
+  registered on the relay. The sender gets a fast `unknown_peer` ACK,
+  not a timeout. Cross-owner sends are still refused (`not_authorized`,
+  unchanged). Companion to extension 0.20.23.
 
 ### 0.7.3 (2026-09-18)
 
