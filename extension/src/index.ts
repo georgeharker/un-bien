@@ -87,6 +87,7 @@ import {
   saveConfig,
   isValidRelayUrl,
   isWebSocketScheme,
+  loadConfig,
 } from "./config.js"
 import { _expandTilde, _launchSession } from "./launch.js"
 import { _enrichToolArgs } from "./enrich_tool_args.js"
@@ -1519,8 +1520,12 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
 
   // Plano 20: agent_send + agent_request tools so the LLM can drive the
   // session network natively. Getter captures `_meshNode` live so the
-  // tool always sees the current state.
-  registerAgentTools(pi, () => _meshNode?.peer() ?? null, () => _meshInbox)
+  // tool always sees the current state. Gated on `mesh.tools` (default
+  // true) — when false, the tools are NOT registered; the broker + relay
+  // still work for the paired app, but the model can't send/list/wait.
+  if (loadConfig().mesh?.tools !== false) {
+    registerAgentTools(pi, () => _meshNode?.peer() ?? null, () => _meshInbox)
+  }
   _registerReceivedImageRenderer(pi)
 
   // Received-image preview entries are for local TUI display only. Pi's custom

@@ -91,6 +91,16 @@ export type UnBienConfig = {
    * stay hidden from the app (historical behaviour). See `subagent_rooms.ts`.
    */
   subagents?: { rooms?: boolean }
+
+  /** Cross-session mesh messaging. When `tools` is true (the default), the
+   *  agent-mesh tools (`agent_send`, `list_peers`, `whoami`,
+   *  `mesh_get_message`, `mesh_list_messages`, `mesh_wait_message`) are
+   *  registered for the LLM to call — agents on the same broker (same
+   *  machine) or across the relay (same owner) can message each other.
+   *  Absent/false ⇒ the tools are NOT registered; the broker + relay still
+   *  work for the paired app, but the model can't send/list/wait messages.
+   *  See `docs/cross-session-comms.md` + `session/tools.ts`. */
+  mesh?: { tools?: boolean }
 }
 
 export function loadConfig(): UnBienConfig {
