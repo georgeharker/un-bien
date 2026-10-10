@@ -114,48 +114,54 @@ relay + sees only that relay's sessions. With federation, `rooms_check`
 on relay A includes sessions from peer relay B — sessions the app didn't
 add a relay for. This raises app-side questions:
 
-1. **Session provenance.** A federated session (from relay B) appears
-   on relay A's `rooms_check`. The app's `LiveSession` has a `relayID`
-   (the directly-connected relay A). The app might need a `peerRelay`
-   field (or a `viaRelay` label) to indicate the session is actually on
-   a federated peer relay, so the user understands the topology.
+1. **Desired UX: indirectly reachable sessions show with an indicator +
+   host, and MAY appear more than once.** Each access path
+   (`relayID:peer:sessionID`) is a distinct entry in the app's session
+   list. A session on host B (relay B) that's federated with relay A:
+   - If the app is connected to relay A only: shows once, with an
+     indicator (e.g. a "via" badge / federation icon) + the host name
+     ("hostB") so the user knows it's indirectly reachable.
+   - If the app is connected to BOTH relay A and relay B: shows TWICE —
+     once direct (via relay B, no indicator) + once federated (via relay
+     A, with indicator + "hostB"). **This is fine** — each instance shows
+     its access path, and the user can choose which to open (direct is
+     lower-latency; federated is a fallback if relay B is unreachable).
+   - Do NOT merge these as duplicates. Different `relayID` = different
+     access path = separate entry, even if it's the same underlying
+     session.
 
-2. **Relay list display.** The app's relay list shows the relays the
-   user directly added. Federated peer relays (visible via relay A's
-   `rooms_check`) aren't in the user's relay list. The app might show
-   them greyed out / "via federation" so the user understands these
-   sessions are reachable through relay A's peering, not a direct
-   connection.
+2. **Session provenance field.** The app's `LiveSession` gains a
+   `peerRelay` field (the peer relay's name, e.g. "hostB") when the
+   session is federated (arrived via a peer relay's `rooms_check`).
+   Absent/null = direct (the session is on a relay the app added
+   directly). Present = federated (indirectly reachable via the
+   directly-connected relay's peering). The app renders the indicator
+   - host name from this field.
 
-3. **Routing transparency.** If the app sends a message to a federated
-   session, the relay handles the cross-relay forwarding (the app
-   addresses the session by its room_id on relay A; relay A forwards to
-   relay B). The app doesn't need to know about the peering — BUT the
-   app's `agent_send` (if the app does agent-level messaging) would need
-   the `<hostB>:` prefix for cross-relay agent mesh sends. For
-   transcript-level messages (sendUserMessage to a room), the relay's
-   room routing handles it transparently.
+3. **Relay list display.** The app's relay list shows the relays the
+   user directly added. Federated peer relays aren't in the list — but
+   the app could show them under the directly-connected relay as
+   "peered relays" (greyed out, with the host name), so the user
+   understands the topology + can see which hosts are reachable via
+   federation.
 
-4. **No double-add needed.** The user does NOT need to add relay B to
-   the app's relay list to see federated sessions. The sessions appear
-   via relay A's `rooms_check` (the relay includes its peers' sessions).
-   The app might offer "add relay B directly" as a convenience (for
-   direct access if relay A is down), but it's not required.
+4. **Routing transparency.** The relay handles cross-relay forwarding
+   transparently for transcript messages (the app addresses the session
+   by its room_id on relay A; relay A forwards to relay B). The app
+   doesn't need to know about the peering for transcript access. For
+   agent-level mesh sends, the `<hostB>:` prefix is needed (the
+   extension's `BrokerRemote` handles this).
 
-5. **Session identity.** The app keys sessions by
-   `relayID:peer:sessionID`. A federated session's `peer` (epk) is the
-   remote machine's epk (from relay B). The `relayID` is relay A (the
-   directly-connected relay). So the session identity is unique + stable
-   (even if the session is also visible on relay B directly — it would
-   have a different `relayID` there). The app should not merge these as
-   duplicates (different relayID = different access path, same session).
+5. **No double-add required.** The user does NOT need to add relay B to
+   see federated sessions. They appear via relay A's `rooms_check`. The
+   app could offer "add relay B directly" as a convenience (direct access,
+   lower latency, fallback if relay A is down), but it's not required.
 
-**Net: the app likely needs changes** to show federated sessions with
-their provenance (which relay they're via), and possibly to show the
-peering topology in the relay list. The relay handles the cross-relay
-forwarding transparently for transcript messages; agent-level mesh sends
-need the `<hostB>:` prefix. This is an app change, not just
-relay/extension.
+**Net: the app needs changes** — the `peerRelay` provenance field, the
+indicator + host display for federated sessions, and the "may appear more
+than once" multi-path model (don't merge). The relay handles cross-relay
+forwarding transparently; the app just shows the provenance. This is an
+app change, not just relay/extension.
 
 ### Owner identity + non-keychain sync
 
