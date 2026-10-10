@@ -115,20 +115,21 @@ on relay A includes sessions from peer relay B — sessions the app didn't
 add a relay for. This raises app-side questions:
 
 1. **Desired UX: indirectly reachable sessions show with an indicator +
-   host, and MAY appear more than once.** Each access path
-   (`relayID:peer:sessionID`) is a distinct entry in the app's session
-   list. A session on host B (relay B) that's federated with relay A:
-   - If the app is connected to relay A only: shows once, with an
-     indicator (e.g. a "via" badge / federation icon) + the host name
-     ("hostB") so the user knows it's indirectly reachable.
-   - If the app is connected to BOTH relay A and relay B: shows TWICE —
-     once direct (via relay B, no indicator) + once federated (via relay
-     A, with indicator + "hostB"). **This is fine** — each instance shows
-     its access path, and the user can choose which to open (direct is
-     lower-latency; federated is a fallback if relay B is unreachable).
-   - Do NOT merge these as duplicates. Different `relayID` = different
-     access path = separate entry, even if it's the same underlying
-     session.
+   host. Per-relay deduplication; cross-relay multiplicity.**
+   - **On one relay: a session appears ONCE**, even if multiple
+     federated routes exist (e.g. relay A peers with both B and C, and
+     both can reach the same session). The relay deduplicates within its
+     `rooms_check` (by epk + sessionID) — the app sees one entry per
+     session per relay, not one per federated route.
+   - **Across relays: the same session MAY appear on another relay too.**
+     If the app is connected to relay A (federated with B) AND relay B
+     (direct), the session appears once on relay A (with indicator +
+     "hostB") AND once on relay B (direct, no indicator). That's two
+     entries total — one per relay — not a duplicate within a relay.
+   - **The relay picks the route.** If multiple federated peers can
+     reach the same session, the relay selects one (the best/first to
+     advertise) + records it in the `peerRelay` field. The app doesn't
+     see multiple entries for the same session on the same relay.
 
 2. **Session provenance field.** The app's `LiveSession` gains a
    `peerRelay` field (the peer relay's name, e.g. "hostB") when the
