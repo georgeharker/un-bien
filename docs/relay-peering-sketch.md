@@ -47,18 +47,29 @@ peers to the other, so `list_peers` on relay A includes relay B's peers
 
 ### How it works
 
-1. **Peering config.** Each relay is configured with its peer relay's URL
-   - name. In `un-bien.json` (or the relay's env/config):
+1. **Peering config — separate per-machine file, managed by the CLI.**
+   The peering config is NOT in the shared `un-bien.json` (which goes in
+   dotfiles + is machine-agnostic). It lives in a **separate per-machine
+   file** at `~/.local/state/un-bien/relay-peers.json` (state dir, not
+   synced):
 
    ```json
-   {
-     "relay": {
-       "peers": [{ "url": "http://100.y.y.y:3000", "name": "hostB" }]
-     }
-   }
+   [
+     { "url": "http://100.y.y.y:3000", "name": "hostB" },
+     { "url": "http://100.z.z.z:3000", "name": "hostC" }
+   ]
    ```
 
-   The relay reads this on startup + connects to the peer relay(s).
+   The CLI manages it:
+   - `unbien relay peer add <url> <name>` — add a peer relay.
+   - `unbien relay peer remove <name>` — remove a peer relay.
+   - `unbien relay peer list` — list configured peers.
+
+   The relay reads this on startup. On add/remove, the CLI writes the file
+   - signals the relay (SIGHUP or restart) to pick up the change.
+
+   Each machine has its OWN peer list — host A peers with B, host B peers
+   with A + C, host C peers with B only. Asymmetric peering is fine.
 
 2. **Relay-to-relay auth: shared-owner verification.** Both relays
    already have the owner's opk (from the signed `mesh_versions` the app
