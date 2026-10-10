@@ -186,7 +186,7 @@ fn assert_transport_error_shape(frame: &Value, expected_reason: &str) {
         .and_then(Value::as_str)
         .expect("transport error reason must be a string");
     assert!(
-        matches!(reason, "offline" | "not_authorized" | "bad_envelope"),
+        matches!(reason, "unknown_peer" | "not_authorized" | "bad_envelope"),
         "transport error reason must be closed"
     );
     assert_eq!(reason, expected_reason);
@@ -462,9 +462,9 @@ async fn invalid_target_keys_fail_closed_as_bad_envelope() {
 
 /// Pi-B is NOT connected when A sends. Relay synthesizes a transport_error
 /// envelope and returns it to A as `pi_envelope_in`. Body carries
-/// `type=transport_error, reason=offline` and `re` matches the original id.
+/// `type=transport_error, reason=unknown_peer` and `re` matches the original id.
 #[tokio::test]
-async fn pi_b_offline_returns_transport_error_offline() {
+async fn pi_b_offline_returns_transport_error_unknown_peer() {
     let port = start_relay().await;
     let base_http = format!("http://127.0.0.1:{port}");
 
@@ -490,7 +490,7 @@ async fn pi_b_offline_returns_transport_error_offline() {
     send_pi_envelope(&mut ws_a, &peer_b, envelope).await;
 
     let frame = recv_json(&mut ws_a, "ws_a transport_error").await;
-    assert_transport_error_shape(&frame, "offline");
+    assert_transport_error_shape(&frame, "unknown_peer");
     assert_eq!(frame["envelope"]["re"], request_id, "must correlate via re");
     assert_eq!(frame["envelope"]["from"], "_relay");
     assert_eq!(frame["envelope"]["to"], "casa:sess-3");

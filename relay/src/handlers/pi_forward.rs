@@ -257,17 +257,20 @@ pub enum PiForwardResult {
 
 #[derive(Clone, Copy)]
 enum TransportErrorReason {
-    Offline,
     NotAuthorized,
     BadEnvelope,
+    /// The target PC is not registered on this relay (no live connection).
+    /// The sender gets a fast `unknown_peer` ACK, not a timeout — the dest
+    /// isn't on the relay, full stop.
+    UnknownPeer,
 }
 
 impl TransportErrorReason {
     fn as_str(self) -> &'static str {
         match self {
-            Self::Offline => "offline",
             Self::NotAuthorized => "not_authorized",
             Self::BadEnvelope => "bad_envelope",
+            Self::UnknownPeer => "unknown_peer",
         }
     }
 }
@@ -330,9 +333,12 @@ pub async fn handle_pi_envelope(
     if registry.forward_to_peer(&target, msg) {
         PiForwardResult::Forwarded
     } else {
+        // Target PC has no live connection on this relay → not registered.
+        // `UnknownPeer` (not `Offline`): the sender gets a fast `unknown_peer`
+        // ACK, not a timeout — the dest isn't on the relay, full stop.
         PiForwardResult::TransportError(make_transport_error(
             Some(envelope),
-            TransportErrorReason::Offline,
+            TransportErrorReason::UnknownPeer,
         ))
     }
 }
