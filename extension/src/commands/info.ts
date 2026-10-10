@@ -10,6 +10,7 @@ import { resolveRelayUrl } from "../config.js"
 import { describeIdentity, listPeers } from "../pairing/storage.js"
 import { _inspectPeerRecord } from "../pairing/peer_trust.js"
 import { formatPeerInventory } from "../session/peer_inventory.js"
+import { LOCAL_SESSION_NAME } from "../session/global_config.js"
 import type { CommandDeps } from "./deps.js"
 
 /**
@@ -28,8 +29,7 @@ export function _cmdStatus(
   // Mesh line
   let meshLine: string
   if (deps.meshNode) {
-    const name = deps.meshNode.name()
-    meshLine = `🟢 Local mesh: connected as "${name}" (${deps.sessionPeerCount} peer${deps.sessionPeerCount === 1 ? "" : "s"})`
+    meshLine = `🟢 Local mesh: ${deps.meshNode.address()} (broker "${LOCAL_SESSION_NAME}"; ${deps.sessionPeerCount} peer${deps.sessionPeerCount === 1 ? "" : "s"})`
   } else {
     meshLine = "⚪ Local mesh: not connected"
   }

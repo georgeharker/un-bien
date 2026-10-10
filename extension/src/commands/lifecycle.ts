@@ -709,6 +709,22 @@ export async function _cmdJoin(
     // failover, etc.) — querying list_peers makes the count self-healing.
     if (body && (body.type === "peer_joined" || body.type === "peer_left")) {
       deps.refreshSessionPeerCount(peer, ctx)
+      // Surface the peer lifecycle on pi.events so other extensions/observers
+      // can react (the way pi-subagents emits its events). `name`/`address`
+      // carry the joining/leaving peer's ADDRESS (plan/38). Best-effort: an
+      // emit failure must never break the broker message handler.
+      const evtBody = body as { name?: string; address?: string }
+      const address = evtBody.address ?? evtBody.name
+      if (address) {
+        try {
+          deps.pi?.events?.emit(
+            body.type === "peer_joined" ? "un-bien:peer_joined" : "un-bien:peer_left",
+            { address },
+          )
+        } catch {
+          /* best-effort */
+        }
+      }
       // Plan/25 Wave B: push fresh peer list to all siblings so their
       // remotePeers cache stays current without polling.
       void peer

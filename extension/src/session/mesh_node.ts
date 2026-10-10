@@ -743,6 +743,13 @@ export class MeshNode {
     return this.peer_.rename(newName)
   }
 
+  /** In-place rename (no teardown/rejoin): the broker re-assigns the name +
+   *  broadcasts peer_left/peer_joined so other peers' list_peers updates
+   *  without a socket drop or leader re-election. */
+  async renameInPlace(newName: string): Promise<string> {
+    return this.peer_.renameInPlace(newName)
+  }
+
   currentRole(): "leader" | "follower" {
     return this.peer_.currentRole()
   }

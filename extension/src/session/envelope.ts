@@ -19,6 +19,7 @@ export const TRANSPORT_ERROR_REASONS = [
   "offline",
   "not_authorized",
   "bad_envelope",
+  "unknown_peer",
 ] as const
 
 export type TransportErrorReason = (typeof TRANSPORT_ERROR_REASONS)[number]

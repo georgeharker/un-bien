@@ -20,6 +20,12 @@ export function formatMeshAckResult(to: string, ack: AckResult): MeshAckResult {
       return errorResult(formatDenied(to, ack))
     case "timeout":
       return errorResult(formatTimeout(to, ack))
+    case "unknown_peer":
+      return errorResult(
+        `No peer "${to}" on this broker — it is not registered here ` +
+        `(it may be on a different broker, or offline). Check ` +
+        `list_peers / whoami before retrying.`,
+      )
   }
 }
 

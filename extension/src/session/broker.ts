@@ -81,7 +81,7 @@ export function sanitizeMeshName(raw: string): string {
  * envelope back to the sender once it has delivered:
  *
  *   - target online → deliver envelope, ACK `received`
- *   - no such peer  → silent drop (sender times out)
+ *   - no such peer  → ACK `unknown_peer` (sender fails fast, no 5s timeout)
  *
  * plan/34 removed the busy-drop: a message that arrives while the target is
  * mid-turn is **always delivered**, never dropped. The Pi harness
@@ -171,11 +171,11 @@ function isValidRegisteredCwd(value: string): boolean {
   )
 }
 
-type AckStatus = "received" | "denied"
+type AckStatus = "received" | "denied" | "unknown_peer"
 
 interface AckBody {
   type: "ack"
-  status: "received" | "denied"
+  status: "received" | "denied" | "unknown_peer"
   target: string
 }
 
@@ -199,6 +199,24 @@ interface RegisterAck {
    *  collision). New clients use it for display; for a legacy peer (no cwd)
    *  it equals `address_assigned`. */
   name_assigned: string
+}
+
+/** In-place rename request from a registered peer (no teardown/rejoin).
+ *  The broker re-assigns the name (with `#N` collision handling), updates the
+ *  peer's map key in-place, and broadcasts peer_left/peer_joined so other
+ *  peers' list_peers updates — all without dropping the socket. */
+interface RenameMsg {
+  type: "rename"
+  name: string
+}
+
+interface RenameAck {
+  type: "rename_ack"
+  /** The name actually assigned (carries `#N` on collision). On failure this
+   *  is the OLD name (the peer keeps its identity). */
+  name_assigned: string
+  /** Canonical address after the rename (unchanged on failure). */
+  address_assigned: string
 }
 
 interface SystemBody {
@@ -326,6 +344,18 @@ export class Broker {
       if (this._tryObserverProbe(conn, line)) return
       this._handleRegister(conn, line)
       return
+    }
+    // Registered peer: an in-place `rename` control message (no teardown/rejoin)
+    // or a regular envelope. Check for the control message first — an Envelope
+    // has no top-level `type`, so `type === "rename"` only matches the control.
+    try {
+      const control = JSON.parse(line) as { type?: unknown }
+      if (control?.type === "rename") {
+        this._handleRename(conn, control as RenameMsg)
+        return
+      }
+    } catch {
+      /* not JSON → regular envelope (parse below) */
     }
     // Already registered — must be a regular envelope.
     let env: Envelope
@@ -539,6 +569,59 @@ export class Broker {
     )
   }
 
+  /** In-place rename: re-assign the peer's name (with `#N` collision handling),
+   *  update the map key without dropping the socket, and broadcast
+   *  peer_left/peer_joined so other peers' `list_peers` updates. The peer's
+   *  address (`<cwd>@<name>`) changes — in-flight sends to the old address will
+   *  `unknown_peer` (the old name is gone). */
+  private _handleRename(conn: PeerConn, msg: RenameMsg): void {
+    console.error("[un-bien broker] _handleRename entered oldAddress=" + conn.address + " msg.name=" + JSON.stringify(msg.name));
+    const oldAddress = conn.address
+    const ackOld = (): void => this._sendRenameAck(conn, conn.name, conn.address)
+    if (typeof msg.name !== "string" || msg.name.length === 0) {
+      ackOld()
+      return
+    }
+    // Temporarily remove the old entry so _identityForRegister's collision
+    // check excludes self (the renaming peer's own name is freed for reuse).
+    this.peers.delete(oldAddress)
+    const identity = this._identityForRegister(conn.cwd, msg.name, false)
+    if (!identity) {
+      // invalid/full → restore the old entry + ack with the old name (no change)
+      this.peers.set(oldAddress, conn)
+      ackOld()
+      return
+    }
+    conn.name = identity.name
+    conn.address = identity.address
+    this.peers.set(identity.address, conn)
+    // Notify others: peer_left (old) + peer_joined (new) so their list_peers
+    // updates (reuses the existing broadcast + the lifecycle.ts handler). Exclude
+    // self (the new address) from both.
+    this._broadcastSystem(
+      { type: "peer_left", name: oldAddress, address: oldAddress },
+      identity.address,
+    )
+    this._broadcastSystem(
+      { type: "peer_joined", name: identity.address, address: identity.address },
+      identity.address,
+    )
+    this._sendRenameAck(conn, identity.name, identity.address)
+  }
+
+  private _sendRenameAck(conn: PeerConn, name: string, address: string): void {
+    const ack: RenameAck = {
+      type: "rename_ack",
+      name_assigned: name,
+      address_assigned: address,
+    }
+    try {
+      conn.socket.write(JSON.stringify(ack) + "\n")
+    } catch {
+      /* best-effort */
+    }
+  }
+
   // ── routing ───────────────────────────────────────────────────────────────
 
   private async _route(env: Envelope): Promise<void> {
@@ -575,7 +658,15 @@ export class Broker {
     let ackStatus: AckStatus | "none" = "none"
     for (const targetName of targets) {
       const peer = this.peers.get(targetName)
-      if (!peer) continue // unknown peer: silent drop (sender times out)
+      if (!peer) {
+        // Unknown peer: fail fast with an `unknown_peer` ACK so the sender
+        // learns the peer isn't on this broker immediately (no 5s timeout).
+        if (isUnicast) {
+          ackStatus = "unknown_peer"
+          this._sendAckToSender(env, "unknown_peer", targetName)
+        }
+        continue
+      }
 
       try {
         peer.socket.write(line)

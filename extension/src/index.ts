@@ -62,6 +62,7 @@ import { envLog } from "./session/debug_log.js"
 import { chainUiNotify, notifyOwners, setOwnerNotifyHook } from "./session/owner_notify.js"
 import { roomIdForSession } from "./rooms.js"
 import { registerAgentTools } from "./session/tools.js"
+import { MeshInbox, type MeshMessage } from "./session/mesh_inbox.js"
 import { formatPeerInventory } from "./session/peer_inventory.js"
 import type { MeshNode } from "./session/mesh_node.js"
 import {
@@ -513,6 +514,10 @@ type MeshEnvelope = {
   body: unknown
 }
 let _pendingMeshMessages: MeshEnvelope[] = []
+// Inbound mesh message inbox — every delivered message is stored here so a
+// missed push is recoverable (list_messages/get_message) and a reply can be
+// awaited by correlation id (wait_message). Fed by _deliverMeshMessageToAgent.
+let _meshInbox = new MeshInbox()
 // agent-run active/generation now live PER-SESSION in _stateFor(sid).agentRun;
 // mesh delivery targets the ROOT run, so the drain reads _rootState().agentRun.
 let _meshDrainScheduled = false
@@ -1515,7 +1520,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // Plano 20: agent_send + agent_request tools so the LLM can drive the
   // session network natively. Getter captures `_meshNode` live so the
   // tool always sees the current state.
-  registerAgentTools(pi, () => _meshNode?.peer() ?? null)
+  registerAgentTools(pi, () => _meshNode?.peer() ?? null, () => _meshInbox)
   _registerReceivedImageRenderer(pi)
 
   // Received-image preview entries are for local TUI display only. Pi's custom
@@ -1750,6 +1755,20 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         room_id: st.myRoomId,
         meta: { name },
       })
+    }
+    // ALSO re-key the broker mesh name in-place (no teardown/rejoin) so
+    // list_peers reflects the new name WITHOUT a /reload. The broker validates
+    // + collision-suffixes the name, updates its map key, and broadcasts
+    // peer_left/peer_joined so other peers' list_peers updates too. Fire-and-
+    // forget: a failure (broker down, timeout) leaves the mesh name stale — the
+    // relay room_meta + evt above already updated the app tile, and a /reload
+    // re-derives the mesh name as a fallback.
+    const renameCwd =
+      "cwd" in ctx ? (ctx as { cwd?: string }).cwd : undefined
+    if (_meshNode && typeof renameCwd === "string" && renameCwd.length > 0) {
+      void _meshNode
+        .renameInPlace(resolveAgentName(renameCwd, name))
+        .catch(() => undefined)
     }
   })
 
@@ -2236,6 +2255,24 @@ function _deliverMeshMessageToAgent(env: MeshEnvelope): void {
       `[un-bien] agent-network message from "${env.from}": agent session not bound yet — message dropped`,
     )
     return
+  }
+  // Store in the inbox (pull/wait surface), emit on pi.events (observers), AND
+  // push via the drain (nudge). Build the record once so all three see the same
+  // MeshMessage.
+  const message: MeshMessage = {
+    id: env.id,
+    from: env.from,
+    to: _meshNode?.address() ?? "",
+    body: env.body,
+    re: env.re,
+    sentAt: Date.now(),
+    deliveredAt: null,
+  }
+  _meshInbox.add(message)
+  try {
+    _pi?.events?.emit("un-bien:message_received", { message })
+  } catch {
+    /* best-effort: never let an emit break delivery */
   }
   _pendingMeshMessages.push(env)
   _scheduleMeshMessageDrain()

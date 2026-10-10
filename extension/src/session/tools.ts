@@ -2,6 +2,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { Type } from "typebox"
 import type { TransportErrorReason } from "./envelope.js"
 import type { AckResult, SessionPeer } from "./peer.js"
+import { LOCAL_SESSION_NAME, sessionSockPath } from "./global_config.js"
+import { MeshInbox, type MeshMessage } from "./mesh_inbox.js"
 
 const NOT_IN_SESSION = "Not in a session. Run /unbien join first"
 const ACK_TIMEOUT_MS = 5_000
@@ -21,7 +23,7 @@ interface RequestInput {
 }
 
 type SendStatus =
-  "received" | "busy" | "denied" | "timeout" | "sent" | "refused"
+  "received" | "busy" | "denied" | "timeout" | "sent" | "refused" | "unknown_peer"
 
 interface SendDetails {
   status: SendStatus
@@ -55,6 +57,7 @@ interface SendDetails {
 export function registerAgentTools(
   pi: ExtensionAPI,
   getSessionPeer: () => SessionPeer | null,
+  getInbox: () => MeshInbox,
 ): void {
   const SendParams = Type.Object({
     to: Type.String({
@@ -184,8 +187,10 @@ export function registerAgentTools(
   })
 
   const ListPeersParams = Type.Object({})
+  const WhoAmIParams = Type.Object({})
+  type WhoAmI = { address: string; name: string; broker: string; socket: string }
 
-  pi.registerTool<typeof ListPeersParams, { peers: string[] }>({
+  pi.registerTool<typeof ListPeersParams, { peers: string[]; self?: WhoAmI }>({
     name: "list_peers",
     label: "List Peers",
     description:
@@ -230,7 +235,15 @@ export function registerAgentTools(
         const text = filtered.length === 0 ? "(no peers)" : filtered.join("\n")
         return {
           content: [{ type: "text", text }],
-          details: { peers: filtered },
+          details: {
+            peers: filtered,
+            self: {
+              address: peer.address(),
+              name: peer.name(),
+              broker: LOCAL_SESSION_NAME,
+              socket: sessionSockPath(LOCAL_SESSION_NAME),
+            },
+          },
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
@@ -238,6 +251,38 @@ export function registerAgentTools(
           content: [{ type: "text", text: `list_peers failed: ${msg}` }],
           details: { peers: [] },
         }
+      }
+    },
+  })
+
+  pi.registerTool<typeof WhoAmIParams, WhoAmI>({
+    name: "whoami",
+    label: "Who Am I (mesh)",
+    description:
+      "Returns THIS agent's mesh identity: address (<cwd>@<name>), " +
+      "broker-assigned name, broker session, and socket path. Use to confirm " +
+      "which broker you're on and what address others should send to. Pair " +
+      "with list_peers (others).",
+    promptSnippet:
+      "whoami(): returns {address, name, broker, socket} — your mesh identity. Cheap; call freely.",
+    parameters: WhoAmIParams,
+    execute: async () => {
+      const peer = getSessionPeer()
+      const broker = LOCAL_SESSION_NAME
+      const socket = sessionSockPath(broker)
+      if (!peer) {
+        const details: WhoAmI = { address: "", name: "", broker, socket }
+        return { content: [{ type: "text", text: NOT_IN_SESSION }], details }
+      }
+      const details: WhoAmI = {
+        address: peer.address(),
+        name: peer.name(),
+        broker,
+        socket,
+      }
+      return {
+        content: [{ type: "text", text: `${details.address} (broker "${broker}")` }],
+        details,
       }
     },
   })
@@ -293,6 +338,97 @@ export function registerAgentTools(
       }
     },
   })
+
+  // ── Inbox pull (recover a missed push / wait for a reply) ───────────────
+  // The get_subagent_result analog: every inbound mesh message is stored in
+  // the MeshInbox (index.ts feeds it on delivery), so a missed push is
+  // recoverable, and a reply can be awaited by correlation id (re) — the
+  // clean replacement for the deprecated agent_request's blocking semantics.
+  const GetMessageParams = Type.Object({
+    id: Type.String({ description: "The message id to fetch." }),
+  })
+  pi.registerTool<typeof GetMessageParams, MeshMessage | null>({
+    name: "mesh_get_message",
+    label: "Get Mesh Message",
+    description:
+      "Fetch one inbound mesh message by id (the id the sender assigned, " +
+      "shown in the pushed nudge). Returns the full typed payload, or null " +
+      "if no such message. Use to recover a message you missed the push for.",
+    promptSnippet:
+      "mesh_get_message({id}): returns the MeshMessage {id,from,to,body,re,sentAt} or null. Cheap; call freely.",
+    parameters: GetMessageParams,
+    execute: async (_toolCallId, params) => {
+      const { id } = params as { id: string }
+      const msg = getInbox().get(id)
+      return {
+        content: [{ type: "text", text: msg ? JSON.stringify(msg) : "(no such message)" }],
+        details: msg,
+      }
+    },
+  })
+
+  const ListMessagesParams = Type.Object({
+    from: Type.Optional(Type.String({ description: "Only messages from this sender address." })),
+    re: Type.Optional(Type.String({ description: "Only messages with this correlation id (re)." })),
+    sinceMs: Type.Optional(Type.Number({ description: "Only messages at-or-after this epoch ms." })),
+    limit: Type.Optional(Type.Number({ description: "Max messages to return (newest N)." })),
+  })
+  pi.registerTool<typeof ListMessagesParams, { messages: MeshMessage[] }>({
+    name: "mesh_list_messages",
+    label: "List Mesh Messages",
+    description:
+      "List inbound mesh messages in this inbox (newest-first when limit is " +
+      "set), optionally filtered by sender (from) and/or correlation id (re). " +
+      "Use to recover messages you missed, or to review recent inbound.",
+    promptSnippet:
+      "mesh_list_messages({from?, re?, sinceMs?, limit?}): returns {messages: MeshMessage[]}. Cheap; call freely.",
+    parameters: ListMessagesParams,
+    execute: async (_toolCallId, params) => {
+      const { from, re, sinceMs, limit } = params as {
+        from?: string; re?: string; sinceMs?: number; limit?: number
+      }
+      const messages = getInbox().list(
+        { from, re, sinceMs },
+        typeof limit === "number" && limit > 0 ? limit : undefined,
+      )
+      const text = messages.length === 0
+        ? "(no messages)"
+        : messages.map((m) => `${m.id}  from=${m.from}${m.re ? ` re=${m.re}` : ""}`).join("\n")
+      return { content: [{ type: "text", text }], details: { messages } }
+    },
+  })
+
+  const WaitMessageParams = Type.Object({
+    from: Type.Optional(Type.String({ description: "Wait for a message from this sender address." })),
+    re: Type.Optional(Type.String({ description: "Wait for a message with this correlation id (re) — the reply to your agent_send." })),
+    sinceMs: Type.Optional(Type.Number({ description: "Only consider messages at-or-after this epoch ms." })),
+    timeout_ms: Type.Optional(Type.Number({ description: "Max ms to wait (default 30000). 0 or non-positive = poll (return immediately if a match is already stored, else null)." })),
+  })
+  pi.registerTool<typeof WaitMessageParams, MeshMessage | null>({
+    name: "mesh_wait_message",
+    label: "Wait For Mesh Message",
+    description:
+      "Block until an inbound mesh message matching the filter arrives, then " +
+      "return it; or return immediately if one is already stored. The " +
+      "agent_request replacement: agent_send with `re`, then wait_message with " +
+      "the same `re`. A reply that arrived before this call is returned at " +
+      "once (not re-awaited). Returns null on timeout.",
+    promptSnippet:
+      "mesh_wait_message({from?, re?, timeout_ms?}): blocks up to timeout (default 30s) for a matching MeshMessage; returns it or null. This is the reply-wait primitive.",
+    parameters: WaitMessageParams,
+    execute: async (_toolCallId, params) => {
+      const { from, re, sinceMs, timeout_ms } = params as {
+        from?: string; re?: string; sinceMs?: number; timeout_ms?: number
+      }
+      const timeout =
+        typeof timeout_ms === "number" && timeout_ms > 0 ? timeout_ms : 30_000
+      const msg = await getInbox().wait({ from, re, sinceMs }, timeout)
+      return {
+        content: [{ type: "text", text: msg ? JSON.stringify(msg) : "(no message within timeout)" }],
+        details: msg,
+      }
+    },
+  })
 }
 
 function _formatAck(
@@ -338,5 +474,11 @@ function _formatAck(
         )
       }
       return `No ACK from "${to}" within ${ACK_TIMEOUT_MS}ms${reSuffix} — transport error. Investigate or retry later.`
+    case "unknown_peer":
+      return (
+        `No peer "${to}" on this broker${reSuffix} — it is not registered ` +
+        `here (it may be on a different broker, or offline). Check ` +
+        `list_peers / whoami before retrying.`
+      )
   }
 }

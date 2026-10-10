@@ -49,7 +49,7 @@ const DEFAULT_TIMEOUT_MS = 30_000
 const ACK_TIMEOUT_MS = 5_000
 const FAILOVER_RETRY_MS = 100
 
-export type AckStatus = "received" | "busy" | "denied" | "timeout"
+export type AckStatus = "received" | "busy" | "denied" | "timeout" | "unknown_peer"
 
 export interface AckResult {
   status: AckStatus
@@ -73,7 +73,7 @@ export class MeshTransportError extends Error {
 
 interface AckBody {
   type: "ack"
-  status: "received" | "busy" | "denied"
+  status: "received" | "busy" | "denied" | "unknown_peer"
   target: string
 }
 
@@ -116,7 +116,12 @@ function asAckBody(body: unknown): AckBody | null {
     target: unknown
   }
   if (
-    (status !== "received" && status !== "busy" && status !== "denied") ||
+    (
+      status !== "received" &&
+      status !== "busy" &&
+      status !== "denied" &&
+      status !== "unknown_peer"
+    ) ||
     typeof target !== "string"
   ) {
     return null
@@ -308,6 +313,51 @@ export class SessionPeer {
     return this._joinOrLead()
   }
 
+  /**
+   * In-place rename: ask the broker to re-assign the name WITHOUT a
+   * teardown/rejoin (no socket drop, no leader re-election). The broker
+   * validates + collision-suffixes the new name, updates its map key, and
+   * broadcasts peer_left/peer_joined so other peers' list_peers updates.
+   * Returns the actually-assigned name (may carry `#N`). Rejects on timeout.
+   */
+  async renameInPlace(newName: string): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this._pendingControlAck = null
+        reject(new Error("rename_ack timeout"))
+      }, ACK_TIMEOUT_MS)
+      this._pendingControlAck = (raw) => {
+        clearTimeout(timer)
+        const ack = raw as {
+          type?: string
+          name_assigned?: string
+          address_assigned?: string
+        } | null
+        if (
+          ack?.type === "rename_ack" &&
+          typeof ack.name_assigned === "string"
+        ) {
+          this.assignedName = ack.name_assigned
+          this.opts.name = ack.name_assigned
+          resolve(ack.name_assigned)
+        } else {
+          reject(
+            new Error(`expected rename_ack, got: ${JSON.stringify(raw)}`),
+          )
+        }
+      }
+      try {
+        this.socket?.write(
+          JSON.stringify({ type: "rename", name: newName }) + "\n",
+        )
+      } catch (err) {
+        clearTimeout(timer)
+        this._pendingControlAck = null
+        reject(err instanceof Error ? err : new Error(String(err)))
+      }
+    })
+  }
+
   async leave(): Promise<void> {
     this.leftFlag = true
     await this._teardownConn()
@@ -420,6 +470,8 @@ export class SessionPeer {
   }
 
   private _preAckListener: ((raw: unknown) => void) | null = null
+  /** One-shot post-registration control-message listener (rename_ack). */
+  private _pendingControlAck: ((raw: unknown) => void) | null = null
 
   private _onData(chunk: string): void {
     this.buf += chunk
@@ -442,6 +494,25 @@ export class SessionPeer {
         // Garbage during register window — ignore.
       }
       return
+    }
+
+    // Post-registration control message (rename_ack): intercept before
+    // envelope parse. A `rename_ack` is a JSON control message, not an
+    // Envelope (no from/to/id/body), so `parse()` would drop it. Only
+    // intercept lines that ARE a `rename_ack` — envelopes (no top-level
+    // `type`) fall through to normal dispatch.
+    if (this._pendingControlAck) {
+      try {
+        const control = JSON.parse(line) as { type?: unknown } | null
+        if (control?.type === "rename_ack") {
+          const listener = this._pendingControlAck
+          this._pendingControlAck = null
+          listener(control)
+          return
+        }
+      } catch {
+        /* not JSON → regular envelope (parse below) */
+      }
     }
 
     // Regular envelope.
@@ -516,7 +587,12 @@ export class SessionPeer {
     clearTimeout(slot.timer)
     this.ackPending.delete(pendingId)
     slot.resolve({
-      status: reason === "offline" ? "timeout" : "denied",
+      status:
+        reason === "unknown_peer"
+          ? "unknown_peer"
+          : reason === "offline"
+            ? "timeout"
+            : "denied",
       id: pendingId,
       error: `transport_error: ${reason}`,
       reason,
