@@ -58,6 +58,19 @@ requirements where they matter.
 
 ## Extension (@geohar/un-bien)
 
+### 0.20.24 (2026-10-10)
+
+- **mesh.tools config gate** — the cross-session mesh tools (`agent_send`,
+  `list_peers`, `whoami`, `mesh_*`) are now gated on a `mesh.tools` config
+  setting (default `true`). Set `"mesh": {"tools": false}` in
+  `un-bien.json` to disable them; the broker + relay still work for the
+  paired app, but the model can't call the mesh tools. Restart pi to
+  pick up a flip.
+- **Docs: `docs/cross-session-comms.md`** — full documentation of the
+  cross-session messaging surface: tools, delivery model (push + pull +
+  wait), error semantics, events, in-place rename, broker architecture,
+  same-owner validation, collision safety, app safety.
+
 ### 0.20.23 (2026-10-10)
 
 - **Cross-mesh robust messaging + inbox pull + in-place rename** —
