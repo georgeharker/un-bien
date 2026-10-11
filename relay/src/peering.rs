@@ -85,6 +85,14 @@ fn has_common_owner(ours: &HashSet<String>, theirs: &HashSet<String>) -> bool {
     ours.intersection(theirs).next().is_some()
 }
 
+/// Broadcast the current federated_peer_list to all connected WS clients.
+/// Called after every federated session change (set_peer_rooms, add_room,
+/// remove_room, clear_peer) so apps/extensions discover federated peers.
+async fn broadcast_federated_list(registry: &PeerRegistry, federated: &FederatedSessions) {
+    let json = federated.federated_peer_list_json().await;
+    registry.broadcast_to_all(Message::Text(json));
+}
+
 /// The wire frame exchanged on connect.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct RelayHello {
@@ -220,6 +228,7 @@ async fn connect_and_verify(
         .set_peer_rooms(&peer_list.relay_name, peer_list.rooms_by_epk)
         .await;
     info!(peer = %peer.name, "stored federated sessions from peer relay");
+    broadcast_federated_list(registry, federated).await;
 
     // Keep the connection open for incremental updates + forwarding (Phase 3c).
     // Split the WS so we can read incoming frames + send outbound forwards.
@@ -250,6 +259,8 @@ async fn connect_and_verify(
                                 federated
                                     .add_room(&update.relay_name, &update.epk, room)
                                     .await;
+                                broadcast_federated_list(registry, federated)
+                                    .await;
                             }
                         }
                         "remove" => {
@@ -259,6 +270,8 @@ async fn connect_and_verify(
                                 federated
                                     .remove_room(&update.relay_name, &update.epk, room_id)
                                     .await;
+                                broadcast_federated_list(registry, federated)
+                                    .await;
                             }
                         }
                         _ => {}
@@ -267,6 +280,20 @@ async fn connect_and_verify(
                 }
                 // Try relay_forward (deliver to local pi + send ack).
                 if let Ok(forward) = serde_json::from_str::<RelayForward>(&text) {
+                    // Loop prevention: drop if we've already handled this forward.
+                    if forward.visited.contains(&relay_own_name()) {
+                        let ack = RelayForwardAck {
+                            kind: "relay_forward_ack".into(),
+                            request_id: forward.request_id,
+                            status: "unknown_peer".into(),
+                        };
+                        let _ = ws_sink
+                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                serde_json::to_string(&ack).unwrap_or_default().into(),
+                            ))
+                            .await;
+                        continue;
+                    }
                     let outbound = serde_json::json!({
                         "type": "pi_envelope_in",
                         "from_pc": forward.from_epk,
@@ -318,6 +345,7 @@ async fn connect_and_verify(
     // Cleanup on disconnect.
     federated.unregister_sender(&peer.name).await;
     federated.clear_peer(&peer.name).await;
+    broadcast_federated_list(registry, federated).await;
     Ok(())
 }
 
@@ -399,6 +427,7 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
         relay = %peer_list.relay_name,
         "stored federated sessions from inbound peer relay"
     );
+    broadcast_federated_list(&state.registry, &state.federated).await;
 
     // Send our local rooms.
     let local_rooms = FederatedSessions::local_rooms_by_epk(&state.registry);
@@ -449,6 +478,8 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
                                     .federated
                                     .add_room(&update.relay_name, &update.epk, room)
                                     .await;
+                                broadcast_federated_list(&state.registry, &state.federated)
+                                    .await;
                             }
                         }
                         "remove" => {
@@ -459,6 +490,8 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
                                     .federated
                                     .remove_room(&update.relay_name, &update.epk, room_id)
                                     .await;
+                                broadcast_federated_list(&state.registry, &state.federated)
+                                    .await;
                             }
                         }
                         _ => {}
@@ -467,6 +500,18 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
                 }
                 // Try relay_forward (deliver to local pi + send ack).
                 if let Ok(forward) = serde_json::from_str::<RelayForward>(&text) {
+                    // Loop prevention: drop if we've already handled this forward.
+                    if forward.visited.contains(&relay_own_name()) {
+                        let ack = RelayForwardAck {
+                            kind: "relay_forward_ack".into(),
+                            request_id: forward.request_id,
+                            status: "unknown_peer".into(),
+                        };
+                        let _ = socket_sink
+                            .send(Message::Text(serde_json::to_string(&ack).unwrap_or_default()))
+                            .await;
+                        continue;
+                    }
                     let outbound = serde_json::json!({
                         "type": "pi_envelope_in",
                         "from_pc": forward.from_epk,
@@ -515,6 +560,7 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
         .unregister_sender(&peer_list.relay_name)
         .await;
     state.federated.clear_peer(&peer_list.relay_name).await;
+    broadcast_federated_list(&state.registry, &state.federated).await;
 }
 
 #[cfg(test)]
@@ -613,6 +659,11 @@ pub struct RelayForward {
     pub from_epk: String,
     pub target_epk: String,
     pub envelope: serde_json::Value,
+    /// Relays that have already handled this forward (loop prevention).
+    /// The sending relay adds its own name; a relay that finds its name here
+    /// drops the forward + replies unknown_peer.
+    #[serde(default)]
+    pub visited: Vec<String>,
 }
 
 /// Wire frame: the ack for a relay_forward (Phase 3c).
@@ -630,8 +681,8 @@ pub struct RelayForwardAck {
 pub struct FederatedSessions {
     /// (peer_relay_name, epk) → Vec<RoomMeta>
     sessions: Mutex<HashMap<(String, String), Vec<RoomMeta>>>,
-    /// epk → peer_relay_name (for forwarding)
-    epk_to_relay: Mutex<HashMap<String, String>>,
+    /// epk → list of peer_relay_names (for forwarding — multi-route fallback)
+    epk_to_relays: Mutex<HashMap<String, Vec<String>>>,
     /// peer_relay_name → WS sender channel (for relay_forward, raw JSON text)
     forward_senders: Mutex<HashMap<String, Vec<mpsc::UnboundedSender<String>>>>,
     /// request_id → oneshot sender (for relay_forward_ack replies)
@@ -642,7 +693,7 @@ impl FederatedSessions {
     pub fn new() -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
-            epk_to_relay: Mutex::new(HashMap::new()),
+            epk_to_relays: Mutex::new(HashMap::new()),
             forward_senders: Mutex::new(HashMap::new()),
             pending_forwards: Mutex::new(HashMap::new()),
         }
@@ -655,16 +706,19 @@ impl FederatedSessions {
         rooms_by_epk: HashMap<String, Vec<RoomMeta>>,
     ) {
         let mut sessions = self.sessions.lock().await;
-        let mut epk_map = self.epk_to_relay.lock().await;
+        let mut epk_map = self.epk_to_relays.lock().await;
 
         // Remove old entries for this peer relay.
         sessions.retain(|k, _| k.0 != peer_relay);
-        epk_map.retain(|_, relay| relay.as_str() != peer_relay);
+        for relays in epk_map.values_mut() {
+            relays.retain(|r| r != peer_relay);
+        }
+        epk_map.retain(|_, relays| !relays.is_empty());
 
         // Insert new entries.
         for (epk, rooms) in rooms_by_epk {
             sessions.insert((peer_relay.to_string(), epk.clone()), rooms);
-            epk_map.insert(epk, peer_relay.to_string());
+            epk_map.entry(epk).or_default().push(peer_relay.to_string());
         }
     }
 
@@ -673,21 +727,32 @@ impl FederatedSessions {
         let mut sessions = self.sessions.lock().await;
         let key = (peer_relay.to_string(), epk.to_string());
         sessions.entry(key).or_default().push(room);
-        self.epk_to_relay
-            .lock()
-            .await
-            .insert(epk.to_string(), peer_relay.to_string());
+        let mut epk_map = self.epk_to_relays.lock().await;
+        let relays = epk_map.entry(epk.to_string()).or_default();
+        if !relays.contains(&peer_relay.to_string()) {
+            relays.push(peer_relay.to_string());
+        }
     }
 
     /// Remove a single room (on relay_peer_update remove).
     pub async fn remove_room(&self, peer_relay: &str, epk: &str, room_id: &str) {
         let mut sessions = self.sessions.lock().await;
         let key = (peer_relay.to_string(), epk.to_string());
+        let mut should_remove_relay = false;
         if let Some(rooms) = sessions.get_mut(&key) {
             rooms.retain(|r| r.room_id != room_id);
             if rooms.is_empty() {
                 sessions.remove(&key);
-                self.epk_to_relay.lock().await.remove(epk);
+                should_remove_relay = true;
+            }
+        }
+        if should_remove_relay {
+            let mut epk_map = self.epk_to_relays.lock().await;
+            if let Some(relays) = epk_map.get_mut(epk) {
+                relays.retain(|r| r != peer_relay);
+                if relays.is_empty() {
+                    epk_map.remove(epk);
+                }
             }
         }
     }
@@ -696,10 +761,11 @@ impl FederatedSessions {
     pub async fn clear_peer(&self, peer_relay: &str) {
         let mut sessions = self.sessions.lock().await;
         sessions.retain(|k, _| k.0 != peer_relay);
-        self.epk_to_relay
-            .lock()
-            .await
-            .retain(|_, relay| relay != peer_relay);
+        let mut epk_map = self.epk_to_relays.lock().await;
+        for relays in epk_map.values_mut() {
+            relays.retain(|r| r != peer_relay);
+        }
+        epk_map.retain(|_, relays| !relays.is_empty());
     }
 
     /// Get all federated rooms for a given epk (for rooms_check).
@@ -713,8 +779,72 @@ impl FederatedSessions {
     }
 
     /// Look up which peer relay handles a given epk (for forwarding).
+    /// Returns the first relay name (backward compat — single route).
     pub async fn relay_for_epk(&self, epk: &str) -> Option<String> {
-        self.epk_to_relay.lock().await.get(epk).cloned()
+        self.epk_to_relays
+            .lock()
+            .await
+            .get(epk)
+            .and_then(|relays| relays.first().cloned())
+    }
+
+    /// Look up ALL peer relays that have a given epk (for multi-route
+    /// fallback in forwarding). Returns the list in insertion order.
+    pub async fn relays_for_epk(&self, epk: &str) -> Vec<String> {
+        self.epk_to_relays
+            .lock()
+            .await
+            .get(epk)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Build the `federated_peer_list` control frame (Phase 4) for broadcasting
+    /// to all connected WS clients. Contains every federated peer's epk,
+    /// relay_name, and room metadata so the extension can populate its
+    /// `BrokerRemote.federatedPeers` map + include them in `list_peers`.
+    pub async fn federated_peer_list_json(&self) -> String {
+        let sessions = self.sessions.lock().await;
+        // Group by epk: (relay_name, epk) → rooms → {epk, relay_name, rooms}
+        // Dedup rooms by room_id across relays (multi-homed pi case).
+        let mut by_epk: HashMap<
+            String,
+            (
+                String,
+                Vec<serde_json::Value>,
+                std::collections::HashSet<String>,
+            ),
+        > = HashMap::new();
+        for ((relay, epk), rooms) in sessions.iter() {
+            let entry = by_epk
+                .entry(epk.clone())
+                .or_insert_with(|| (relay.clone(), Vec::new(), std::collections::HashSet::new()));
+            for room in rooms {
+                // Skip duplicate room_ids (same room from a different relay).
+                if entry.2.contains(&room.room_id) {
+                    continue;
+                }
+                entry.2.insert(room.room_id.clone());
+                if let Ok(val) = serde_json::to_value(room) {
+                    entry.1.push(val);
+                }
+            }
+        }
+        let peers: Vec<serde_json::Value> = by_epk
+            .into_iter()
+            .map(|(epk, (relay, rooms, _))| {
+                serde_json::json!({
+                    "epk": epk,
+                    "relay_name": relay,
+                    "rooms": rooms,
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "type": "federated_peer_list",
+            "peers": peers,
+        })
+        .to_string()
     }
 
     /// Get all local rooms from the registry, grouped by epk (for sending
@@ -756,15 +886,27 @@ impl FederatedSessions {
         target_epk: &str,
         envelope: serde_json::Value,
     ) -> Option<oneshot::Receiver<RelayForwardAck>> {
-        let relay_name = self.relay_for_epk(target_epk).await?;
+        // Multi-route fallback: try each relay that has the target epk,
+        // in order, until we find one with an alive sender.
+        let relay_names = self.relays_for_epk(target_epk).await;
+        if relay_names.is_empty() {
+            return None;
+        }
+        let own_name = relay_own_name();
         let tx = {
             let senders = self.forward_senders.lock().await;
-            senders
-                .get(&relay_name)?
-                .iter()
-                .find(|tx| !tx.is_closed())?
-                .clone()
+            let mut found = None;
+            for relay_name in &relay_names {
+                if let Some(vec) = senders.get(relay_name) {
+                    if let Some(alive) = vec.iter().find(|tx| !tx.is_closed()) {
+                        found = Some(alive.clone());
+                        break;
+                    }
+                }
+            }
+            found
         };
+        let tx = tx?;
         let request_id = format!("{}", rand::random::<u64>());
         let forward = RelayForward {
             kind: "relay_forward".into(),
@@ -772,6 +914,7 @@ impl FederatedSessions {
             from_epk: from_epk.to_string(),
             target_epk: target_epk.to_string(),
             envelope,
+            visited: vec![own_name],
         };
         let (otx, orx) = oneshot::channel();
         self.pending_forwards.lock().await.insert(request_id, otx);

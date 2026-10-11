@@ -471,6 +471,18 @@ impl PeerRegistry {
         }
         delivered
     }
+
+    /// Broadcast a control frame to ALL connected WS clients (every live
+    /// connection in the registry). Used for Phase 4: pushing the
+    /// `federated_peer_list` to apps/extensions when federated sessions change.
+    pub fn broadcast_to_all(&self, msg: Message) {
+        let lock = self.senders.lock().unwrap();
+        for v in lock.values() {
+            for (_, _, tx) in v.iter() {
+                let _ = tx.send(msg.clone());
+            }
+        }
+    }
 }
 
 #[cfg(test)]
