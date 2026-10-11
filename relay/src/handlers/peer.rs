@@ -491,6 +491,7 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                         &registry,
                                         mesh.clone(),
                                         mesh_auth.clone(),
+                                        federated.clone(),
                                     )
                                     .await
                                     {

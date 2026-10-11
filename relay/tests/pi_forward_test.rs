@@ -18,7 +18,8 @@ use ed25519_dalek::{Signer, SigningKey};
 use futures_util::{SinkExt, StreamExt};
 use relay::handlers::pi_forward::{PiForwardResult, handle_pi_envelope};
 use relay::{
-    FirehoseMetrics, MeshAuthCache, MeshStore, PeerRegistry, PresenceManager, RoomManager, RoomMeta,
+    FederatedSessions, FirehoseMetrics, MeshAuthCache, MeshStore, PeerRegistry, PresenceManager,
+    RoomManager, RoomMeta,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -652,6 +653,7 @@ async fn stored_malformed_member_shape_invalidates_whole_owner() {
                 &registry,
                 Arc::new(store),
                 Arc::new(MeshAuthCache::new()),
+                Arc::new(FederatedSessions::new()),
             )
             .await,
         );

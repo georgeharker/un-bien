@@ -4,8 +4,8 @@ mod identity;
 pub mod mesh;
 pub mod metrics;
 pub mod paths;
-pub mod peers;
 pub mod peering;
+pub mod peers;
 pub mod presence;
 pub mod protocol;
 pub mod rooms;
@@ -21,6 +21,7 @@ use axum::{
 pub use handlers::pi_forward::MeshAuthCache;
 pub use mesh::MeshStore;
 pub use metrics::FirehoseMetrics;
+pub use peering::FederatedSessions;
 pub use peers::pairing::PairingRegistry;
 pub use peers::registry::PeerRegistry;
 pub use presence::PresenceManager;

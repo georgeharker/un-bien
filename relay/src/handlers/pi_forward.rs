@@ -32,6 +32,7 @@ use tracing::warn;
 
 use crate::identity::canonical_ed25519_public_key;
 use crate::mesh::{MeshStore, types::MeshHeader};
+use crate::peering::FederatedSessions;
 use crate::peers::registry::PeerRegistry;
 
 /// Time-to-live for a positive membership lookup. The plan calls for 60 s.
@@ -283,6 +284,7 @@ pub async fn handle_pi_envelope(
     registry: &PeerRegistry,
     mesh: Arc<MeshStore>,
     cache: Arc<MeshAuthCache>,
+    federated: Arc<FederatedSessions>,
 ) -> PiForwardResult {
     let to_pc = frame.get("to_pc").and_then(|v| v.as_str());
     let envelope = frame.get("envelope");
@@ -333,13 +335,25 @@ pub async fn handle_pi_envelope(
     if registry.forward_to_peer(&target, msg) {
         PiForwardResult::Forwarded
     } else {
-        // Target PC has no live connection on this relay → not registered.
-        // `UnknownPeer` (not `Offline`): the sender gets a fast `unknown_peer`
-        // ACK, not a timeout — the dest isn't on the relay, full stop.
-        PiForwardResult::TransportError(make_transport_error(
-            Some(envelope),
-            TransportErrorReason::UnknownPeer,
-        ))
+        // Target not local — try federated forwarding (Phase 3c).
+        if let Some(ack_rx) = federated
+            .forward_to_federated(&sender, &target, envelope.clone())
+            .await
+        {
+            match tokio::time::timeout(Duration::from_secs(5), ack_rx).await {
+                Ok(Ok(ack)) if ack.status == "forwarded" => PiForwardResult::Forwarded,
+                _ => PiForwardResult::TransportError(make_transport_error(
+                    Some(envelope),
+                    TransportErrorReason::UnknownPeer,
+                )),
+            }
+        } else {
+            // Not federated either — unknown_peer (fast failure, no timeout).
+            PiForwardResult::TransportError(make_transport_error(
+                Some(envelope),
+                TransportErrorReason::UnknownPeer,
+            ))
+        }
     }
 }
 
@@ -725,7 +739,16 @@ mod tests {
                 "body": {},
             },
         });
-        match handle_pi_envelope(&pi_key(0x0a), &frame, &registry, store, cache).await {
+        match handle_pi_envelope(
+            &pi_key(0x0a),
+            &frame,
+            &registry,
+            store,
+            cache,
+            Arc::new(FederatedSessions::new()),
+        )
+        .await
+        {
             PiForwardResult::TransportError(_) => {}
             PiForwardResult::Forwarded => panic!("must be transport_error"),
         }
