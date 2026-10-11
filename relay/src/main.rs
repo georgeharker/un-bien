@@ -85,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
         mesh_auth,
         metrics,
     };
+    relay::peering::start_peering(std::sync::Arc::clone(&state.mesh));
     let app = relay::build_router(state);
 
     let addr = format!("0.0.0.0:{port}");

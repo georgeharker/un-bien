@@ -160,6 +160,17 @@ impl MeshStore {
         Ok(rows?)
     }
 
+    /// All known owner public-key hashes (for relay-to-relay shared-owner
+    /// verification). Returns the DISTINCT set of `owner_pk_hash` values
+    /// from the mesh_versions table — each is a SHA-256 hex of an owner's
+    /// public key. Two relays with a common hash share an owner → federate.
+    pub fn all_owner_hashes(&self) -> Result<Vec<String>, StoreError> {
+        let conn = self.connection();
+        let mut stmt = conn.prepare("SELECT DISTINCT owner_pk_hash FROM mesh_versions")?;
+        let rows: Result<Vec<String>, _> = stmt.query_map([], |r| r.get::<_, String>(0))?.collect();
+        Ok(rows?)
+    }
+
     #[cfg(test)]
     pub(crate) fn all_blobs_calls(&self) -> usize {
         self.all_blobs_calls.load(Ordering::Relaxed)

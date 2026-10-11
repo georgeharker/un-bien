@@ -71,6 +71,12 @@ pub fn resolve_relay_log_path() -> PathBuf {
     relay_log_path_from(&state_root())
 }
 
+/// The relay peering config path: `<state_root>/relay-peers.json`. Per-machine
+/// (not synced via dotfiles). Managed by the CLI (`unbien relay peer add/remove/list`).
+pub fn relay_peers_path() -> PathBuf {
+    state_root().join("relay-peers.json")
+}
+
 /// Pure pairing DB resolution: `UNBIEN_PAIRING_DB_PATH` (absolute override,
 /// wins) falls through to `<state root>/pairing.db`. Its OWN store —
 /// deliberately NOT mesh.db and NOT the extension's peers.json (design

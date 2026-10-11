@@ -5,6 +5,7 @@ pub mod mesh;
 pub mod metrics;
 pub mod paths;
 pub mod peers;
+pub mod peering;
 pub mod presence;
 pub mod protocol;
 pub mod rooms;
@@ -63,6 +64,7 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/", get(handlers::peer::ws_handler))
         .route("/health", get(|| async { "OK" }))
+        .route("/relay-peer", get(peering::relay_peer_ws_handler))
         .route(
             "/mesh/:owner_pk_hash",
             get(mesh::handler::get_mesh).post(mesh::handler::post_mesh),
