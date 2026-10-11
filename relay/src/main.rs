@@ -87,7 +87,11 @@ async fn main() -> anyhow::Result<()> {
         metrics,
         federated: Arc::clone(&federated),
     };
-    relay::peering::start_peering(std::sync::Arc::clone(&state.mesh), std::sync::Arc::clone(&state.registry), Arc::clone(&federated));
+    relay::peering::start_peering(
+        std::sync::Arc::clone(&state.mesh),
+        std::sync::Arc::clone(&state.registry),
+        Arc::clone(&federated),
+    );
     let app = relay::build_router(state);
 
     let addr = format!("0.0.0.0:{port}");

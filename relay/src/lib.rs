@@ -5,10 +5,10 @@ pub mod mesh;
 pub mod metrics;
 pub mod paths;
 pub mod peering;
-pub mod relay_keypair;
 pub mod peers;
 pub mod presence;
 pub mod protocol;
+pub mod relay_keypair;
 pub mod rooms;
 
 use std::sync::Arc;
