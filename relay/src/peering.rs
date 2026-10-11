@@ -186,6 +186,17 @@ pub fn start_peering(
         return;
     }
     for peer in &config {
+        // Refuse to peer with relays that don't have a pinned pubkey
+        // (from the pairing URL). Shared-owner alone is not sufficient —
+        // the peer must be explicitly paired.
+        if peer.pubkey.is_none() {
+            warn!(
+                peer = %peer.name,
+                url = %peer.url,
+                "skipping peer relay — no pinned pubkey (pair with 'unbien relay pair' + 'unbien relay peer add relay-pair://...')"
+            );
+            continue;
+        }
         info!(peer = %peer.name, url = %peer.url, "starting peering task");
         let peer = peer.clone();
         let mesh = Arc::clone(&mesh);
