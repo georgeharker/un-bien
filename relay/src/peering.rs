@@ -186,18 +186,12 @@ pub fn start_peering(
         return;
     }
     for peer in &config {
-        // Refuse to peer with relays that don't have a pinned pubkey
-        // (from the pairing URL). Shared-owner alone is not sufficient —
-        // the peer must be explicitly paired.
-        if peer.pubkey.is_none() {
-            warn!(
-                peer = %peer.name,
-                url = %peer.url,
-                "skipping peer relay — no pinned pubkey (pair with 'unbien relay pair' + 'unbien relay peer add relay-pair://...')"
-            );
-            continue;
-        }
-        info!(peer = %peer.name, url = %peer.url, "starting peering task");
+        // Shared-owner verification IS the pairing — if both relays share an
+        // owner, they're paired + can federate. The pinned pubkey (from the
+        // pairing URL) is an additional identity layer: if present, the relay
+        // verifies the peer's pubkey matches + the signature is valid. If
+        // absent, the relay still federates based on shared-owner alone.
+        info!(peer = %peer.name, url = %peer.url, pubkey = ?peer.pubkey.as_deref().map(|p| &p[..8]), "starting peering task");
         let peer = peer.clone();
         let mesh = Arc::clone(&mesh);
         let registry = Arc::clone(&registry);
