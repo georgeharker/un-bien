@@ -30,39 +30,43 @@ transcript access and to the extension for agent-level mesh sends.
 
 ## Setup
 
-### 1. Configure peering (per-machine)
+### 1. Pair two relays (pairing URL)
 
-The peering config is **per-machine** — it lives in
-`~/.local/state/un-bien/relay-peers.json` (state dir, not synced via
-dotfiles). The CLI manages it:
+Each relay has its own Ed25519 identity (generated on first run, stored in
+`~/.local/state/un-bien/relay-keypair.json`). To pair two relays, one issues
+a pairing URL + the other consumes it:
 
 ```sh
-# On host A: add host B's relay as a peer
-unbien relay peer add ws://100.y.y.y:3000 hostB
+# On host A — issue a pairing URL
+unbien relay pair ws://100.x.x.x:3000 --name hostA
+# → Relay pairing URL:
+# →   relay-pair://eyJ1cmwiOiJ3czovLzEwMC54...
+#
+# Copy this URL + run on the peer relay:
+#   unbien relay peer add relay-pair://eyJ1cmwiOiJ3czovLzEwMC54...
 
-# On host B: add host A's relay as a peer
-unbien relay peer add ws://100.x.x.x:3000 hostA
-
-# List configured peers
-unbien relay peer list
+# On host B — consume the pairing URL (pins hostA's pubkey)
+unbien relay peer add relay-pair://eyJ1cmwiOiJ3czovLzEwMC54...
+# → peer added: hostA -> ws://100.x.x.x:3000 (pubkey pinned)
+# → Restart the relay to connect.
 ```
 
-Asymmetric peering is fine — host A can peer with B without B peering
-with A (the connection is outbound from A, inbound on B). Symmetric
-peering (both connect to each other) also works — the relay handles
-duplicate connections via `Vec<UnboundedSender>` per relay name.
+The pairing URL is a base64 blob: `{url, name, pubkey}`. The consuming
+relay stores the peer's pubkey in `relay-peers.json` for pinning. On
+connect, the relay verifies the peer's identity (pubkey matches + signature
+valid) in addition to the shared-owner check.
 
-The relay reads `relay-peers.json` on startup. After adding/removing a
-peer, restart the relay (or it will pick up the change on the next
-reconnect cycle).
+**Legacy (no pinning):** `unbien relay peer add <url> <name>` still works
+— the relay connects with shared-owner verification only (no pubkey
+pinning). Use the pairing URL for the stronger identity verification.
 
-### 2. Set the relay's own name (optional)
+### 2. Set the relay's own name + URL (for the pairing URL exchange)
 
-The relay's own name (used in `relay_peer_list`, `relay_peer_update`, and
-`federated_peer_list` frames) defaults to the hostname. Override with:
+The relay's own name + URL are used in `relay_hello` (so the peer can
+connect back for symmetric peering) + in the pairing URL:
 
 ```sh
-UNBIEN_RELAY_NAME=hostA unbien-relay
+UNBIEN_RELAY_NAME=hostA UNBIEN_RELAY_URL=ws://100.x.x.x:3000 unbien-relay
 ```
 
 ### 3. Ensure shared owner identity
@@ -90,15 +94,25 @@ connection at `/relay-peer`.
 ### Federation handshake
 
 ```
-A → B:  {"type":"relay_hello","owners":["<opk_hash>","..."]}
-B → A:  {"type":"relay_hello_ack","federate":true,"owners":["<opk_hash>","..."]}
+A → B:  {"type":"relay_hello","owners":[...],"relay_pubkey":"base64","relay_name":"hostA","relay_url":"ws://...","nonce":"base64","sig":"base64"}
+B → A:  {"type":"relay_hello_ack","federate":true,"owners":[...],"relay_pubkey":"base64","relay_name":"hostB","relay_url":"ws://...","nonce":"base64","sig":"base64"}
 ```
 
-Both relays exchange their known owner public-key hashes (SHA-256 of the
-owner's opk, from `mesh_versions`). If the hash sets intersect (shared
-owner), `federate: true` + the connection stays open. If no common owner,
-`federate: false` + disconnect. **The opk is the trust basis** — no shared
-secret, no Ed25519 pinning, no token.
+Two layers of auth:
+
+1. **Shared-owner verification** — both relays exchange their known owner
+   public-key hashes (SHA-256 of the owner's opk, from `mesh_versions`). If
+   the hash sets intersect (shared owner), `federate: true`. If no common
+   owner, `federate: false` + disconnect. **The opk is the trust basis** —
+   no shared secret, no token.
+2. **Relay identity verification** — each relay includes its Ed25519 public
+   key + a signature (over `nonce|pubkey|name|url`) proving possession of
+   the private key. If the peer's pubkey is pinned in the config (from the
+   pairing URL), the relay verifies it matches + the signature is valid.
+   If not pinned, the signature is still verified (proof of possession).
+
+The `relay_url` field enables the URL exchange — the peer relay learns the
+connecting relay's URL + can connect back for symmetric peering.
 
 ### Session list exchange
 
@@ -127,19 +141,26 @@ receiving relay updates its `FederatedSessions` + broadcasts the updated
 ### Cross-relay forwarding
 
 ```
-A → B:  {"type":"relay_forward","request_id":"<id>","from_epk":"<epk_A>","target_epk":"<epk_B>","envelope":{...},"visited":["hostA"]}
+A → B:  {"type":"relay_forward","request_id":"<id>","from_epk":"<epk_A>","target_epk":"<epk_B>","envelope":{...},"visited":["hostA"],"relay_pubkey":"base64","relay_sig":"base64"}
 B → A:  {"type":"relay_forward_ack","request_id":"<id>","status":"forwarded"}  // or "unknown_peer"
 ```
+
+**Authenticated forwarding** — the forwarding relay signs
+`(request_id|from_epk|target_epk|visited)` with its Ed25519 keypair. The
+receiving relay verifies the signature. Unsigned or invalid-signature
+forwards are rejected with `unknown_peer`. No unauthenticated forwarding
+is accepted.
 
 When a pi on relay A sends a `pi_envelope` targeting a peer on relay B:
 
 1. Relay A checks `FederatedSessions.relays_for_epk(target)` → finds
    relay B.
 2. Relay A sends a `relay_forward` frame with `from_epk`, `target_epk`,
-   the verbatim envelope, + a `visited` list containing relay A's own
-   name.
-3. Relay B receives the forward, checks the `visited` list (loop
-   prevention — drops if its own name is present), delivers to the local
+   the verbatim envelope, a `visited` list containing relay A's own name,
+   - a signature over the forward's key fields.
+3. Relay B receives the forward, verifies the relay signature, checks the
+   `visited` list (loop prevention — drops if its own name is present),
+   delivers to the local
    pi via `registry.forward_to_peer`, + sends a `relay_forward_ack`.
 4. Relay A awaits the ack (5s timeout). `forwarded` → success.
    `unknown_peer` or timeout → `TransportError::UnknownPeer` back to the
@@ -251,12 +272,14 @@ sessions from peer relay B — sessions the app didn't add a relay for.
 
 ## Config reference
 
-| Setting             | Location                                  | Default                  | Description                                                                                            |
-| ------------------- | ----------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------ |
-| `relay-peers.json`  | `~/.local/state/un-bien/relay-peers.json` | empty                    | Per-machine peering config (`{peers: [{url, name}]}`). Managed by `unbien relay peer add/remove/list`. |
-| `UNBIEN_RELAY_NAME` | env                                       | hostname                 | The relay's own name (for `relay_peer_list`, `relay_peer_update`, `federated_peer_list` frames).       |
-| `UNBIEN_RELAY_PORT` | env                                       | 3000                     | The relay's listen port.                                                                               |
-| `UNBIEN_STATE_DIR`  | env                                       | `~/.local/state/un-bien` | State root (mesh.db, relay-peers.json).                                                                |
+| Setting              | Location                                    | Default                  | Description                                                                                                                        |
+| -------------------- | ------------------------------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `relay-peers.json`   | `~/.local/state/un-bien/relay-peers.json`   | empty                    | Per-machine peering config (`{peers: [{url, name, pubkey?}]}`). Managed by `unbien relay peer add/remove/list` or the pairing URL. |
+| `relay-keypair.json` | `~/.local/state/un-bien/relay-keypair.json` | auto-generated           | The relay's Ed25519 identity keypair. Generated on first run.                                                                      |
+| `UNBIEN_RELAY_NAME`  | env                                         | hostname                 | The relay's own name (for `relay_hello`, `relay_peer_list`, `federated_peer_list` frames).                                         |
+| `UNBIEN_RELAY_URL`   | env                                         | empty                    | The relay's own WebSocket URL (for the pairing URL exchange in `relay_hello`).                                                     |
+| `UNBIEN_RELAY_PORT`  | env                                         | 3000                     | The relay's listen port.                                                                                                           |
+| `UNBIEN_STATE_DIR`   | env                                         | `~/.local/state/un-bien` | State root (mesh.db, relay-peers.json, relay-keypair.json).                                                                        |
 
 ## Challenges
 
