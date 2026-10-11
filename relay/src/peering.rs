@@ -18,6 +18,20 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
+/// The relay's own name (for relay_peer_list / relay_peer_update frames).
+/// Reads `UNBIEN_RELAY_NAME` env var; defaults to the hostname, then "relay".
+fn relay_own_name() -> String {
+    if let Ok(name) = std::env::var("UNBIEN_RELAY_NAME") {
+        if !name.is_empty() {
+            return name;
+        }
+    }
+    std::env::var("HOSTNAME")
+        .ok()
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| "relay".to_string())
+}
+
 use std::sync::Arc;
 
 use crate::AppState;
@@ -184,7 +198,7 @@ async fn connect_and_verify(
     let local_rooms = FederatedSessions::local_rooms_by_epk(registry);
     let peer_list = RelayPeerList {
         kind: "relay_peer_list".into(),
-        relay_name: peer.name.clone(),
+        relay_name: relay_own_name(),
         rooms_by_epk: local_rooms,
     };
     ws.send(tokio_tungstenite::tungstenite::Message::Text(
@@ -390,7 +404,7 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
     let local_rooms = FederatedSessions::local_rooms_by_epk(&state.registry);
     let our_list = RelayPeerList {
         kind: "relay_peer_list".into(),
-        relay_name: "self".into(), // TODO: the relay's own name (from config or hostname).
+        relay_name: relay_own_name(), // our own name (was "self" placeholder)
         rooms_by_epk: local_rooms,
     };
     if socket
@@ -619,7 +633,7 @@ pub struct FederatedSessions {
     /// epk → peer_relay_name (for forwarding)
     epk_to_relay: Mutex<HashMap<String, String>>,
     /// peer_relay_name → WS sender channel (for relay_forward, raw JSON text)
-    forward_senders: Mutex<HashMap<String, mpsc::UnboundedSender<String>>>,
+    forward_senders: Mutex<HashMap<String, Vec<mpsc::UnboundedSender<String>>>>,
     /// request_id → oneshot sender (for relay_forward_ack replies)
     pending_forwards: Mutex<HashMap<String, oneshot::Sender<RelayForwardAck>>>,
 }
@@ -717,12 +731,19 @@ impl FederatedSessions {
         self.forward_senders
             .lock()
             .await
-            .insert(peer_relay.to_string(), tx);
+            .entry(peer_relay.to_string())
+            .or_default()
+            .push(tx);
     }
 
-    /// Unregister (called on disconnect).
+    /// Unregister dead senders for a peer relay (called on disconnect).
+    /// Retains senders that are still alive (other connections to the same
+    /// relay stay usable — symmetric peering creates two connections).
     pub async fn unregister_sender(&self, peer_relay: &str) {
-        self.forward_senders.lock().await.remove(peer_relay);
+        let mut senders = self.forward_senders.lock().await;
+        if let Some(vec) = senders.get_mut(peer_relay) {
+            vec.retain(|tx| !tx.is_closed());
+        }
     }
 
     /// Forward a pi_envelope to a federated peer relay. Looks up which peer
@@ -738,7 +759,11 @@ impl FederatedSessions {
         let relay_name = self.relay_for_epk(target_epk).await?;
         let tx = {
             let senders = self.forward_senders.lock().await;
-            senders.get(&relay_name)?.clone()
+            senders
+                .get(&relay_name)?
+                .iter()
+                .find(|tx| !tx.is_closed())?
+                .clone()
         };
         let request_id = format!("{}", rand::random::<u64>());
         let forward = RelayForward {
@@ -760,6 +785,33 @@ impl FederatedSessions {
         if let Some(tx) = self.pending_forwards.lock().await.remove(&ack.request_id) {
             let _ = tx.send(ack);
         }
+    }
+
+    /// Broadcast a relay_peer_update to all connected federated peer relays.
+    /// Called when a local pi connects ("add") or disconnects ("remove").
+    /// Uses `relay_own_name()` so the receiver keys the session correctly.
+    pub async fn broadcast_update(&self, action: &str, epk: &str, room: serde_json::Value) {
+        let relay_name = relay_own_name();
+        let update = RelayPeerUpdate {
+            kind: "relay_peer_update".into(),
+            relay_name,
+            action: action.to_string(),
+            epk: epk.to_string(),
+            room,
+        };
+        let text = serde_json::to_string(&update).unwrap_or_default();
+        let senders = self.forward_senders.lock().await;
+        for vec in senders.values() {
+            for tx in vec {
+                let _ = tx.send(text.clone());
+            }
+        }
+    }
+}
+
+impl Default for FederatedSessions {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

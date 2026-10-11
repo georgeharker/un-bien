@@ -166,7 +166,13 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
     let federated = state.federated.clone();
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
+    let room_meta_json = serde_json::to_value(&room_meta).unwrap_or_default();
     let conn_id = registry.register(peer_id.clone(), room_meta, tx).await;
+
+    // Phase 3c: notify federated peer relays of the new local session.
+    federated
+        .broadcast_update("add", &peer_id, room_meta_json)
+        .await;
 
     // Per-conn dedup state for control-frame replies. Suppress identical
     // re-emits of `presence` (single cache slot — there's only one
@@ -616,5 +622,15 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
 
     registry.unregister(&peer_id, &room_id, conn_id).await;
     rooms.unsubscribe_all(&peer_id).await;
+
+    // Phase 3c: notify federated peer relays that this session is gone.
+    federated
+        .broadcast_update(
+            "remove",
+            &peer_id,
+            serde_json::json!({ "room_id": room_id }),
+        )
+        .await;
+
     info!(peer = %peer_short, room = %room_id, addr = %peer_addr, "disconnected");
 }
