@@ -30,25 +30,79 @@ transcript access and to the extension for agent-level mesh sends.
 
 ## Setup
 
-### 1. Pair two relays (pairing URL)
+### 1. Install the dev release (on each machine)
+
+```sh
+# Extension + launcher + CLI (npm dev tag)
+npm i -g @geohar/un-bien@dev @geohar/un-bien-launcher@dev @geohar/unbien-cli@dev
+
+# Launcher daemon (installs the plist)
+unbien-admin install
+
+# Relay (crates.io — note: un-bien-relay, with hyphens)
+cargo install un-bien-relay --version 0.7.5-dev.20261011 --locked
+```
+
+### 2. Add federation env vars to the relay plist (on each machine)
+
+Edit `~/Library/LaunchAgents/com.georgeharker.unbien.relay.plist` — add
+these inside `<EnvironmentVariables>`:
+
+```xml
+<key>UNBIEN_RELAY_NAME</key>
+<string>hostA</string>              <!-- this machine's name -->
+<key>UNBIEN_RELAY_URL</key>
+<string>ws://hostA:3000</string>    <!-- externally-reachable URL (Tailscale MagicDNS) -->
+```
+
+The relay's own name + URL are used in `relay_hello` (so the peer can
+connect back for symmetric peering) + in the pairing URL. Without
+`UNBIEN_RELAY_URL`, the relay doesn't advertise its URL — the peer can't
+connect back.
+
+### 3. Restart the relay (on each machine)
+
+```sh
+# Reload the plist (picks up env var changes) + restart
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.georgeharker.unbien.relay.plist 2>/dev/null
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.georgeharker.unbien.relay.plist
+
+# Verify
+launchctl list | grep unbien.relay
+curl http://localhost:3000/health
+```
+
+For a simple restart (no plist changes):
+
+```sh
+launchctl kickstart -k gui/$(id -u)/com.georgeharker.unbien.relay
+```
+
+### 4. Pair the two relays
 
 Each relay has its own Ed25519 identity (generated on first run, stored in
-`~/.local/state/un-bien/relay-keypair.json`). To pair two relays, one issues
-a pairing URL + the other consumes it:
+`~/.local/state/un-bien/relay-keypair.json`). To pair two relays, one
+issues a pairing URL + the other consumes it:
 
 ```sh
 # On host A — issue a pairing URL
-unbien relay pair ws://100.x.x.x:3000 --name hostA
+unbien relay pair ws://hostA:3000 --name hostA
 # → Relay pairing URL:
-# →   relay-pair://eyJ1cmwiOiJ3czovLzEwMC54...
+# →   relay-pair://eyJ1cmwiOiJ3czovL2hvc3RBLi4u
 #
 # Copy this URL + run on the peer relay:
-#   unbien relay peer add relay-pair://eyJ1cmwiOiJ3czovLzEwMC54...
+#   unbien relay peer add relay-pair://eyJ1cmwiOiJ3czovL2hvc3RBLi4u
 
 # On host B — consume the pairing URL (pins hostA's pubkey)
-unbien relay peer add relay-pair://eyJ1cmwiOiJ3czovLzEwMC54...
-# → peer added: hostA -> ws://100.x.x.x:3000 (pubkey pinned)
-# → Restart the relay to connect.
+unbien relay peer add relay-pair://eyJ1cmwiOiJ3czovL2hvc3RBLi4u
+# → peer added: hostA -> ws://hostA:3000 (pubkey pinned)
+
+# (optional) On host B — issue a pairing URL back for symmetric peering
+unbien relay pair ws://hostB:3000 --name hostB
+
+# On host A — consume hostB's pairing URL
+unbien relay peer add relay-pair://eyJ1cmwiOiJ3czovL2hvc3RCLi4u
+# → peer added: hostB -> ws://hostB:3000 (pubkey pinned)
 ```
 
 The pairing URL is a base64 blob: `{url, name, pubkey}`. The consuming
@@ -60,31 +114,41 @@ valid) in addition to the shared-owner check.
 — the relay connects with shared-owner verification only (no pubkey
 pinning). Use the pairing URL for the stronger identity verification.
 
-### 2. Set the relay's own name + URL (for the pairing URL exchange)
-
-The relay's own name + URL are used in `relay_hello` (so the peer can
-connect back for symmetric peering) + in the pairing URL:
+### 5. Restart both relays to pick up the peering config
 
 ```sh
-UNBIEN_RELAY_NAME=hostA UNBIEN_RELAY_URL=ws://100.x.x.x:3000 unbien-relay
+# On each machine:
+launchctl kickstart -k gui/$(id -u)/com.georgeharker.unbien.relay
 ```
 
-### 3. Ensure shared owner identity
+### 6. Verify federation
 
-Both relays need the same owner's `mesh_versions` blob (listing all the
-owner's machines' epks). This happens automatically if the app is paired
-with machines on both relays — the app publishes `mesh_versions` to each
-relay it's connected to.
+```sh
+# Check the relay logs — should show:
+#   "federated with peer relay (shared owner verified)"
+tail -20 ~/.local/state/un-bien/relay.log | grep -i federat
 
-For **non-keychain owner identity sync** (same opk on multiple devices):
+# List configured peers
+unbien relay peer list
 
-- `identity.storage: "file"` → sync `~/.local/state/un-bien/identity.json`
-  across devices (iCloud Drive, Syncthing, rsync).
-- `identity.storage: "keychain"` → use iCloud Keychain to sync the
-  keychain entry across devices.
-- If not syncing: each device has its own opk → different owners →
-  cross-relay sends are `not_authorized` (correct — they're different
-  owners).
+# From a pi session on host A:
+#   list_peers  → should show host B's agents as hostB:<cwd>@<name>
+#   agent_send  → should reach agents on host B
+```
+
+### Prerequisites
+
+- **Both relays must share an owner** — the app must be paired with at
+  least one machine on each relay (so both relays have the same owner's
+  `mesh_versions` blob). Same-owner IS the pairing; the pairing URL adds
+  pubkey pinning on top.
+- **Both relays must be reachable** — via Tailscale (MagicDNS), LAN, or
+  public IP. The `UNBIEN_RELAY_URL` must be reachable from the other
+  machine.
+- **Same owner identity** — if using file-based identity, sync
+  `~/.local/state/un-bien/identity.json` across devices (iCloud Drive,
+  Syncthing, rsync). If keychain, use iCloud Keychain. Different owners =
+  federation refused.
 
 ## Wire protocol
 
