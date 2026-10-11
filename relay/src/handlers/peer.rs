@@ -169,6 +169,15 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
     let room_meta_json = serde_json::to_value(&room_meta).unwrap_or_default();
     let conn_id = registry.register(peer_id.clone(), room_meta, tx).await;
 
+    // Phase 4: push the current federated_peer_list to this new connection
+    // so a reconnecting extension gets the current federated peers immediately
+    // (not just on the next change). Only pushed when federation is active —
+    // avoids an empty-list frame on every connect when there's no peering.
+    if federated.has_federated_sessions().await {
+        let fed_list = federated.federated_peer_list_json().await;
+        let _ = registry.forward_to_peer(&peer_id, Message::Text(fed_list));
+    }
+
     // Phase 3c: notify federated peer relays of the new local session.
     federated
         .broadcast_update("add", &peer_id, room_meta_json)

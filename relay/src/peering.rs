@@ -799,6 +799,13 @@ impl FederatedSessions {
             .unwrap_or_default()
     }
 
+    /// Whether any federated sessions exist (to gate the on-connect push —
+    /// avoid sending an empty federated_peer_list to every new connection
+    /// when there's no federation).
+    pub async fn has_federated_sessions(&self) -> bool {
+        !self.epk_to_relays.lock().await.is_empty()
+    }
+
     /// Build the `federated_peer_list` control frame (Phase 4) for broadcasting
     /// to all connected WS clients. Contains every federated peer's epk,
     /// relay_name, and room metadata so the extension can populate its
@@ -885,7 +892,7 @@ impl FederatedSessions {
         from_epk: &str,
         target_epk: &str,
         envelope: serde_json::Value,
-    ) -> Option<oneshot::Receiver<RelayForwardAck>> {
+    ) -> Option<(String, oneshot::Receiver<RelayForwardAck>)> {
         // Multi-route fallback: try each relay that has the target epk,
         // in order, until we find one with an alive sender.
         let relay_names = self.relays_for_epk(target_epk).await;
@@ -917,9 +924,19 @@ impl FederatedSessions {
             visited: vec![own_name],
         };
         let (otx, orx) = oneshot::channel();
-        self.pending_forwards.lock().await.insert(request_id, otx);
+        self.pending_forwards
+            .lock()
+            .await
+            .insert(request_id.clone(), otx);
         let _ = tx.send(serde_json::to_string(&forward).unwrap_or_default());
-        Some(orx)
+        Some((request_id, orx))
+    }
+
+    /// Cancel a pending forward (clean up the oneshot entry on timeout).
+    /// Prevents the pending_forwards map from leaking entries when the ack
+    /// never arrives (peer relay offline/unresponsive).
+    pub async fn cancel_forward(&self, request_id: &str) {
+        self.pending_forwards.lock().await.remove(request_id);
     }
 
     /// Handle a relay_forward_ack received from a peer relay. Resolves the

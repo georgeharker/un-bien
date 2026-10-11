@@ -336,16 +336,21 @@ pub async fn handle_pi_envelope(
         PiForwardResult::Forwarded
     } else {
         // Target not local — try federated forwarding (Phase 3c).
-        if let Some(ack_rx) = federated
+        if let Some((request_id, ack_rx)) = federated
             .forward_to_federated(&sender, &target, envelope.clone())
             .await
         {
             match tokio::time::timeout(Duration::from_secs(5), ack_rx).await {
                 Ok(Ok(ack)) if ack.status == "forwarded" => PiForwardResult::Forwarded,
-                _ => PiForwardResult::TransportError(make_transport_error(
-                    Some(envelope),
-                    TransportErrorReason::UnknownPeer,
-                )),
+                _ => {
+                    // Clean up the pending forward entry (fixes the leak on
+                    // timeout — peer relay offline/unresponsive).
+                    federated.cancel_forward(&request_id).await;
+                    PiForwardResult::TransportError(make_transport_error(
+                        Some(envelope),
+                        TransportErrorReason::UnknownPeer,
+                    ))
+                }
             }
         } else {
             // Not federated either — unknown_peer (fast failure, no timeout).
