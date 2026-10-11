@@ -1,35 +1,11 @@
-# Relay Peering — Cross-Relay Session Access (Design Sketch)
+# Relay Peering — Cross-Relay Federation
 
-**Status:** sketch, not under development.  
+**Status:** implemented (relay 0.7.5+, Phases 3a–3c + Phase 4).  
 **Use case:** "ship work to another machine" — an agent on host A (relay A)
 can `agent_send` to an agent on host B (relay B), where A and B each run
 their own relay. Same owner (same opk), different machines (different epks).
 
-## Today
-
-- Each machine runs its own relay (`unbien-relay` on :3000).
-- The app pairs with multiple machines (by epk) across multiple relays.
-- Cross-machine mesh (`BrokerRemote` + `PiForwardClient`) works **within
-  one relay** — two machines on the SAME relay can `agent_send` to each
-  other.
-- Two machines on **different relays** cannot mesh — there's no
-  cross-relay forwarding.
-- The app can see sessions on all relays (it connects to each +
-  `rooms_check`). But the **agents** (pi sessions) can't talk
-  cross-relay.
-
-## The gap
-
-Agent A (on host A, relay A) wants to send a message to Agent B (on host
-B, relay B). Today this is impossible — relay A doesn't know about relay
-B's peers, and there's no relay-to-relay forwarding path.
-
-## Proposed: relay-to-relay peering (federation)
-
-Two relays connect to each other (WebSocket, shared-owner verification) and forward pi
-envelopes across — an SMTP-style federation. Each relay advertises its
-peers to the other, so `list_peers` on relay A includes relay B's peers
-(prefixed `<hostB>:`), and vice versa.
+## Architecture
 
 ```
   Host A                    Host B
@@ -38,220 +14,259 @@ peers to the other, so `list_peers` on relay A includes relay B's peers
   │   ↓           │           │   ↓           │
   │ Relay A       │←─ WS ─→│ Relay B       │
   │  (100.x:3000) │  peering │  (100.y:3000) │
-  └─────────────┘           └─────────────┘
+  │  /relay-peer  │  (port   │  /relay-peer  │
+  └─────────────┘   3100+)  └─────────────┘
         ↑                           ↑
         └───── app (opk) ──────────┘
          (paired with both, publishes
           mesh_versions to both)
 ```
 
-### How it works
+Each relay runs its own instance. The relays connect to each other over
+WebSocket at the `/relay-peer` endpoint, verify shared ownership, exchange
+session lists, and forward pi envelopes cross-relay. The app pairs with
+each machine independently; the federation is transparent to the app for
+transcript access and to the extension for agent-level mesh sends.
 
-1. **Peering config — separate per-machine file, managed by the CLI.**
-   The peering config is NOT in the shared `un-bien.json` (which goes in
-   dotfiles + is machine-agnostic). It lives in a **separate per-machine
-   file** at `~/.local/state/un-bien/relay-peers.json` (state dir, not
-   synced):
+## Setup
 
-   ```json
-   [
-     { "url": "http://100.y.y.y:3000", "name": "hostB" },
-     { "url": "http://100.z.z.z:3000", "name": "hostC" }
-   ]
-   ```
+### 1. Configure peering (per-machine)
 
-   The CLI manages it:
-   - `unbien relay peer add <url> <name>` — add a peer relay.
-   - `unbien relay peer remove <name>` — remove a peer relay.
-   - `unbien relay peer list` — list configured peers.
+The peering config is **per-machine** — it lives in
+`~/.local/state/un-bien/relay-peers.json` (state dir, not synced via
+dotfiles). The CLI manages it:
 
-   The relay reads this on startup. On add/remove, the CLI writes the file
-   - signals the relay (SIGHUP or restart) to pick up the change.
+```sh
+# On host A: add host B's relay as a peer
+unbien relay peer add ws://100.y.y.y:3000 hostB
 
-   Each machine has its OWN peer list — host A peers with B, host B peers
-   with A + C, host C peers with B only. Asymmetric peering is fine.
+# On host B: add host A's relay as a peer
+unbien relay peer add ws://100.x.x.x:3000 hostA
 
-2. **Relay-to-relay auth: shared-owner verification.** Both relays
-   already have the owner's opk (from the signed `mesh_versions` the app
-   published on pairing). On connect, they exchange their known owner
-   public keys — if they share a common owner (same opk), they federate.
-   If no common owner, they refuse. **The opk IS the trust basis** — no
-   shared secret, no Ed25519 pinning, no token to configure. The user
-   just adds the peer relay URL; the shared-owner check is automatic.
+# List configured peers
+unbien relay peer list
+```
 
-3. **Peer discovery exchange.** On connect, relay A and relay B exchange
-   their peer lists (addresses + cwds + names). Relay A's `list_peers`
-   includes relay B's peers, prefixed `<hostB>:`. Relay B's includes
-   relay A's, prefixed `<hostA>:`. The prefix is the peer relay's
-   `name` from the peering config.
+Asymmetric peering is fine — host A can peer with B without B peering
+with A (the connection is outbound from A, inbound on B). Symmetric
+peering (both connect to each other) also works — the relay handles
+duplicate connections via `Vec<UnboundedSender>` per relay name.
 
-4. **Cross-relay forwarding.** When Pi A sends to `<hostB>:<peer@B>`:
-   - Relay A sees the `<hostB>:` prefix → routes to the peer relay B
-     (via the relay-to-relay WS).
-   - Relay B receives the envelope → routes to the target Pi B.
-   - ACK back: Pi B → relay B → relay A → Pi A.
-   - The `BrokerRemote` on Pi A already handles cross-PC routing
-     (`tryRouteOutbound`); the relay-to-relay path extends this to
-     cross-relay.
+The relay reads `relay-peers.json` on startup. After adding/removing a
+peer, restart the relay (or it will pick up the change on the next
+reconnect cycle).
 
-5. **Same-owner validation.** The owner's `mesh_versions` blob lists all
-   the owner's machines (epks). The app publishes it to **both** relays
-   (it's connected to both). So relay A has the full membership
-   (epk_A + epk_B), and relay B has the same. The `is_authorized_canonical`
-   check on relay A: sender epk_A + target epk_B are in the same owner's
-   membership → authorized → forward. Relay B checks again on receipt.
-   Cross-owner → `not_authorized` → refused.
+### 2. Set the relay's own name (optional)
 
-6. **Loop prevention.** Each cross-relay envelope carries a
-   `visited_relays` list (or a TTL counter). A relay that's already in
-   the list drops the envelope. Prevents relay A → relay B → relay A
-   loops.
+The relay's own name (used in `relay_peer_list`, `relay_peer_update`, and
+`federated_peer_list` frames) defaults to the hostname. Override with:
 
-### App considerations
+```sh
+UNBIEN_RELAY_NAME=hostA unbien-relay
+```
 
-Federation changes what the app sees. Today the app directly adds each
-relay + sees only that relay's sessions. With federation, `rooms_check`
-on relay A includes sessions from peer relay B — sessions the app didn't
-add a relay for. This raises app-side questions:
+### 3. Ensure shared owner identity
 
-1. **Desired UX: indirectly reachable sessions show with an indicator +
-   host. Per-relay deduplication; cross-relay multiplicity.**
-   - **On one relay: a session appears ONCE**, even if multiple
-     federated routes exist (e.g. relay A peers with both B and C, and
-     both can reach the same session). The relay deduplicates within its
-     `rooms_check` (by epk + sessionID) — the app sees one entry per
-     session per relay, not one per federated route.
-   - **Across relays: the same session MAY appear on another relay too.**
-     If the app is connected to relay A (federated with B) AND relay B
-     (direct), the session appears once on relay A (with indicator +
-     "hostB") AND once on relay B (direct, no indicator). That's two
-     entries total — one per relay — not a duplicate within a relay.
-   - **The relay picks the route.** If multiple federated peers can
-     reach the same session, the relay selects one (the best/first to
-     advertise) + records it in the `peerRelay` field. The app doesn't
-     see multiple entries for the same session on the same relay.
+Both relays need the same owner's `mesh_versions` blob (listing all the
+owner's machines' epks). This happens automatically if the app is paired
+with machines on both relays — the app publishes `mesh_versions` to each
+relay it's connected to.
+
+For **non-keychain owner identity sync** (same opk on multiple devices):
+
+- `identity.storage: "file"` → sync `~/.local/state/un-bien/identity.json`
+  across devices (iCloud Drive, Syncthing, rsync).
+- `identity.storage: "keychain"` → use iCloud Keychain to sync the
+  keychain entry across devices.
+- If not syncing: each device has its own opk → different owners →
+  cross-relay sends are `not_authorized` (correct — they're different
+  owners).
+
+## Wire protocol
+
+All frames are JSON text messages over the relay-to-relay WebSocket
+connection at `/relay-peer`.
+
+### Federation handshake
+
+```
+A → B:  {"type":"relay_hello","owners":["<opk_hash>","..."]}
+B → A:  {"type":"relay_hello_ack","federate":true,"owners":["<opk_hash>","..."]}
+```
+
+Both relays exchange their known owner public-key hashes (SHA-256 of the
+owner's opk, from `mesh_versions`). If the hash sets intersect (shared
+owner), `federate: true` + the connection stays open. If no common owner,
+`federate: false` + disconnect. **The opk is the trust basis** — no shared
+secret, no Ed25519 pinning, no token.
+
+### Session list exchange
+
+```
+A → B:  {"type":"relay_peer_list","relay_name":"hostA","rooms_by_epk":{"<epk_A>":[{room_id,...},...]}}
+B → A:  {"type":"relay_peer_list","relay_name":"hostB","rooms_by_epk":{"<epk_B>":[{room_id,...},...]}}
+```
+
+Each relay sends its **local** rooms (pis connected to that relay), keyed
+by epk. Only local rooms are advertised — no transitive knowledge (relay
+C does not re-advertise relay B's peers to relay A). This means each epk
+appears from exactly one relay (unless a pi is multi-homed — connected to
+multiple relays).
+
+### Incremental updates
+
+```
+A → B:  {"type":"relay_peer_update","relay_name":"hostA","action":"add","epk":"<epk>","room":{<RoomMeta>}}
+A → B:  {"type":"relay_peer_update","relay_name":"hostA","action":"remove","epk":"<epk>","room":{"room_id":"..."}}
+```
+
+Sent when a local pi connects (`add`) or disconnects (`remove`). The
+receiving relay updates its `FederatedSessions` + broadcasts the updated
+`federated_peer_list` to all connected WS clients (apps/extensions).
+
+### Cross-relay forwarding
+
+```
+A → B:  {"type":"relay_forward","request_id":"<id>","from_epk":"<epk_A>","target_epk":"<epk_B>","envelope":{...},"visited":["hostA"]}
+B → A:  {"type":"relay_forward_ack","request_id":"<id>","status":"forwarded"}  // or "unknown_peer"
+```
+
+When a pi on relay A sends a `pi_envelope` targeting a peer on relay B:
+
+1. Relay A checks `FederatedSessions.relays_for_epk(target)` → finds
+   relay B.
+2. Relay A sends a `relay_forward` frame with `from_epk`, `target_epk`,
+   the verbatim envelope, + a `visited` list containing relay A's own
+   name.
+3. Relay B receives the forward, checks the `visited` list (loop
+   prevention — drops if its own name is present), delivers to the local
+   pi via `registry.forward_to_peer`, + sends a `relay_forward_ack`.
+4. Relay A awaits the ack (5s timeout). `forwarded` → success.
+   `unknown_peer` or timeout → `TransportError::UnknownPeer` back to the
+   sender.
+
+### Federated peer list push (Phase 4)
+
+```
+Relay → all WS clients:  {"type":"federated_peer_list","peers":[{"epk":"<epk>","relay_name":"hostB","rooms":[{<RoomMeta>},...]}]}
+```
+
+Broadcast to all connected WS clients (apps/extensions) whenever
+federated sessions change. The extension's `bridge.ts` listens for this
+frame + calls `BrokerRemote.setFederatedPeers()`, which populates the
+`federatedPeers` map so agents can discover + route to cross-relay peers
+via `list_peers` + `agent_send`.
+
+Rooms are deduplicated by `room_id` across relays (multi-homed pi case).
+The extension deduplicates infos by `(cwd, name)`.
+
+## How it works (end-to-end)
+
+### Discovery
+
+1. Agent A calls `list_peers` → the extension's `BrokerRemote` returns
+   local peers + cross-PC siblings + **federated peers** (from the
+   `federated_peer_list` push). Federated peers appear as
+   `<relayName>:<cwd>@<name>`.
+2. Agent A sees Agent B as `hostB:/path/to/cwd@name`.
+
+### Sending
+
+1. Agent A calls `agent_send` with `to: "hostB:/path/to/cwd@name"`.
+2. The extension's `BrokerRemote.tryRouteOutbound` parses the address →
+   `pcLabel = "hostB"`, `peerName = "/path/to/cwd@name"`.
+3. `_routeToFederated` finds the federated epk that has this peer, strips
+   the `hostB:` prefix (the target pi's broker routes by the local
+   address), + sends via `pi.sendEnvelopeToPi(epk, env)`.
+4. Relay A receives the `pi_envelope` with `to_pc = epk_B`. The target
+   isn't local → `FederatedSessions.forward_to_federated` tries each
+   relay that has epk_B (multi-route fallback) → sends a `relay_forward`
+   to relay B.
+5. Relay B receives the forward → delivers `pi_envelope_in` to Pi B.
+6. Pi B's `BrokerRemote.handleIncoming` → `_handleFederatedIncoming`
+   (accepts the sender as a federated peer, addresses are already local)
+   → injects into the local broker → Agent B receives the message.
+
+### Same-owner validation
+
+The owner's `mesh_versions` blob lists all the owner's machines (epks).
+The app publishes it to **both** relays. So relay A has the full
+membership (epk_A + epk_B), and relay B has the same. The
+`is_authorized_canonical` check on relay A: sender epk_A + target epk_B
+are in the same owner's membership → authorized → forward. Cross-owner →
+`not_authorized` → refused.
+
+## Multi-route hardening
+
+| Concern                          | Solution                                                                                                                                                              |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Duplicate rooms in peer list** | `federated_peer_list_json` deduplicates rooms by `room_id` across relays. The extension's `setFederatedPeers` deduplicates infos by `(cwd, name)`.                    |
+| **Multi-route fallback**         | `epk_to_relays` is `HashMap<epk, Vec<relay_name>>` (not single relay per epk). `forward_to_federated` tries each relay's alive senders in order until one succeeds.   |
+| **Loop prevention**              | `RelayForward.visited: Vec<String>`. The sending relay adds its own name. A relay that finds its name in the visited list drops the forward + replies `unknown_peer`. |
+
+### Multi-homed pis
+
+A pi connected to both relay B and relay C appears from both relays in
+relay A's `FederatedSessions`. The `federated_peer_list` groups by epk
+(one entry per epk) + deduplicates rooms by `room_id`. The extension sees
+one entry per epk. For forwarding, the relay tries each relay's alive
+senders (multi-route fallback). This is intentional — the peer IS
+reachable via multiple relays, + the relay picks the best available route.
+
+### No transitive knowledge
+
+The `relay_peer_list` exchange only sends **local** rooms. Relay C does
+not re-advertise relay B's peers to relay A. This means:
+
+- Each epk appears from exactly one relay (unless multi-homed).
+- No transitive forwarding (A → C → B) in the current design.
+- The `visited` list is a safety net for when transitive forwarding is
+  added in the future.
+
+## App considerations
+
+Federation changes what the app sees. `rooms_check` on relay A includes
+sessions from peer relay B — sessions the app didn't add a relay for.
+
+1. **Per-relay deduplication; cross-relay multiplicity.** On one relay, a
+   session appears once (deduplicated by epk + room_id). Across relays,
+   the same session may appear once per relay (if the app is connected to
+   both). The `peerRelay` field in the `rooms_check` response indicates
+   which peer relay the session came from.
 
 2. **Session provenance field.** The app's `LiveSession` gains a
    `peerRelay` field (the peer relay's name, e.g. "hostB") when the
-   session is federated (arrived via a peer relay's `rooms_check`).
-   Absent/null = direct (the session is on a relay the app added
-   directly). Present = federated (indirectly reachable via the
-   directly-connected relay's peering). The app renders the indicator
-   - host name from this field.
+   session is federated. Absent/null = direct. Present = federated
+   (indirectly reachable via the directly-connected relay's peering). The
+   app renders an indicator + host name from this field.
 
-3. **Relay list display.** The app's relay list shows the relays the
-   user directly added. Federated peer relays aren't in the list — but
-   the app could show them under the directly-connected relay as
-   "peered relays" (greyed out, with the host name), so the user
-   understands the topology + can see which hosts are reachable via
-   federation.
+3. **Forward-compatible.** The current app (without the `peerRelay`
+   indicator) treats federated sessions as normal tiles — the
+   `peerRelay` field rides along silently (Swift Codable ignores unknown
+   keys). No breakage.
 
-4. **Routing transparency.** The relay handles cross-relay forwarding
-   transparently for transcript messages (the app addresses the session
-   by its room_id on relay A; relay A forwards to relay B). The app
-   doesn't need to know about the peering for transcript access. For
-   agent-level mesh sends, the `<hostB>:` prefix is needed (the
-   extension's `BrokerRemote` handles this).
+4. **No double-add required.** The user does NOT need to add relay B to
+   see federated sessions. They appear via relay A's `rooms_check` +
+   `federated_peer_list` push.
 
-5. **No double-add required.** The user does NOT need to add relay B to
-   see federated sessions. They appear via relay A's `rooms_check`. The
-   app could offer "add relay B directly" as a convenience (direct access,
-   lower latency, fallback if relay A is down), but it's not required.
+## Config reference
 
-**Net: the app needs changes** — the `peerRelay` provenance field, the
-indicator + host display for federated sessions, and the "may appear more
-than once" multi-path model (don't merge). The relay handles cross-relay
-forwarding transparently; the app just shows the provenance. This is an
-app change, not just relay/extension.
+| Setting             | Location                                  | Default                  | Description                                                                                            |
+| ------------------- | ----------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `relay-peers.json`  | `~/.local/state/un-bien/relay-peers.json` | empty                    | Per-machine peering config (`{peers: [{url, name}]}`). Managed by `unbien relay peer add/remove/list`. |
+| `UNBIEN_RELAY_NAME` | env                                       | hostname                 | The relay's own name (for `relay_peer_list`, `relay_peer_update`, `federated_peer_list` frames).       |
+| `UNBIEN_RELAY_PORT` | env                                       | 3000                     | The relay's listen port.                                                                               |
+| `UNBIEN_STATE_DIR`  | env                                       | `~/.local/state/un-bien` | State root (mesh.db, relay-peers.json).                                                                |
 
-### Owner identity + non-keychain sync
-
-The **owner** (the paired app) has an owner public key (opk). The app
-publishes `mesh_versions` (listing its machines' epks) to each relay it's
-connected to. For cross-relay peering to work, **both relays need the
-same `mesh_versions`** (with all the owner's machines). This happens
-automatically if the app is connected to both relays (it publishes to
-each).
-
-The **machine identity** (epk) is per-machine (each machine has its own
-Ed25519 keypair). No sync needed — the machines have DIFFERENT epks, and
-the mesh_versions lists all of them under the same owner.
-
-**Non-keychain sync (if the user wants the same owner key on multiple
-devices):**
-
-- `identity.storage: "file"` → the owner identity is in
-  `~/.local/state/un-bien/identity.json`. Sync this file across devices
-  (iCloud Drive, Syncthing, rsync) so both devices have the same opk.
-- `identity.storage: "keychain"` → the keychain is per-device. Use iCloud
-  Keychain to sync the keychain entry across devices (macOS + iOS).
-- If not syncing: each device has its own opk → different owners →
-  cross-relay sends between their machines would be `not_authorized`.
-  That's correct (they're different owners).
-
-### What changes are needed
-
-| Component           | Change                                                                                                                                                                                                                                                           |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Relay (Rust)**    | Relay-to-relay WS connection + auth + peer-list exchange + cross-relay forwarding + loop prevention. The biggest piece.                                                                                                                                          |
-| **Extension (TS)**  | `BrokerRemote` / `PiForwardClient` — the cross-relay routing prefix (`<hostB>:`) is already the cross-PC pattern; the extension routes to the peer relay via the local relay's forwarding. Minimal change (the prefix is already handled by `tryRouteOutbound`). |
-| **App (iOS/macOS)** | Publish `mesh_versions` to all connected relays (may already do this). No other change — the app already connects to multiple relays + sees sessions on each.                                                                                                    |
-| **Config**          | `relay.peers` setting in `un-bien.json` (or the relay's env/config).                                                                                                                                                                                             |
-| **Docs**            | Setup guide: configure peering, sync owner identity (non-keychain), verify same-owner.                                                                                                                                                                           |
-
-### Challenges
+## Challenges
 
 - **NAT/firewall:** relay A and relay B need to reach each other. If both
-  are on Tailscale, direct. If not, one needs a public endpoint OR a
-  DERP-like relay-of-relays.
-- **Auth:** the relay-to-relay connection needs authentication (so a
-  random relay can't connect + harvest peer lists). Shared-owner verification — both relays exchange opks; if no common owner, refuse. No shared secret or pinning needed. (was: the
-  See step 2 above.)
-- **Loop prevention:** a `visited_relays` list or TTL on cross-relay
-  envelopes. Critical if more than two relays are peered (A → B → C → A).
+  are on Tailscale, direct (MagicDNS). If not, one needs a public endpoint
+  or a DERP-like relay-of-relays.
 - **Partial connectivity:** if relay A can reach relay B but not vice
-  versa (one-directional NAT), the peering is half-duplex. The relays
-  need to detect this + report it.
-- **Peer list freshness:** relay A's view of relay B's peers goes stale
-  if a peer on B joins/leaves. Exchange on connect + periodic refresh
-  (or push on peer_joined/left).
-
-### Alternative: one relay, all machines
-
-The simplest approach (today's architecture): run ONE relay on a
-Tailscale-accessible machine, and all machines connect to it. Cross-machine
-mesh already works within one relay. No relay changes needed.
-
-**Downside:** single point of failure (if the relay machine is down, all
-mesh is down). The user explicitly runs a relay per host (for resilience
-
-- locality), so consolidating to one relay defeats that.
-
-### Alternative: the app as a bridge
-
-The app (connected to both relays) bridges messages between them. The app
-receives a message from machine A on relay A → forwards to machine B on
-relay B.
-
-**Downside:** the app must be online + it's a viewer, not a router. Not
-designed for forwarding. And it's a bottleneck (all cross-relay traffic
-flows through the phone).
-
-## Recommendation
-
-**Relay-to-relay peering (Option A)** is the right design for the user's
-use case (ship work to another machine, relay per host, optional
-connection). It extends the existing cross-machine mesh to cross-relay,
-preserves the per-host resilience, and the same-owner validation already
-works (the app publishes mesh_versions to both relays).
-
-The relay Rust change is the biggest piece (relay-to-relay WS + auth +
-peer exchange + forwarding + loop prevention). The extension change is
-minimal (the cross-PC routing prefix pattern already handles the
-`<host>:` prefix). The app change is minimal (publish mesh_versions to
-all relays — may already work).
-
-The non-keychain sync docs: if the owner uses file-based identity, sync
-`identity.json` across devices so the same opk is on both. If keychain,
-use iCloud Keychain. If not syncing, different devices = different owners
-= cross-relay sends refused (correct).
+  versa (one-directional NAT), the peering is half-duplex. The outbound
+  peering loop reconnects with exponential backoff (1s → 60s).
+- **Reconnect:** the outbound peering loop reconnects automatically on
+  disconnect. The `Vec<UnboundedSender>` per relay name ensures both
+  connections (outbound + inbound) coexist in symmetric peering —
+  disconnecting one doesn't kill the other's sender.

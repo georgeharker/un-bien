@@ -3,8 +3,11 @@
 un-bien provides LLM-agnostic cross-session messaging for pi + un-bien.
 Any model running in pi can call the mesh tools to send messages to,
 list, and wait for replies from other pi sessions on the same machine
-(local UDS broker) or across machines (via the relay, same-owner
-validated).
+(local UDS broker), across machines (via the relay, same-owner
+validated), or across relays (via relay federation, same-owner validated).
+
+See [Relay Peering](relay-peering-sketch.md) for the federation design +
+setup guide.
 
 ## Enable / Disable
 
@@ -25,15 +28,15 @@ Restart pi to pick up a flip.
 
 ## Tools
 
-| Tool                                                 | Description                                                                                                                                                                                                                                                       |
-| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent_send({to, body, re?})`                        | Unicast send to a peer (by address from `list_peers`). Returns `{status, ok}` — `received` (delivered), `denied` (peer refused / cross-owner), `unknown_peer` (not on any reachable broker), `timeout` (registered but no ACK), `sent` (broadcast).               |
-| `list_peers()`                                       | Returns the current peer inventory as addresses `<cwd>@<name>` (cross-PC prefixed `<pc>:`). Includes `self` (your own `whoami`). Excludes self from the `peers` array.                                                                                            |
-| `whoami()`                                           | Returns your mesh identity: `{address, name, broker, socket}`.                                                                                                                                                                                                    |
-| `mesh_get_message({id})`                             | Fetch one inbound mesh message by id (recover a missed push). Returns `MeshMessage` or `null`.                                                                                                                                                                    |
-| `mesh_list_messages({from?, re?, sinceMs?, limit?})` | List inbound mesh messages (filtered by sender / correlation id / timestamp).                                                                                                                                                                                     |
-| `mesh_wait_message({from?, re?, timeout_ms?})`       | Block until a matching message arrives (or timeout). Returns `MeshMessage` or `null`. The `agent_request` replacement: `agent_send` with `re` → `mesh_wait_message` with the same `re`. `timeout_ms: 0` = poll (return immediately if a match is already stored). |
-| `agent_request({to, body, timeout_ms?})`             | **Deprecated** — prefer `agent_send` + `mesh_wait_message`. Still works (blocking request/reply).                                                                                                                                                                 |
+| Tool                                                 | Description                                                                                                                                                                                                                                                                                      |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `agent_send({to, body, re?})`                        | Unicast send to a peer (by address from `list_peers`). Returns `{status, ok}` — `received` (delivered), `denied` (peer refused / cross-owner), `unknown_peer` (not on any reachable broker), `timeout` (registered but no ACK), `sent` (broadcast).                                              |
+| `list_peers()`                                       | Returns the current peer inventory as addresses `<cwd>@<name>` (cross-PC prefixed `<pc>:`, cross-relay prefixed `<relayName>:`). Includes `self` (your own `whoami`). Excludes self from the `peers` array. Federated peers (on a peer relay) appear via the relay's `federated_peer_list` push. |
+| `whoami()`                                           | Returns your mesh identity: `{address, name, broker, socket}`.                                                                                                                                                                                                                                   |
+| `mesh_get_message({id})`                             | Fetch one inbound mesh message by id (recover a missed push). Returns `MeshMessage` or `null`.                                                                                                                                                                                                   |
+| `mesh_list_messages({from?, re?, sinceMs?, limit?})` | List inbound mesh messages (filtered by sender / correlation id / timestamp).                                                                                                                                                                                                                    |
+| `mesh_wait_message({from?, re?, timeout_ms?})`       | Block until a matching message arrives (or timeout). Returns `MeshMessage` or `null`. The `agent_request` replacement: `agent_send` with `re` → `mesh_wait_message` with the same `re`. `timeout_ms: 0` = poll (return immediately if a match is already stored).                                |
+| `agent_request({to, body, timeout_ms?})`             | **Deprecated** — prefer `agent_send` + `mesh_wait_message`. Still works (blocking request/reply).                                                                                                                                                                                                |
 
 ### MeshMessage type
 
@@ -103,12 +106,24 @@ No `/reload` needed.
   (`is_authorized_canonical`: both peers must be in the same owner's
   `mesh_versions` membership). Cross-owner → `not_authorized` → the
   sender gets `status: "denied"`.
+- **Cross-relay (federated):** when the target is on a peer relay, the
+  local relay forwards the `pi_envelope` cross-relay via the
+  `relay_forward` / `relay_forward_ack` protocol. The `BrokerRemote`
+  discovers federated peers via the relay's `federated_peer_list` push
+  (Phase 4) + routes to them via `_routeToFederated` (strips the
+  `<relayName>:` prefix + sends via `pi_envelope` — the relay does the
+  cross-relay hop). See [Relay Peering](relay-peering-sketch.md) for
+  the full federation design.
 
 ## Same-owner validation
 
 - **Cross-machine:** the relay refuses cross-owner sends
   (`transport_error: not_authorized`). Two users on the same machine
   with different keys meet on the relay → same-owner check → refused.
+- **Cross-relay:** same check — the sending relay validates same-owner
+  before forwarding cross-relay. The receiving relay trusts the sending
+  relay's check (federation requires shared-owner verification on
+  connect). Cross-owner → `not_authorized` → refused.
 - **Local:** same-machine = same epk = same owner (by construction).
   Two users with different HOMEs have different broker sockets → they
   don't share a local broker → they only meet on the relay (where
