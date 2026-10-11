@@ -105,11 +105,14 @@ switch (verb) {
     const blob = Buffer.from(
       JSON.stringify({ url: normalizeUrl(pairUrl), name: pairName, pubkey }),
     ).toString("base64")
+    const pairUrlFull = `relay-pair://${blob}`
+    // URL to stdout (pipeable: `unbien relay pair | pbcopy`), instructions to stderr.
+    console.log(pairUrlFull)
     console.error(
-      "Relay pairing URL:\n" +
-        `  relay-pair://${blob}\n\n` +
-        "Copy this URL + run on the peer relay:\n" +
-        `  unbien relay peer add relay-pair://${blob}`,
+      "Relay pairing URL (also on stdout — pipe to pbcopy/xclip):\n" +
+        `  ${pairUrlFull}\n\n` +
+        "Run on the peer relay:\n" +
+        `  unbien relay peer add ${pairUrlFull}`,
     )
     break
   }
