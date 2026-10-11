@@ -77,9 +77,12 @@ json_version() { sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$1" | head -1; }
 cargo_version() { sed -n 's/^version = "\([^"]*\)".*/\1/p' "$1" | head -1; }
 
 bump_version() { # $1=version $2=patch|minor
-  v_major=$(echo "$1" | cut -d. -f1)
-  v_minor=$(echo "$1" | cut -d. -f2)
-  v_patch=$(echo "$1" | cut -d. -f3)
+  # Strip pre-release suffix (everything after -) so 0.7.5-dev.20261011
+  # bumps to 0.7.6, not a parse error on "5-dev".
+  clean=$(echo "$1" | sed 's/-.*//')
+  v_major=$(echo "$clean" | cut -d. -f1)
+  v_minor=$(echo "$clean" | cut -d. -f2)
+  v_patch=$(echo "$clean" | cut -d. -f3)
   if [ "$2" = minor ]; then
     echo "${v_major}.$((v_minor + 1)).0"
   else
