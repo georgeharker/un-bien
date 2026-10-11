@@ -19,6 +19,7 @@ import {
   removeRelayPeer,
   relayPubkeyB64,
 } from "./store.js"
+import { hostname as osHostname } from "node:os"
 
 const [verb, ...rest] = process.argv.slice(2)
 
@@ -79,26 +80,24 @@ switch (verb) {
   case "pair": {
     // Generate a pairing URL for this relay.
     // Usage: unbien relay pair [url] [--name <name>]
-    // The URL defaults to UNBIEN_RELAY_URL env var.
+    // Defaults: url = UNBIEN_RELAY_URL env, name = system hostname.
     const pairUrl =
       rest.find((a) => !a.startsWith("--")) ??
       process.env.UNBIEN_RELAY_URL ??
       ""
     const nameArg = rest[rest.indexOf("--name") + 1]
+    // Default the name to the system hostname (same as the relay does via
+    // gethostname). Only override if --name or UNBIEN_RELAY_NAME is set.
     const pairName =
       nameArg ??
       process.env.UNBIEN_RELAY_NAME ??
-      (() => {
-        try {
-          return new URL(normalizeUrl(pairUrl)).hostname
-        } catch {
-          return "relay"
-        }
-      })()
+      osHostname()
     if (!pairUrl) {
       console.error(
-        "usage: unbien relay pair <url> [--name <name>]\n" +
-          "  Or set UNBIEN_RELAY_URL env var.",
+        "usage: unbien relay pair [url] [--name <name>]\n" +
+          "  The URL defaults to UNBIEN_RELAY_URL env var.\n" +
+          "  The name defaults to the system hostname.\n" +
+          "  Set UNBIEN_RELAY_URL in the relay plist, or pass it explicitly.",
       )
       process.exit(1)
     }
