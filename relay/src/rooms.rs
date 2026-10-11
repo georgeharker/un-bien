@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// Metadata about one active Pi room (sub-channel of a peer_id).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RoomMeta {
     pub room_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]

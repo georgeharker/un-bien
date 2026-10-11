@@ -88,7 +88,7 @@ pub struct RelayHelloAck {
 }
 
 /// Start the outbound peering tasks. Each peer relay gets a tokio task.
-pub fn start_peering(mesh: Arc<MeshStore>) {
+pub fn start_peering(mesh: Arc<MeshStore>, registry: Arc<PeerRegistry>, federated: Arc<FederatedSessions>) {
     let config = read_peer_config();
     if config.is_empty() {
         info!("no federated peer relays configured (relay-peers.json empty or absent)");
@@ -98,17 +98,19 @@ pub fn start_peering(mesh: Arc<MeshStore>) {
         info!(peer = %peer.name, url = %peer.url, "starting peering task");
         let peer = peer.clone();
         let mesh = Arc::clone(&mesh);
+        let registry = Arc::clone(&registry);
+        let federated = Arc::clone(&federated);
         tokio::spawn(async move {
-            peering_loop(mesh, peer).await;
+            peering_loop(mesh, registry, federated, peer).await;
         });
     }
 }
 
 /// Per-peer: connect → hello → federate or disconnect → backoff → reconnect.
-async fn peering_loop(mesh: std::sync::Arc<MeshStore>, peer: RelayPeerConfig) {
+async fn peering_loop(mesh: Arc<MeshStore>, registry: Arc<PeerRegistry>, federated: Arc<FederatedSessions>, peer: RelayPeerConfig) {
     let mut backoff = 1u64;
     loop {
-        match connect_and_verify(&mesh, &peer).await {
+        match connect_and_verify(&mesh, &registry, &federated, &peer).await {
             Ok(()) => {
                 info!(peer = %peer.name, "federated peer disconnected, reconnecting");
                 backoff = 1;
@@ -124,7 +126,9 @@ async fn peering_loop(mesh: std::sync::Arc<MeshStore>, peer: RelayPeerConfig) {
 
 /// Connect outbound, exchange hellos, verify shared ownership.
 async fn connect_and_verify(
-    mesh: &std::sync::Arc<MeshStore>,
+    mesh: &Arc<MeshStore>,
+    registry: &Arc<PeerRegistry>,
+    federated: &Arc<FederatedSessions>,
     peer: &RelayPeerConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let ws_url = format!("{}/relay-peer", peer.url.trim_end_matches('/'));
@@ -167,14 +171,70 @@ async fn connect_and_verify(
 
     info!(peer = %peer.name, "federated with peer relay (shared owner verified)");
 
-    // Phase 2: keep open until peer disconnects. Phase 3 adds exchange here.
+    // Phase 3: exchange peer lists.
+    let local_rooms = FederatedSessions::local_rooms_by_epk(registry);
+    let peer_list = RelayPeerList {
+        kind: "relay_peer_list".into(),
+        relay_name: peer.name.clone(),
+        rooms_by_epk: local_rooms,
+    };
+    ws.send(tokio_tungstenite::tungstenite::Message::Text(
+        serde_json::to_string(&peer_list)?.into(),
+    ))
+    .await?;
+
+    // Receive the peer's relay_peer_list.
+    let msg = ws
+        .next()
+        .await
+        .ok_or("peer closed before relay_peer_list")?;
+    let text = match msg? {
+        tokio_tungstenite::tungstenite::Message::Text(t) => t,
+        _ => return Err("expected relay_peer_list".into()),
+    };
+    let peer_list: RelayPeerList = serde_json::from_str(&text)?;
+    federated
+        .set_peer_rooms(&peer_list.relay_name, peer_list.rooms_by_epk)
+        .await;
+    info!(peer = %peer.name, "stored federated sessions from peer relay");
+
+    // Keep the connection open for incremental updates + forwarding (Phase 3c).
     while let Some(msg) = ws.next().await {
         match msg {
             Ok(tokio_tungstenite::tungstenite::Message::Close(_)) | Err(_) => break,
-            Ok(_) => { /* Phase 3 will handle peer list + forwarding */ }
+            Ok(tokio_tungstenite::tungstenite::Message::Text(t)) => {
+                if let Ok(update) = serde_json::from_str::<RelayPeerUpdate>(&t) {
+                    match update.action.as_str() {
+                        "add" => {
+                            if let Ok(room) =
+                                serde_json::from_value::<RoomMeta>(update.room.clone())
+                            {
+                                federated
+                                    .add_room(&update.relay_name, &update.epk, room)
+                                    .await;
+                            }
+                        }
+                        "remove" => {
+                            if let Some(room_id) =
+                                update.room.get("room_id").and_then(|v| v.as_str())
+                            {
+                                federated
+                                    .remove_room(&update.relay_name, &update.epk, room_id)
+                                    .await;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Ok(_) => {}
         }
     }
+
+    // Clear federated sessions on disconnect.
+    federated.clear_peer(&peer.name).await;
     Ok(())
+
 }
 
 // ── Inbound handler (/relay-peer) ─────────────────────────────────────────
@@ -232,13 +292,83 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
 
     info!("relay-peer: federated (shared owner verified)");
 
-    // Phase 2: keep open. Phase 3 adds exchange here.
+    // Phase 3: receive the peer's relay_peer_list, store it, then send ours.
+    let msg = match socket.recv().await {
+        Some(Ok(Message::Text(t))) => t,
+        _ => {
+            warn!("relay-peer: expected relay_peer_list, got disconnect");
+            return;
+        }
+    };
+    let peer_list: RelayPeerList = match serde_json::from_str(&msg) {
+        Ok(l) => l,
+        Err(e) => {
+            warn!("relay-peer: failed to parse relay_peer_list: {e}");
+            return;
+        }
+    };
+    state
+        .federated
+        .set_peer_rooms(&peer_list.relay_name, peer_list.rooms_by_epk)
+        .await;
+    info!(
+        relay = %peer_list.relay_name,
+        "stored federated sessions from inbound peer relay"
+    );
+
+    // Send our local rooms.
+    let local_rooms = FederatedSessions::local_rooms_by_epk(&state.registry);
+    let our_list = RelayPeerList {
+        kind: "relay_peer_list".into(),
+        relay_name: "self".into(), // TODO: the relay's own name (from config or hostname).
+        rooms_by_epk: local_rooms,
+    };
+    if socket
+        .send(Message::Text(serde_json::to_string(&our_list).unwrap_or_default()))
+        .await
+        .is_err()
+    {
+        return;
+    }
+
+    // Keep open for incremental updates + forwarding (Phase 3c).
     while let Some(msg) = socket.recv().await {
         match msg {
             Ok(Message::Close(_)) | Err(_) => break,
-            Ok(_) => { /* Phase 3 will handle peer list + forwarding */ }
+            Ok(Message::Text(t)) => {
+                if let Ok(update) = serde_json::from_str::<RelayPeerUpdate>(&t) {
+                    match update.action.as_str() {
+                        "add" => {
+                            if let Ok(room) =
+                                serde_json::from_value::<RoomMeta>(update.room.clone())
+                            {
+                                state
+                                    .federated
+                                    .add_room(&update.relay_name, &update.epk, room)
+                                    .await;
+                            }
+                        }
+                        "remove" => {
+                            if let Some(room_id) =
+                                update.room.get("room_id").and_then(|v| v.as_str())
+                            {
+                                state
+                                    .federated
+                                    .remove_room(&update.relay_name, &update.epk, room_id)
+                                    .await;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Ok(_) => {}
         }
     }
+
+    // Clear federated sessions on disconnect.
+    state.federated.clear_peer(&peer_list.relay_name).await;
+
 }
 
 #[cfg(test)]
@@ -319,4 +449,131 @@ mod tests {
         assert!(result.is_err()); // malformed JSON → error → empty
         let _ = std::fs::remove_file(&tmp);
     }
+}
+
+// ── Phase 3: FederatedSessions + peer list exchange + cross-relay forwarding ─
+
+use std::collections::HashMap;
+use tokio::sync::Mutex;
+use crate::rooms::RoomMeta;
+use crate::peers::registry::PeerRegistry;
+
+/// Stores rooms from federated peer relays. Keyed by (peer_relay_name, epk)
+/// → Vec<RoomMeta>. Also maintains an epk → peer_relay_name index for
+/// forwarding (which peer relay handles a given target epk?).
+#[derive(Default)]
+pub struct FederatedSessions {
+    /// (peer_relay_name, epk) → Vec<RoomMeta>
+    sessions: Mutex<HashMap<(String, String), Vec<RoomMeta>>>,
+    /// epk → peer_relay_name (for forwarding)
+    epk_to_relay: Mutex<HashMap<String, String>>,
+}
+
+impl FederatedSessions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Replace all sessions from a given peer relay (on relay_peer_list).
+    pub async fn set_peer_rooms(
+        &self,
+        peer_relay: &str,
+        rooms_by_epk: HashMap<String, Vec<RoomMeta>>,
+    ) {
+        let mut sessions = self.sessions.lock().await;
+        let mut epk_map = self.epk_to_relay.lock().await;
+
+        // Remove old entries for this peer relay.
+        sessions.retain(|k, _| k.0 != peer_relay);
+        epk_map.retain(|_, relay| relay.as_str() != peer_relay);
+
+        // Insert new entries.
+        for (epk, rooms) in rooms_by_epk {
+            sessions.insert((peer_relay.to_string(), epk.clone()), rooms);
+            epk_map.insert(epk, peer_relay.to_string());
+        }
+    }
+
+    /// Add a single room for a peer relay (on relay_peer_update add).
+    pub async fn add_room(
+        &self,
+        peer_relay: &str,
+        epk: &str,
+        room: RoomMeta,
+    ) {
+        let mut sessions = self.sessions.lock().await;
+        let key = (peer_relay.to_string(), epk.to_string());
+        sessions.entry(key).or_default().push(room);
+        self.epk_to_relay.lock().await.insert(epk.to_string(), peer_relay.to_string());
+    }
+
+    /// Remove a single room (on relay_peer_update remove).
+    pub async fn remove_room(
+        &self,
+        peer_relay: &str,
+        epk: &str,
+        room_id: &str,
+    ) {
+        let mut sessions = self.sessions.lock().await;
+        let key = (peer_relay.to_string(), epk.to_string());
+        if let Some(rooms) = sessions.get_mut(&key) {
+            rooms.retain(|r| r.room_id != room_id);
+            if rooms.is_empty() {
+                sessions.remove(&key);
+                self.epk_to_relay.lock().await.remove(epk);
+            }
+        }
+    }
+
+    /// Remove all sessions from a peer relay (on disconnect).
+    pub async fn clear_peer(&self, peer_relay: &str) {
+        let mut sessions = self.sessions.lock().await;
+        sessions.retain(|k, _| k.0 != peer_relay);
+        self.epk_to_relay.lock().await.retain(|_, relay| relay != peer_relay);
+    }
+
+    /// Get all federated rooms for a given epk (for rooms_check).
+    pub async fn rooms_for_epk(&self, epk: &str) -> Vec<(String, RoomMeta)> {
+        let sessions = self.sessions.lock().await;
+        sessions
+            .iter()
+            .filter(|((_, e), _)| e == epk)
+            .flat_map(|((relay, _), rooms)| {
+                rooms.iter().map(move |r| (relay.clone(), r.clone()))
+            })
+            .collect()
+    }
+
+    /// Look up which peer relay handles a given epk (for forwarding).
+    pub async fn relay_for_epk(&self, epk: &str) -> Option<String> {
+        self.epk_to_relay.lock().await.get(epk).cloned()
+    }
+
+    /// Get all local rooms from the registry, grouped by epk (for sending
+    /// to peer relays on the relay_peer_list exchange).
+    pub fn local_rooms_by_epk(registry: &PeerRegistry) -> HashMap<String, Vec<RoomMeta>> {
+        registry.all_rooms_by_epk()
+    }
+}
+
+/// Wire frame: a peer relay's full room list (sent after federation).
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RelayPeerList {
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// The sending relay's name (for attribution).
+    pub relay_name: String,
+    /// Rooms grouped by the remote machine's epk.
+    pub rooms_by_epk: HashMap<String, Vec<RoomMeta>>,
+}
+
+/// Wire frame: an incremental room update (add/remove).
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RelayPeerUpdate {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub relay_name: String,
+    pub action: String, // "add" | "remove"
+    pub epk: String,
+    pub room: serde_json::Value, // RoomMeta (add) or {"room_id": "..."} (remove)
 }

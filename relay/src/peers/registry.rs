@@ -248,6 +248,34 @@ impl PeerRegistry {
         by_room.into_values().collect()
     }
 
+    /// All local rooms grouped by peer epk (for the relay_peer_list exchange).
+    /// Same merge logic as rooms_of, but for ALL peers, not one.
+    pub fn all_rooms_by_epk(&self) -> HashMap<String, Vec<RoomMeta>> {
+        let lock = self.senders.lock().unwrap();
+        let mut by_epk: HashMap<String, HashMap<String, RoomMeta>> = HashMap::new();
+        for ((peer_id, _room_id), v) in lock.iter() {
+            if let Some((_, last_meta, _)) = v.last() {
+                let merged = {
+                    let mut m = last_meta.clone();
+                    for (_, rm, _) in v.iter() {
+                        for (k, val) in rm.extra.iter() {
+                            m.extra.entry(k.clone()).or_insert_with(|| val.clone());
+                        }
+                    }
+                    m
+                };
+                by_epk
+                    .entry(peer_id.clone())
+                    .or_default()
+                    .insert(merged.room_id.clone(), merged);
+            }
+        }
+        by_epk
+            .into_iter()
+            .map(|(epk, rooms)| (epk, rooms.into_values().collect()))
+            .collect()
+    }
+
     /// Broadcasts `msg` to every live connection at `(dest_peer, dest_room)`
     /// **except** the one whose conn_id equals `from_conn_id` (skip-sender).
     ///
