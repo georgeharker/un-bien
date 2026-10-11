@@ -1,6 +1,11 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
+import {
+  ed25519KeypairFromSeed,
+  generateEd25519Keypair,
+  type Ed25519Keypair,
+} from "@geohar/un-bien/client"
 
 /**
  * The pi machines this client has paired with. Pairing is machine-level, so one
@@ -97,6 +102,9 @@ export function forgetRelay(urlOrName: string, path = RELAYS_PATH): boolean {
 export interface RelayPeer {
   url: string
   name: string
+  /** The peer relay's pinned Ed25519 public key (base64). If present, the
+   *  relay verifies the peer's identity on connect. */
+  pubkey?: string
 }
 
 const RELAY_PEERS_PATH = join(
@@ -139,4 +147,50 @@ export function removeRelayPeer(
     mode: 0o600,
   })
   return true
+}
+
+// ── Relay keypair (identity for relay-to-relay peering) ───────────────────
+
+const RELAY_KEYPAIR_PATH = join(
+  homedir(),
+  ".local",
+  "state",
+  "un-bien",
+  "relay-keypair.json",
+)
+
+interface KeypairFile {
+  public_key: string // base64
+  private_key: string // base64 (32-byte seed)
+}
+
+/** Load the relay's Ed25519 keypair from the state dir, or generate + persist
+ *  a new one. Format is compatible with the Rust relay's `relay_keypair.rs`. */
+export function loadOrCreateRelayKeypair(
+  path = RELAY_KEYPAIR_PATH,
+): Ed25519Keypair {
+  try {
+    const file = JSON.parse(readFileSync(path, "utf8")) as KeypairFile
+    const seed = Buffer.from(file.private_key, "base64")
+    if (seed.length === 32) {
+      return ed25519KeypairFromSeed(seed)
+    }
+  } catch {
+    // File doesn't exist or is corrupt — generate a new one.
+  }
+  const kp = generateEd25519Keypair()
+  const file: KeypairFile = {
+    public_key: Buffer.from(kp.publicKey).toString("base64"),
+    private_key: Buffer.from(kp.secretKey).toString("base64"),
+  }
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  writeFileSync(path, JSON.stringify(file, null, 2), { mode: 0o600 })
+  return kp
+}
+
+/** The relay's public key as base64 (its "id" for pairing). */
+export function relayPubkeyB64(path = RELAY_KEYPAIR_PATH): string {
+  return Buffer.from(loadOrCreateRelayKeypair(path).publicKey).toString(
+    "base64",
+  )
 }

@@ -18,6 +18,10 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
+use crate::relay_keypair::RelayKeypair;
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+use rand::RngCore as _;
+
 /// The relay's own name (for relay_peer_list / relay_peer_update frames).
 /// Reads `UNBIEN_RELAY_NAME` env var; defaults to the hostname, then "relay".
 fn relay_own_name() -> String {
@@ -32,6 +36,35 @@ fn relay_own_name() -> String {
         .unwrap_or_else(|| "relay".to_string())
 }
 
+/// The relay's own WebSocket URL (for the URL exchange in relay_hello).
+/// Reads `UNBIEN_RELAY_URL` env var; defaults to empty (not advertised).
+fn relay_own_url() -> Option<String> {
+    std::env::var("UNBIEN_RELAY_URL")
+        .ok()
+        .filter(|u| !u.is_empty())
+}
+
+/// Generate a random 32-byte nonce, base64-encoded.
+fn gen_relay_nonce() -> String {
+    let mut nonce = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut nonce);
+    B64.encode(nonce)
+}
+
+/// Sign the relay identity fields (nonce + pubkey + name + url) with the
+/// relay's keypair. Returns the base64 signature.
+fn sign_relay_identity(keypair: &RelayKeypair, nonce: &str, name: &str, url: &str) -> String {
+    let msg = format!("{nonce}|{}|{name}|{url}", keypair.pubkey_b64());
+    keypair.sign(msg.as_bytes())
+}
+
+/// Verify a peer's relay identity signature. Returns true if the signature
+/// is valid for the given pubkey + identity fields.
+fn verify_relay_identity(pubkey: &str, nonce: &str, name: &str, url: &str, sig: &str) -> bool {
+    let msg = format!("{nonce}|{pubkey}|{name}|{url}");
+    RelayKeypair::verify(pubkey, msg.as_bytes(), sig)
+}
+
 use std::sync::Arc;
 
 use crate::AppState;
@@ -44,6 +77,11 @@ use crate::paths::relay_peers_path;
 pub struct RelayPeerConfig {
     pub url: String,
     pub name: String,
+    /// The peer relay's pinned Ed25519 public key (base64). If present, the
+    /// relay verifies the peer's identity on connect. If absent, only
+    /// shared-owner verification is used (backward compat).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pubkey: Option<String>,
 }
 
 /// Read the peering config from `<state_root>/relay-peers.json`.
@@ -99,6 +137,23 @@ pub struct RelayHello {
     #[serde(rename = "type")]
     pub kind: String,
     pub owners: Vec<String>,
+    /// The relay's Ed25519 public key (base64) — its identity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relay_pubkey: Option<String>,
+    /// The relay's name (for display + routing).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relay_name: Option<String>,
+    /// The relay's WebSocket URL (for the URL exchange — the peer can
+    /// connect back if it wants symmetric peering).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relay_url: Option<String>,
+    /// Random nonce (base64) for replay protection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<String>,
+    /// Signature over (nonce + relay_pubkey + relay_name + relay_url),
+    /// proving possession of the private key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sig: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -107,6 +162,16 @@ pub struct RelayHelloAck {
     pub kind: String,
     pub federate: bool,
     pub owners: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relay_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relay_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relay_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sig: Option<String>,
 }
 
 /// Start the outbound peering tasks. Each peer relay gets a tokio task.
@@ -165,11 +230,21 @@ async fn connect_and_verify(
     let ws_url = format!("{}/relay-peer", peer.url.trim_end_matches('/'));
     let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url).await?;
 
-    // Send our relay_hello.
+    // Send our relay_hello (with relay identity for pairing).
     let ours: Vec<String> = owner_hashes(mesh).into_iter().collect();
+    let keypair = crate::relay_keypair::load_or_generate(None);
+    let nonce = gen_relay_nonce();
+    let name = relay_own_name();
+    let url = relay_own_url().unwrap_or_default();
+    let sig = sign_relay_identity(&keypair, &nonce, &name, &url);
     let hello = RelayHello {
         kind: "relay_hello".into(),
         owners: ours.clone(),
+        relay_pubkey: Some(keypair.pubkey_b64()),
+        relay_name: Some(name),
+        relay_url: if url.is_empty() { None } else { Some(url) },
+        nonce: Some(nonce),
+        sig: Some(sig),
     };
     ws.send(tokio_tungstenite::tungstenite::Message::Text(
         serde_json::to_string(&hello)?.into(),
@@ -198,6 +273,24 @@ async fn connect_and_verify(
     if !has_common_owner(&ours_set, &theirs) {
         info!(peer = %peer.name, "no common owner (double-check)");
         return Err("no common owner (double-check)".into());
+    }
+
+    // Verify the peer's relay identity (if present + pinned).
+    if let (Some(peer_pubkey), Some(peer_nonce), Some(peer_sig)) =
+        (&ack.relay_pubkey, &ack.nonce, &ack.sig)
+    {
+        if let Some(pinned) = &peer.pubkey {
+            if pinned != peer_pubkey {
+                info!(peer = %peer.name, pinned = %pinned, got = %peer_pubkey, "relay pubkey mismatch");
+                return Err("relay pubkey mismatch".into());
+            }
+        }
+        let peer_name = ack.relay_name.as_deref().unwrap_or("");
+        let peer_url = ack.relay_url.as_deref().unwrap_or("");
+        if !verify_relay_identity(peer_pubkey, peer_nonce, peer_name, peer_url, peer_sig) {
+            info!(peer = %peer.name, "relay identity signature invalid");
+            return Err("relay identity signature invalid".into());
+        }
     }
 
     info!(peer = %peer.name, "federated with peer relay (shared owner verified)");
@@ -282,6 +375,29 @@ async fn connect_and_verify(
                 if let Ok(forward) = serde_json::from_str::<RelayForward>(&text) {
                     // Loop prevention: drop if we've already handled this forward.
                     if forward.visited.contains(&relay_own_name()) {
+                        let ack = RelayForwardAck {
+                            kind: "relay_forward_ack".into(),
+                            request_id: forward.request_id,
+                            status: "unknown_peer".into(),
+                        };
+                        let _ = ws_sink
+                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                serde_json::to_string(&ack).unwrap_or_default().into(),
+                            ))
+                            .await;
+                        continue;
+                    }
+                    // Verify the forward's relay signature (authenticated forwarding).
+                    let sig_valid = match (&forward.relay_pubkey, &forward.relay_sig) {
+                        (Some(pk), Some(sig)) => {
+                            let msg = format!("{}|{}|{}|{}",
+                                forward.request_id, forward.from_epk,
+                                forward.target_epk, forward.visited.join(","));
+                            RelayKeypair::verify(pk, msg.as_bytes(), sig)
+                        }
+                        _ => false, // unsigned forward — rejected
+                    };
+                    if !sig_valid {
                         let ack = RelayForwardAck {
                             kind: "relay_forward_ack".into(),
                             request_id: forward.request_id,
@@ -381,11 +497,21 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
     let ours_set: HashSet<String> = ours.iter().cloned().collect();
     let federate = has_common_owner(&ours_set, &theirs);
 
-    // Send relay_hello_ack.
+    // Send relay_hello_ack (with relay identity for pairing).
+    let keypair = crate::relay_keypair::load_or_generate(None);
+    let nonce = gen_relay_nonce();
+    let name = relay_own_name();
+    let url = relay_own_url().unwrap_or_default();
+    let sig = sign_relay_identity(&keypair, &nonce, &name, &url);
     let ack = RelayHelloAck {
         kind: "relay_hello_ack".into(),
         federate,
         owners: ours,
+        relay_pubkey: Some(keypair.pubkey_b64()),
+        relay_name: Some(name),
+        relay_url: if url.is_empty() { None } else { Some(url) },
+        nonce: Some(nonce),
+        sig: Some(sig),
     };
     if socket
         .send(Message::Text(
@@ -512,6 +638,27 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
                             .await;
                         continue;
                     }
+                    // Verify the forward's relay signature (authenticated forwarding).
+                    let sig_valid = match (&forward.relay_pubkey, &forward.relay_sig) {
+                        (Some(pk), Some(sig)) => {
+                            let msg = format!("{}|{}|{}|{}",
+                                forward.request_id, forward.from_epk,
+                                forward.target_epk, forward.visited.join(","));
+                            RelayKeypair::verify(pk, msg.as_bytes(), sig)
+                        }
+                        _ => false, // unsigned forward — rejected
+                    };
+                    if !sig_valid {
+                        let ack = RelayForwardAck {
+                            kind: "relay_forward_ack".into(),
+                            request_id: forward.request_id,
+                            status: "unknown_peer".into(),
+                        };
+                        let _ = socket_sink
+                            .send(Message::Text(serde_json::to_string(&ack).unwrap_or_default()))
+                            .await;
+                        continue;
+                    }
                     let outbound = serde_json::json!({
                         "type": "pi_envelope_in",
                         "from_pc": forward.from_epk,
@@ -587,6 +734,11 @@ mod tests {
         let hello = RelayHello {
             kind: "relay_hello".into(),
             owners: vec!["hash1".into(), "hash2".into()],
+            relay_pubkey: None,
+            relay_name: None,
+            relay_url: None,
+            nonce: None,
+            sig: None,
         };
         let json = serde_json::to_string(&hello).unwrap();
         assert!(json.contains("\"type\":\"relay_hello\""));
@@ -651,6 +803,9 @@ use std::collections::HashMap;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 /// Wire frame: a pi_envelope forwarded across relays (Phase 3c).
+/// Authenticated: the forwarding relay signs (request_id + from_epk +
+/// target_epk + visited) with its keypair so the receiving relay can
+/// verify provenance.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct RelayForward {
     #[serde(rename = "type")]
@@ -660,10 +815,14 @@ pub struct RelayForward {
     pub target_epk: String,
     pub envelope: serde_json::Value,
     /// Relays that have already handled this forward (loop prevention).
-    /// The sending relay adds its own name; a relay that finds its name here
-    /// drops the forward + replies unknown_peer.
     #[serde(default)]
     pub visited: Vec<String>,
+    /// The forwarding relay's Ed25519 public key (base64).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relay_pubkey: Option<String>,
+    /// Signature over (request_id + from_epk + target_epk + visited joined).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relay_sig: Option<String>,
 }
 
 /// Wire frame: the ack for a relay_forward (Phase 3c).
@@ -915,13 +1074,20 @@ impl FederatedSessions {
         };
         let tx = tx?;
         let request_id = format!("{}", rand::random::<u64>());
+        // Sign the forward with the relay's keypair (authenticated forwarding).
+        let keypair = crate::relay_keypair::load_or_generate(None);
+        let visited = vec![own_name];
+        let sig_msg = format!("{request_id}|{from_epk}|{target_epk}|{}", visited.join(","));
+        let relay_sig = keypair.sign(sig_msg.as_bytes());
         let forward = RelayForward {
             kind: "relay_forward".into(),
             request_id: request_id.clone(),
             from_epk: from_epk.to_string(),
             target_epk: target_epk.to_string(),
             envelope,
-            visited: vec![own_name],
+            visited: visited.clone(),
+            relay_pubkey: Some(keypair.pubkey_b64()),
+            relay_sig: Some(relay_sig),
         };
         let (otx, orx) = oneshot::channel();
         self.pending_forwards

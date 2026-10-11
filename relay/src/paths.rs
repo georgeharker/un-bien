@@ -77,6 +77,12 @@ pub fn relay_peers_path() -> PathBuf {
     state_root().join("relay-peers.json")
 }
 
+/// The relay's own Ed25519 keypair (identity for relay-to-relay peering).
+/// Generated on first run, persisted across restarts.
+pub fn relay_keypair_path() -> PathBuf {
+    state_root().join("relay-keypair.json")
+}
+
 /// Pure pairing DB resolution: `UNBIEN_PAIRING_DB_PATH` (absolute override,
 /// wins) falls through to `<state root>/pairing.db`. Its OWN store —
 /// deliberately NOT mesh.db and NOT the extension's peers.json (design

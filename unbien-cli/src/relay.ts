@@ -17,6 +17,7 @@ import {
   loadRelayPeers,
   addRelayPeer,
   removeRelayPeer,
+  relayPubkeyB64,
 } from "./store.js"
 
 const [verb, ...rest] = process.argv.slice(2)
@@ -75,22 +76,89 @@ switch (verb) {
     break
   }
 
+  case "pair": {
+    // Generate a pairing URL for this relay.
+    // Usage: unbien relay pair [url] [--name <name>]
+    // The URL defaults to UNBIEN_RELAY_URL env var.
+    const pairUrl =
+      rest.find((a) => !a.startsWith("--")) ??
+      process.env.UNBIEN_RELAY_URL ??
+      ""
+    const nameArg = rest[rest.indexOf("--name") + 1]
+    const pairName =
+      nameArg ??
+      process.env.UNBIEN_RELAY_NAME ??
+      (() => {
+        try {
+          return new URL(normalizeUrl(pairUrl)).hostname
+        } catch {
+          return "relay"
+        }
+      })()
+    if (!pairUrl) {
+      console.error(
+        "usage: unbien relay pair <url> [--name <name>]\n" +
+          "  Or set UNBIEN_RELAY_URL env var.",
+      )
+      process.exit(1)
+    }
+    const pubkey = relayPubkeyB64()
+    const blob = Buffer.from(
+      JSON.stringify({ url: normalizeUrl(pairUrl), name: pairName, pubkey }),
+    ).toString("base64")
+    console.error(
+      "Relay pairing URL:\n" +
+        `  relay-pair://${blob}\n\n` +
+        "Copy this URL + run on the peer relay:\n" +
+        `  unbien relay peer add relay-pair://${blob}`,
+    )
+    break
+  }
+
   case "list":
   case "peer": {
     const [subVerb, ...peerRest] = rest
     switch (subVerb) {
       case "add": {
-        const url = peerRest[0]
-        const name = peerRest[1]
-        if (!url || !name) {
-          console.error("usage: unbien relay peer add <url> <name>")
-          process.exit(1)
+        const arg = peerRest[0]
+        // Accept a pairing URL (relay-pair://base64...) or the legacy
+        // <url> <name> form.
+        if (arg && arg.startsWith("relay-pair://")) {
+          try {
+            const blob = arg.slice("relay-pair://".length)
+            const parsed = JSON.parse(
+              Buffer.from(blob, "base64").toString("utf8"),
+            ) as { url: string; name: string; pubkey: string }
+            addRelayPeer({
+              url: normalizeUrl(parsed.url),
+              name: parsed.name,
+              pubkey: parsed.pubkey,
+            })
+            console.error(
+              "[relay] peer added: " + parsed.name + " -> " +
+                normalizeUrl(parsed.url) + " (pubkey pinned)\n" +
+                "  Restart the relay to connect.",
+            )
+          } catch {
+            console.error("[relay] invalid pairing URL")
+            process.exit(1)
+          }
+        } else {
+          const url = peerRest[0]
+          const name = peerRest[1]
+          if (!url || !name) {
+            console.error(
+              "usage: unbien relay peer add <url> <name>\n" +
+                "       unbien relay peer add relay-pair://<base64>",
+            )
+            process.exit(1)
+          }
+          addRelayPeer({ url: normalizeUrl(url), name })
+          console.error(
+            "[relay] peer added: " + name + " -> " + normalizeUrl(url) +
+              "\n  Restart the relay to connect.",
+          )
         }
-        addRelayPeer({ url: normalizeUrl(url), name })
-        console.error(
-          "[relay] peer added: " + name + " -> " + normalizeUrl(url) +
-            "\n  Restart the relay to connect.",
-        )
         break
       }
       case "remove": {
