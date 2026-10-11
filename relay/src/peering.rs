@@ -280,7 +280,12 @@ async fn connect_and_verify(
         return Err("no common owner (double-check)".into());
     }
 
-    // Verify the peer's relay identity (if present + pinned).
+    // Verify the peer's relay identity (optional layer — if the peer's
+    // relay_hello_ack includes identity fields). Same-owner (checked above)
+    // is the gate; this is additional identity verification. If a pubkey is
+    // pinned in the config (from the pairing URL), verify it matches. If not
+    // pinned, just verify the signature proves possession. Either way, this
+    // never refuses a same-owner peer — it only adds identity assurance.
     if let (Some(peer_pubkey), Some(peer_nonce), Some(peer_sig)) =
         (&ack.relay_pubkey, &ack.nonce, &ack.sig)
     {

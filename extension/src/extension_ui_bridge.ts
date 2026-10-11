@@ -414,10 +414,17 @@ export function createExtensionUiBridge(
     // than one renders them oldest-first. pi-ask resolves one flow at a time in
     // practice, so this is a defensive detail rather than a live case. Stock
     // ctx.ui dialogs ride along so a peer attaching mid-dialog sees them.
-    pendingRequests: () =>
-      [...activeFlows.values()]
+    pendingRequests: () => {
+      // Reset TTL timers on replay (backfill/session_sync): the app
+      // reconnected, so give it a fresh window. Without this, a TTL armed
+      // when the flow first opened could fire during/after backfill —
+      // dismissing the app's modal while the TUI ask is still active.
+      for (const flow of activeFlows.values()) armFlowTtl(flow.flowId)
+      for (const id of stockPending.keys()) armStockTtl(id)
+      return [...activeFlows.values()]
         .map(requestForFlow)
-        .concat([...stockPending.values()].map((p) => p.request)),
+        .concat([...stockPending.values()].map((p) => p.request))
+    },
 
     /** Cancel EVERY pending flow/dialog (slash-command feedback: /stop). Emits
      *  a cancelled response per pi-ask flow (resolves the extension side) and
