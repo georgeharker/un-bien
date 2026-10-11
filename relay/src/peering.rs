@@ -30,8 +30,11 @@ fn relay_own_name() -> String {
             return name;
         }
     }
-    std::env::var("HOSTNAME")
+    // Fall back to the system hostname (gethostname syscall) — not the
+    // HOSTNAME env var, which isn't set under launchd/systemd.
+    hostname::get()
         .ok()
+        .and_then(|h| h.into_string().ok())
         .filter(|h| !h.is_empty())
         .unwrap_or_else(|| "relay".to_string())
 }
