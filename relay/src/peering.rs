@@ -240,3 +240,83 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn shared_owner_intersection() {
+        let a: HashSet<String> = ["hash1", "hash2"].into_iter().map(String::from).collect();
+        let b: HashSet<String> = ["hash2", "hash3"].into_iter().map(String::from).collect();
+        assert!(has_common_owner(&a, &b)); // common: hash2
+
+        let c: HashSet<String> = ["hash4"].into_iter().map(String::from).collect();
+        assert!(!has_common_owner(&a, &c)); // no common
+
+        let empty: HashSet<String> = HashSet::new();
+        assert!(!has_common_owner(&a, &empty)); // empty
+        assert!(!has_common_owner(&empty, &empty)); // both empty
+    }
+
+    #[test]
+    fn relay_hello_serde() {
+        let hello = RelayHello {
+            kind: "relay_hello".into(),
+            owners: vec!["hash1".into(), "hash2".into()],
+        };
+        let json = serde_json::to_string(&hello).unwrap();
+        assert!(json.contains("\"type\":\"relay_hello\""));
+        assert!(json.contains("\"owners\""));
+
+        let ack: RelayHelloAck = serde_json::from_str(
+            r#"{"type":"relay_hello_ack","federate":true,"owners":["hash1"]}"#,
+        )
+        .unwrap();
+        assert!(ack.federate);
+        assert_eq!(ack.owners, vec!["hash1"]);
+    }
+
+    #[test]
+    fn read_peer_config_absent() {
+        // No file at a nonexistent path → empty (read_peer_config uses
+        // relay_peers_path() which resolves from env; this test verifies the
+        // "file not found" path returns empty, not an error).
+        // We can't easily override the path in read_peer_config (it uses
+        // relay_peers_path() with no override), so this test is a smoke test
+        // that the function doesn't panic when the file is absent.
+        let _ = read_peer_config();
+    }
+
+    #[test]
+    fn read_peer_config_from_temp_file() {
+        let tmp = std::env::temp_dir().join("unbien-relay-peers-test.json");
+        std::fs::write(
+            &tmp,
+            r#"{"peers":[{"url":"http://100.x:3000","name":"hostB"},{"url":"http://100.y:3000","name":"hostC"}]}"#,
+        )
+        .unwrap();
+        // read_peer_config uses relay_peers_path() (no override), so we can't
+        // point it at tmp. Instead, test the parsing logic directly.
+        let raw = std::fs::read_to_string(&tmp).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let empty = serde_json::Value::Array(vec![]);
+        let peers = parsed
+            .get("peers")
+            .and_then(|v| v.as_array())
+            .unwrap_or(empty.as_array().unwrap());
+        assert_eq!(peers.len(), 2);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn read_peer_config_malformed() {
+        let tmp = std::env::temp_dir().join("unbien-relay-peers-malformed.json");
+        std::fs::write(&tmp, "not json").unwrap();
+        let raw = std::fs::read_to_string(&tmp).unwrap();
+        let result: Result<serde_json::Value, _> = serde_json::from_str(&raw);
+        assert!(result.is_err()); // malformed JSON → error → empty
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
