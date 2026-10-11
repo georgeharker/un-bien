@@ -10,7 +10,14 @@
  * what `unbien pair` offers when you haven't specified --relay, and what
  * `unbien connect` falls back to when a peer has no stored URL.
  */
-import { loadRelays, rememberRelay, forgetRelay } from "./store.js"
+import {
+  loadRelays,
+  rememberRelay,
+  forgetRelay,
+  loadRelayPeers,
+  addRelayPeer,
+  removeRelayPeer,
+} from "./store.js"
 
 const [verb, ...rest] = process.argv.slice(2)
 
@@ -69,6 +76,70 @@ switch (verb) {
   }
 
   case "list":
+  case "peer": {
+    const [subVerb, ...peerRest] = rest
+    switch (subVerb) {
+      case "add": {
+        const url = peerRest[0]
+        const name = peerRest[1]
+        if (!url || !name) {
+          console.error("usage: unbien relay peer add <url> <name>")
+          process.exit(1)
+        }
+        addRelayPeer({ url: normalizeUrl(url), name })
+        console.error(
+          "[relay] peer added: " + name + " -> " + normalizeUrl(url) +
+            "\n  Restart the relay to connect.",
+        )
+        break
+      }
+      case "remove": {
+        const name = peerRest[0]
+        if (!name) {
+          console.error("usage: unbien relay peer remove <name>")
+          process.exit(1)
+        }
+        if (removeRelayPeer(name)) {
+          console.error(
+            "[relay] peer removed: " + name +
+              "\n  Restart the relay to disconnect.",
+          )
+        } else {
+          console.error("[relay] no peer named " + name)
+          process.exit(1)
+        }
+        break
+      }
+      case "list": {
+        const peers = loadRelayPeers()
+        if (peers.length === 0) {
+          console.error(
+            "No federated peer relays. Add one:\n" +
+              "  unbien relay peer add <url> <name>\n" +
+              "\n" +
+              "Peer relays federate via shared-owner verification.\n" +
+              "See docs/relay-peering-sketch.md.",
+          )
+        } else {
+          console.error(
+            "Federated peer relays:\n" +
+              peers.map((p) => "  " + p.name + " -> " + p.url).join("\n"),
+          )
+        }
+        break
+      }
+      default:
+        console.error(
+          "usage:\n" +
+            "  unbien relay peer add <url> <name>\n" +
+            "  unbien relay peer remove <name>\n" +
+            "  unbien relay peer list",
+        )
+        process.exit(1)
+    }
+    break
+  }
+
   default: {
     const relays = loadRelays()
     if (relays.length === 0) {
