@@ -37,6 +37,19 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm -C extension build
       - run: pnpm -C extension test
+      # Pre-release versions (containing '-') publish under the `dev` tag,
+      # not `latest` — so a dev release doesn't override the stable release.
+      - name: Detect pre-release
+        id: prerelease
+        working-directory: extension
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          if echo "$VER" | grep -q '-'; then
+            echo "tag=--tag dev" >> "$GITHUB_OUTPUT"
+            echo "pre-release $VER -> publishing under 'dev' tag"
+          else
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          fi
       - name: Publish @geohar/un-bien
         working-directory: extension
-        run: npm publish --provenance --access public
+        run: npm publish --provenance --access public ${{ steps.prerelease.outputs.tag }}

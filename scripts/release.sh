@@ -1,12 +1,16 @@
 #!/bin/sh
 # Cut a release: version bumps, tags, push. One command per component — or all.
 #
-# Usage: scripts/release.sh <ext|cli|relay|all> <patch|minor> [--dry-run|--yes]
+# Usage: scripts/release.sh <ext|cli|relay|all> <patch|minor> [--dry-run|--yes|--dev]
 #
 #   ext     -> extension/package.json  (@geohar/un-bien)        tag v<ver>
 #   cli     -> unbien-cli/package.json (@geohar/unbien-cli)     tag cli-v<ver>
 #   relay   -> relay/Cargo.toml        (un-bien-relay)          tag relay-v<ver>
 #   all     -> ext + cli + relay (relay/cli patch unless given per-component)
+#
+#   --dev   append -dev.YYYYMMDD to each version (pre-release). npm packages
+#           publish under the `dev` tag (not `latest`); crates.io treats it
+#           as a pre-release version (cargo install gets latest stable).
 #
 # COUPLING (the reason this script exists): the launcher wrapper
 # (@geohar/un-bien-launcher) is a one-line re-export of the extension, and its
@@ -39,10 +43,12 @@ BUMP="${2:-patch}"
 shift 2 2>/dev/null || shift $# 2>/dev/null || true
 DRY_RUN=0
 ASSUME_YES=0
+DEV=0
 for arg in "$@"; do
   case "$arg" in
   --dry-run) DRY_RUN=1 ;;
   --yes | -y) ASSUME_YES=1 ;;
+  --dev) DEV=1 ;;
   *)
     echo "unknown flag: $arg" >&2
     exit 2
@@ -97,6 +103,15 @@ LAUNCHER_NEW=$(bump_version "$LAUNCHER_NOW" patch)
 [ "$COMPONENT" = ext ] && EXT_NEW=$(bump_version "$EXT_NOW" "$BUMP")
 [ "$COMPONENT" = cli ] && CLI_NEW=$(bump_version "$CLI_NOW" "$BUMP")
 [ "$COMPONENT" = relay ] && RELAY_NEW=$(bump_version "$RELAY_NOW" "$BUMP")
+
+# --dev: append a date-based pre-release suffix to each version.
+if [ "$DEV" = 1 ]; then
+  DEV_SUFFIX="-dev.$(date +%Y%m%d)"
+  EXT_NEW="${EXT_NEW}${DEV_SUFFIX}"
+  CLI_NEW="${CLI_NEW}${DEV_SUFFIX}"
+  RELAY_NEW="${RELAY_NEW}${DEV_SUFFIX}"
+  LAUNCHER_NEW="${LAUNCHER_NEW}${DEV_SUFFIX}"
+fi
 
 # What actually gets cut.
 DO_EXT=0
