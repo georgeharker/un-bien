@@ -163,6 +163,7 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
     let mesh_auth = state.mesh_auth.clone();
     let metrics = state.metrics.clone();
     let pairing = state.pairing.clone();
+    let federated = state.federated.clone();
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
     let conn_id = registry.register(peer_id.clone(), room_meta, tx).await;
@@ -358,44 +359,65 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                 }
                                 "rooms_check" => {
                                     for target_peer in &peers {
-                                        // ROOMS gate (design 01M1ZE43): refuse to list an
-                                        // unpaired machine's rooms. Routed + peer-attributed
-                                        // (not a silent drop) so the app distinguishes
-                                        // not-paired from offline.
-                                        if !pairing.allows(target_peer, &peer_id) {
-                                            let refusal = serde_json::json!({
-                                                "type": "error",
-                                                "code": "unknown_peer",
+                                        // Paired local peer — pairing gate first (preserves the
+                                        // old behavior: paired-but-offline → empty rooms, not refused).
+                                        if pairing.allows(target_peer, &peer_id) {
+                                            let active_rooms = registry.rooms_of(target_peer);
+                                            let resp = serde_json::json!({
+                                                "type": "rooms",
                                                 "peer": target_peer,
+                                                "rooms": active_rooms,
                                             })
                                             .to_string();
-                                            if sink.send(Message::Text(refusal)).await.is_err() {
+                                            if last_rooms_resp.get(target_peer) == Some(&resp) {
+                                                metrics.inc_rooms_suppressed(1);
+                                                continue;
+                                            }
+                                            last_rooms_resp.insert(target_peer.clone(), resp.clone());
+                                            if sink.send(Message::Text(resp)).await.is_err() {
                                                 break 'routing;
+                                            }
+                                            metrics.inc_rooms_emitted(1);
+                                            continue;
+                                        }
+                                        // Not paired locally — check if it's a federated peer.
+                                        let fed_rooms = federated.rooms_for_epk(target_peer).await;
+                                        if !fed_rooms.is_empty() {
+                                            // Federated — no pairing gate (shared-owner verified).
+                                            // peerRelay field for the future app indicator.
+                                            for (peer_relay, room) in &fed_rooms {
+                                                let resp = serde_json::json!({
+                                                    "type": "rooms",
+                                                    "peer": target_peer,
+                                                    "peerRelay": peer_relay,
+                                                    "rooms": [room],
+                                                })
+                                                .to_string();
+                                                let dedup_key = format!("{target_peer}:{peer_relay}");
+                                                if last_rooms_resp.get(&dedup_key) == Some(&resp) {
+                                                    metrics.inc_rooms_suppressed(1);
+                                                    continue;
+                                                }
+                                                last_rooms_resp.insert(dedup_key, resp.clone());
+                                                if sink.send(Message::Text(resp)).await.is_err() {
+                                                    break 'routing;
+                                                }
+                                                metrics.inc_rooms_emitted(1);
                                             }
                                             continue;
                                         }
-                                        let active_rooms = registry.rooms_of(target_peer);
-                                        let resp = serde_json::json!({
-                                            "type": "rooms",
+                                        // Neither paired nor federated — refuse.
+                                        let refusal = serde_json::json!({
+                                            "type": "error",
+                                            "code": "unknown_peer",
                                             "peer": target_peer,
-                                            "rooms": active_rooms,
                                         })
                                         .to_string();
-                                        // Dedup per (conn, target_peer):
-                                        // first reply always sent; subsequent
-                                        // identical snapshots dropped.
-                                        if last_rooms_resp.get(target_peer) == Some(&resp) {
-                                            metrics.inc_rooms_suppressed(1);
-                                            continue;
-                                        }
-                                        last_rooms_resp.insert(target_peer.clone(), resp.clone());
-                                        if sink.send(Message::Text(resp)).await.is_err() {
+                                        if sink.send(Message::Text(refusal)).await.is_err() {
                                             break 'routing;
                                         }
-                                        metrics.inc_rooms_emitted(1);
                                     }
                                 }
-
                                 // ── room meta update (plano 18 + 28 + 32) ──
                                 // `meta.model`, `meta.thinking` and
                                 // `meta.working` are patched independently: a
