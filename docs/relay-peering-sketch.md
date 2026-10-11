@@ -43,22 +43,31 @@ unbien-admin install
 cargo install un-bien-relay --version 0.7.5-dev.20261011 --locked
 ```
 
-### 2. Add federation env vars to the relay plist (on each machine)
+### 2. Add the relay URL to the plist (on each machine)
 
+The relay's name is **auto-computed** from the system hostname — no need
+to set `UNBIEN_RELAY_NAME` (override only if you want a different name).
+
+The relay URL (`UNBIEN_RELAY_URL`) is NOT auto-computed — it needs to be
+the externally-reachable address (Tailscale MagicDNS, LAN IP, or public).
 Edit `~/Library/LaunchAgents/com.georgeharker.unbien.relay.plist` — add
-these inside `<EnvironmentVariables>`:
+this inside `<EnvironmentVariables>`:
+
+```xml
+<key>UNBIEN_RELAY_URL</key>
+<string>ws://hostA:3000</string>    <!-- externally-reachable URL -->
+```
+
+The URL is used in `relay_hello` (so the peer can connect back for
+symmetric peering) + in the pairing URL. Without it, the relay doesn't
+advertise its URL — the peer can't connect back.
+
+(Optional) Override the name if you want something other than the hostname:
 
 ```xml
 <key>UNBIEN_RELAY_NAME</key>
-<string>hostA</string>              <!-- this machine's name -->
-<key>UNBIEN_RELAY_URL</key>
-<string>ws://hostA:3000</string>    <!-- externally-reachable URL (Tailscale MagicDNS) -->
+<string>my-custom-name</string>
 ```
-
-The relay's own name + URL are used in `relay_hello` (so the peer can
-connect back for symmetric peering) + in the pairing URL. Without
-`UNBIEN_RELAY_URL`, the relay doesn't advertise its URL — the peer can't
-connect back.
 
 ### 3. Restart the relay (on each machine)
 
