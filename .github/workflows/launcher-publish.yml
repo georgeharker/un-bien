@@ -39,6 +39,18 @@ jobs:
 
       # `pnpm publish` rewrites the `workspace:^` dep on @geohar/un-bien
       # to the concrete published version (npm publish can't).
+      # Pre-release versions (containing '-') publish under the `dev` tag.
+      - name: Detect pre-release
+        id: prerelease
+        working-directory: launcher
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          if echo "$VER" | grep -q '-'; then
+            echo "tag=--tag dev" >> "$GITHUB_OUTPUT"
+            echo "pre-release $VER -> publishing under 'dev' tag"
+          else
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          fi
       - name: Publish @geohar/un-bien-launcher
         working-directory: launcher
-        run: pnpm publish --provenance --access public --no-git-checks
+        run: pnpm publish --provenance --access public --no-git-checks ${{ steps.prerelease.outputs.tag }}
