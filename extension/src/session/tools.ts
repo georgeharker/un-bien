@@ -58,6 +58,9 @@ export function registerAgentTools(
   pi: ExtensionAPI,
   getSessionPeer: () => SessionPeer | null,
   getInbox: () => MeshInbox,
+  getFederatedPeers: () => string[] = () => [],
+  getFederatedPeersDetail: () => Map<string, { relayName: string; addresses: string[] }> = () => new Map(),
+  getRelay: () => { send: (data: string) => void } | null = () => null,
 ): void {
   const SendParams = Type.Object({
     to: Type.String({
@@ -134,6 +137,47 @@ export function registerAgentTools(
       }
 
       const isUnicast = to !== "broadcast"
+
+      // Federated peer routing: if the target is on a federated peer relay,
+      // send a pi_envelope directly via the relay. The relay handles cross-relay
+      // forwarding (Phase 3c). This works with OR without the BrokerRemote
+      // (the bridge might not be attached if the topology is empty).
+      if (isUnicast) {
+        const fedDetail = getFederatedPeersDetail()
+        const relay = getRelay()
+        if (relay) {
+          for (const [epk, info] of fedDetail) {
+            if (info.addresses.includes(to)) {
+              const envelope = {
+                from: peer.address(),
+                to,
+                body,
+                id: crypto.randomUUID(),
+                re: re ?? null,
+              }
+              try {
+                relay.send(JSON.stringify({
+                  type: "pi_envelope",
+                  to_pc: epk,
+                  envelope,
+                }))
+                const details: SendDetails = { status: "sent", ok: true }
+                return {
+                  content: [{ type: "text", text: `Sent to federated peer (${info.relayName}).` }],
+                  details,
+                }
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err)
+                const details: SendDetails = { status: "timeout", ok: false, error: msg }
+                return {
+                  content: [{ type: "text", text: `Federated send failed: ${msg}` }],
+                  details,
+                }
+              }
+            }
+          }
+        }
+      }
 
       // Broadcast: fire-and-forget. Broker doesn't ACK multi-target sends.
       if (!isUnicast) {
@@ -213,6 +257,13 @@ export function registerAgentTools(
         }
       }
       try {
+        // Request the current federated peer list from the relay (refreshes
+        // the cache via the listener in index.ts). Best-effort — the cache
+        // might update on the NEXT call if the response hasn't arrived yet.
+        const relay = getRelay()
+        if (relay) {
+          try { relay.send(JSON.stringify({ type: "get_federated_peer_list" })) } catch { /* best-effort */ }
+        }
         // Internal use of the request/reply primitive is fine — broker
         // replies are synthesised in-process (`_handleBrokerMessage`)
         // without going through `_route`, so they bypass the ACK path.
@@ -231,7 +282,8 @@ export function registerAgentTools(
         // address itself anyway, so listing it is noise. Peers are ADDRESSES
         // (plan/38), so filter by address.
         const selfAddress = peer.address()
-        const filtered = peers.filter((p) => p !== selfAddress)
+        const combined = [...peers, ...getFederatedPeers()]
+        const filtered = combined.filter((p) => p !== selfAddress)
         const text = filtered.length === 0 ? "(no peers)" : filtered.join("\n")
         return {
           content: [{ type: "text", text }],
