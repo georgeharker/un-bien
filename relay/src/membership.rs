@@ -24,7 +24,7 @@ use crate::peers::pairing::PairingRegistry;
 /// All owner hashes (SHA-256 hex of owner public key bytes) from both the
 /// mesh_versions table + the PairingRegistry. Used by the federation
 /// shared-owner check (`has_common_owner`).
-pub fn all_owner_hashes(mesh: &MeshStore, pairing: &PairingRegistry) -> HashSet<String> {
+pub fn trust_root_hashes(mesh: &MeshStore, pairing: &PairingRegistry) -> HashSet<String> {
     let mut hashes = HashSet::new();
     // From mesh_versions (app-published).
     if let Ok(mesh_hashes) = mesh.all_owner_hashes() {
@@ -42,7 +42,7 @@ pub fn all_owner_hashes(mesh: &MeshStore, pairing: &PairingRegistry) -> HashSet<
 /// All machines that share an owner with `pi_pk`, from both the mesh store +
 /// the PairingRegistry. Used by the pi_envelope authorization check
 /// (`is_authorized_canonical`): if the target is in this set → authorized.
-pub fn owner_member_set(
+pub fn authorized_peers(
     pi_pk: &str,
     mesh: &MeshStore,
     pairing: &PairingRegistry,

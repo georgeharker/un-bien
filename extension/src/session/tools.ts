@@ -58,8 +58,8 @@ export function registerAgentTools(
   pi: ExtensionAPI,
   getSessionPeer: () => SessionPeer | null,
   getInbox: () => MeshInbox,
-  getFederatedPeers: () => string[] = () => [],
-  getFederatedPeersDetail: () => Map<string, { relayName: string; addresses: string[] }> = () => new Map(),
+  getRemoteRelayPeers: () => string[] = () => [],
+  getRemoteRelayPeersDetail: () => Map<string, { relayName: string; addresses: string[] }> = () => new Map(),
   getRelay: () => { send: (data: string) => void } | null = () => null,
 ): void {
   const SendParams = Type.Object({
@@ -143,7 +143,7 @@ export function registerAgentTools(
       // forwarding (Phase 3c). This works with OR without the BrokerRemote
       // (the bridge might not be attached if the topology is empty).
       if (isUnicast) {
-        const fedDetail = getFederatedPeersDetail()
+        const fedDetail = getRemoteRelayPeersDetail()
         const relay = getRelay()
         if (relay) {
           for (const [epk, info] of fedDetail) {
@@ -282,7 +282,7 @@ export function registerAgentTools(
         // address itself anyway, so listing it is noise. Peers are ADDRESSES
         // (plan/38), so filter by address.
         const selfAddress = peer.address()
-        const combined = [...peers, ...getFederatedPeers()]
+        const combined = [...peers, ...getRemoteRelayPeers()]
         const filtered = combined.filter((p) => p !== selfAddress)
         const text = filtered.length === 0 ? "(no peers)" : filtered.join("\n")
         return {

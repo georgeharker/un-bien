@@ -151,7 +151,7 @@ impl MeshAuthCache {
         pairing: &PairingRegistry,
     ) -> bool {
         // Use the shared owner_member_set (combines mesh store + PairingRegistry).
-        let members = crate::owner::owner_member_set(pi_pk, store, pairing);
+        let members = crate::membership::authorized_peers(pi_pk, store, pairing);
         if members.is_empty() {
             self.insert_result(pi_pk.to_owned(), AuthorizationResult::Negative);
             return false;

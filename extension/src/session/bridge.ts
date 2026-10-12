@@ -1,5 +1,5 @@
 import type { Broker } from "./broker.js"
-import { BrokerRemote, type FederatedPeerWire } from "./broker_remote.js"
+import { BrokerRemote } from "./broker_remote.js"
 import { PiForwardClient } from "../transport/pi_forward_client.js"
 import type { RelayClient } from "../transport/relay_client.js"
 import { MeshClient } from "../mesh/client.js"
@@ -180,21 +180,6 @@ export async function attachCrossPcBridge(
 
   let state: "dormant" | "active" | "detached" = "dormant"
 
-  // Phase 4: listen for federated_peer_list pushes from the relay + inject
-  // federated peers into the BrokerRemote so agents can discover + route to
-  // cross-relay peers.
-  const onFederatedList = (line: string): void => {
-    try {
-      const frame = JSON.parse(line) as { type?: string; peers?: unknown }
-      if (frame.type !== "federated_peer_list" || !Array.isArray(frame.peers)) {
-        return
-      }
-      brokerRemote.setFederatedPeers(frame.peers as FederatedPeerWire[])
-    } catch {
-      // Not JSON or malformed — ignore (other listeners handle other frames)
-    }
-  }
-  opts.relay.on("message", onFederatedList)
 
   return {
     brokerRemote,
@@ -218,7 +203,6 @@ export async function attachCrossPcBridge(
     detach(): void {
       if (state === "detached") return
       state = "detached"
-      opts.relay.off("message", onFederatedList)
       try {
         brokerRemote.detach()
       } finally {

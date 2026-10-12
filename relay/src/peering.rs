@@ -122,8 +122,8 @@ pub fn read_peer_config() -> Vec<RelayPeerConfig> {
 /// PairingRegistry is the primary source: a pi session connects → the
 /// extension sends pairing_set with the owner pubkeys → the relay stores
 /// them → the federation check uses them.
-fn owner_hashes(mesh: &MeshStore, pairing: &PairingRegistry) -> HashSet<String> {
-    crate::owner::all_owner_hashes(mesh, pairing)
+fn trust_root_hashes(mesh: &MeshStore, pairing: &PairingRegistry) -> HashSet<String> {
+    crate::membership::trust_root_hashes(mesh, pairing)
 }
 
 /// Check if two relay's owner hash sets share a common owner.
@@ -311,7 +311,7 @@ async fn connect_and_verify(
     let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url).await?;
 
     // Send our relay_hello (with relay identity for pairing).
-    let ours: Vec<String> = owner_hashes(mesh, pairing).into_iter().collect();
+    let ours: Vec<String> = trust_root_hashes(mesh, pairing).into_iter().collect();
     let keypair = crate::relay_keypair::load_or_generate(None);
     let nonce = gen_relay_nonce();
     let name = relay_own_name();
@@ -578,7 +578,7 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
 
     // Check for a common owner.
     let theirs: HashSet<String> = hello.owners.into_iter().collect();
-    let ours: Vec<String> = owner_hashes(&state.mesh, &state.pairing)
+    let ours: Vec<String> = trust_root_hashes(&state.mesh, &state.pairing)
         .into_iter()
         .collect();
     let ours_set: HashSet<String> = ours.iter().cloned().collect();

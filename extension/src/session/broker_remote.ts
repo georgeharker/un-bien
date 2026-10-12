@@ -13,7 +13,6 @@ import {
   serialize,
   uuidv7,
 } from "./envelope.js"
-import { composeAddress } from "./broker.js"
 import type { PiForwardClient } from "../transport/pi_forward_client.js"
 import {
   canonicalizeEd25519PublicKey,
@@ -45,27 +44,6 @@ export interface RemotePeerEntry {
   ts: number
 }
 
-/** Wire format of one federated peer in the relay's `federated_peer_list` push
- *  (Phase 4). The relay broadcasts this to all connected WS clients when
- *  federated sessions change. */
-export interface FederatedPeerWire {
-  epk: string
-  relay_name: string
-  rooms: FederatedRoomMetaWire[]
-}
-
-/** Minimal view of RoomMeta from the relay's federated_peer_list. */
-interface FederatedRoomMetaWire {
-  room_id: string
-  name?: string
-  cwd?: string
-}
-
-/** One federated peer entry in the BrokerRemote's cache. */
-interface FederatedPeerEntry {
-  relayName: string
-  infos: WirePeerInfo[]
-}
 
 export interface BrokerRemoteOptions {
   broker: Broker
@@ -215,10 +193,6 @@ export class BrokerRemote implements RemoteRouter, BrokerRemoteLifecycle {
 
   /** Canonical sibling pubkey → cached local roster. */
   private readonly remotePeers = new Map<string, RemotePeerEntry>()
-  /** Federated peers (Phase 4): epk → { relayName, infos }. Populated from
-   *  the relay's `federated_peer_list` push. Disjoint from sibling peers —
-   *  federated peers are on a peer relay, not in the local mesh. */
-  private readonly federatedPeers = new Map<string, FederatedPeerEntry>()
   /** Canonical sibling pubkeys whose active topology refresh must be retried. */
   private readonly topologyRefreshNeeded = new Set<string>()
   /** Canonical sibling pubkey → in-flight roster fills. */
@@ -451,12 +425,6 @@ export class BrokerRemote implements RemoteRouter, BrokerRemoteLifecycle {
         output.push(`${pcLabel}:${info.address}`)
       }
     }
-    // Federated peers (Phase 4) — from the relay's federated_peer_list push.
-    for (const { relayName, infos } of this.federatedPeers.values()) {
-      for (const info of infos) {
-        output.push(`${relayName}:${info.address}`)
-      }
-    }
     return output
   }
 
@@ -469,17 +437,6 @@ export class BrokerRemote implements RemoteRouter, BrokerRemoteLifecycle {
           cwd: info.cwd,
           name: info.name,
           address: `${pcLabel}:${info.address}`,
-        })
-      }
-    }
-    // Federated peers (Phase 4).
-    for (const { relayName, infos } of this.federatedPeers.values()) {
-      for (const info of infos) {
-        output.push({
-          pc: relayName,
-          cwd: info.cwd,
-          name: info.name,
-          address: `${relayName}:${info.address}`,
         })
       }
     }
@@ -515,8 +472,7 @@ export class BrokerRemote implements RemoteRouter, BrokerRemoteLifecycle {
     if (!parsed) return false
     const siblingKey = this.routing.siblingByLabel.get(parsed.pcLabel)
     if (siblingKey) return this._routeToCanonicalSibling(siblingKey, env)
-    // Federated peer (Phase 4) — route via cross-relay forwarding.
-    return this._routeToFederated(parsed.pcLabel, parsed.peerName, env)
+    return false
   }
 
   private _routeToCanonicalSibling(siblingKey: string, env: Envelope): boolean {
@@ -537,59 +493,6 @@ export class BrokerRemote implements RemoteRouter, BrokerRemoteLifecycle {
     return true
   }
 
-  /** Route to a federated peer (Phase 4). The address is
-   *  `<relayName>:<cwd>@<name>` — we strip the relayName prefix (the target
-   *  pi's broker routes by the local address) + send via pi_envelope to the
-   *  federated epk. The relay does the cross-relay hop. */
-  private _routeToFederated(
-    pcLabel: string,
-    peerName: string,
-    env: Envelope,
-  ): boolean {
-    for (const [epk, { relayName, infos }] of this.federatedPeers) {
-      if (relayName !== pcLabel) continue
-      if (!infos.some((info) => info.address === peerName)) continue
-      // Strip the relayName prefix — the target pi's broker routes by the
-      // local address. `from` stays as the sender's local address.
-      const rewritten: Envelope = {
-        ...env,
-        to: peerName,
-      }
-      this.pi.sendEnvelopeToPi(epk, rewritten)
-      return true
-    }
-    return false
-  }
-
-  /** Replace the entire federated peer set (Phase 4). Called when the relay
-   *  pushes a `federated_peer_list` frame. Each peer's rooms are converted to
-   *  WirePeerInfo entries with addresses `<relayName>:<cwd>@<name>`. */
-  setFederatedPeers(peers: FederatedPeerWire[]): void {
-    this.federatedPeers.clear()
-    for (const peer of peers) {
-      // Dedup infos by (cwd, name) — a multi-homed pi may appear from
-      // multiple relays with the same room. Keep one entry per (cwd, name).
-      const seen = new Set<string>()
-      const infos: WirePeerInfo[] = []
-      for (const room of peer.rooms) {
-        const cwd = room.cwd ?? ""
-        const name = room.name ?? room.room_id
-        const key = `${cwd}\0${name}`
-        if (seen.has(key)) continue
-        seen.add(key)
-        infos.push({
-          cwd,
-          name,
-          address: composeAddress({ cwd, name }),
-        })
-      }
-      this.federatedPeers.set(peer.epk, {
-        relayName: peer.relay_name,
-        infos,
-      })
-    }
-  }
-
   handleIncoming(env: Envelope, fromPc: string): void {
     if (this.lifecycle !== "active") return
     if (fromPc === "_relay") {
@@ -608,11 +511,6 @@ export class BrokerRemote implements RemoteRouter, BrokerRemoteLifecycle {
     }
     const localAlias = this.routing.siblingByPubkey.get(canonicalFromPc)
     if (!localAlias) {
-      // Phase 4: check if the sender is a federated peer (cross-relay).
-      if (this.federatedPeers.has(canonicalFromPc)) {
-        this._handleFederatedIncoming(env, canonicalFromPc)
-        return
-      }
       this._dropMetadataOnly(
         "unknown_from_pc",
         publicKeyFingerprint(fromPcBytes),

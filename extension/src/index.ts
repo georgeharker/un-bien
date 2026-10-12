@@ -521,11 +521,12 @@ let _pendingMeshMessages: MeshEnvelope[] = []
 let _meshInbox = new MeshInbox()
 // Federated peers cache (from the relay's federated_peer_list push).
 // Updated by a listener on _relay — works without the cross-PC bridge.
-// Federated peers from the relay's federated_peer_list push.
+// Remote relay peers (from the relay's federated_peer_list push).
 // Map: epk → { relayName, addresses[] } — addresses are <relayName>:<cwd>@<name>.
 // Used by list_peers (discovery) + agent_send (routing via pi_envelope).
-let _federatedPeersCache: string[] = []
-let _federatedPeersDetail: Map<string, { relayName: string; addresses: string[] }> = new Map()
+// Also handles incoming pi_envelope_in frames (federated messages → mesh inbox).
+let _remoteRelayPeers: string[] = []
+let _remoteRelayPeerEpks: Map<string, { relayName: string; addresses: string[] }> = new Map()
 // agent-run active/generation now live PER-SESSION in _stateFor(sid).agentRun;
 // mesh delivery targets the ROOT run, so the drain reads _rootState().agentRun.
 let _meshDrainScheduled = false
@@ -1039,7 +1040,7 @@ const relayDeps: RelayLifecycleDeps = {
     if (v) {
       v.on("message", (line: string) => {
         try {
-          const frame = JSON.parse(line) as { type?: string; peers?: Array<{ epk?: string; relay_name?: string; rooms?: Array<{ cwd?: string; name?: string; room_id?: string }> }> }
+          const frame = JSON.parse(line) as { type?: string; peers?: Array<{ epk?: string; relay_name?: string; rooms?: Array<{ cwd?: string; name?: string; room_id?: string }> }>; envelope?: { from?: string; to?: string; body?: unknown; id?: string; re?: string | null } }
           if (frame.type === "federated_peer_list" && Array.isArray(frame.peers)) {
             const addresses: string[] = []
             for (const peer of frame.peers) {
@@ -1050,7 +1051,7 @@ const relayDeps: RelayLifecycleDeps = {
                 addresses.push(`${relayName}:${cwd}@${name}`)
               }
             }
-            _federatedPeersCache = addresses
+            _remoteRelayPeers = addresses
             // Also store the detail map (epk → addresses) for agent_send routing.
             const detail = new Map<string, { relayName: string; addresses: string[] }>()
             for (const peer of frame.peers) {
@@ -1063,7 +1064,16 @@ const relayDeps: RelayLifecycleDeps = {
               }
               detail.set(peer.epk ?? "", { relayName, addresses: peerAddresses })
             }
-            _federatedPeersDetail = detail
+            _remoteRelayPeerEpks = detail
+          }
+          // Incoming federated message — deliver via the same path as local
+          // mesh messages. Handles pi_envelope_in from federated peer relays
+          // WITHOUT needing the cross-PC bridge (BrokerRemote).
+          if (frame.type === "pi_envelope_in" && frame.envelope) {
+            const env = frame.envelope as { from?: string; to?: string; body?: unknown; id?: string; re?: string | null }
+            if (env.id && env.from && env.to) {
+              _deliverMeshMessageToAgent(env as MeshEnvelope)
+            }
           }
         } catch {
           // Not JSON or malformed — ignore
@@ -1569,7 +1579,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // true) — when false, the tools are NOT registered; the broker + relay
   // still work for the paired app, but the model can't send/list/wait.
   if (loadConfig().mesh?.tools !== false) {
-    registerAgentTools(pi, () => _meshNode?.peer() ?? null, () => _meshInbox, () => _federatedPeersCache, () => _federatedPeersDetail, () => _relay)
+    registerAgentTools(pi, () => _meshNode?.peer() ?? null, () => _meshInbox, () => _remoteRelayPeers, () => _remoteRelayPeerEpks, () => _relay)
   }
   _registerReceivedImageRenderer(pi)
 
