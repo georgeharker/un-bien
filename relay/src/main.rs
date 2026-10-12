@@ -90,6 +90,7 @@ async fn main() -> anyhow::Result<()> {
     relay::peering::start_peering(
         std::sync::Arc::clone(&state.mesh),
         std::sync::Arc::clone(&state.registry),
+        std::sync::Arc::clone(&state.pairing),
         Arc::clone(&federated),
     );
     let app = relay::build_router(state);

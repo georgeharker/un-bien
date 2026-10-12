@@ -265,6 +265,14 @@ impl PairingRegistry {
     pub fn owners_of(&self, machine: &str) -> Option<HashSet<String>> {
         self.allow.lock().unwrap().get(machine).cloned()
     }
+
+    /// All unique owner pubkeys across ALL machines (from pairing_set pushes).
+    /// Used for the federation shared-owner check — works without the app
+    /// (the extension sends pairing_set when a pi connects).
+    pub fn all_owner_pubkeys(&self) -> HashSet<String> {
+        let allow = self.allow.lock().unwrap();
+        allow.values().flat_map(|set| set.iter().cloned()).collect()
+    }
 }
 
 #[cfg(test)]

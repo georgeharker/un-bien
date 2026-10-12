@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::relay_keypair::RelayKeypair;
+use crate::peers::pairing::PairingRegistry;
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use notify::Watcher;
 use rand::RngCore as _;
@@ -115,11 +116,30 @@ pub fn read_peer_config() -> Vec<RelayPeerConfig> {
 }
 
 /// The owner hashes this relay knows about (from `mesh_versions`).
-fn owner_hashes(mesh: &MeshStore) -> HashSet<String> {
-    mesh.all_owner_hashes()
-        .unwrap_or_default()
+/// Collect owner hashes from BOTH the mesh_versions table (if the app
+/// published a mesh blob) AND the PairingRegistry (owner pubkeys from the
+/// extension's pairing_set pushes — works without the app). The
+/// PairingRegistry is the primary source: a pi session connects → the
+/// extension sends pairing_set with the owner pubkeys → the relay stores
+/// them → the federation check uses them.
+fn owner_hashes(mesh: &MeshStore, pairing: &PairingRegistry) -> HashSet<String> {
+    use base64::Engine as _;
+    // Owner hashes from the pairing allow-list (extension-pushed, no app needed).
+    let mut hashes: HashSet<String> = pairing
+        .all_owner_pubkeys()
         .into_iter()
-        .collect()
+        .filter_map(|pk_b64| {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(&pk_b64)
+                .ok()?;
+            Some(crate::mesh::verify::owner_pk_hash(&bytes))
+        })
+        .collect();
+    // Also include mesh_versions hashes (if the app published them).
+    if let Ok(mesh_hashes) = mesh.all_owner_hashes() {
+        hashes.extend(mesh_hashes);
+    }
+    hashes
 }
 
 /// Check if two relay's owner hash sets share a common owner.
@@ -185,6 +205,7 @@ pub struct RelayHelloAck {
 pub fn start_peering(
     mesh: Arc<MeshStore>,
     registry: Arc<PeerRegistry>,
+    pairing: Arc<PairingRegistry>,
     federated: Arc<FederatedSessions>,
 ) {
     tokio::spawn(async move {
@@ -206,9 +227,10 @@ pub fn start_peering(
                 let peer = peer.clone();
                 let mesh = Arc::clone(&mesh);
                 let registry = Arc::clone(&registry);
+                let pairing = Arc::clone(&pairing);
                 let federated = Arc::clone(&federated);
                 tokio::spawn(async move {
-                    peering_loop(mesh, registry, federated, peer).await;
+                    peering_loop(mesh, registry, pairing, federated, peer).await;
                 });
             }
         };
@@ -269,12 +291,13 @@ pub fn start_peering(
 async fn peering_loop(
     mesh: Arc<MeshStore>,
     registry: Arc<PeerRegistry>,
+    pairing: Arc<PairingRegistry>,
     federated: Arc<FederatedSessions>,
     peer: RelayPeerConfig,
 ) {
     let mut backoff = 1u64;
     loop {
-        match connect_and_verify(&mesh, &registry, &federated, &peer).await {
+        match connect_and_verify(&mesh, &registry, &pairing, &federated, &peer).await {
             Ok(()) => {
                 info!(peer = %peer.name, "federated peer disconnected, reconnecting");
                 backoff = 1;
@@ -292,6 +315,7 @@ async fn peering_loop(
 async fn connect_and_verify(
     mesh: &Arc<MeshStore>,
     registry: &Arc<PeerRegistry>,
+    pairing: &Arc<PairingRegistry>,
     federated: &Arc<FederatedSessions>,
     peer: &RelayPeerConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -303,7 +327,7 @@ async fn connect_and_verify(
     let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url).await?;
 
     // Send our relay_hello (with relay identity for pairing).
-    let ours: Vec<String> = owner_hashes(mesh).into_iter().collect();
+    let ours: Vec<String> = owner_hashes(mesh, &pairing).into_iter().collect();
     let keypair = crate::relay_keypair::load_or_generate(None);
     let nonce = gen_relay_nonce();
     let name = relay_own_name();
@@ -570,7 +594,7 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
 
     // Check for a common owner.
     let theirs: HashSet<String> = hello.owners.into_iter().collect();
-    let ours: Vec<String> = owner_hashes(&state.mesh).into_iter().collect();
+    let ours: Vec<String> = owner_hashes(&state.mesh, &state.pairing).into_iter().collect();
     let ours_set: HashSet<String> = ours.iter().cloned().collect();
     let federate = has_common_owner(&ours_set, &theirs);
 
