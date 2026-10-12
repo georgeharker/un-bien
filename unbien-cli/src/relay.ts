@@ -41,11 +41,20 @@ function normalizeUrl(raw: string): string {
  *  + 'unbien relay peer pair'. Falls back to the first remembered relay's
  *  URL if UNBIEN_RELAY_URL isn't set in the shell env. */
 function doPair(args: string[]): void {
-  const pairUrl =
+  // URL priority: explicit arg > UNBIEN_RELAY_URL > UNBIEN_RELAY (convert
+  // 0.0.0.0/localhost → hostname, http:// → ws://) > first remembered relay.
+  const rawUrl =
     args.find((a) => !a.startsWith("--")) ??
     process.env.UNBIEN_RELAY_URL ??
+    process.env.UNBIEN_RELAY ??
     loadRelays()[0]?.url ??
     ""
+  // Fix up the URL for external reachability: replace 0.0.0.0/localhost
+  // with the system hostname, + convert http(s):// → ws(s)://.
+  const pairUrl = rawUrl
+    .replace(/0\.0\.0\.0|localhost/g, osHostname())
+    .replace(/^http:\/\//, "ws://")
+    .replace(/^https:\/\//, "wss://")
   const nameArg = args[args.indexOf("--name") + 1]
   const pairName =
     nameArg ??
