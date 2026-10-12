@@ -162,6 +162,18 @@ async function listAllSessions(
           choices.push({ ...room, relayUrl, relayLabel: label })
         }
       }
+
+      // Also list federated sessions (from peer relays) — the relay pushes
+      // federated_peer_list on connect. One call per relay (not per peer).
+      const fedRooms = await client.listFederatedSessions()
+      for (const room of fedRooms) {
+        choices.push({
+          ...room,
+          relayUrl,
+          relayLabel: room.peerRelay ?? relayLabelFor(relayUrl),
+        })
+      }
+
       return undefined // explicit: Promise.all worker; array-callback-return wants a value
     }),
   )
@@ -517,8 +529,23 @@ async function pickRoom(rooms: readonly RoomInfo[]): Promise<RoomInfo | null> {
   if (rooms.length === 1) return rooms[0]!
   // A non-TTY stdin (piped input, CI) can't drive a highlight list.
   if (!process.stdin.isTTY) {
-    console.error("\nSessions on this machine:\n")
-    rooms.forEach((room, i) => console.error(describeSession(room, i)))
+    // Group: local sessions first, then federated grouped by peerRelay.
+    const local = rooms.filter((r) => !r.peerRelay)
+    const remoteRelays = [...new Set(rooms.map((r) => r.peerRelay).filter(Boolean))] as string[]
+    let idx = 0
+    const lines: string[] = []
+    if (local.length > 0) {
+      lines.push("Local sessions:")
+      for (const room of local) lines.push(describeSession(room, idx++))
+    }
+    for (const relay of remoteRelays) {
+      lines.push("")
+      lines.push("Remote (" + relay + "):")
+      for (const room of rooms.filter((r) => r.peerRelay === relay)) {
+        lines.push(describeSession(room, idx++))
+      }
+    }
+    console.error("\n" + lines.join("\n"))
     const rl = createPromptInterface({
       input: process.stdin,
       output: process.stderr,

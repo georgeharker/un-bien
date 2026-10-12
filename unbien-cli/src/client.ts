@@ -94,6 +94,34 @@ export class SessionClient extends EventEmitter<SessionClientEvents> {
     })
   }
 
+  /** Listen for the relay's federated_peer_list push (Phase 4) — sessions
+   *  on federated peer relays. Returns rooms tagged with peerRelay so the
+   *  session picker shows '(remote: peerRelay)'. */
+  listFederatedSessions(timeoutMs = 3_000): Promise<RoomInfo[]> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.off("relayControl", onControl)
+        resolve([])
+      }, timeoutMs)
+      const onControl = (frame: Record<string, unknown>) => {
+        if (frame.type !== "federated_peer_list") return
+        clearTimeout(timer)
+        this.off("relayControl", onControl)
+        const peers = Array.isArray(frame.peers) ? frame.peers : []
+        const rooms: RoomInfo[] = []
+        for (const peer of peers as Record<string, unknown>[]) {
+          const relayName = typeof peer.relay_name === "string" ? peer.relay_name : "?"
+          const peerRooms = Array.isArray(peer.rooms) ? peer.rooms : []
+          for (const room of peerRooms as RoomInfo[]) {
+            rooms.push({ ...room, peerRelay: relayName })
+          }
+        }
+        resolve(rooms)
+      }
+      this.on("relayControl", onControl)
+    })
+  }
+
   async connect(options?: { roomId?: string }): Promise<void> {
     this.relay.on("message", (line) => this.onLine(line))
     this.relay.on("close", () => this.emit("close"))
