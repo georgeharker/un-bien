@@ -117,7 +117,47 @@ switch (verb) {
     break
   }
 
-  case "list":
+  case "list": {
+    // Show the local relay + remembered relays + federated peers.
+    const ownName = process.env.UNBIEN_RELAY_NAME ?? osHostname()
+    const ownUrl =
+      process.env.UNBIEN_RELAY_URL ??
+      `http://localhost:${process.env.UNBIEN_RELAY_PORT ?? 3000}`
+    const ownPubkey = relayPubkeyB64()
+    const relays = loadRelays()
+    const peers = loadRelayPeers()
+    console.error(
+      "Local relay:\n" +
+        `  ${ownName} → ${ownUrl}  (pubkey: ${ownPubkey.slice(0, 12)}...)\n` +
+        `  pair: unbien relay pair\n`,
+    )
+    if (relays.length > 0) {
+      console.error(
+        "Remembered relays:\n" +
+          relays.map((r) => `  ${r.name} → ${r.url}`).join("\n") + "\n",
+      )
+    }
+    if (peers.length > 0) {
+      console.error(
+        "Federated peer relays:\n" +
+          peers
+            .map(
+              (p) =>
+                `  ${p.name} → ${p.url}` +
+                (p.pubkey ? `  (pubkey: ${p.pubkey.slice(0, 12)}...)` : ""),
+            )
+            .join("\n"),
+      )
+    } else {
+      console.error(
+        "No federated peer relays. Add one:\n" +
+          "  unbien relay peer add <url> <name>\n" +
+          "  unbien relay peer add relay-pair://<base64>",
+      )
+    }
+    break
+  }
+
   case "peer": {
     const [subVerb, ...peerRest] = rest
     switch (subVerb) {
@@ -211,18 +251,36 @@ switch (verb) {
   }
 
   default: {
+    // Same as 'list' — show the local relay + remembered + peers.
+    const ownName = process.env.UNBIEN_RELAY_NAME ?? osHostname()
+    const ownUrl =
+      process.env.UNBIEN_RELAY_URL ??
+      `http://localhost:${process.env.UNBIEN_RELAY_PORT ?? 3000}`
+    const ownPubkey = relayPubkeyB64()
     const relays = loadRelays()
-    if (relays.length === 0) {
+    const peers = loadRelayPeers()
+    console.error(
+      "Local relay:\n" +
+        `  ${ownName} → ${ownUrl}  (pubkey: ${ownPubkey.slice(0, 12)}...)\n` +
+        `  pair: unbien relay pair\n` +
+        `  peers: unbien relay peer list\n`,
+    )
+    if (relays.length > 0) {
       console.error(
-        "No remembered relays. Add one:\n" +
-          "  unbien relay add <url> [name]\n" +
-          "\n" +
-          "Peers already carry their own relay URLs (set at pair time); the\n" +
-          "registry is the fallback for `unbien pair` without --relay.",
+        "Remembered relays:\n" +
+          relays.map((r) => `  ${r.name} → ${r.url}`).join("\n") + "\n",
       )
-    } else {
+    }
+    if (peers.length > 0) {
       console.error(
-        "Relays:\n" + relays.map((r) => `  ${r.name} → ${r.url}`).join("\n"),
+        "Federated peer relays:\n" +
+          peers
+            .map(
+              (p) =>
+                `  ${p.name} → ${p.url}` +
+                (p.pubkey ? `  (pubkey: ${p.pubkey.slice(0, 12)}...)` : ""),
+            )
+            .join("\n"),
       )
     }
     break
