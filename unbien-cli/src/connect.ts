@@ -504,7 +504,8 @@ function describeSession(room: RoomInfo, index: number): string {
   const label = room.name ?? room.sessionId?.slice(0, 8) ?? room.room_id
   const child = room.parent ? " (subagent)" : ""
   const id = room.sessionId?.slice(0, 8) ?? room.room_id
-  return `  ${index + 1}. ${label}${child}\n      ${room.cwd ?? "?"}  [${id}]`
+  const remote = room.peerRelay ? ` (remote: ${room.peerRelay})` : ""
+  return `  ${index + 1}. ${label}${child}${remote}\n      ${room.cwd ?? "?"}  [${id}]`
 }
 
 /** `--session` selects by IDENTITY: the pi sessionId (prefix ok) or room id. */

@@ -33,6 +33,10 @@ export interface RoomInfo {
   parent?: string
   sessionId?: string
   caps?: string[]
+  /** If present, this session is on a federated (remote) peer relay.
+   *  The value is the peer relay's name. Absent = direct (local to the
+   *  relay the CLI connected to). */
+  peerRelay?: string
 }
 
 export interface SessionClientEvents {
@@ -78,7 +82,10 @@ export class SessionClient extends EventEmitter<SessionClientEvents> {
         if (frame.type !== "rooms" || frame.peer !== this.invite.epk) return
         clearTimeout(timer)
         this.off("relayControl", onControl)
-        resolve(Array.isArray(frame.rooms) ? (frame.rooms as RoomInfo[]) : [])
+        const peerRelay = typeof frame.peerRelay === "string" ? frame.peerRelay : undefined
+        const rooms = Array.isArray(frame.rooms) ? (frame.rooms as RoomInfo[]) : []
+        // Tag each room with the peerRelay (federated sessions).
+        resolve(peerRelay ? rooms.map((r) => ({ ...r, peerRelay })) : rooms)
       }
       this.on("relayControl", onControl)
       this.relay.send(
