@@ -372,6 +372,16 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                 "unsubscribe_rooms" => {
                                     rooms.unsubscribe(&peer_id, peers).await;
                                 }
+                                // Phase 4: explicit request for the current federated peer list.
+                                // The extension sends this after the cross-PC bridge is attached,
+                                // so it gets the current list regardless of timing (the on-connect
+                                // push might have been missed if the bridge wasn't ready yet).
+                                "get_federated_peer_list" => {
+                                    let fed_list = federated.federated_peer_list_json().await;
+                                    if sink.send(Message::Text(fed_list)).await.is_err() {
+                                        break;
+                                    }
+                                }
                                 "rooms_check" => {
                                     for target_peer in &peers {
                                         // Paired local peer — pairing gate first (preserves the

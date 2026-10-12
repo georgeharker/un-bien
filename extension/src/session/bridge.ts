@@ -196,6 +196,12 @@ export async function attachCrossPcBridge(
   }
   opts.relay.on("message", onFederatedList)
 
+  // Request the current federated peer list from the relay. The on-connect
+  // push might have arrived before this listener was registered (the bridge
+  // is created after the relay connects). This explicit request ensures we
+  // get the current list regardless of timing.
+  opts.relay.send(JSON.stringify({ type: "get_federated_peer_list" }))
+
   return {
     brokerRemote,
     piForward,
