@@ -575,7 +575,6 @@ export class Broker {
    *  address (`<cwd>@<name>`) changes — in-flight sends to the old address will
    *  `unknown_peer` (the old name is gone). */
   private _handleRename(conn: PeerConn, msg: RenameMsg): void {
-    console.error("[un-bien broker] _handleRename entered oldAddress=" + conn.address + " msg.name=" + JSON.stringify(msg.name));
     const oldAddress = conn.address
     const ackOld = (): void => this._sendRenameAck(conn, conn.name, conn.address)
     if (typeof msg.name !== "string" || msg.name.length === 0) {
