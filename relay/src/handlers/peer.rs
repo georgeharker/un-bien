@@ -493,10 +493,34 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                         parent: parent_patch,
                                         parent_session_id: parent_session_patch,
                                     };
-                                    if !registry
+                                    if registry
                                         .update_room_meta(&peer_id, &target_room, patch)
                                         .await
                                     {
+                                        // Propagate the meta change (name/model/working) to
+                                        // federated peer relays. add_room upserts by room_id, so
+                                        // the peer relay's stale copy is replaced. Also re-push
+                                        // the federated_peer_list to local WS clients (Phase 4
+                                        // discovery) so /name renames are visible cross-relay.
+                                        let rooms = registry.rooms_of(&peer_id);
+                                        if let Some(updated) =
+                                            rooms.iter().find(|r| r.room_id == target_room)
+                                        {
+                                            federated
+                                                .broadcast_update(
+                                                    "add",
+                                                    &peer_id,
+                                                    serde_json::to_value(updated)
+                                                        .unwrap_or_default(),
+                                                )
+                                                .await;
+                                            }
+                                        crate::peering::broadcast_federated_list(
+                                            &registry,
+                                            &federated,
+                                        )
+                                        .await;
+                                    } else {
                                         warn!(
                                             peer = %peer_short,
                                             room = %target_room,

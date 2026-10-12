@@ -134,7 +134,7 @@ fn has_common_owner(ours: &HashSet<String>, theirs: &HashSet<String>) -> bool {
 /// Broadcast the current federated_peer_list to all connected WS clients.
 /// Called after every federated session change (set_peer_rooms, add_room,
 /// remove_room, clear_peer) so apps/extensions discover federated peers.
-async fn broadcast_federated_list(registry: &PeerRegistry, federated: &FederatedSessions) {
+pub async fn broadcast_federated_list(registry: &PeerRegistry, federated: &FederatedSessions) {
     let json = federated.federated_peer_list_json().await;
     registry.broadcast_to_all(Message::Text(json));
 }
@@ -972,7 +972,15 @@ impl FederatedSessions {
     pub async fn add_room(&self, peer_relay: &str, epk: &str, room: RoomMeta) {
         let mut sessions = self.sessions.lock().await;
         let key = (peer_relay.to_string(), epk.to_string());
-        sessions.entry(key).or_default().push(room);
+        let rooms = sessions.entry(key).or_default();
+        // Upsert: a meta update (e.g. /name rename) reuses "add" — replace
+        // the existing room with the same room_id so the stale copy
+        // (old name/model/working) doesn't shadow the fresh one.
+        if let Some(existing) = rooms.iter_mut().find(|r| r.room_id == room.room_id) {
+            *existing = room;
+        } else {
+            rooms.push(room);
+        }
         let mut epk_map = self.epk_to_relays.lock().await;
         let relays = epk_map.entry(epk.to_string()).or_default();
         if !relays.contains(&peer_relay.to_string()) {
