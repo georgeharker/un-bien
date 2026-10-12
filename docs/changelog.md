@@ -278,3 +278,17 @@ current code.
 ### 0.3.4
 
 - Current release; no changes in the recent wave.
+
+## Known issue: app backfill misses text response
+
+**Observed:** During app backfill (session_sync get_entries replay), the user sees the thinking block but not the model's text response. Both are visible in the TUI.
+
+**Suspected causes:**
+1. fitEntryForTransport truncation in rpc_inbound.ts cuts the text from the end of a large entry (2 MiB cap) while preserving the thinking at the beginning
+2. get_entries paging boundary splits thinking + text across pages — the app only requests the first page
+3. The app receives the full entry but only renders the thinking block (app display bug)
+4. Pi stores thinking + text as separate content blocks — the backfill only deserializes the first
+
+**Investigation needed:** Check if the raw entry JSON has the full text or if it's truncated. Key file: extension/src/session/rpc_inbound.ts
+
+**Not federation-related** — pre-existing app/pi backfill issue observed during federation testing.
