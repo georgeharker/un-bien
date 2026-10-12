@@ -18,8 +18,8 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-use crate::relay_keypair::RelayKeypair;
 use crate::peers::pairing::PairingRegistry;
+use crate::relay_keypair::RelayKeypair;
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use notify::Watcher;
 use rand::RngCore as _;
@@ -327,7 +327,7 @@ async fn connect_and_verify(
     let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url).await?;
 
     // Send our relay_hello (with relay identity for pairing).
-    let ours: Vec<String> = owner_hashes(mesh, &pairing).into_iter().collect();
+    let ours: Vec<String> = owner_hashes(mesh, pairing).into_iter().collect();
     let keypair = crate::relay_keypair::load_or_generate(None);
     let nonce = gen_relay_nonce();
     let name = relay_own_name();
@@ -594,7 +594,9 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
 
     // Check for a common owner.
     let theirs: HashSet<String> = hello.owners.into_iter().collect();
-    let ours: Vec<String> = owner_hashes(&state.mesh, &state.pairing).into_iter().collect();
+    let ours: Vec<String> = owner_hashes(&state.mesh, &state.pairing)
+        .into_iter()
+        .collect();
     let ours_set: HashSet<String> = ours.iter().cloned().collect();
     let federate = has_common_owner(&ours_set, &theirs);
 
