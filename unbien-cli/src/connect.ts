@@ -149,13 +149,13 @@ async function listAllSessions(
         let client = clients.get(relayUrl)
         if (!client) {
           client = new SessionClient(relayUrl, keypair, invite)
+          // Register the federated_peer_list listener BEFORE connect — the
+          // relay pushes it DURING connect (right after auth, before connect()
+          // returns). If we register after, the frame is already emitted + lost.
+          fedPromise = client.listFederatedSessions()
           try {
             await client.connect()
             clients.set(relayUrl, client)
-            // Start listening for federated_peer_list RIGHT AFTER connect —
-            // the relay pushes it on connect, before listRooms. If we wait
-            // until after listRooms, the frame is already gone.
-            fedPromise = client.listFederatedSessions()
           } catch {
             deadRelays.push(relayLabelFor(relayUrl))
             return // unreachable relay: skip this group
