@@ -514,12 +514,12 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                                         .unwrap_or_default(),
                                                 )
                                                 .await;
-                                            }
-                                        crate::peering::broadcast_federated_list(
-                                            &registry,
-                                            &federated,
-                                        )
-                                        .await;
+                                        }
+                                        // No local federated_peer_list re-push: local
+                                        // subscribers already got room_meta_updated, and the
+                                        // federated list holds OTHER relays' sessions. The
+                                        // peer relay re-pushes its own list when it receives
+                                        // the relay_peer_update above.
                                     } else {
                                         warn!(
                                             peer = %peer_short,
