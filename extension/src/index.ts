@@ -379,14 +379,19 @@ function _attachBridgeIfReady(): void {
   if (!_meshNode || !_relay || !_relayUrl || !_cachedEd25519) return
   // A newly-created SelfRevoke producer must publish its own initial verified
   // or fallback snapshot before any retained topology is allowed to attach.
-  if (_selfRevoke !== null) {
+  // BUT — attach the bridge regardless of topology readiness: the federated
+  // peer list listener (federated_peer_list from the relay) doesn't need
+  // topology. The topology only affects sibling (cross-PC) routing, not
+  // federated peer discovery. Without this, the bridge is never attached
+  // when the mesh_versions table is empty (no app-published mesh blob) —
+  // even though the federation is working at the relay level.
+  if (_selfRevoke !== null && _selfRevokeTopology !== null) {
     if (
-      _selfRevokeTopologyReadyEpoch !== _selfRevokeEpoch ||
-      _selfRevokeTopology === null
+      _selfRevokeTopologyReadyEpoch === _selfRevokeEpoch &&
+      !_meshNode.hasTopology()
     ) {
-      return
+      _meshNode.setTopology(_selfRevokeTopology)
     }
-    if (!_meshNode.hasTopology()) _meshNode.setTopology(_selfRevokeTopology)
   }
   void _meshNode
     .attachBridge({
