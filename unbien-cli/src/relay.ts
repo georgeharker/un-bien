@@ -37,6 +37,43 @@ function normalizeUrl(raw: string): string {
   return url.replace(/\/+$/, "")
 }
 
+/** Generate a relay pairing URL. Used by both 'unbien relay pair' (alias)
+ *  + 'unbien relay peer pair'. Falls back to the first remembered relay's
+ *  URL if UNBIEN_RELAY_URL isn't set in the shell env. */
+function doPair(args: string[]): void {
+  const pairUrl =
+    args.find((a) => !a.startsWith("--")) ??
+    process.env.UNBIEN_RELAY_URL ??
+    loadRelays()[0]?.url ??
+    ""
+  const nameArg = args[args.indexOf("--name") + 1]
+  const pairName =
+    nameArg ??
+    process.env.UNBIEN_RELAY_NAME ??
+    osHostname()
+  if (!pairUrl) {
+    console.error(
+      "usage: unbien relay peer pair [url] [--name <name>]\n" +
+        "  The URL defaults to UNBIEN_RELAY_URL env var, or the first remembered relay.\n" +
+        "  The name defaults to the system hostname.\n" +
+        "  Set UNBIEN_RELAY_URL in the relay plist, or pass it explicitly.",
+    )
+    process.exit(1)
+  }
+  const pubkey = relayPubkeyB64()
+  const blob = Buffer.from(
+    JSON.stringify({ url: normalizeUrl(pairUrl), name: pairName, pubkey }),
+  ).toString("base64")
+  const pairUrlFull = `relay-pair://${blob}`
+  console.log(pairUrlFull)
+  console.error(
+    "Relay pairing URL (also on stdout — pipe to pbcopy/xclip):\n" +
+      `  ${pairUrlFull}\n\n` +
+      "Run on the peer relay:\n" +
+      `  unbien relay peer add ${pairUrlFull}`,
+  )
+}
+
 switch (verb) {
   case "add": {
     const url = rest[0]
@@ -78,42 +115,8 @@ switch (verb) {
   }
 
   case "pair": {
-    // Generate a pairing URL for this relay.
-    // Usage: unbien relay pair [url] [--name <name>]
-    // Defaults: url = UNBIEN_RELAY_URL env, name = system hostname.
-    const pairUrl =
-      rest.find((a) => !a.startsWith("--")) ??
-      process.env.UNBIEN_RELAY_URL ??
-      ""
-    const nameArg = rest[rest.indexOf("--name") + 1]
-    // Default the name to the system hostname (same as the relay does via
-    // gethostname). Only override if --name or UNBIEN_RELAY_NAME is set.
-    const pairName =
-      nameArg ??
-      process.env.UNBIEN_RELAY_NAME ??
-      osHostname()
-    if (!pairUrl) {
-      console.error(
-        "usage: unbien relay pair [url] [--name <name>]\n" +
-          "  The URL defaults to UNBIEN_RELAY_URL env var.\n" +
-          "  The name defaults to the system hostname.\n" +
-          "  Set UNBIEN_RELAY_URL in the relay plist, or pass it explicitly.",
-      )
-      process.exit(1)
-    }
-    const pubkey = relayPubkeyB64()
-    const blob = Buffer.from(
-      JSON.stringify({ url: normalizeUrl(pairUrl), name: pairName, pubkey }),
-    ).toString("base64")
-    const pairUrlFull = `relay-pair://${blob}`
-    // URL to stdout (pipeable: `unbien relay pair | pbcopy`), instructions to stderr.
-    console.log(pairUrlFull)
-    console.error(
-      "Relay pairing URL (also on stdout — pipe to pbcopy/xclip):\n" +
-        `  ${pairUrlFull}\n\n` +
-        "Run on the peer relay:\n" +
-        `  unbien relay peer add ${pairUrlFull}`,
-    )
+    // Alias for 'unbien relay peer pair' — keep for convenience.
+    doPair(rest)
     break
   }
 
@@ -220,6 +223,10 @@ switch (verb) {
         }
         break
       }
+      case "pair": {
+        doPair(peerRest)
+        break
+      }
       case "list": {
         const peers = loadRelayPeers()
         if (peers.length === 0) {
@@ -241,7 +248,9 @@ switch (verb) {
       default:
         console.error(
           "usage:\n" +
+            "  unbien relay peer pair [url] [--name <name>]\n" +
             "  unbien relay peer add <url> <name>\n" +
+            "  unbien relay peer add relay-pair://<base64>\n" +
             "  unbien relay peer remove <name>\n" +
             "  unbien relay peer list",
         )
