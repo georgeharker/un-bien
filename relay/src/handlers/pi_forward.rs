@@ -33,6 +33,7 @@ use tracing::warn;
 use crate::identity::canonical_ed25519_public_key;
 use crate::mesh::{MeshStore, types::MeshHeader};
 use crate::peering::FederatedSessions;
+use crate::peers::pairing::PairingRegistry;
 use crate::peers::registry::PeerRegistry;
 
 /// Time-to-live for a positive membership lookup. The plan calls for 60 s.
@@ -142,26 +143,23 @@ impl MeshAuthCache {
         }
     }
 
-    fn refresh_authorization(&self, pi_pk: &str, target: &str, store: &MeshStore) -> bool {
-        let blobs = match store.all_blobs() {
-            Ok(blobs) => blobs,
-            Err(error) => {
-                warn!(error = %error, "mesh store read failed during authorization refresh");
-                return false;
-            }
-        };
-        match direct_members_from_blobs(pi_pk, &blobs) {
-            Some(members) => {
-                let members = Arc::new(members);
-                let authorized = members.contains(target);
-                self.insert_result(pi_pk.to_owned(), AuthorizationResult::Positive(members));
-                authorized
-            }
-            None => {
-                self.insert_result(pi_pk.to_owned(), AuthorizationResult::Negative);
-                false
-            }
+    fn refresh_authorization(
+        &self,
+        pi_pk: &str,
+        target: &str,
+        store: &MeshStore,
+        pairing: &PairingRegistry,
+    ) -> bool {
+        // Use the shared owner_member_set (combines mesh store + PairingRegistry).
+        let members = crate::owner::owner_member_set(pi_pk, store, pairing);
+        if members.is_empty() {
+            self.insert_result(pi_pk.to_owned(), AuthorizationResult::Negative);
+            return false;
         }
+        let members = Arc::new(members);
+        let authorized = members.contains(target);
+        self.insert_result(pi_pk.to_owned(), AuthorizationResult::Positive(members));
+        authorized
     }
 
     /// `true` iff both Pis belong to the same direct Owner membership.
@@ -170,6 +168,7 @@ impl MeshAuthCache {
         pi_a: &str,
         pi_b: &str,
         store: Arc<MeshStore>,
+        pairing: Arc<PairingRegistry>,
     ) -> bool {
         let (Ok(a), Ok(b)) = (
             canonical_ed25519_public_key(pi_a),
@@ -177,7 +176,7 @@ impl MeshAuthCache {
         ) else {
             return false;
         };
-        self.is_authorized_canonical(&a, &b, store).await
+        self.is_authorized_canonical(&a, &b, store, pairing).await
     }
 
     async fn is_authorized_canonical(
@@ -185,6 +184,7 @@ impl MeshAuthCache {
         pi_a: &str,
         pi_b: &str,
         store: Arc<MeshStore>,
+        pairing: Arc<PairingRegistry>,
     ) -> bool {
         if let Some(result) = self.cached_result(pi_a) {
             return Self::cached_authorization(result, pi_b);
@@ -205,7 +205,7 @@ impl MeshAuthCache {
         self.refresh_jobs
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         match tokio::task::spawn_blocking(move || {
-            cache.refresh_authorization(&sender, &target, store.as_ref())
+            cache.refresh_authorization(&sender, &target, store.as_ref(), pairing.as_ref())
         })
         .await
         {
@@ -285,6 +285,7 @@ pub async fn handle_pi_envelope(
     mesh: Arc<MeshStore>,
     cache: Arc<MeshAuthCache>,
     federated: Arc<FederatedSessions>,
+    pairing: Arc<PairingRegistry>,
 ) -> PiForwardResult {
     let to_pc = frame.get("to_pc").and_then(|v| v.as_str());
     let envelope = frame.get("envelope");
@@ -318,7 +319,10 @@ pub async fn handle_pi_envelope(
         }
     };
 
-    if !cache.is_authorized_canonical(&sender, &target, mesh).await {
+    if !cache
+        .is_authorized_canonical(&sender, &target, mesh, pairing)
+        .await
+    {
         return PiForwardResult::TransportError(make_transport_error(
             Some(envelope),
             TransportErrorReason::NotAuthorized,
@@ -536,12 +540,36 @@ mod tests {
         write_owner_blob(&store, &[1; 32], &[&a, &b], 1);
         write_owner_blob(&store, &[2; 32], &[&b, &c], 1);
 
-        assert!(cache.is_authorized(&a, &b, store.clone()).await);
-        assert!(cache.is_authorized(&b, &a, store.clone()).await);
-        assert!(cache.is_authorized(&b, &c, store.clone()).await);
-        assert!(cache.is_authorized(&c, &b, store.clone()).await);
-        assert!(!cache.is_authorized(&a, &c, store.clone()).await);
-        assert!(!cache.is_authorized(&c, &a, store).await);
+        assert!(
+            cache
+                .is_authorized(&a, &b, store.clone(), Arc::new(PairingRegistry::new()))
+                .await
+        );
+        assert!(
+            cache
+                .is_authorized(&b, &a, store.clone(), Arc::new(PairingRegistry::new()))
+                .await
+        );
+        assert!(
+            cache
+                .is_authorized(&b, &c, store.clone(), Arc::new(PairingRegistry::new()))
+                .await
+        );
+        assert!(
+            cache
+                .is_authorized(&c, &b, store.clone(), Arc::new(PairingRegistry::new()))
+                .await
+        );
+        assert!(
+            !cache
+                .is_authorized(&a, &c, store.clone(), Arc::new(PairingRegistry::new()))
+                .await
+        );
+        assert!(
+            !cache
+                .is_authorized(&c, &a, store, Arc::new(PairingRegistry::new()))
+                .await
+        );
     }
 
     #[tokio::test]
@@ -556,11 +584,20 @@ mod tests {
 
         assert!(
             cache
-                .is_authorized(&a_url_safe, &b_url_safe, store.clone())
+                .is_authorized(
+                    &a_url_safe,
+                    &b_url_safe,
+                    store.clone(),
+                    Arc::new(PairingRegistry::new())
+                )
                 .await
         );
         write_owner_blob(&store, &owner, &[&a_url_safe], 2);
-        assert!(cache.is_authorized(&a, &b, store).await);
+        assert!(
+            cache
+                .is_authorized(&a, &b, store, Arc::new(PairingRegistry::new()))
+                .await
+        );
     }
 
     #[tokio::test]
@@ -571,10 +608,18 @@ mod tests {
         let b = pi_key(0x0b);
         let owner = [4_u8; 32];
         write_owner_blob(&store, &owner, &[&a, &b], 1);
-        assert!(cache.is_authorized(&a, &b, store.clone()).await);
+        assert!(
+            cache
+                .is_authorized(&a, &b, store.clone(), Arc::new(PairingRegistry::new()))
+                .await
+        );
 
         write_owner_blob(&store, &owner, &[&a], 2);
-        assert!(!cache.is_authorized(&a, &b, store).await);
+        assert!(
+            !cache
+                .is_authorized(&a, &b, store, Arc::new(PairingRegistry::new()))
+                .await
+        );
     }
 
     #[tokio::test]
@@ -584,9 +629,22 @@ mod tests {
         let target = pi_key(0x0b);
         let owner = [5; 32];
         write_owner_blob(&store, &owner, &[&sender, &target], 1);
-        assert!(cache.is_authorized(&sender, &target, store.clone()).await);
+        assert!(
+            cache
+                .is_authorized(
+                    &sender,
+                    &target,
+                    store.clone(),
+                    Arc::new(PairingRegistry::new())
+                )
+                .await
+        );
         write_owner_blob(&store, &owner, &[&sender], 2);
-        assert!(cache.is_authorized(&sender, &target, store).await);
+        assert!(
+            cache
+                .is_authorized(&sender, &target, store, Arc::new(PairingRegistry::new()))
+                .await
+        );
     }
 
     #[tokio::test]
@@ -596,15 +654,34 @@ mod tests {
         let member = pi_key(0x0b);
         write_owner_blob(&store, &[5; 32], &[&sender, &member], 1);
 
-        assert!(cache.is_authorized(&sender, &member, store.clone()).await);
         assert!(
-            !cache
-                .is_authorized(&sender, &pi_key(0x0c), store.clone())
+            cache
+                .is_authorized(
+                    &sender,
+                    &member,
+                    store.clone(),
+                    Arc::new(PairingRegistry::new())
+                )
                 .await
         );
         assert!(
             !cache
-                .is_authorized(&sender, &pi_key(0x0d), store.clone())
+                .is_authorized(
+                    &sender,
+                    &pi_key(0x0c),
+                    store.clone(),
+                    Arc::new(PairingRegistry::new())
+                )
+                .await
+        );
+        assert!(
+            !cache
+                .is_authorized(
+                    &sender,
+                    &pi_key(0x0d),
+                    store.clone(),
+                    Arc::new(PairingRegistry::new())
+                )
                 .await
         );
         assert_eq!(store.all_blobs_calls(), 1);
@@ -616,12 +693,22 @@ mod tests {
         let sender = pi_key(0x0a);
         assert!(
             !cache
-                .is_authorized(&sender, &pi_key(0x0b), store.clone())
+                .is_authorized(
+                    &sender,
+                    &pi_key(0x0b),
+                    store.clone(),
+                    Arc::new(PairingRegistry::new())
+                )
                 .await
         );
         assert!(
             !cache
-                .is_authorized(&sender, &pi_key(0x0c), store.clone())
+                .is_authorized(
+                    &sender,
+                    &pi_key(0x0c),
+                    store.clone(),
+                    Arc::new(PairingRegistry::new())
+                )
                 .await
         );
         assert_eq!(store.all_blobs_calls(), 1);
@@ -634,9 +721,27 @@ mod tests {
         let sender = pi_key(0x0a);
         let target = pi_key(0x0b);
         write_owner_blob(&store, &[6; 32], &[&sender, &target], 1);
-        assert!(cache.is_authorized(&sender, &target, store.clone()).await);
+        assert!(
+            cache
+                .is_authorized(
+                    &sender,
+                    &target,
+                    store.clone(),
+                    Arc::new(PairingRegistry::new())
+                )
+                .await
+        );
         tokio::time::sleep(Duration::from_millis(10)).await;
-        assert!(cache.is_authorized(&sender, &target, store.clone()).await);
+        assert!(
+            cache
+                .is_authorized(
+                    &sender,
+                    &target,
+                    store.clone(),
+                    Arc::new(PairingRegistry::new())
+                )
+                .await
+        );
         assert_eq!(store.all_blobs_calls(), 2);
     }
 
@@ -646,7 +751,12 @@ mod tests {
         let sender = pi_key(0x0a);
         assert!(
             !cache
-                .is_authorized(&sender, &pi_key(0x0b), store.clone())
+                .is_authorized(
+                    &sender,
+                    &pi_key(0x0b),
+                    store.clone(),
+                    Arc::new(PairingRegistry::new())
+                )
                 .await
         );
         {
@@ -657,7 +767,12 @@ mod tests {
         }
         assert!(
             !cache
-                .is_authorized(&sender, &pi_key(0x0c), store.clone())
+                .is_authorized(
+                    &sender,
+                    &pi_key(0x0c),
+                    store.clone(),
+                    Arc::new(PairingRegistry::new())
+                )
                 .await
         );
         assert_eq!(store.all_blobs_calls(), 2);
@@ -684,10 +799,30 @@ mod tests {
         let target = pi_key(0x0b);
         write_owner_blob(&store, &[8; 32], &[&sender, &target], 1);
         let (a, b, c, d) = tokio::join!(
-            cache.is_authorized(&sender, &target, store.clone()),
-            cache.is_authorized(&sender, &target, store.clone()),
-            cache.is_authorized(&sender, &target, store.clone()),
-            cache.is_authorized(&sender, &target, store.clone()),
+            cache.is_authorized(
+                &sender,
+                &target,
+                store.clone(),
+                Arc::new(PairingRegistry::new())
+            ),
+            cache.is_authorized(
+                &sender,
+                &target,
+                store.clone(),
+                Arc::new(PairingRegistry::new())
+            ),
+            cache.is_authorized(
+                &sender,
+                &target,
+                store.clone(),
+                Arc::new(PairingRegistry::new())
+            ),
+            cache.is_authorized(
+                &sender,
+                &target,
+                store.clone(),
+                Arc::new(PairingRegistry::new())
+            ),
         );
         assert!(a && b && c && d);
         assert_eq!(store.all_blobs_calls(), 1);
@@ -700,7 +835,16 @@ mod tests {
         let sender = pi_key(0x0a);
         let target = pi_key(0x0b);
         write_owner_blob(&store, &[9; 32], &[&sender, &target], 1);
-        assert!(cache.is_authorized(&sender, &target, store.clone()).await);
+        assert!(
+            cache
+                .is_authorized(
+                    &sender,
+                    &target,
+                    store.clone(),
+                    Arc::new(PairingRegistry::new())
+                )
+                .await
+        );
         let poisoned_cache = cache.clone();
         assert!(
             std::thread::spawn(move || {
@@ -710,11 +854,29 @@ mod tests {
             .join()
             .is_err()
         );
-        assert!(cache.is_authorized(&sender, &target, store.clone()).await);
+        assert!(
+            cache
+                .is_authorized(
+                    &sender,
+                    &target,
+                    store.clone(),
+                    Arc::new(PairingRegistry::new())
+                )
+                .await
+        );
         assert!(!cache.inner.is_poisoned());
         // The repaired cache reuses the refreshed entry instead of scanning
         // SQLite again after the recovered lock is released.
-        assert!(cache.is_authorized(&sender, &target, store.clone()).await);
+        assert!(
+            cache
+                .is_authorized(
+                    &sender,
+                    &target,
+                    store.clone(),
+                    Arc::new(PairingRegistry::new())
+                )
+                .await
+        );
         assert_eq!(store.all_blobs_calls(), 2);
         assert_eq!(cache.refresh_jobs.load(Ordering::Relaxed), 2);
     }
@@ -751,6 +913,7 @@ mod tests {
             store,
             cache,
             Arc::new(FederatedSessions::new()),
+            Arc::new(PairingRegistry::new()),
         )
         .await
         {

@@ -123,23 +123,7 @@ pub fn read_peer_config() -> Vec<RelayPeerConfig> {
 /// extension sends pairing_set with the owner pubkeys → the relay stores
 /// them → the federation check uses them.
 fn owner_hashes(mesh: &MeshStore, pairing: &PairingRegistry) -> HashSet<String> {
-    use base64::Engine as _;
-    // Owner hashes from the pairing allow-list (extension-pushed, no app needed).
-    let mut hashes: HashSet<String> = pairing
-        .all_owner_pubkeys()
-        .into_iter()
-        .filter_map(|pk_b64| {
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(&pk_b64)
-                .ok()?;
-            Some(crate::mesh::verify::owner_pk_hash(&bytes))
-        })
-        .collect();
-    // Also include mesh_versions hashes (if the app published them).
-    if let Ok(mesh_hashes) = mesh.all_owner_hashes() {
-        hashes.extend(mesh_hashes);
-    }
-    hashes
+    crate::owner::all_owner_hashes(mesh, pairing)
 }
 
 /// Check if two relay's owner hash sets share a common owner.

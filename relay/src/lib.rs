@@ -3,6 +3,7 @@ pub mod handlers;
 mod identity;
 pub mod mesh;
 pub mod metrics;
+pub mod owner;
 pub mod paths;
 pub mod peering;
 pub mod peers;

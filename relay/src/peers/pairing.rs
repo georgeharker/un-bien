@@ -273,6 +273,17 @@ impl PairingRegistry {
         let allow = self.allow.lock().unwrap();
         allow.values().flat_map(|set| set.iter().cloned()).collect()
     }
+
+    /// All machines that allow a given owner in their pairing_set.
+    /// Used for the authorization fallback (find siblings via pairing).
+    pub fn machines_by_owner(&self, owner: &str) -> HashSet<String> {
+        let allow = self.allow.lock().unwrap();
+        allow
+            .iter()
+            .filter(|(_, owners)| owners.contains(owner))
+            .map(|(machine, _)| machine.clone())
+            .collect()
+    }
 }
 
 #[cfg(test)]
