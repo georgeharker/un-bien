@@ -48,8 +48,13 @@ cargo install un-bien-relay --version 0.7.5-dev.20261011 --locked
 The relay's name is **auto-computed** from the system hostname — no need
 to set `UNBIEN_RELAY_NAME` (override only if you want a different name).
 
-The relay URL (`UNBIEN_RELAY_URL`) is NOT auto-computed — it needs to be
-the externally-reachable address (Tailscale MagicDNS, LAN IP, or public).
+The relay URL (`UNBIEN_RELAY_URL`) is the externally-reachable address
+(Tailscale MagicDNS, LAN IP, or public). This is separate from
+`UNBIEN_RELAY` (which is the local connection URL, typically
+`http://0.0.0.0:3000` — the relay binds to all interfaces). The pairing
+URL + `relay_hello` use `UNBIEN_RELAY_URL` so the peer relay knows where
+to connect back.
+
 Edit `~/Library/LaunchAgents/com.georgeharker.unbien.relay.plist` — add
 this inside `<EnvironmentVariables>`:
 
@@ -57,6 +62,12 @@ this inside `<EnvironmentVariables>`:
 <key>UNBIEN_RELAY_URL</key>
 <string>ws://hostA:3000</string>    <!-- externally-reachable URL -->
 ```
+
+**If `UNBIEN_RELAY_URL` is not set**, `unbien relay peer pair` falls back
+to `UNBIEN_RELAY` + auto-converts `0.0.0.0`/`localhost` → the system
+hostname + `http://` → `ws://`. So it works even without setting
+`UNBIEN_RELAY_URL` explicitly — but setting it gives you control over the
+exact address.
 
 The URL is used in `relay_hello` (so the peer can connect back for
 symmetric peering) + in the pairing URL. Without it, the relay doesn't
