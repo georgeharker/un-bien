@@ -20,6 +20,7 @@ use tracing::{info, warn};
 
 use crate::relay_keypair::RelayKeypair;
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+use notify::Watcher;
 use rand::RngCore as _;
 
 /// The relay's own name (for relay_peer_list / relay_peer_update frames).
@@ -178,8 +179,9 @@ pub struct RelayHelloAck {
 }
 
 /// Start the outbound peering tasks. Each peer relay gets a tokio task.
-/// A config watcher periodically re-reads relay-peers.json + spawns new
-/// peering loops for new peers — no restart needed after `unbien relay peer add`.
+/// A filesystem watcher (notify) watches relay-peers.json for changes +
+/// spawns new peering loops for new peers — no restart needed after
+/// `unbien relay peer add`. A 30s fallback poll catches any missed events.
 pub fn start_peering(
     mesh: Arc<MeshStore>,
     registry: Arc<PeerRegistry>,
@@ -187,12 +189,14 @@ pub fn start_peering(
 ) {
     tokio::spawn(async move {
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        loop {
+        let peers_path = crate::paths::relay_peers_path();
+
+        // Helper: read config + spawn peering loops for new peers.
+        let spawn_new = |seen: &mut std::collections::HashSet<String>| {
             let config = read_peer_config();
             if config.is_empty() && seen.is_empty() {
                 info!("no federated peer relays configured (relay-peers.json empty or absent)");
             }
-            // Spawn peering loops for new peers (not already seen).
             for peer in &config {
                 if seen.contains(&peer.name) {
                     continue;
@@ -207,8 +211,56 @@ pub fn start_peering(
                     peering_loop(mesh, registry, federated, peer).await;
                 });
             }
-            // Re-check every 5 seconds for new peers.
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        };
+
+        // Initial read.
+        spawn_new(&mut seen);
+
+        // Watch relay-peers.json for changes.
+        let (watch_tx, mut watch_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+        let _watcher =
+            match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+                if let Ok(event) = res {
+                    if matches!(
+                        event.kind,
+                        notify::EventKind::Modify(_) | notify::EventKind::Create(_)
+                    ) {
+                        let _ = watch_tx.send(());
+                    }
+                }
+            }) {
+                Ok(mut w) => {
+                    // Watch the parent dir (watching the file itself misses atomic saves
+                    // that replace the file — the inode changes. Watching the dir catches
+                    // the create event for the new file).
+                    let _ = w.watch(
+                        peers_path.parent().unwrap_or(&peers_path),
+                        notify::RecursiveMode::NonRecursive,
+                    );
+                    info!("watching relay-peers.json for changes (fswatch)");
+                    Some(w)
+                }
+                Err(e) => {
+                    warn!(error = %e, "fswatch unavailable — falling back to 5s poll");
+                    None
+                }
+            };
+
+        loop {
+            tokio::select! {
+                // File changed — re-read config (debounce 100ms for atomic save
+                // sequences that fire multiple events).
+                _ = watch_rx.recv() => {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    // Drain any queued events (debounce).
+                    while watch_rx.try_recv().is_ok() {}
+                    spawn_new(&mut seen);
+                }
+                // Fallback: re-read every 30s in case the watcher misses an event.
+                _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+                    spawn_new(&mut seen);
+                }
+            }
         }
     });
 }
