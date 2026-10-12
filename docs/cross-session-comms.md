@@ -6,7 +6,7 @@ list, and wait for replies from other pi sessions on the same machine
 (local UDS broker), across machines (via the relay, same-owner
 validated), or across relays (via relay federation, same-owner validated).
 
-See [Relay Peering](relay-peering-sketch.md) for the federation design +
+See [Relay Peering](relay-peering.md) for the federation design +
 setup guide.
 
 ## Enable / Disable
@@ -112,7 +112,7 @@ No `/reload` needed.
   discovers federated peers via the relay's `federated_peer_list` push
   (Phase 4) + routes to them via `_routeToFederated` (strips the
   `<relayName>:` prefix + sends via `pi_envelope` — the relay does the
-  cross-relay hop). See [Relay Peering](relay-peering-sketch.md) for
+  cross-relay hop). See [Relay Peering](relay-peering.md) for
   the full federation design.
 
 ## Same-owner validation

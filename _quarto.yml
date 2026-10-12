@@ -23,6 +23,8 @@ project:
     - docs/rpc-on-event-map.md
     - docs/subagent-events.md
     - docs/identity.md
+    - docs/cross-session-comms.md
+    - docs/relay-peering.md
 
 # gfm_auto_identifiers makes heading anchors match GitHub's slugs, which the
 # docs' cross-links use. Keep pandoc's full markdown reader otherwise —
@@ -85,6 +87,10 @@ website:
             href: docs/subagent-events.md
           - text: "Machine identity"
             href: docs/identity.md
+          - text: "Cross-session comms (agent mesh)"
+            href: docs/cross-session-comms.md
+          - text: "Relay peering (federation)"
+            href: docs/relay-peering.md
       - section: "Reference"
         contents:
           - text: "Self-host the relay"
