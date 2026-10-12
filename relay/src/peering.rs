@@ -295,7 +295,11 @@ async fn connect_and_verify(
     federated: &Arc<FederatedSessions>,
     peer: &RelayPeerConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let ws_url = format!("{}/relay-peer", peer.url.trim_end_matches('/'));
+    // Convert http(s):// to ws(s):// — tokio_tungstenite requires ws/wss.
+    let raw_url = format!("{}/relay-peer", peer.url.trim_end_matches('/'));
+    let ws_url = raw_url
+        .replacen("http://", "ws://", 1)
+        .replacen("https://", "wss://", 1);
     let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url).await?;
 
     // Send our relay_hello (with relay identity for pairing).

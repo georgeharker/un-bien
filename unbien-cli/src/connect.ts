@@ -139,6 +139,7 @@ async function listAllSessions(
       // (relay, machine) pair. The FIRST machine on each relay provides the
       // client; subsequent machines on the same relay reuse it (listRooms
       // just sends rooms_check for that machine's epk).
+      let fedPromise: Promise<RoomInfo[]> = Promise.resolve([])
       for (const peer of relayPeers) {
         const invite: PairingInvite = {
           token: "",
@@ -151,6 +152,10 @@ async function listAllSessions(
           try {
             await client.connect()
             clients.set(relayUrl, client)
+            // Start listening for federated_peer_list RIGHT AFTER connect —
+            // the relay pushes it on connect, before listRooms. If we wait
+            // until after listRooms, the frame is already gone.
+            fedPromise = client.listFederatedSessions()
           } catch {
             deadRelays.push(relayLabelFor(relayUrl))
             return // unreachable relay: skip this group
@@ -163,9 +168,8 @@ async function listAllSessions(
         }
       }
 
-      // Also list federated sessions (from peer relays) — the relay pushes
-      // federated_peer_list on connect. One call per relay (not per peer).
-      const fedRooms = await client.listFederatedSessions()
+      // Await the federated sessions (listener was started on connect).
+      const fedRooms = await fedPromise
       for (const room of fedRooms) {
         choices.push({
           ...room,
