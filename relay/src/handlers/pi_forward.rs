@@ -319,10 +319,22 @@ pub async fn handle_pi_envelope(
         }
     };
 
-    if !cache
-        .is_authorized_canonical(&sender, &target, mesh, pairing)
-        .await
-    {
+    // Federated targets: the sender's local authorization + the federation's
+    // shared-owner verification are sufficient. The receiving relay's
+    // membership is unknown to this relay (PairingRegistry is per-relay), so
+    // the full sender+target membership check can't work cross-relay.
+    let target_is_federated = federated.relay_for_epk(&target).await.is_some();
+    let authorized = if target_is_federated {
+        // Sender must be a valid local mesh member (has an owner).
+        cache
+            .is_authorized_canonical(&sender, &sender, mesh.clone(), pairing.clone())
+            .await
+    } else {
+        cache
+            .is_authorized_canonical(&sender, &target, mesh, pairing)
+            .await
+    };
+    if !authorized {
         return PiForwardResult::TransportError(make_transport_error(
             Some(envelope),
             TransportErrorReason::NotAuthorized,
