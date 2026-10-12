@@ -179,7 +179,7 @@ switch (verb) {
             console.error(
               "[relay] peer added: " + parsed.name + " -> " +
                 normalizeUrl(parsed.url) + " (pubkey pinned)\n" +
-                "  Restart: launchctl kickstart -k gui/$(id -u)/com.georgeharker.unbien.relay",
+                "  The relay will connect within ~5s (no restart needed).",
             )
           } catch {
             console.error("[relay] invalid pairing URL")
@@ -198,7 +198,7 @@ switch (verb) {
           addRelayPeer({ url: normalizeUrl(url), name })
           console.error(
             "[relay] peer added: " + name + " -> " + normalizeUrl(url) +
-              "\n  Restart: launchctl kickstart -k gui/$(id -u)/com.georgeharker.unbien.relay",
+              "\n  The relay will connect within ~5s (no restart needed).",
           )
         }
         break
@@ -212,7 +212,7 @@ switch (verb) {
         if (removeRelayPeer(name)) {
           console.error(
             "[relay] peer removed: " + name +
-              "\n  Restart: launchctl kickstart -k gui/$(id -u)/com.georgeharker.unbien.relay",
+              "\n  The relay will disconnect within ~5s (no restart needed).",
           )
         } else {
           console.error("[relay] no peer named " + name)

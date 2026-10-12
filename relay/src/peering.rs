@@ -178,31 +178,39 @@ pub struct RelayHelloAck {
 }
 
 /// Start the outbound peering tasks. Each peer relay gets a tokio task.
+/// A config watcher periodically re-reads relay-peers.json + spawns new
+/// peering loops for new peers — no restart needed after `unbien relay peer add`.
 pub fn start_peering(
     mesh: Arc<MeshStore>,
     registry: Arc<PeerRegistry>,
     federated: Arc<FederatedSessions>,
 ) {
-    let config = read_peer_config();
-    if config.is_empty() {
-        info!("no federated peer relays configured (relay-peers.json empty or absent)");
-        return;
-    }
-    for peer in &config {
-        // Shared-owner verification IS the pairing — if both relays share an
-        // owner, they're paired + can federate. The pinned pubkey (from the
-        // pairing URL) is an additional identity layer: if present, the relay
-        // verifies the peer's pubkey matches + the signature is valid. If
-        // absent, the relay still federates based on shared-owner alone.
-        info!(peer = %peer.name, url = %peer.url, pubkey = ?peer.pubkey.as_deref().map(|p| &p[..8]), "starting peering task");
-        let peer = peer.clone();
-        let mesh = Arc::clone(&mesh);
-        let registry = Arc::clone(&registry);
-        let federated = Arc::clone(&federated);
-        tokio::spawn(async move {
-            peering_loop(mesh, registry, federated, peer).await;
-        });
-    }
+    tokio::spawn(async move {
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        loop {
+            let config = read_peer_config();
+            if config.is_empty() && seen.is_empty() {
+                info!("no federated peer relays configured (relay-peers.json empty or absent)");
+            }
+            // Spawn peering loops for new peers (not already seen).
+            for peer in &config {
+                if seen.contains(&peer.name) {
+                    continue;
+                }
+                info!(peer = %peer.name, url = %peer.url, pubkey = ?peer.pubkey.as_deref().map(|p| &p[..8]), "starting peering task");
+                seen.insert(peer.name.clone());
+                let peer = peer.clone();
+                let mesh = Arc::clone(&mesh);
+                let registry = Arc::clone(&registry);
+                let federated = Arc::clone(&federated);
+                tokio::spawn(async move {
+                    peering_loop(mesh, registry, federated, peer).await;
+                });
+            }
+            // Re-check every 5 seconds for new peers.
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+    });
 }
 
 /// Per-peer: connect → hello → federate or disconnect → backoff → reconnect.
