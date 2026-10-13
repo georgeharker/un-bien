@@ -94,3 +94,42 @@ fn direct_members_from_blobs(pi_pk: &str, blobs: &[Vec<u8>]) -> Option<HashSet<S
     }
     (!union.is_empty()).then_some(union)
 }
+
+/// Gate #5, in one place: may `sender` deliver an envelope to `target`?
+/// - Local target: full sender+target membership (mesh store + PairingRegistry).
+/// - Federated target (on a peer relay): sender must be a valid local member;
+///   the federation's shared-owner verification covers the target side (the
+///   receiving relay's membership is not visible to this relay — PairingRegistry
+///   is per-relay).
+pub fn authorize_send(
+    sender: &str,
+    target: &str,
+    mesh: &MeshStore,
+    pairing: &PairingRegistry,
+    is_federated_target: bool,
+) -> bool {
+    if is_federated_target {
+        return !authorized_peers(sender, mesh, pairing).is_empty();
+    }
+    authorized_peers(sender, mesh, pairing).contains(target)
+}
+
+/// Gate #6, in one place: verify a relay_forward's provenance signature
+/// (signed by the forwarding relay over request_id|from_epk|target_epk|visited).
+/// Unsigned or invalid forwards are rejected.
+pub fn verify_relay_forward(
+    request_id: &str,
+    from_epk: &str,
+    target_epk: &str,
+    visited: &[String],
+    relay_pubkey: &Option<String>,
+    relay_sig: &Option<String>,
+) -> bool {
+    match (relay_pubkey, relay_sig) {
+        (Some(pk), Some(sig)) => {
+            let msg = format!("{request_id}|{from_epk}|{target_epk}|{}", visited.join(","));
+            super::relay_keypair::RelayKeypair::verify(pk, msg.as_bytes(), sig)
+        }
+        _ => false,
+    }
+}

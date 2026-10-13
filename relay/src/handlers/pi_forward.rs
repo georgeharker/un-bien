@@ -319,16 +319,13 @@ pub async fn handle_pi_envelope(
         }
     };
 
-    // Federated targets: the sender's local authorization + the federation's
-    // shared-owner verification are sufficient. The receiving relay's
-    // membership is unknown to this relay (PairingRegistry is per-relay), so
-    // the full sender+target membership check can't work cross-relay.
+    // Authorization via the shared policy (membership.rs): local targets get
+    // the full sender+target membership check; federated targets require the
+    // sender to be a valid local member (the federation's shared-owner
+    // verification covers the target side).
     let target_is_federated = federated.relay_for_epk(&target).await.is_some();
     let authorized = if target_is_federated {
-        // Sender must be a valid local mesh member (has an owner).
-        cache
-            .is_authorized_canonical(&sender, &sender, mesh.clone(), pairing.clone())
-            .await
+        crate::membership::authorize_send(&sender, &target, &mesh, &pairing, true)
     } else {
         cache
             .is_authorized_canonical(&sender, &target, mesh, pairing)

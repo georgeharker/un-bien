@@ -472,16 +472,15 @@ async fn connect_and_verify(
                             .await;
                         continue;
                     }
-                    // Verify the forward's relay signature (authenticated forwarding).
-                    let sig_valid = match (&forward.relay_pubkey, &forward.relay_sig) {
-                        (Some(pk), Some(sig)) => {
-                            let msg = format!("{}|{}|{}|{}",
-                                forward.request_id, forward.from_epk,
-                                forward.target_epk, forward.visited.join(","));
-                            RelayKeypair::verify(pk, msg.as_bytes(), sig)
-                        }
-                        _ => false, // unsigned forward — rejected
-                    };
+                    // Verify the forward's provenance (shared helper).
+                    let sig_valid = crate::membership::verify_relay_forward(
+                        &forward.request_id,
+                        &forward.from_epk,
+                        &forward.target_epk,
+                        &forward.visited,
+                        &forward.relay_pubkey,
+                        &forward.relay_sig,
+                    );
                     if !sig_valid {
                         let ack = RelayForwardAck {
                             kind: "relay_forward_ack".into(),
@@ -575,6 +574,32 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
             return;
         }
     };
+
+    // Symmetric identity verification (matches the outbound check): verify
+    // the connecting relay's signature +, if a peer with this name is
+    // configured with a pinned pubkey, that it matches.
+    if let (Some(peer_pubkey), Some(peer_nonce), Some(peer_sig)) =
+        (&hello.relay_pubkey, &hello.nonce, &hello.sig)
+    {
+        let peer_name = hello.relay_name.as_deref().unwrap_or("");
+        let peer_url_hello = hello.relay_url.as_deref().unwrap_or("");
+        if !verify_relay_identity(peer_pubkey, peer_nonce, peer_name, peer_url_hello, peer_sig) {
+            warn!("relay-peer: identity signature invalid, declining");
+            return;
+        }
+        // Pinning: a configured peer with this name must present the pinned pubkey.
+        if peer_name.len() > 0 {
+            let configured = read_peer_config().into_iter().find(|p| p.name == peer_name);
+            if let Some(cfg) = configured {
+                if let Some(pinned) = &cfg.pubkey {
+                    if pinned != peer_pubkey {
+                        warn!(peer = %peer_name, pinned = %pinned, got = %peer_pubkey, "relay-peer: pubkey mismatch, declining");
+                        return;
+                    }
+                }
+            }
+        }
+    }
 
     // Check for a common owner.
     let theirs: HashSet<String> = hello.owners.into_iter().collect();
@@ -725,16 +750,15 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
                             .await;
                         continue;
                     }
-                    // Verify the forward's relay signature (authenticated forwarding).
-                    let sig_valid = match (&forward.relay_pubkey, &forward.relay_sig) {
-                        (Some(pk), Some(sig)) => {
-                            let msg = format!("{}|{}|{}|{}",
-                                forward.request_id, forward.from_epk,
-                                forward.target_epk, forward.visited.join(","));
-                            RelayKeypair::verify(pk, msg.as_bytes(), sig)
-                        }
-                        _ => false, // unsigned forward — rejected
-                    };
+                    // Verify the forward's provenance (shared helper).
+                    let sig_valid = crate::membership::verify_relay_forward(
+                        &forward.request_id,
+                        &forward.from_epk,
+                        &forward.target_epk,
+                        &forward.visited,
+                        &forward.relay_pubkey,
+                        &forward.relay_sig,
+                    );
                     if !sig_valid {
                         let ack = RelayForwardAck {
                             kind: "relay_forward_ack".into(),
@@ -1083,6 +1107,18 @@ impl FederatedSessions {
             for room in rooms {
                 // Skip duplicate room_ids (same room from a different relay).
                 if entry.2.contains(&room.room_id) {
+                    continue;
+                }
+                // Skip launcher daemon control rooms: the `is_daemon` cap marks
+                // them (the app filters them from display; here we keep them off
+                // discovery entirely so agents don't see "droplet:/Users/...@droplet").
+                let is_daemon = room
+                    .extra
+                    .get("caps")
+                    .and_then(|c| c.as_array())
+                    .map(|caps| caps.iter().any(|c| c.as_str() == Some("is_daemon")))
+                    .unwrap_or(false);
+                if is_daemon {
                     continue;
                 }
                 entry.2.insert(room.room_id.clone());
