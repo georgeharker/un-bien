@@ -156,6 +156,18 @@ unbien relay peer list
 #   agent_send  → should reach agents on host B
 ```
 
+### Per-machine participation (extension)
+
+The relay's gate is the master switch, but each machine can also refuse to
+participate via the extension config (`~/.config/pi/agent/extensions/un-bien.json`):
+
+```json
+{ "mesh": { "federation": false } }
+```
+
+Tools on + federation off = local/same-relay mesh only (no cross-relay
+discovery, routing, or inbound). Default true.
+
 ### Prerequisites
 
 - **Both relays must share an owner** — the app must be paired with at

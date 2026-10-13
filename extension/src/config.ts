@@ -100,7 +100,14 @@ export type UnBienConfig = {
    *  Absent/false ⇒ the tools are NOT registered; the broker + relay still
    *  work for the paired app, but the model can't send/list/wait messages.
    *  See `docs/cross-session-comms.md` + `session/tools.ts`. */
-  mesh?: { tools?: boolean }
+  mesh?: {
+    tools?: boolean
+    /** Per-machine participation in relay FEDERATION (cross-relay peers).
+     *  Distinct from `tools`: tools on + federation off = local/same-relay
+     *  mesh only. The relay's `federation.enabled` gate remains the master
+     *  opt-in; this is the per-machine refusal switch. Default true. */
+    federation?: boolean
+  }
 }
 
 export function loadConfig(): UnBienConfig {

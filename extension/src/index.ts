@@ -1039,6 +1039,11 @@ const relayDeps: RelayLifecycleDeps = {
     // pushes + the explicit get_federated_peer_list response.
     if (v) {
       v.on("message", (line: string) => {
+        // Per-machine federation gate (mesh.federation, default true — the
+        // relay's federation.enabled is the master opt-in; this is the local
+        // refusal switch). When off, the caches stay empty: list_peers shows
+        // no remote-relay peers and agent_send's federated routing no-ops.
+        if (loadConfig().mesh?.federation === false) return
         try {
           const frame = JSON.parse(line) as { type?: string; peers?: Array<{ epk?: string; relay_name?: string; rooms?: Array<{ cwd?: string; name?: string; room_id?: string }> }>; envelope?: { from?: string; to?: string; body?: unknown; id?: string; re?: string | null } }
           if (frame.type === "federated_peer_list" && Array.isArray(frame.peers)) {
