@@ -538,6 +538,7 @@ async fn connect_and_verify(
                             .await;
                         continue;
                     }
+                    federated.record_reply_route(&forward.from_epk, &peer.name).await;
                     // Outer-envelope forward (app→pi / ub frames): the opaque
                     // {peer, room, ct} rides the SAME verified provenance the
                     // inner form has — authenticated-forwarding REQUIRED, so it
@@ -860,6 +861,7 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
                             .await;
                         continue;
                     }
+                    state.federated.record_reply_route(&forward.from_epk, &peer_list.relay_name).await;
                     // Outer-envelope forward (app→pi / ub frames): the opaque
                     // {peer, room, ct} rides the SAME verified provenance the
                     // inner form has — authenticated-forwarding REQUIRED, so it
@@ -1090,16 +1092,48 @@ pub struct FederatedSessions {
     forward_senders: Mutex<HashMap<String, Vec<mpsc::UnboundedSender<String>>>>,
     /// request_id → oneshot sender (for relay_forward_ack replies)
     pending_forwards: Mutex<HashMap<String, oneshot::Sender<RelayForwardAck>>>,
+    /// client-epk → (originating peer relay, recorded-at) for REPLY ROUTES.
+    /// An app client has no rooms on any relay, so a remote relay has no epk→
+    /// relay mapping for it — but it DOES learn the route when that client's
+    /// outer envelope is forwarded in (record_reply_route). The daemon's
+    /// reply (handshake, caps, launch ack) then routes BACK via the same
+    /// relay, completing the E2E handshake that otherwise never finishes.
+    /// TTL-bounded so stale routes self-expire.
+    reply_routes: Mutex<HashMap<String, (String, std::time::Instant)>>,
 }
 
 impl FederatedSessions {
+    /// How long a learned reply route stays routable.
+    pub const REPLY_ROUTE_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+
     pub fn new() -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
             epk_to_relays: Mutex::new(HashMap::new()),
             forward_senders: Mutex::new(HashMap::new()),
             pending_forwards: Mutex::new(HashMap::new()),
+            reply_routes: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Learn/refresh that `from_epk` is reachable via `relay_name` (called for
+    /// every SIG-VERIFIED inbound forward — unauthenticated forwards never
+    /// poison routes).
+    pub async fn record_reply_route(&self, from_epk: &str, relay_name: &str) {
+        let mut routes = self.reply_routes.lock().await;
+        let now = std::time::Instant::now();
+        routes.retain(|_, (_, at)| now.duration_since(*at) < Self::REPLY_ROUTE_TTL);
+        routes.insert(from_epk.to_string(), (relay_name.to_string(), now));
+    }
+
+    /// The peer relay a (possibly non-local) epk was last forwarded FROM, if
+    /// fresh. Used when relays_for_epk has no mapping (app clients).
+    async fn reply_relay_for(&self, epk: &str) -> Option<String> {
+        let routes = self.reply_routes.lock().await;
+        routes
+            .get(epk)
+            .filter(|(_, at)| at.elapsed() < Self::REPLY_ROUTE_TTL)
+            .map(|(relay, _)| relay.clone())
     }
 
     /// Replace all sessions from a given peer relay (on relay_peer_list).
@@ -1318,7 +1352,14 @@ impl FederatedSessions {
     ) -> Option<(String, oneshot::Receiver<RelayForwardAck>)> {
         // Multi-route fallback: try each relay that has the target epk,
         // in order, until we find one with an alive sender.
-        let relay_names = self.relays_for_epk(target_epk).await;
+        let mut relay_names = self.relays_for_epk(target_epk).await;
+        if relay_names.is_empty() {
+            // No rooms-based mapping (e.g. an app client's reply): fall back
+            // to the learned reply route.
+            if let Some(relay) = self.reply_relay_for(target_epk).await {
+                relay_names = vec![relay];
+            }
+        }
         if relay_names.is_empty() {
             return None;
         }
@@ -1382,7 +1423,14 @@ impl FederatedSessions {
         room: &str,
         ct: &str,
     ) -> Option<(String, oneshot::Receiver<RelayForwardAck>)> {
-        let relay_names = self.relays_for_epk(target_epk).await;
+        let mut relay_names = self.relays_for_epk(target_epk).await;
+        if relay_names.is_empty() {
+            // No rooms-based mapping (e.g. an app client's reply): fall back
+            // to the learned reply route.
+            if let Some(relay) = self.reply_relay_for(target_epk).await {
+                relay_names = vec![relay];
+            }
+        }
         if relay_names.is_empty() {
             return None;
         }
