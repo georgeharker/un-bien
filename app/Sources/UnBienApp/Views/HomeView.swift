@@ -143,6 +143,10 @@ struct HomeView: View {
                         // only when >1 machine is live on this relay.
                         let multiMachine = Set(sessions.map(\.peerEPK)).count > 1
                         let badge: (LiveSession) -> String? = { s in
+                            // Federated rows carry their own relay chip (RHS,
+                            // server-rack) — a hex-prefix machine badge would
+                            // just pair with it wrongly.
+                            if s.peerRelay != nil { return nil }
                             guard multiMachine else { return nil }
                             let m = launchMachines.first { $0.epk == s.peerEPK }
                             return m?.nickname ?? m?.hostname ?? String(s.peerEPK.prefix(6))
@@ -179,6 +183,14 @@ struct HomeView: View {
                             MachineLaunchRow(machine: machine,
                                              onLaunch: { launchTarget = .machine(machine) },
                                              onResume: { resumeTarget = machine })
+                        }
+                        // FEDERATED machines (relay peering): the same machine
+                        // row shape, launch chip routed through the local relay's
+                        // outer forward to the peer relay that owns the machine.
+                        // Presence (caps) polled by the same list-level sweep.
+                        ForEach(model.federatedMachines(onRelay: relay.id)) { fm in
+                            FederatedMachineLaunchRow(machine: fm,
+                                                      onLaunch: { launchTarget = .federated(fm) })
                         }
                         // Known machine whose rooms are gated (unpaired / revoked /
                         // re-keyed): offer re-pair instead of a silent empty listing.
@@ -276,6 +288,12 @@ struct HomeView: View {
                 where model.daemonPresence(for: machine) == nil {
                     await model.requestDaemonStatus(machine: machine)
                 }
+                // FEDERATED machines ride the same caps store, so the same
+                // sweep probes them (stop-once-answered applies identically).
+                for fm in model.federatedMachines(onRelay: relay.id)
+                where model.daemonPresence(federated: fm) == nil {
+                    await model.requestDaemonStatus(relayID: fm.relayID, epk: fm.epk)
+                }
             }
             try? await Task.sleep(nanoseconds: 3_000_000_000)
         }
@@ -330,6 +348,20 @@ struct HomeView: View {
                         .padding(.vertical, 2)
                         .background(theme.secondaryText.opacity(0.12), in: Capsule())
                         .accessibilityLabel("Machine: \(machineBadge)")
+                }
+                // Federated session: WHICH peer relay it lives on. TRAILING chip
+                // (user) matching the local machine chip's capsule style; the
+                // badge above returns nil for federated rows, so never both.
+                if let fed = session.peerRelay {
+                    HStack(spacing: 3) {
+                        Image(systemName: "server.rack").font(.caption2)
+                        Text(fed).font(.caption2.weight(.medium))
+                    }
+                    .foregroundStyle(theme.secondaryText)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(theme.secondaryText.opacity(0.12), in: Capsule())
+                    .accessibilityLabel("On remote machine \(fed)")
                 }
                 // A pending extension_ui ask for this session: the ask sheet only
                 // presents INSIDE the open transcript, so without a row-level
@@ -558,16 +590,6 @@ private struct SessionRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
-                // Federated: monochrome server icon + host label (theme-colored,
-                // no emoji) — this session lives on a remote relay.
-                if let peerRelay = session.peerRelay {
-                    Image(systemName: "server.rack")
-                        .font(.caption)
-                        .foregroundStyle(theme.secondaryText)
-                        .accessibilityLabel("On remote machine \(peerRelay)")
-                    Text(peerRelay).font(.caption2.weight(.medium))
-                        .foregroundStyle(theme.secondaryText)
-                }
                 Text(session.name).font(.body)
             }
             if let cwd = session.cwd {
@@ -645,6 +667,68 @@ private struct MachineLaunchRow: View {
         guard let d = model.daemonPresence(for: machine) else { return "searching for daemon…" }
         let backend = d.backend.map { " · \($0)" } ?? "" 
         return "ready to launch" + backend
+    }
+}
+
+/// A FEDERATED machine's machine-level launch row — mirrors MachineLaunchRow
+/// (icon-led, muted, launch chip cap-gated) with a monochrome server adornment
+/// marking the remote hop. Presence pulls through the same (relay, epk) caps
+/// store; launch routes through the local relay's outer forward.
+private struct FederatedMachineLaunchRow: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.appTheme) private var theme
+    let machine: FederatedMachine
+    let onLaunch: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "desktopcomputer")
+                .font(.title3)
+                .foregroundStyle(theme.secondaryText)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text(machine.name).font(.subheadline.weight(.medium))
+                    // Federated adornment: monochrome server mark, same
+                    // language as the session chip (no emoji colors).
+                    Image(systemName: "server.rack")
+                        .font(.caption2)
+                        .foregroundStyle(theme.secondaryText)
+                        .accessibilityLabel("Remote machine reached via federated relay \(machine.name)")
+                }
+                Text(subtitle).font(.caption)
+                    .foregroundStyle(theme.secondaryText).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            if model.daemonSupports("remote_launch", federated: machine) {
+                Button(action: onLaunch) {
+                    Image(systemName: "plus.circle.fill").imageScale(.large)
+                }
+                .buttonStyle(.borderless)
+                .tint(theme.accent)
+                .accessibilityLabel("Launch a session on remote machine \(machine.name)")
+            } else {
+                ProgressView().controlSize(.small)
+            }
+        }
+        .padding(.vertical, 2)
+        // Launch only (user UX parity with local machines); federated RESUME
+        // rides the same machinery but stays deferred until the sheet wiring
+        // for remote stored-session listings exists.
+        .contextMenu {
+            if model.daemonSupports("remote_launch", federated: machine) {
+                Button(action: onLaunch) {
+                    Label("New Conversation…", systemImage: "plus.bubble")
+                }
+            }
+        }
+    }
+
+    private var subtitle: String {
+        guard let d = model.daemonPresence(federated: machine) else {
+            return "remote machine — searching for daemon…"
+        }
+        let backend = d.backend.map { " · \($0)" } ?? ""
+        return "remote · ready to launch" + backend
     }
 }
 

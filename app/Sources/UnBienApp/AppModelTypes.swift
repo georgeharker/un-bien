@@ -74,6 +74,23 @@ struct AskSyncWindow: Equatable, Sendable {
 /// Daemon/machine status pulled via a `presence_status` request (design
 /// 01M1813Q) — an idle machine's launch capabilities + configured backend,
 /// kept SEPARATE from per-session `capabilities` (there is no session here).
+/// A machine known through RELAY-TO-RELAY FEDERATION (relay-peering.md): the
+/// app's own relay peers with another relay and shares their machines.
+/// Routes launch/presence envelopes through the local relay — the relay
+/// outer-forwards them to the owning relay, so the cross-hop is invisible
+/// here (same (relayID, epk) control-room shape as a paired machine).
+public struct FederatedMachine: Identifiable, Equatable, Sendable {
+    public let relayID: UUID
+    public let epk: String
+    public let name: String
+    public var id: String { "\(relayID.uuidString):\(epk)" }
+    public init(relayID: UUID, epk: String, name: String) {
+        self.relayID = relayID
+        self.epk = epk
+        self.name = name
+    }
+}
+
 public struct DaemonPresence: Equatable, Sendable {
     public var caps: Set<String>
     public var hostname: String?

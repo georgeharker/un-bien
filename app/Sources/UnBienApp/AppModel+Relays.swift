@@ -79,7 +79,12 @@ extension AppModel {
                 .replacingOccurrences(of: "ws://", with: "")
                 .replacingOccurrences(of: "http://", with: "")
             let host = hostPart.split(separator: "/").first.map(String.init) ?? hostPart
-            let isTailscale = host.hasSuffix(".ts.net") || isTailscaleCGNAT(host)
+            // Single-label hosts (no dot) are local-network names — mDNS
+            // (.local) or MagicDNS short forms (e.g. `cascade`) — both only
+            // meaningful inside the user's own network, so skip the warning.
+            let isTailscale =
+                host.hasSuffix(".ts.net") || isTailscaleCGNAT(host)
+                || !host.contains(".")
             if isTailscale { return }
             let isLocal = host.hasPrefix("127.0.0.1") || host.hasPrefix("localhost")
             let scope = isLocal ? "fine for a local relay" : "fine on Tailscale/LAN — avoid on public networks"
@@ -257,14 +262,36 @@ extension AppModel {
         daemonPresence(for: machine)?.supports(cap) ?? false
     }
 
+    /// Same caps store, for a FEDERATED machine: the store is keyed by
+    /// (relay, epk) — the routing identity is all a machine ever is — so a
+    /// federated peer's presence lands in the SAME slots.
+    public func daemonPresence(federated fm: FederatedMachine) -> DaemonPresence? {
+        daemonPresence[machineCapsKey(relayID: fm.relayID, epk: fm.epk)]
+    }
+
+    public func daemonSupports(_ cap: String, federated fm: FederatedMachine) -> Bool {
+        daemonPresence(federated: fm)?.supports(cap) ?? false
+    }
+
+    /// Federated machines known via one relay's peer list (display order).
+    public func federatedMachines(onRelay relayID: UUID) -> [FederatedMachine] {
+        federatedMachines.filter { $0.relayID == relayID }
+    }
+
     /// Pull a machine's daemon caps: derive its control room and send a
     /// `presence_status` request there (design 01M1813Q). The daemon, if up,
     /// replies with { caps, hostname, backend } into the `daemonPresence` store.
     public func requestDaemonStatus(machine: PairedMachine) async {
-        guard let connection = connections[machine.relayID],
-              let room = Base64.deriveControlRoom(epk: machine.epk) else { return }
+        await requestDaemonStatus(relayID: machine.relayID, epk: machine.epk)
+    }
+
+    /// Same poll for a FEDERATED machine — same derived control room, same
+    /// envelope; the local relay routes it to the peer relay that owns it.
+    public func requestDaemonStatus(relayID: UUID, epk: String) async {
+        guard let connection = connections[relayID],
+              let room = Base64.deriveControlRoom(epk: epk) else { return }
         try? await connection.send(.presenceStatus(id: UUID().uuidString),
-                                   toPeer: machine.epk, room: room)
+                                   toPeer: epk, room: room)
     }
 
     /// Launch a session on an IDLE machine (no live session needed): send
@@ -284,14 +311,23 @@ extension AppModel {
     public func launchOnMachine(cwd: String?, name: String?,
                                 resume: String? = nil,
                                 machine: PairedMachine) async -> String? {
-        guard let connection = connections[machine.relayID],
-              let room = Base64.deriveControlRoom(epk: machine.epk) else { return nil }
+        await launchOnMachine(cwd: cwd, name: name, resume: resume,
+                              relayID: machine.relayID, epk: machine.epk)
+    }
+
+    /// The (relayID, epk) core the paired/federated overloads share — routing
+    /// is all a machine ever is, and both resolve to these two facts.
+    @discardableResult
+    public func launchOnMachine(cwd: String?, name: String?, resume: String? = nil,
+                                relayID: UUID, epk: String) async -> String? {
+        guard let connection = connections[relayID],
+              let room = Base64.deriveControlRoom(epk: epk) else { return nil }
         let trimmedCwd = cwd?.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedName = name?.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedResume = resume?.trimmingCharacters(in: .whitespacesAndNewlines)
         let rid = UUID().uuidString
         pendingMachineLaunches[rid] = PendingMachineLaunch(
-            machineKey: machineCapsKey(relayID: machine.relayID, epk: machine.epk),
+            machineKey: machineCapsKey(relayID: relayID, epk: epk),
             launchReq: rid)
         // Backstop: a launch that never comes live (daemon died mid-spawn,
         // spawn failed after the gate) must not hijack a LATER announce's
@@ -306,7 +342,7 @@ extension AppModel {
                            cwd: (trimmedCwd?.isEmpty ?? true) ? nil : trimmedCwd,
                            name: (trimmedName?.isEmpty ?? true) ? nil : trimmedName,
                            resume: (trimmedResume?.isEmpty ?? true) ? nil : trimmedResume),
-            toPeer: machine.epk, room: room)
+            toPeer: epk, room: room)
         return rid
     }
 

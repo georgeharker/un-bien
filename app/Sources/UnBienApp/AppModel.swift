@@ -149,6 +149,9 @@ public final class AppModel: ObservableObject {
     /// machine (launch caps + backend), not a live session. Keyed by the
     /// control-room key `relayID:daemonEPK:controlRoomID`.
     @Published public var daemonPresence: [String: DaemonPresence] = [:]
+    /// Machines known through RELAY-TO-RELAY FEDERATION (relay-peering.md):
+    /// Home renders each as a machine launch row (server-rack adorned).
+    @Published public var federatedMachines: [FederatedMachine] = []
     /// A pairing invite opened via the `unbien://` scheme, awaiting a relay
     /// choice. Drives the deep-link relay chooser sheet.
     @Published public var pendingPairing: PendingPairing?

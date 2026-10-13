@@ -899,12 +899,25 @@ extension AppModel {
             upsertSession(relayID: relayID, peer: peer, room: room)
         case let .federatedPeerList(peers):
             // Federated machines' rooms (relay-to-relay peering): upsert each
-            // with peerRelay stamped so Home renders the server icon + host.
+            // with peerRelay stamped so Home renders the server chip on the
+            // session row; each peer ALSO becomes a machine launch row.
+            var known = Set<String>()
             for fedPeer in peers {
                 for var room in fedPeer.rooms {
                     room.peerRelay = fedPeer.relayName
                     upsertSession(relayID: relayID, peer: fedPeer.epk, room: room)
                 }
+                let fm = FederatedMachine(relayID: relayID, epk: fedPeer.epk,
+                                          name: fedPeer.relayName)
+                known.insert(fm.id)
+                if !federatedMachines.contains(fm) {
+                    federatedMachines.append(fm)
+                }
+            }
+            // Prune machines this relay no longer federates (peer left the
+            // mesh / peering torn down) — the list frame IS the topology.
+            federatedMachines.removeAll {
+                $0.relayID == relayID && !known.contains($0.id)
             }
         case let .roomEnded(peer, roomID, _):
             if let k = sessionKey(relayID: relayID, peer: peer, roomID: roomID) {

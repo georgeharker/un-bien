@@ -7,10 +7,14 @@ import UnBienCore
 /// the single launch surface.
 enum LaunchTarget: Identifiable {
     case machine(PairedMachine)
+    /// Launch on a machine known through relay-to-relay federation — the
+    /// routing facts are the same (relay + epk); the sheet wording differs.
+    case federated(FederatedMachine)
 
     var id: String {
         switch self {
         case let .machine(m): return "machine:\(m.id)"
+        case let .federated(f): return "federated:\(f.id)"
         }
     }
 }
@@ -88,15 +92,27 @@ struct LaunchSessionSheet: View {
     }
 
     private var subtitle: String {
-        if case let .machine(m) = target, let backend = model.daemonPresence(for: m)?.backend {
-            return "Starts a new pi session on this machine using \(backend)."
+        switch target {
+        case let .machine(m):
+            if let backend = model.daemonPresence(for: m)?.backend {
+                return "Starts a new pi session on this machine using \(backend)."
+            }
+            return "Starts a new pi session on this machine using its configured backend (tmux or herdr). Set the backend in the machine's un-bien settings."
+        case let .federated(f):
+            if let backend = model.daemonPresence(federated: f)?.backend {
+                return "Starts a new pi session on \(f.name) (remote, via federated relay) using \(backend)."
+            }
+            return "Starts a new pi session on \(f.name) — a remote machine reached through your relay's federated peering."
         }
-        return "Starts a new pi session on this machine using its configured backend (tmux or herdr). Set the backend in the machine's un-bien settings."
     }
 
     private func launch() async {
-        if case let .machine(m) = target {
+        switch target {
+        case let .machine(m):
             await model.launchOnMachine(cwd: cwd, name: name, machine: m)
+        case let .federated(f):
+            await model.launchOnMachine(cwd: cwd, name: name,
+                                        relayID: f.relayID, epk: f.epk)
         }
     }
 }
