@@ -538,6 +538,7 @@ private struct RelayHeader: View {
 }
 
 private struct SessionRow: View {
+    @Environment(\.appTheme) private var theme
     let session: LiveSession
     /// Shared formatter (plan 01M18VA5X3M6T): relative delta on Home rows.
     private static let relativeFormatter: RelativeDateTimeFormatter = {
@@ -556,7 +557,19 @@ private struct SessionRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(session.name).font(.body)
+            HStack(spacing: 4) {
+                // Federated: monochrome server icon + host label (theme-colored,
+                // no emoji) — this session lives on a remote relay.
+                if let peerRelay = session.peerRelay {
+                    Image(systemName: "server.rack")
+                        .font(.caption)
+                        .foregroundStyle(theme.secondaryText)
+                        .accessibilityLabel("On remote machine \(peerRelay)")
+                    Text(peerRelay).font(.caption2.weight(.medium))
+                        .foregroundStyle(theme.secondaryText)
+                }
+                Text(session.name).font(.body)
+            }
             if let cwd = session.cwd {
                 Text(cwd).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }

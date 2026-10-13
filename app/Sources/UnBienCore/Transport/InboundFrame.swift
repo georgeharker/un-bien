@@ -60,6 +60,10 @@ public enum InboundFrame: Equatable, Sendable {
                 throw DecodeError.invalidMessage("room_ended missing 'room_id'")
             }
             return .roomEnded(peer: try peer(), roomID: roomID, sinceTs: object["since_ts"] as? Int)
+        case "federated_peer_list":
+            let envelope = try decoder.decode(
+                FederatedPeerListEnvelope.self, from: data)
+            return .federatedPeerList(peers: envelope.peers)
         case "room_meta_updated":
             guard let roomID = object["room_id"] as? String else {
                 throw DecodeError.invalidMessage("room_meta_updated missing 'room_id'")
@@ -78,4 +82,7 @@ public enum InboundFrame: Equatable, Sendable {
 
     private struct PresenceEnvelope: Decodable { let states: [PresenceState] }
     private struct RoomsEnvelope: Decodable { let peer: String; let rooms: [RoomInfo] }
+    private struct FederatedPeerListEnvelope: Decodable {
+        let peers: [FederatedPeer]
+    }
 }

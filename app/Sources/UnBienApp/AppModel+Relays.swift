@@ -445,6 +445,7 @@ extension AppModel {
                                   parentSessionID: room.parentSessionID,
                                   parentRoomID: room.parent, subagentID: room.subagentID,
                                   startedAt: room.startedAt)
+        session.peerRelay = room.peerRelay
         // Manual dismissal (plan 01M18X3B): an ended chat the user removed
         // stays hidden — a snapshot re-listing or re-announce is the room
         // LINGERING at the relay, not liveness. Only proof of life (a fresh

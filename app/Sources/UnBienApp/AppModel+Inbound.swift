@@ -897,6 +897,15 @@ extension AppModel {
             for room in rooms { upsertSession(relayID: relayID, peer: peer, room: room) }
         case let .roomAnnounced(peer, room):
             upsertSession(relayID: relayID, peer: peer, room: room)
+        case let .federatedPeerList(peers):
+            // Federated machines' rooms (relay-to-relay peering): upsert each
+            // with peerRelay stamped so Home renders the server icon + host.
+            for fedPeer in peers {
+                for var room in fedPeer.rooms {
+                    room.peerRelay = fedPeer.relayName
+                    upsertSession(relayID: relayID, peer: fedPeer.epk, room: room)
+                }
+            }
         case let .roomEnded(peer, roomID, _):
             if let k = sessionKey(relayID: relayID, peer: peer, roomID: roomID) {
                 sessions[k] = nil

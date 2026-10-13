@@ -99,6 +99,11 @@ public struct RoomInfo: Codable, Equatable, Sendable {
     /// daemons/extensions — the session then just surfaces via normal
     /// discovery.
     public let launchReq: String?
+    /// If present, this session lives on a FEDERATED (remote) peer relay —
+    /// surfaced by that relay's rooms_check. The value is the peer relay's
+    /// name (e.g. "droplet"); absent = the session is local to this relay.
+    /// Rendered as a monochrome server icon + host label on the Home row.
+    public var peerRelay: String?
 
     enum CodingKeys: String, CodingKey {
         case roomID = "room_id"
@@ -109,6 +114,20 @@ public struct RoomInfo: Codable, Equatable, Sendable {
         case sessionID = "sessionId"
         case parentSessionID = "parentSessionId"
         case launchReq = "launchReq"
+        case peerRelay = "peerRelay"
+    }
+}
+
+/// One federated-machine entry from the relay's `federated_peer_list` push:
+/// the machine's epk + peer relay name + its advertised rooms (with
+/// `peerRelay` stamped on each so SessionRow renders the server icon).
+public struct FederatedPeer: Codable, Equatable, Sendable {
+    public let epk: String
+    public let relayName: String
+    public let rooms: [RoomInfo]
+    enum CodingKeys: String, CodingKey {
+        case epk, rooms
+        case relayName = "relay_name"
     }
 }
 
@@ -134,6 +153,7 @@ public enum RelayControlIn: Equatable, Sendable {
     case peerOffline(peer: String, sinceTs: Int?)
     case presence(states: [PresenceState])
     case rooms(peer: String, rooms: [RoomInfo])
+    case federatedPeerList(peers: [FederatedPeer])
     case roomAnnounced(peer: String, room: RoomInfo)
     case roomEnded(peer: String, roomID: String, sinceTs: Int?)
     case roomMetaUpdated(

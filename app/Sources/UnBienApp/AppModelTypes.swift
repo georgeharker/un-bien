@@ -36,6 +36,10 @@ public struct LiveSession: Identifiable, Equatable, Hashable, Sendable {
     /// Session start (epoch ms, from pair_ok / room_meta.started_at) — feeds
     /// the Home row's relative-age display (plan 01M18VA5X3M6T).
     public var startedAt: Int? = nil
+    /// Peer relay name when this session is on a FEDERATED relay (arrived via
+    /// that relay's rooms_check) — nil = local to this relay. Home renders a
+    /// monochrome server icon + host for it.
+    public var peerRelay: String? = nil
 
     /// Identity = pi sessionId, NOT the routing roomId.
     public var id: String { "\(relayID.uuidString):\(peerEPK):\(sessionID)" }
