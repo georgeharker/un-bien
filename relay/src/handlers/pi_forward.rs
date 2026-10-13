@@ -31,7 +31,9 @@ use tokio::sync::Mutex as AsyncMutex;
 use tracing::warn;
 
 use crate::identity::canonical_ed25519_public_key;
-use crate::mesh::{MeshStore, types::MeshHeader};
+use crate::mesh::MeshStore;
+#[cfg(test)]
+use crate::mesh::types::MeshHeader;
 use crate::peering::FederatedSessions;
 use crate::peers::pairing::PairingRegistry;
 use crate::peers::registry::PeerRegistry;
@@ -224,6 +226,7 @@ impl Default for MeshAuthCache {
     }
 }
 
+#[cfg(test)] // only the test module exercises this copy (membership.rs holds the lib one)
 fn direct_members_from_blobs(pi_pk: &str, blobs: &[Vec<u8>]) -> Option<HashSet<String>> {
     let mut union = HashSet::new();
     for blob in blobs {

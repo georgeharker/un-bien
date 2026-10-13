@@ -115,6 +115,23 @@ fn home_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
+/// The relay's CONFIG file — user intent/settings (federation gate, and later
+/// name/url/port). State (peers topology, mesh.db) stays under the state root;
+/// settings belong in the config root, which is dotfile-syncable.
+pub fn relay_config_path() -> PathBuf {
+    let base = std::env::var("XDG_CONFIG_HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from("/"))
+                .join(".config")
+        });
+    base.join("un-bien").join("relay.json")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,21 +206,4 @@ mod tests {
             PathBuf::from("/home/agent/.local/state/un-bien/relay.log")
         );
     }
-}
-
-/// The relay's CONFIG file — user intent/settings (federation gate, and later
-/// name/url/port). State (peers topology, mesh.db) stays under the state root;
-/// settings belong in the config root, which is dotfile-syncable.
-pub fn relay_config_path() -> PathBuf {
-    let base = std::env::var("XDG_CONFIG_HOME")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            std::env::var("HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from("/"))
-                .join(".config")
-        });
-    base.join("un-bien").join("relay.json")
 }
