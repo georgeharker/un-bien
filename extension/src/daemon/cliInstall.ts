@@ -32,9 +32,10 @@ export interface CliInstallResult {
 export function extIsDevChannel(): boolean {
   try {
     const here = fileURLToPath(import.meta.url)
-    // dist/daemon/cliInstall.js → ../.. = the extension package root
+    // dist/daemon/cliInstall.js → ../../.. = the extension package root
+    // (three levels, matching _readExtensionVersion's resolution)
     const pkg = JSON.parse(
-      readFileSync(join(here, "..", "..", "package.json"), "utf8"),
+      readFileSync(join(here, "..", "..", "..", "package.json"), "utf8"),
     ) as { version?: string }
     return typeof pkg.version === "string" && pkg.version.includes("-dev")
   } catch {
