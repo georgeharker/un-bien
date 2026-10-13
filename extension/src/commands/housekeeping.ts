@@ -23,6 +23,7 @@ import {
 import {
   RELAY_LAUNCHD_LABEL,
   RELAY_SYSTEMD_UNIT,
+  type RelayInstallResult,
   installRelayService,
   uninstallRelayService,
 } from "../daemon/relayService.js"
@@ -61,6 +62,12 @@ import { fileURLToPath } from "node:url"
  * binary from PATH (they did `npm install -g un-bien`), so re-linking would
  * point their `un-bien` at the Pi-extension copy and diverge on upgrades.
  */
+/** Readable suffix for the relay's upgrade action in the durable summary —
+ *  unknown/missing actions are left unannotated. */
+function relayActionSuffix(action: RelayInstallResult["relayAction"]): string {
+  return action && action !== "unknown" ? ` — ${action}` : ""
+}
+
 /** Launcher-daemon install WITHOUT notifying — returns the report sections.
  *  _cmdInstallTarget consolidates these into ONE final notify: the pi TUI
  *  replaces toasts as they arrive, so per-step messages were wiping each
@@ -236,10 +243,13 @@ export async function _cmdInstallTarget(
           // transient progress toasts (replaced as they arrive)
           onLog: (l) => ctx.ui.notify(`[relay] ${l}`, "info"),
         })
+        const relayLine = r.relayVersion
+          ? `  Binary: ${r.binary} (unbien-relay ${r.relayVersion}${relayActionSuffix(r.relayAction)})`
+          : `  Binary: ${r.binary}`
         summary.push(
           `[un-bien] Relay service installed (${r.platform}).`,
+          relayLine,
           `  Unit: ${r.unitPath}`,
-          `  Binary: ${r.binary}`,
           // Display hint for the app's Add-Relay sheet — NOT a connection.
           // The scheme prefix (plain ws, no TLS) is shown by the sheet's
           // placeholder; the plain-ws posture is a documented design decision

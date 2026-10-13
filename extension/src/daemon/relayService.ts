@@ -120,20 +120,27 @@ export function hasCargo(): boolean {
 }
 
 /** Compile + install the relay via cargo. Takes minutes (bundled SQLite C
- *  compile) — the caller MUST have surfaced that to the user first. */
+ *  compile) — the caller MUST have surfaced that to the user first. When
+ *  `version` is given it is pinned EXPLICITLY: bare `cargo install` grabs
+ *  the newest STABLE release, silently DOWNGRADING a dev-channel machine
+ *  (and a pre-release cannot be selected without `--version` at all). */
 export async function cargoInstallRelay(
   onLog?: (line: string) => void,
+  opts: { version?: string } = {},
 ): Promise<RelayBinary> {
-  const { stdout, stderr } = await execFileAsync(
-    "cargo",
-    ["install", "un-bien-relay"],
-    { timeout: 15 * 60_000, maxBuffer: 8 * 1024 * 1024 },
-  ).catch((err) => {
+  const args = ["install", "un-bien-relay"]
+  if (opts.version) args.push("--version", opts.version)
+  const { stdout, stderr } = await execFileAsync("cargo", args, {
+    timeout: 15 * 60_000,
+    maxBuffer: 8 * 1024 * 1024,
+  }).catch((err) => {
     const detail =
       (err as { stderr?: string; message?: string }).stderr ??
       (err as { message?: string }).message ??
       String(err)
-    throw new Error(`cargo install un-bien-relay failed: ${detail}`)
+    throw new Error(
+      `cargo install un-bien-relay${opts.version ? ` ${opts.version}` : ""} failed: ${detail}`,
+    )
   })
   for (const line of `${stdout}\n${stderr}`.split("\n")) {
     if (line.trim()) onLog?.(line.trim())
@@ -143,6 +150,67 @@ export async function cargoInstallRelay(
     throw new Error(`cargo install reported success but ${cargoBin} is missing`)
   }
   return { path: cargoBin, source: "cargo-install" }
+}
+
+// ── Relay versioning (the install-but-stale fix) ───────────────────────────
+
+/** The version an existing relay binary reports (`unbien-relay 0.7.24-dev…`),
+ *  or null when it can't be run/versioned. Pure enough to test. */
+export function relayReportedVersion(binary: RelayBinary): string | null {
+  try {
+    const out = execFileSync(binary.path, ["--version"], {
+      encoding: "utf8",
+      timeout: 10_000,
+    })
+    const tokens = out.trim().replace(/^unbien-relay\s*/, "").split(/\s+/)
+    return tokens[tokens.length - 1] ?? null
+  } catch {
+    return null
+  }
+}
+
+/** Decision helper: does the installed relay need a (re)install to reach the
+ *  target? Null/"unknown" never installs — an unversionable binary is left
+ *  alone rather than churned blind. */
+export function relayNeedsUpdate(
+  reported: string | null,
+  target: string,
+): boolean {
+  if (!reported) return false
+  return reported !== target
+}
+
+/** Latest published version of the relay on the given channel, straight from
+ *  crates.io's registry API (newest-first list; dev-channel = newest
+ *  pre-release — bare `cargo install` would NEVER pick one). Returns null on
+ *  any failure: an offline machine keeps its current binary rather than
+ *  churning. crates.io requires a descriptive User-Agent. */
+export async function latestCratesVersion(
+  devChannel: boolean,
+): Promise<string | null> {
+  try {
+    const res = await fetch(
+      "https://crates.io/api/v1/crates/un-bien-relay",
+      {
+        headers: {
+          "User-Agent":
+            "un-bien-install (https://github.com/georgeharker/un-bien)",
+        },
+        signal: AbortSignal.timeout(10_000),
+      },
+    )
+    if (!res.ok) return null
+    const body = (await res.json()) as {
+      versions?: { num: string; yanked: boolean }[]
+    }
+    const versions = (body.versions ?? []).filter((v) => !v.yanked)
+    const wanted = devChannel
+      ? versions.find((v) => v.num.includes("-"))
+      : versions.find((v) => !v.num.includes("-"))
+    return wanted?.num ?? null
+  } catch {
+    return null
+  }
 }
 
 // ── Template rendering ─────────────────────────────────────────────────────
@@ -194,6 +262,13 @@ export interface RelayInstallResult {
   platform: "macos" | "linux"
   unitPath: string
   binary: string
+  /** The relay's reported version AFTER any upgrade (undefined when the
+   *  binary couldn't be versioned — useful for the durable summary). */
+  relayVersion?: string
+  /** What the upgrade check did: freshly installed, upgraded, or already
+   *  current. Lets the caller state WHAT happened, not just that a unit
+   *  file exists. */
+  relayAction?: "installed" | "upgraded" | "current" | "unknown"
   port: number
   log: string[]
 }
@@ -224,13 +299,43 @@ export async function installRelayService(opts: {
   const platform = process.platform === "darwin" ? "macos" : "linux"
 
   let binary = findRelayBinary()
-  if (!binary) {
+  let relayVersion: string | undefined
+  let relayAction: RelayInstallResult["relayAction"] = "unknown"
+  if (binary) {
+    // UPGRADE CHECK (the install-but-stale fix): an existing binary is NOT
+    // assumed current. Resolve the channel target from crates.io and reinstall
+    // on mismatch — the service kickstart afterwards then actually loads the
+    // version the channel promises, instead of yesterday's build.
     if (opts.autoInstall && hasCargo()) {
+      const target = await latestCratesVersion(extIsDevChannel())
+      const reported = relayReportedVersion(binary)
       push(
-        "relay binary not found — compiling via cargo install (this takes a few minutes)…",
+        `relay binary: ${binary.path} (${reported ?? "unknown version"})`,
       )
-      binary = await cargoInstallRelay(push)
-    } else {
+      if (target && relayNeedsUpdate(reported, target)) {
+        push(`updating relay: ${reported} → ${target} …`)
+        binary = await cargoInstallRelay(push, { version: target })
+        relayAction = "upgraded"
+      } else if (target) {
+        push(`relay already current: ${target}`)
+        relayAction = "current"
+      } else {
+        push("could not reach crates.io for a version check — leaving the installed relay as-is")
+        relayAction = "current"
+      }
+      relayVersion = relayReportedVersion(binary) ?? undefined
+    }
+  } else if (opts.autoInstall && hasCargo()) {
+    push(
+      "relay binary not found — compiling via cargo install (this takes a few minutes)…",
+    )
+    const target = await latestCratesVersion(extIsDevChannel())
+    binary = target
+      ? await cargoInstallRelay(push, { version: target })
+      : await cargoInstallRelay(push)
+    relayAction = "installed"
+    relayVersion = relayReportedVersion(binary) ?? undefined
+  } else {
       throw new Error(
         "`unbien-relay` binary not found. Either:\n" +
           "  • cargo install un-bien-relay        (compiles from source; needs Rust)\n" +
@@ -241,7 +346,6 @@ export async function installRelayService(opts: {
           "then re-run /unbien install relay",
       )
     }
-  }
   push(`relay binary: ${binary.path} (${binary.source})`)
 
   const port = opts.port ?? RELAY_DEFAULT_PORT
@@ -329,7 +433,15 @@ export async function installRelayService(opts: {
     push("activated via systemctl --user enable + restart")
   }
 
-  return { platform, unitPath, binary: binary.path, port, log }
+  return {
+    platform,
+    unitPath,
+    binary: binary.path,
+    relayVersion,
+    relayAction,
+    port,
+    log,
+  }
 }
 
 export async function uninstallRelayService(): Promise<{
