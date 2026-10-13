@@ -121,13 +121,15 @@ export function findTemplate(
 
 // ── Service paths ──────────────────────────────────────────────────────────
 
+export const LAUNCHER_SYSTEMD_UNIT = "unbien-launcher.service"
+
 export function systemdUnitPath(): string {
   return join(
     homedir(),
     ".config",
     "systemd",
     "user",
-    "unbien-launcher.service",
+    LAUNCHER_SYSTEMD_UNIT,
   )
 }
 

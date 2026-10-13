@@ -14,6 +14,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent"
 import {
   LAUNCHD_LABEL,
+  LAUNCHER_SYSTEMD_UNIT,
   installService,
   uninstallService,
   linkCliBinaries,
@@ -21,6 +22,7 @@ import {
 } from "../daemon/install.js"
 import {
   RELAY_LAUNCHD_LABEL,
+  RELAY_SYSTEMD_UNIT,
   installRelayService,
   uninstallRelayService,
 } from "../daemon/relayService.js"
@@ -259,8 +261,9 @@ export async function _cmdInstallTarget(
     }
   }
 
-  // ALWAYS REKICK (macOS): a launchd service keeps the OLD image loaded until
-  // restarted — an install without a kickstart yields "installed but stale"
+  // ALWAYS REKICK (macOS/linux): a launchd service keeps the OLD image loaded
+  // until restarted, and systemd --user won't pick up a replaced binary until
+  // restart either — an install without a rekick yields "installed but stale"
   // running code (observed: relay updated to 0.7.24 on disk while the service
   // kept 0.7.22 behavior, including the legacy gate read). Kick BOTH services:
   // the launcher daemon follows this extension's dist and the relay runs its
@@ -278,9 +281,23 @@ export async function _cmdInstallTarget(
           : `[un-bien] could not restart ${label} — not installed (${r.status})`,
       )
     }
+  } else if (process.platform === "linux") {
+    // systemd --user units (unbien-launcher.service / unbien-relay.service —
+    // see install.ts's systemdUnitPath + relayService.ts's unit constant).
+    // restart (not try-restart) so a not-yet-running unit comes up too.
+    for (const unit of [LAUNCHER_SYSTEMD_UNIT, RELAY_SYSTEMD_UNIT]) {
+      const r = spawnSync("systemctl", ["--user", "restart", unit], {
+        stdio: "ignore",
+      })
+      summary.push(
+        r.status === 0
+          ? `[un-bien] restarted service: ${unit}`
+          : `[un-bien] could not restart ${unit} — not installed? (${r.status})`,
+      )
+    }
   } else {
     summary.push(
-      "[un-bien] non-macOS: restart the launcher + relay services to load the new files.",
+      "[un-bien] non-macOS/linux: restart the launcher + relay services to load the new files.",
     )
   }
 
