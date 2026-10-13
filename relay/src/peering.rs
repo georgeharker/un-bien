@@ -934,6 +934,14 @@ pub struct RelayForward {
     /// Signature over (request_id + from_epk + target_epk + visited joined).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relay_sig: Option<String>,
+    /// Outer-envelope forward (app→pi / ub frames, e.g. CLI remote launch):
+    /// when BOTH are present, `envelope` is ABSENT and these carry the
+    /// opaque {peer, room, ct} outer form to deliver verbatim to
+    /// (target_epk, room) via registry.forward.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ct: Option<String>,
 }
 
 /// Wire frame: the ack for a relay_forward (Phase 3c).
@@ -1219,6 +1227,8 @@ impl FederatedSessions {
             visited: visited.clone(),
             relay_pubkey: Some(keypair.pubkey_b64()),
             relay_sig: Some(relay_sig),
+            room: None,
+            ct: None,
         };
         let (otx, orx) = oneshot::channel();
         self.pending_forwards
@@ -1234,6 +1244,58 @@ impl FederatedSessions {
     /// never arrives (peer relay offline/unresponsive).
     pub async fn cancel_forward(&self, request_id: &str) {
         self.pending_forwards.lock().await.remove(request_id);
+    }
+
+    /// Forward an OUTER envelope (app→pi / ub frame, opaque {peer, room, ct})
+    /// to a federated peer relay. Same channel + ack mechanism as
+    /// forward_to_federated, but the payload is the opaque outer form — the
+    /// receiving relay delivers it via registry.forward to (target, room).
+    pub async fn forward_outer_to_federated(
+        &self,
+        from_epk: &str,
+        target_epk: &str,
+        room: &str,
+        ct: &str,
+    ) -> Option<oneshot::Receiver<RelayForwardAck>> {
+        let relay_names = self.relays_for_epk(target_epk).await;
+        if relay_names.is_empty() {
+            return None;
+        }
+        let own_name = relay_own_name();
+        let tx = {
+            let senders = self.forward_senders.lock().await;
+            let mut found = None;
+            for relay_name in &relay_names {
+                if let Some(vec) = senders.get(relay_name) {
+                    if let Some(alive) = vec.iter().find(|tx| !tx.is_closed()) {
+                        found = Some(alive.clone());
+                        break;
+                    }
+                }
+            }
+            found
+        }?;
+        let request_id = format!("{}", rand::random::<u64>());
+        let keypair = crate::relay_keypair::load_or_generate(None);
+        let visited = vec![own_name];
+        let sig_msg = format!("{request_id}|{from_epk}|{target_epk}|{}", visited.join(","));
+        let relay_sig = keypair.sign(sig_msg.as_bytes());
+        let forward = RelayForward {
+            kind: "relay_forward".into(),
+            request_id: request_id.clone(),
+            from_epk: from_epk.to_string(),
+            target_epk: target_epk.to_string(),
+            envelope: serde_json::Value::Null,
+            visited,
+            relay_pubkey: Some(keypair.pubkey_b64()),
+            relay_sig: Some(relay_sig),
+            room: Some(room.to_string()),
+            ct: Some(ct.to_string()),
+        };
+        let (otx, orx) = oneshot::channel();
+        self.pending_forwards.lock().await.insert(request_id, otx);
+        let _ = tx.send(serde_json::to_string(&forward).unwrap_or_default());
+        Some(orx)
     }
 
     /// Handle a relay_forward_ack received from a peer relay. Resolves the
