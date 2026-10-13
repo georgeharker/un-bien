@@ -603,7 +603,15 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                 // the app distinguishes not-paired from offline.
                                 let paired = pairing.allows(&dest_peer, &peer_id)
                                     || pairing.allows(&peer_id, &dest_peer);
-                                if !paired && !is_pair_envelope(&env.ct) {
+                                // Federated targets bypass the local pairing gate:
+                                // the sending relay's local pairing + federation
+                                // shared-owner verification cover this (the
+                                // remote machine's pairing_set isn't visible here).
+                                let target_is_federated = federated
+                                    .relay_for_epk(&dest_peer)
+                                    .await
+                                    .is_some();
+                                if !paired && !is_pair_envelope(&env.ct) && !target_is_federated {
                                     let refusal = serde_json::json!({
                                         "type": "error",
                                         "code": "unknown_peer",
@@ -621,7 +629,7 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                 let rewritten = OuterEnvelope {
                                     peer: peer_id.clone(),
                                     room: room_id.clone(),
-                                    ct: env.ct,
+                                    ct: env.ct.clone(),
                                 };
                                 let fwd_line = serde_json::to_string(&rewritten)
                                     .expect("OuterEnvelope serialisation is infallible");
@@ -633,13 +641,44 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                     Message::Text(fwd_line),
                                     conn_id,
                                 ) {
-                                    warn!(
-                                        from = %peer_short,
-                                        dest = %dest_tail,
-                                        room = %dest_room,
-                                        bytes = ct_len,
-                                        "dest (peer, room) not found, dropping",
-                                    );
+                                    // Not local — try cross-relay forward (gap 5:
+                                    // remote session launch, app→machine frames).
+                                    if let Some((req_id, ack_rx)) = federated
+                                        .forward_outer_to_federated(
+                                            &peer_id,
+                                            &dest_peer,
+                                            &dest_room,
+                                            &env.ct,
+                                        )
+                                        .await
+                                    {
+                                        match tokio::time::timeout(
+                                            std::time::Duration::from_secs(5),
+                                            ack_rx,
+                                        )
+                                        .await
+                                        {
+                                            Ok(Ok(ack))
+                                                if ack.status == "forwarded" => {}
+                                            _ => {
+                                                federated.cancel_forward(&req_id).await;
+                                                warn!(
+                                                    from = %peer_short,
+                                                    dest = %dest_tail,
+                                                    room = %dest_room,
+                                                    "federated outer forward failed",
+                                                );
+                                            }
+                                        }
+                                    } else {
+                                        warn!(
+                                            from = %peer_short,
+                                            dest = %dest_tail,
+                                            room = %dest_room,
+                                            bytes = ct_len,
+                                            "dest (peer, room) not found, dropping",
+                                        );
+                                    }
                                 }
                             }
                         }

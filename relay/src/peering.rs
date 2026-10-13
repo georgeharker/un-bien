@@ -458,7 +458,38 @@ async fn connect_and_verify(
                 }
                 // Try relay_forward (deliver to local pi + send ack).
                 if let Ok(forward) = serde_json::from_str::<RelayForward>(&text) {
-                    // Loop prevention: drop if we've already handled this forward.
+                    // Outer-envelope forward (app→pi / ub frames): deliver the
+                    // opaque {peer, room, ct} verbatim to (target, room).
+                    if forward.room.is_some() && forward.ct.is_some() {
+                        let ack_status = if registry.forward(
+                            &forward.target_epk,
+                            forward.room.as_deref().unwrap_or_default(),
+                            Message::Text(
+                                serde_json::json!({
+                                    "peer": forward.from_epk,
+                                    "room": forward.room.clone().unwrap_or_default(),
+                                    "ct": forward.ct.clone().unwrap_or_default(),
+                                })
+                                .to_string(),
+                            ),
+                            0, // no skip-conn: no local sender conn
+                        ) {
+                            "forwarded"
+                        } else {
+                            "unknown_peer"
+                        };
+                        let ack = RelayForwardAck {
+                            kind: "relay_forward_ack".into(),
+                            request_id: forward.request_id.clone(),
+                            status: ack_status.into(),
+                        };
+                        let _ = ws_sink
+                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                serde_json::to_string(&ack).unwrap_or_default().into(),
+                            ))
+                            .await;
+                        continue;
+                    }
                     if forward.visited.contains(&relay_own_name()) {
                         let ack = RelayForwardAck {
                             kind: "relay_forward_ack".into(),
@@ -1256,7 +1287,7 @@ impl FederatedSessions {
         target_epk: &str,
         room: &str,
         ct: &str,
-    ) -> Option<oneshot::Receiver<RelayForwardAck>> {
+    ) -> Option<(String, oneshot::Receiver<RelayForwardAck>)> {
         let relay_names = self.relays_for_epk(target_epk).await;
         if relay_names.is_empty() {
             return None;
@@ -1293,9 +1324,12 @@ impl FederatedSessions {
             ct: Some(ct.to_string()),
         };
         let (otx, orx) = oneshot::channel();
-        self.pending_forwards.lock().await.insert(request_id, otx);
+        self.pending_forwards
+            .lock()
+            .await
+            .insert(request_id.clone(), otx);
         let _ = tx.send(serde_json::to_string(&forward).unwrap_or_default());
-        Some(orx)
+        Some((request_id, orx))
     }
 
     /// Handle a relay_forward_ack received from a peer relay. Resolves the
