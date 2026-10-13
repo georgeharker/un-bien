@@ -239,14 +239,14 @@ export function registerAgentTools(
     label: "List Peers",
     description:
       "Returns the current peer inventory in this session as ADDRESSES of the " +
-      "form `<cwd>@<name>` (cross-PC peers prefixed `<pc>:`). An address is an " +
+      "form `<cwd>@<name>` (remote machines prefixed `<pc>`). An address is an " +
       "opaque routing key — pass it to `agent_send`/`agent_request` VERBATIM, " +
       "never build one by hand. Use BEFORE sending whenever you're unsure who's " +
       "available, or after a `peer_joined` / `peer_left` notification to refresh " +
       "your mental model. Resolves in milliseconds — a metadata query to the " +
       "broker, not a turn of another agent.",
     promptSnippet:
-      "list_peers(): returns {peers: string[]} of addresses `<cwd>@<name>` (`<pc>:` prefix cross-PC). Echo an address verbatim to agent_send; never compose one. Cheap; call freely.",
+      "list_peers(): returns {peers: string[]} of addresses `<cwd>@<name>` (`<pc>:` prefix for remote machines). Echo an address verbatim to agent_send; never compose one. Cheap; call freely.",
     parameters: ListPeersParams,
     execute: async (_toolCallId) => {
       const peer = getSessionPeer()
@@ -273,11 +273,10 @@ export function registerAgentTools(
           LIST_PEERS_TIMEOUT_MS,
         )
         const body = reply.body as { peers?: unknown } | null
-        const peers = Array.isArray(body?.peers)
-          ? (body!.peers as unknown[]).filter(
-              (p): p is string => typeof p === "string",
-            )
-          : []
+        const peerList = Array.isArray(body?.peers) ? body?.peers : null
+        const peers = (peerList ?? []).filter(
+          (p): p is string => typeof p === "string",
+        )
         // Drop self from the list — the caller is the only one who can't
         // address itself anyway, so listing it is noise. Peers are ADDRESSES
         // (plan/38), so filter by address.
@@ -532,5 +531,9 @@ function _formatAck(
         `here (it may be on a different broker, or offline). Check ` +
         `list_peers / whoami before retrying.`
       )
+    default:
+      // Exhaustive for known statuses; a future status renders honestly
+      // rather than falling off the switch to `undefined`.
+      return `"${to}"${reSuffix} returned status "${ack.status}"${errorSuffix}.`
   }
 }

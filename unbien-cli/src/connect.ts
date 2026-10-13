@@ -45,7 +45,8 @@ function parseArgs(argv: readonly string[]) {
   const positional: string[] = []
   const flags = new Map<string, string>()
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!
+    const arg = argv[i] ?? ""
+    if (arg === "") continue
     if (arg === "--list") flags.set("list", "1")
     else if (arg === "--list-themes") flags.set("list-themes", "1")
     else if (arg === "--debug") flags.set("debug", "1")
@@ -530,7 +531,7 @@ function matchesSessionId(room: RoomInfo, id: string): boolean {
 }
 
 async function pickRoom(rooms: readonly RoomInfo[]): Promise<RoomInfo | null> {
-  if (rooms.length === 1) return rooms[0]!
+  if (rooms.length === 1) return rooms[0] ?? null
   // A non-TTY stdin (piped input, CI) can't drive a highlight list.
   if (!process.stdin.isTTY) {
     // Group: local sessions first, then federated grouped by peerRelay.
