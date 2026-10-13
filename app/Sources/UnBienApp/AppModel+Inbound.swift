@@ -901,12 +901,19 @@ extension AppModel {
             // Federated machines' rooms (relay-to-relay peering): upsert each
             // with peerRelay stamped so Home renders the server chip on the
             // session row; each peer ALSO becomes a machine launch row.
+            // REAL-room gate: a room with no caps at all is a registry ghost
+            // (name "undefined", empty caps — observed on a stale/absent
+            // launcher device). Ghosts must not become session rows, and a
+            // ghost-only peer must not become a machine row — its control
+            // room has no daemon, so its launch chip would spin forever.
             var known = Set<String>()
             for fedPeer in peers {
-                for var room in fedPeer.rooms {
+                let realRooms = fedPeer.rooms.filter { !($0.caps ?? []).isEmpty }
+                for var room in realRooms {
                     room.peerRelay = fedPeer.relayName
                     upsertSession(relayID: relayID, peer: fedPeer.epk, room: room)
                 }
+                guard !realRooms.isEmpty else { continue }
                 let fm = FederatedMachine(relayID: relayID, epk: fedPeer.epk,
                                           name: fedPeer.relayName)
                 known.insert(fm.id)

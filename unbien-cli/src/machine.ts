@@ -81,8 +81,21 @@ export async function resolveRemoteMachine(
     )
     if (matches.length === 1) return matches[0] ?? null
     if (matches.length > 1) {
-      console.error(`ambiguous remote machine '${target}': ${matches.map((m) => m.name).join(", ")}`)
-      return null
+      // Same relay name covers EVERY device that ever registered there, so
+      // several epks can match a name — prefer the device with the most
+      // real rooms (the live machine) and say so.
+      const roomCounts = new Map<string, number>()
+      for (const r of rooms) {
+        if (r.peer_epk) {
+          roomCounts.set(r.peer_epk, (roomCounts.get(r.peer_epk) ?? 0) + 1)
+        }
+      }
+      matches.sort((a, b) => (roomCounts.get(b.epk) ?? 0) - (roomCounts.get(a.epk) ?? 0))
+      console.error(
+        `(${matches.length} matches for '${target}' — using the most active: ` +
+          `${matches[0].epk.slice(0, 8)})`,
+      )
+      return matches[0] ?? null
     }
     return null
   } finally {
