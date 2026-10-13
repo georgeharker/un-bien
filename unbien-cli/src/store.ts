@@ -126,6 +126,37 @@ export function loadRelayPeers(path = RELAY_PEERS_PATH): RelayPeer[] {
   }
 }
 
+/** The relay federation gate — `federation.enabled` in relay-peers.json.
+ *  Default false: federation is OPT-IN (the relay refuses /relay-peer +
+ *  never starts its peering loops otherwise). */
+export function isFederationEnabled(path = RELAY_PEERS_PATH): boolean {
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as {
+      federation?: { enabled?: boolean }
+    }
+    return parsed.federation?.enabled === true
+  } catch {
+    return false
+  }
+}
+
+/** Flip the federation gate. Preserves the peers list. */
+export function setFederationEnabled(enabled: boolean, path = RELAY_PEERS_PATH): void {
+  let parsed: { peers?: RelayPeer[] } = {}
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8")) as { peers?: RelayPeer[] }
+  } catch {
+    // fresh file
+  }
+  const peers = parsed.peers ?? []
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  writeFileSync(
+    path,
+    JSON.stringify({ federation: { enabled }, peers }, null, 2),
+    { mode: 0o600 },
+  )
+}
+
 export function addRelayPeer(
   peer: RelayPeer,
   path = RELAY_PEERS_PATH,

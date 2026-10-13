@@ -6,8 +6,61 @@ list, and wait for replies from other pi sessions on the same machine
 (local UDS broker), across machines (via the relay, same-owner
 validated), or across relays (via relay federation, same-owner validated).
 
-See [Relay Peering](relay-peering.md) for the federation design +
-setup guide.
+## Setting up federated (cross-relay) peers
+
+Federation lets agents on different machines (each running its own
+relay) discover and message each other. Same-owner validated — both
+relays must know the same owner. It is **opt-in**:
+
+1. **Enable the gate on each relay** — the relay refuses the peering
+   route entirely unless `federation.enabled` is true:
+
+   ```sh
+   unbien relay peer federation on
+   # federation on|off|status — flips federation.enabled in relay-peers.json
+   # (the CLI writes the file; the relay picks the change up live)
+   ```
+
+2. **Set the relay's reachable URL** — in the relay's plist/service env
+   (`UNBIEN_RELAY_URL`, e.g. `ws://cascade:3000` via Tailscale). The
+   relay's name is auto-computed from the hostname.
+
+3. **Restart the relay once** after installing a new build:
+
+   ```sh
+   launchctl kickstart -k gui/$(id -u)/com.georgeharker.unbien.relay
+   ```
+
+4. **Pair the relays** — from one machine, issue a pairing URL; on the
+   other, consume it (adds the peer + pins its pubkey + enables the
+   gate):
+
+   ```sh
+   unbien relay peer pair                # on machine A → prints relay-pair://…
+   unbien relay peer add relay-pair://…  # on machine B
+   ```
+
+   For same-iCloud-epk machines, plain addressing works too (shared
+   owner IS the pairing):
+
+   ```sh
+   unbien relay peer add ws://other-machine:3000 other-machine
+   ```
+
+   No restart needed — the relay watches `relay-peers.json` (fswatch)
+   and connects within seconds.
+
+5. **Verify** — with a pi session running on each machine (its
+   `pairing_set` populates the relay's owner registry):
+
+   ```sh
+   unbien relay list      # local + remembered + federated peers
+   list_peers             # shows remote-machine agents as `<relay>:<cwd>@<name>`
+   agent_send             # routes cross-relay transparently
+   ```
+
+See [Relay Peering](relay-peering.md) for the full design + wire
+protocol.
 
 ## Enable / Disable
 

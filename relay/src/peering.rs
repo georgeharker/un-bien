@@ -90,6 +90,25 @@ pub struct RelayPeerConfig {
 }
 
 /// Read the peering config from `<state_root>/relay-peers.json`.
+/// Whether relay federation is ENABLED — the gate (not merely the absence
+/// of peers in relay-peers.json). Reads `federation.enabled` from
+/// relay-peers.json FRESH on every call: the CLI can flip it live
+/// (`unbien relay federation on|off`). Default false — federation is opt-in.
+pub fn federation_enabled() -> bool {
+    let path = relay_peers_path();
+    match std::fs::read_to_string(&path) {
+        Ok(raw) => serde_json::from_str::<serde_json::Value>(&raw)
+            .ok()
+            .and_then(|v| {
+                v.get("federation")
+                    .and_then(|f| f.get("enabled"))
+                    .and_then(|e| e.as_bool())
+            })
+            .unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
 pub fn read_peer_config() -> Vec<RelayPeerConfig> {
     let path = relay_peers_path();
     match std::fs::read_to_string(&path) {
@@ -192,6 +211,10 @@ pub fn start_peering(
     pairing: Arc<PairingRegistry>,
     federated: Arc<FederatedSessions>,
 ) {
+    if !federation_enabled() {
+        info!("relay federation disabled (relay-peers.json federation.enabled false/absent)");
+        return;
+    }
     tokio::spawn(async move {
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let peers_path = crate::paths::relay_peers_path();
@@ -586,6 +609,15 @@ pub async fn relay_peer_ws_handler(
     State(state): State<AppState>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
+    // Gate: refuse federation entirely when disabled (403 — explicit, not a
+    // silent drop, so a peer relay's logs show WHY the handshake failed).
+    if !federation_enabled() {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            "relay federation disabled (relay-peers.json federation.enabled)",
+        )
+            .into_response();
+    }
     ws.on_upgrade(move |socket| handle_inbound_peer(state, socket))
 }
 

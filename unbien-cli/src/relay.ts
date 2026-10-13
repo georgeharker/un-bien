@@ -18,6 +18,8 @@ import {
   addRelayPeer,
   removeRelayPeer,
   relayPubkeyB64,
+  isFederationEnabled,
+  setFederationEnabled,
 } from "./store.js"
 import { hostname as osHostname } from "node:os"
 
@@ -188,6 +190,7 @@ switch (verb) {
               name: parsed.name,
               pubkey: parsed.pubkey,
             })
+            if (!isFederationEnabled()) setFederationEnabled(true)
             console.error(
               "[relay] peer added: " + parsed.name + " -> " +
                 normalizeUrl(parsed.url) + " (pubkey pinned)\n" +
@@ -208,6 +211,7 @@ switch (verb) {
             process.exit(1)
           }
           addRelayPeer({ url: normalizeUrl(url), name })
+          if (!isFederationEnabled()) setFederationEnabled(true)
           console.error(
             "[relay] peer added: " + name + " -> " + normalizeUrl(url) +
               "\n  The relay will connect within ~5s (no restart needed).",
@@ -236,8 +240,29 @@ switch (verb) {
         doPair(peerRest)
         break
       }
+      case "on":
+      case "off":
+      case "status":
+      case "federation": {
+        // unbien relay peer federation <on|off|status> (also the bare
+        // `peer federation` shows status)
+        if (subVerb === "federation") {
+          const action = peerRest[0] ?? "status"
+          if (action === "on") setFederationEnabled(true)
+          else if (action === "off") setFederationEnabled(false)
+          console.error(
+            "[relay] federation " + (isFederationEnabled() ? "ENABLED" : "disabled"),
+          )
+          break
+        }
+        doPair(peerRest)
+        break
+      }
       case "list": {
         const peers = loadRelayPeers()
+        console.error(
+          "[relay] federation " + (isFederationEnabled() ? "ENABLED" : "disabled (unbien relay peer federation on)") + "\n",
+        )
         if (peers.length === 0) {
           console.error(
             "No federated peer relays. Add one:\n" +

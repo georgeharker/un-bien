@@ -1,11 +1,13 @@
-import { mkdtempSync } from "node:fs"
+import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { describe, expect, test } from "vitest"
+import { describe, expect, it, test } from "vitest"
 import {
   loadRelayPeers,
   addRelayPeer,
   removeRelayPeer,
+  isFederationEnabled,
+  setFederationEnabled,
 } from "./store.js"
 
 // ── Relay peering config (relay-peers.json) ────────────────────────────────
@@ -40,5 +42,27 @@ describe("relay peering config", () => {
 
   test("removeRelayPeer on absent name → false", () => {
     expect(removeRelayPeer("nonexistent", peerPath)).toBe(false)
+  })
+})
+describe("federation gate", () => {
+  it("defaults to disabled (absent file / missing flag)", () => {
+    const dir = mkdtempSync("/tmp/unbien-test-")!
+    const file = join(dir, "relay-peers.json")
+    expect(isFederationEnabled(file)).toBe(false)
+    rmSync(dir, { recursive: true })
+  })
+
+  it("setFederationEnabled flips + preserves peers", () => {
+    const dir = mkdtempSync("/tmp/unbien-test-")!
+    const file = join(dir, "relay-peers.json")
+    addRelayPeer({ url: "ws://m:3000", name: "m" }, file)
+    expect(isFederationEnabled(file)).toBe(false)
+    setFederationEnabled(true, file)
+    expect(isFederationEnabled(file)).toBe(true)
+    setFederationEnabled(false, file)
+    expect(isFederationEnabled(file)).toBe(false)
+    // peers survived the flips
+    expect(loadRelayPeers(file)).toHaveLength(1)
+    rmSync(dir, { recursive: true })
   })
 })
