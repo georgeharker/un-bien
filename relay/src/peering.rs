@@ -304,6 +304,14 @@ async fn peering_loop(
 ) {
     let mut backoff = 1u64;
     loop {
+        // Live gate: flipping federation off retires the peer's federated
+        // sessions + idles; flipping back on reconnects — no restart.
+        if !federation_enabled() {
+            federated.unregister_sender(&peer.name).await;
+            federated.clear_peer(&peer.name).await;
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            continue;
+        }
         match connect_and_verify(&mesh, &registry, &pairing, &federated, &peer).await {
             Ok(()) => {
                 info!(peer = %peer.name, "federated peer disconnected, reconnecting");
