@@ -331,6 +331,6 @@ async fn app_request_and_machine_reply_cross_two_relays() {
         }
     }
     let wire = refusal.expect("app got no refusal for the dead-room attach");
-    assert_eq!(wire["code"], "unknown_peer", "refusal code");
+    assert_eq!(wire["code"], "unknown_room", "refusal code");
     assert_eq!(wire["peer"], machine_epk, "refusal names the destination");
 }

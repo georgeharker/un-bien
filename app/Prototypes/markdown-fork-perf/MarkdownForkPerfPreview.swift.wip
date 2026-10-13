@@ -1,0 +1,142 @@
+import SwiftUI
+import MarkdownUI
+
+#if DEBUG
+/// Isolated scroll-perf prototype for the MarkdownUI fork spike (design
+/// 01M1TAQY): the SAME synthetic markdown rendered two ways in a long list —
+/// LIVE MarkdownUI (today's assistant-bubble path) vs the ENTITY path
+/// (`markdownEntities` → prose as one cached `Text`, structural blocks plugged).
+/// A fresh harness per point (not a fork of TranscriptPerfPreview), so the
+/// baseline stays intact and the comparison is clean. Profile scroll in the
+/// canvas / simulator; flip the segmented control to A/B the two renderers.
+private let sampleMarkdown = """
+# Release Notes
+
+Some **bold** text, a bit of *emphasis*, and `inline code` inside a paragraph \
+that deliberately runs on for a while so the layout engine has real wrapped \
+text to measure across several lines.
+
+## Details
+
+Another paragraph with a [link](https://example.com) and more prose. Lorem \
+ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor \
+incididunt ut labore et dolore magna aliqua.
+
+```swift
+func greet(_ name: String) -> String {
+    return "Hello, \\(name)!"
+}
+```
+
+| Column A | Column B | Column C |
+|----------|:--------:|---------:|
+| alpha    | beta     | gamma    |
+| one      | two      | three    |
+
+- first bullet point with some length to it
+- second bullet point
+- third bullet point
+
+A final closing paragraph so the bubble has a bit more body to render.
+"""
+
+struct MarkdownForkPerfPreview: View {
+    @State private var useEntities = false
+    private let theme = ThemeID.tokyoNight.theme
+    private let entities: [MarkdownEntity]
+
+    init() {
+        // Produced ONCE (the entity path caches/stores; here we just reuse).
+        entities = markdownEntities(
+            sampleMarkdown,
+            style: MarkdownProseStyle(baseSize: 16, textColor: .primary, linkColor: .blue))
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("mode", selection: $useEntities) {
+                Text("Live MarkdownUI").tag(false)
+                Text("Entities (cached)").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .padding()
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(0..<150, id: \.self) { _ in
+                        Group {
+                            if useEntities {
+                                MarkdownEntitiesView(entities: entities, theme: theme)
+                            } else {
+                                Markdown(sampleMarkdown)
+                                    .markdownCodeSyntaxHighlighter(
+                                        .highlighter(style: theme.codeHighlightStyle))
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .background(theme.surface.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+                    }
+                }
+                .padding()
+            }
+        }
+        .background(theme.background)
+    }
+}
+
+/// Plugs a renderer per entity kind — prose is a plain `Text` over the
+/// off-main-materialized `AttributedString`; code / table / rule are the app's
+/// own views. This is the "postponed, pluggable materialization" half.
+private struct MarkdownEntitiesView: View {
+    let entities: [MarkdownEntity]
+    let theme: AppTheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(entities.enumerated()), id: \.offset) { _, entity in
+                entityView(entity)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func entityView(_ entity: MarkdownEntity) -> some View {
+        switch entity {
+        case .prose(let attributed):
+            Text(attributed).frame(maxWidth: .infinity, alignment: .leading)
+        case .code(_, let text):
+            Text(text)
+                .font(.system(.footnote, design: .monospaced))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(theme.surface, in: RoundedRectangle(cornerRadius: 6))
+        case .table(let model):
+            EntityTableView(model: model)
+        case .thematicBreak:
+            Divider()
+        case .raw(let text):
+            Text(text).frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private struct EntityTableView: View {
+    let model: MarkdownTableModel
+
+    var body: some View {
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
+            ForEach(Array(model.rows.enumerated()), id: \.offset) { _, row in
+                GridRow {
+                    ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
+                        Text(cell)
+                    }
+                }
+            }
+        }
+        .padding(8)
+    }
+}
+
+#Preview("Markdown fork: live vs entities") { MarkdownForkPerfPreview() }
+#endif

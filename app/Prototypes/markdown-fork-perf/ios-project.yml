@@ -1,0 +1,29 @@
+name: MarkdownForkSpikeiOS
+options:
+  bundleIdPrefix: com.georgeharker.un-bien
+  deploymentTarget:
+    iOS: "18.0"
+targets:
+  MarkdownForkSpikeiOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/MarkdownForkSpikeiOS
+    dependencies:
+      - package: swift-markdown-ui
+        product: MarkdownUI
+    settings:
+      base:
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: true
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: true
+        INFOPLIST_KEY_UILaunchScreen_Generation: true
+        PRODUCT_BUNDLE_IDENTIFIER: com.georgeharker.un-bien.mdfork
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "Apple Development"
+        DEVELOPMENT_TEAM: B8V3694RNX
+packages:
+  # The local FORK (un-bien-fork branch) with the entity segmenter.
+  swift-markdown-ui:
+    path: /Users/geohar/Development/swiftui/swift-markdown-ui

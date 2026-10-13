@@ -657,25 +657,77 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                         )
                                         .await
                                     {
-                                        match tokio::time::timeout(
+                                        let outcome = tokio::time::timeout(
                                             std::time::Duration::from_secs(5),
                                             ack_rx,
                                         )
-                                        .await
-                                        {
+                                        .await;
+                                        match outcome {
                                             Ok(Ok(ack))
                                                 if ack.status == "forwarded" => {}
-                                            _ => {
+                                            // Refused by the destination relay
+                                            // (dest not live there) — refuse
+                                            // BACK to the sender so the app's
+                                            // attach fails visibly, parity with
+                                            // the local path.
+                                            Ok(Ok(ack)) => {
                                                 federated.cancel_forward(&req_id).await;
+                                                let refusal = serde_json::json!({
+                                                    "type": "error",
+                                                    "code": "unknown_room",
+                                                    "peer": dest_peer,
+                                                    "room": dest_room,
+                                                })
+                                                .to_string();
+                                                let _ = registry
+                                                    .forward_to_peer(
+                                                        &peer_id,
+                                                        Message::Text(refusal),
+                                                    );
                                                 warn!(
                                                     from = %peer_short,
                                                     dest = %dest_tail,
                                                     room = %dest_room,
-                                                    "federated outer forward failed",
+                                                    "federated outer forward refused by destination relay ({})", ack.status,
+                                                );
+                                            }
+                                            // Ack timeout — peer relay didn't
+                                            // answer; tell the sender too.
+                                            _ => {
+                                                federated.cancel_forward(&req_id).await;
+                                                let refusal = serde_json::json!({
+                                                    "type": "error",
+                                                    "code": "forward_failed",
+                                                    "peer": dest_peer,
+                                                    "room": dest_room,
+                                                })
+                                                .to_string();
+                                                let _ = registry
+                                                    .forward_to_peer(
+                                                        &peer_id,
+                                                        Message::Text(refusal),
+                                                    );
+                                                warn!(
+                                                    from = %peer_short,
+                                                    dest = %dest_tail,
+                                                    room = %dest_room,
+                                                    "federated outer forward failed (no ack)",
                                                 );
                                             }
                                         }
                                     } else {
+                                        // No route anywhere — the (dest, room)
+                                        // session isn't live remotely. Refuse
+                                        // back to the sender (parity).
+                                        let refusal = serde_json::json!({
+                                            "type": "error",
+                                            "code": "unknown_room",
+                                            "peer": dest_peer,
+                                            "room": dest_room,
+                                        })
+                                        .to_string();
+                                        let _ = registry
+                                            .forward_to_peer(&peer_id, Message::Text(refusal));
                                         warn!(
                                             from = %peer_short,
                                             dest = %dest_tail,
