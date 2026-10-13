@@ -78,7 +78,15 @@ extension AppModel {
             let hostPart = relay.url
                 .replacingOccurrences(of: "ws://", with: "")
                 .replacingOccurrences(of: "http://", with: "")
-            let host = hostPart.split(separator: "/").first.map(String.init) ?? hostPart
+                .replacingOccurrences(of: "wss://", with: "")
+                .replacingOccurrences(of: "https://", with: "")
+            // Strip the PATH and the PORT: the host decision must see only the
+            // host itself. (Bug: with `:3000` left on, `cascade….ts.net:3000`
+            // matched nothing — not .ts.net-suffixed, dotted, non-numeric — so
+            // every skip failed and the warning fired for perfectly private
+            // transports. Port-blind since the original notice.)
+            let hostNoPath = hostPart.split(separator: "/").first.map(String.init) ?? hostPart
+            let host = hostNoPath.split(separator: ":").first.map(String.init) ?? hostNoPath
             // Single-label hosts (no dot) are local-network names — mDNS
             // (.local) or MagicDNS short forms (e.g. `cascade`) — both only
             // meaningful inside the user's own network, so skip the warning.
