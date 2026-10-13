@@ -72,36 +72,33 @@ extension AppModel {
         // Tailscale-only transports skip the warning: a `*.ts.net` MagicDNS
         // host resolves ONLY inside the tailnet, and 100.64.0.0/10 is the
         // Tailscale CGNAT range — both are private by construction.
-        let lower = relay.url.lowercased()
-        if lower.hasPrefix("ws://") || lower.hasPrefix("http://"),
+        // Scheme + host via URLComponents — no replace-and-split string math
+        // (the port-blind parse bug came from exactly that): the stored URL's
+        // host and port are separate accessors, so the decisions below see
+        // only the host.
+        let parsed = URLComponents(string: relay.url)
+        if let scheme = parsed?.scheme?.lowercased(), scheme == "ws" || scheme == "http",
            insecureRelayWarned.insert(relay.id).inserted {
-            let hostPart = relay.url
-                .replacingOccurrences(of: "ws://", with: "")
-                .replacingOccurrences(of: "http://", with: "")
-                .replacingOccurrences(of: "wss://", with: "")
-                .replacingOccurrences(of: "https://", with: "")
-            // Strip the PATH and the PORT: the host decision must see only the
-            // host itself. (Bug: with `:3000` left on, `cascade….ts.net:3000`
-            // matched nothing — not .ts.net-suffixed, dotted, non-numeric — so
-            // every skip failed and the warning fired for perfectly private
-            // transports. Port-blind since the original notice.)
-            let hostNoPath = hostPart.split(separator: "/").first.map(String.init) ?? hostPart
-            let host = hostNoPath.split(separator: ":").first.map(String.init) ?? hostNoPath
-            // Single-label hosts (no dot) are local-network names — mDNS
-            // (.local) or MagicDNS short forms (e.g. `cascade`) — both only
-            // meaningful inside the user's own network, so skip the warning.
-            // Tailscale CGNAT (100.64.0.0/10) and RFC1918 LAN/private space
-            // (10/8, 172.16/12, 192.168/16) are private by construction too —
-            // relays listen on 0.0.0.0 and operators reach them by LAN or
-            // tailnet IP, so those transports never need the warning.
-            let isPrivateTransport =
-                host.hasSuffix(".ts.net") || isPrivateIPv4(host)
-            if isPrivateTransport { return }
-            let isLocal = host.hasPrefix("127.0.0.1") || host.hasPrefix("localhost")
-            let scope = isLocal ? "fine for a local relay" : "fine on Tailscale/LAN — avoid on public networks"
-            pushTransientNotice(
-                message: "Relay '\(relay.name)' is not TLS-encrypted — \(scope).",
-                level: "warning")
+            let host = (parsed?.host ?? "").lowercased()
+            // NOTE: this block must NEVER `return` — it only selects whether a
+            // notice is pushed. An early return here silently SKIPPED THE
+            // CONNECTION for every private transport (the .ts.net skip was
+            // disconnecting cascade entirely — "nothing shows in app at all").
+            if host.isEmpty {
+                // Unparseable/unknown transport — err on the side of warning.
+                pushTransientNotice(
+                    message: "Relay '\(relay.name)' is not TLS-encrypted — could not parse its URL.",
+                    level: "warning")
+            } else {
+                let isPrivateTransport =
+                    host.hasSuffix(".ts.net") || isPrivateIPv4(host)
+                    || !host.contains(".") || host == "localhost" || host == "127.0.0.1"
+                if !isPrivateTransport {
+                    pushTransientNotice(
+                        message: "Relay '\(relay.name)' is not TLS-encrypted — fine on Tailscale/LAN, avoid on public networks.",
+                        level: "warning")
+                }
+            }
         }
         guard let owner, let url = relay.webSocketURL else { return }
         reconnectTasks[relay.id]?.cancel()
