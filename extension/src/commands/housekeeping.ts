@@ -13,12 +13,14 @@
  */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent"
 import {
+  LAUNCHD_LABEL,
   installService,
   uninstallService,
   linkCliBinaries,
   unlinkCliBinaries,
 } from "../daemon/install.js"
 import {
+  RELAY_LAUNCHD_LABEL,
   installRelayService,
   uninstallRelayService,
 } from "../daemon/relayService.js"
@@ -246,14 +248,40 @@ export async function _cmdInstallTarget(
         const r = await installCliPackage((l) =>
           ctx.ui.notify(`[cli] ${l}`, "info"),
         )
+        const landedChannel = r.version?.includes("-dev") ? "dev channel" : "stable"
         summary.push(
-          `[un-bien] CLI installed${r.version ? ` (unbien ${r.version})` : ""}.`,
+          `[un-bien] CLI installed${r.version ? ` (unbien ${r.version})` : ""} — ${landedChannel}.`,
         )
       }
     } catch (err) {
       ok = false
       summary.push(`[un-bien] ${component} install failed: ${String(err)}`)
     }
+  }
+
+  // ALWAYS REKICK (macOS): a launchd service keeps the OLD image loaded until
+  // restarted — an install without a kickstart yields "installed but stale"
+  // running code (observed: relay updated to 0.7.24 on disk while the service
+  // kept 0.7.22 behavior, including the legacy gate read). Kick BOTH services:
+  // the launcher daemon follows this extension's dist and the relay runs its
+  // own binary; whichever component was touched, both may need the new files.
+  if (process.platform === "darwin") {
+    for (const label of [LAUNCHD_LABEL, RELAY_LAUNCHD_LABEL]) {
+      const r = spawnSync(
+        "launchctl",
+        ["kickstart", "-k", `gui/${process.getuid?.() ?? 501}/${label}`],
+        { stdio: "ignore" },
+      )
+      summary.push(
+        r.status === 0
+          ? `[un-bien] restarted service: ${label}`
+          : `[un-bien] could not restart ${label} — not installed (${r.status})`,
+      )
+    }
+  } else {
+    summary.push(
+      "[un-bien] non-macOS: restart the launcher + relay services to load the new files.",
+    )
   }
 
   // The DURABLE report — last toast standing locally, and broadcast to
