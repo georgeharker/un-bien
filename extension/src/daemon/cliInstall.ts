@@ -86,7 +86,24 @@ export async function installCliPackage(
       timeout: 15_000,
     })
     version = vOut.trim() || null
-    push(`verified: unbien ${version}`)
+    // Unambiguous channel report: the spec requested + the landed version
+    // (a -dev suffix on the landed version CONFIRMS the dev channel took).
+    const channel = dev
+      ? "dev channel (@geohar/unbien-cli@dev)"
+      : "stable (latest)"
+    const landed =
+      version && version.includes("-dev")
+        ? "dev"
+        : version && !version.includes("-dev")
+          ? "stable"
+          : "unknown"
+    push(
+      `verified: unbien ${version ?? "?"} — ${landed} channel` +
+        (dev && landed !== "dev"
+          ? " ⚠️ requested DEV but the landed binary is NOT a dev build — check npm"
+          : "") +
+        ` (requested: ${channel})`,
+    )
   } catch {
     push(
       "⚠ installed, but `unbien --version` failed — the npm global bin dir " +
