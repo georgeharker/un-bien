@@ -91,7 +91,8 @@ extension AppModel {
                     level: "warning")
             } else {
                 let isPrivateTransport =
-                    host.hasSuffix(".ts.net") || isPrivateIPv4(host)
+                    privateTransportSuffixes.contains(where: host.hasSuffix)
+                    || isPrivateIPv4(host)
                     || !host.contains(".") || host == "localhost" || host == "127.0.0.1"
                 if !isPrivateTransport {
                     pushTransientNotice(
@@ -607,6 +608,15 @@ extension AppModel {
         }
     }
 }
+
+/// Transports whose PLAINTEXT is private by NETWORK CONSTRUCTION: only
+/// resolvable/reachable inside their mesh or LAN. A single-label host has
+/// no public DNS; `.ts.net` is Tailscale MagicDNS; RFC1918/CGNAT ranges
+/// are covered by isPrivateIPv4. EXTENSION POINT: user-suggested (2026-10)
+/// — other tailnet/MagicDNS-style domains belong here; when a config file
+/// for the app lands, drive this suffix set from it rather than changing
+/// the literal.
+private let privateTransportSuffixes: Set<String> = [".ts.net"]
 
 /// True when `host` is a private-network address: Tailscale CGNAT
 /// (100.64.0.0/10), RFC1918 private space (10/8, 172.16/12, 192.168/16).
