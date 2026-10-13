@@ -1,6 +1,21 @@
 import SwiftUI
 import UnBienCore
 
+/// Which machine a resume sheet targets: a locally-paired machine or one
+/// known through RELAY-TO-RELAY FEDERATION. Both resolve to the same routing
+/// facts (relay + epk) — the listing/launch plumbing is identical.
+enum ResumeTarget: Identifiable {
+    case machine(PairedMachine)
+    case federated(FederatedMachine)
+
+    var id: String {
+        switch self {
+        case let .machine(m): return "resume:machine:\(m.id)"
+        case let .federated(f): return "resume:federated:\(f.id)"
+        }
+    }
+}
+
 /// Pick a STORED pi session on a machine and relaunch it (`session_launch`
 /// with `resume`). Opened from the machine row's long-press menu — the
 /// machine-level counterpart of the launch chip (user UX decision
@@ -10,10 +25,32 @@ import UnBienCore
 /// the resumed chat auto-opens via the UNBIEN_LAUNCH_REQ echo (upsertSession
 /// matcher) — falling back to plain discovery on old daemons.
 struct ResumeSessionSheet: View {
-    let machine: PairedMachine
+    let target: ResumeTarget
     @EnvironmentObject var model: AppModel
     @Environment(\.appTheme) private var theme
     @Environment(\.dismiss) private var dismiss
+
+    /// Both target shapes resolve to the same routing facts; the sheet body is
+    /// deliberately target-agnostic beyond these two values.
+    private var relayID: UUID {
+        switch target {
+        case let .machine(m): return m.relayID
+        case let .federated(f): return f.relayID
+        }
+    }
+    private var epk: String {
+        switch target {
+        case let .machine(m): return m.epk
+        case let .federated(f): return f.epk
+        }
+    }
+    /// Remote machines get the same federated adornment language as Home.
+    private var pageTitle: String {
+        switch target {
+        case .machine: return "Resume session"
+        case let .federated(f): return "Resume · \(f.name) (remote)"
+        }
+    }
 
     @State private var sessions: [StoredMachineSession] = []
     @State private var loadState: LoadState = .loading
@@ -55,7 +92,7 @@ struct ResumeSessionSheet: View {
                     sessionList
                 }
             }
-            .navigationTitle("Resume session")
+            .navigationTitle(pageTitle)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -139,7 +176,7 @@ struct ResumeSessionSheet: View {
 
     private func load() async {
         loadState = .loading
-        switch await model.listMachineSessions(machine: machine) {
+        switch await model.listMachineSessions(relayID: relayID, epk: epk) {
         case .listed(let listed):
             sessions = listed
             loadState = listed.isEmpty ? .empty : .loaded
@@ -160,7 +197,7 @@ struct ResumeSessionSheet: View {
     private func resume(_ s: StoredMachineSession) async {
         dismiss()
         await model.launchOnMachine(cwd: s.cwd, name: nil, resume: s.path,
-                                    machine: machine)
+                                    relayID: relayID, epk: epk)
     }
 
     /// Compact relative-time label, mirroring the CLI picker's granularity.

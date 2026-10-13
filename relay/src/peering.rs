@@ -503,38 +503,6 @@ async fn connect_and_verify(
                 }
                 // Try relay_forward (deliver to local pi + send ack).
                 if let Ok(forward) = serde_json::from_str::<RelayForward>(&text) {
-                    // Outer-envelope forward (app→pi / ub frames): deliver the
-                    // opaque {peer, room, ct} verbatim to (target, room).
-                    if forward.room.is_some() && forward.ct.is_some() {
-                        let ack_status = if registry.forward(
-                            &forward.target_epk,
-                            forward.room.as_deref().unwrap_or_default(),
-                            Message::Text(
-                                serde_json::json!({
-                                    "peer": forward.from_epk,
-                                    "room": forward.room.clone().unwrap_or_default(),
-                                    "ct": forward.ct.clone().unwrap_or_default(),
-                                })
-                                .to_string(),
-                            ),
-                            0, // no skip-conn: no local sender conn
-                        ) {
-                            "forwarded"
-                        } else {
-                            "unknown_peer"
-                        };
-                        let ack = RelayForwardAck {
-                            kind: "relay_forward_ack".into(),
-                            request_id: forward.request_id.clone(),
-                            status: ack_status.into(),
-                        };
-                        let _ = ws_sink
-                            .send(tokio_tungstenite::tungstenite::Message::Text(
-                                serde_json::to_string(&ack).unwrap_or_default().into(),
-                            ))
-                            .await;
-                        continue;
-                    }
                     if forward.visited.contains(&relay_own_name()) {
                         let ack = RelayForwardAck {
                             kind: "relay_forward_ack".into(),
@@ -562,6 +530,43 @@ async fn connect_and_verify(
                             kind: "relay_forward_ack".into(),
                             request_id: forward.request_id,
                             status: "unknown_peer".into(),
+                        };
+                        let _ = ws_sink
+                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                serde_json::to_string(&ack).unwrap_or_default().into(),
+                            ))
+                            .await;
+                        continue;
+                    }
+                    // Outer-envelope forward (app→pi / ub frames): the opaque
+                    // {peer, room, ct} rides the SAME verified provenance the
+                    // inner form has — authenticated-forwarding REQUIRED, so it
+                    // reaches here only after the sig check above. Delivered
+                    // verbatim to (target, room), skipping the receiving-side
+                    // pairing gate (the SENDING relay's local pairing + the
+                    // federation shared-owner check cover it).
+                    if forward.room.is_some() && forward.ct.is_some() {
+                        let ack_status = if registry.forward(
+                            &forward.target_epk,
+                            forward.room.as_deref().unwrap_or_default(),
+                            Message::Text(
+                                serde_json::json!({
+                                    "peer": forward.from_epk,
+                                    "room": forward.room.clone().unwrap_or_default(),
+                                    "ct": forward.ct.clone().unwrap_or_default(),
+                                })
+                                .to_string(),
+                            ),
+                            0, // no skip-conn: no local sender conn
+                        ) {
+                            "forwarded"
+                        } else {
+                            "unknown_peer"
+                        };
+                        let ack = RelayForwardAck {
+                            kind: "relay_forward_ack".into(),
+                            request_id: forward.request_id.clone(),
+                            status: ack_status.into(),
                         };
                         let _ = ws_sink
                             .send(tokio_tungstenite::tungstenite::Message::Text(
@@ -849,6 +854,41 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
                             kind: "relay_forward_ack".into(),
                             request_id: forward.request_id,
                             status: "unknown_peer".into(),
+                        };
+                        let _ = socket_sink
+                            .send(Message::Text(serde_json::to_string(&ack).unwrap_or_default()))
+                            .await;
+                        continue;
+                    }
+                    // Outer-envelope forward (app→pi / ub frames): the opaque
+                    // {peer, room, ct} rides the SAME verified provenance the
+                    // inner form has — authenticated-forwarding REQUIRED, so it
+                    // reaches here only after the sig check above. Delivered
+                    // verbatim to (target, room), skipping the receiving-side
+                    // pairing gate (the SENDING relay's local pairing + the
+                    // federation shared-owner check cover it).
+                    if forward.room.is_some() && forward.ct.is_some() {
+                        let ack_status = if state.registry.forward(
+                            &forward.target_epk,
+                            forward.room.as_deref().unwrap_or_default(),
+                            Message::Text(
+                                serde_json::json!({
+                                    "peer": forward.from_epk,
+                                    "room": forward.room.clone().unwrap_or_default(),
+                                    "ct": forward.ct.clone().unwrap_or_default(),
+                                })
+                                .to_string(),
+                            ),
+                            0, // no skip-conn: no local sender conn
+                        ) {
+                            "forwarded"
+                        } else {
+                            "unknown_peer"
+                        };
+                        let ack = RelayForwardAck {
+                            kind: "relay_forward_ack".into(),
+                            request_id: forward.request_id.clone(),
+                            status: ack_status.into(),
                         };
                         let _ = socket_sink
                             .send(Message::Text(serde_json::to_string(&ack).unwrap_or_default()))

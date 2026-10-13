@@ -14,7 +14,7 @@ struct HomeView: View {
     /// The machine whose long-press menu asked for the stored-session resume
     /// picker (ResumeSessionSheet). Machine-level, like the launch chip (user
     /// UX decision 2026-08-31): the daemon is the single launch surface.
-    @State private var resumeTarget: PairedMachine?
+    @State private var resumeTarget: ResumeTarget?
     @AppStorage("hideLaunchChipUntilDaemonUp") private var hideChipUntilDaemonUp = false
     /// Parents whose subagent children are folded away in the Home list. A parent
     /// is EXPANDED unless listed here, so children show by default.
@@ -98,8 +98,8 @@ struct HomeView: View {
         .sheet(item: $launchTarget) { target in
             LaunchSessionSheet(target: target).environmentObject(model)
         }
-        .sheet(item: $resumeTarget) { machine in
-            ResumeSessionSheet(machine: machine).environmentObject(model)
+        .sheet(item: $resumeTarget) { target in
+            ResumeSessionSheet(target: target).environmentObject(model)
         }
     }
 
@@ -182,15 +182,17 @@ struct HomeView: View {
                         ForEach(visibleMachines) { machine in
                             MachineLaunchRow(machine: machine,
                                              onLaunch: { launchTarget = .machine(machine) },
-                                             onResume: { resumeTarget = machine })
+                                             onResume: { resumeTarget = .machine(machine) })
                         }
                         // FEDERATED machines (relay peering): the same machine
                         // row shape, launch chip routed through the local relay's
                         // outer forward to the peer relay that owns the machine.
                         // Presence (caps) polled by the same list-level sweep.
                         ForEach(model.federatedMachines(onRelay: relay.id)) { fm in
-                            FederatedMachineLaunchRow(machine: fm,
-                                                      onLaunch: { launchTarget = .federated(fm) })
+                            FederatedMachineLaunchRow(
+                                machine: fm,
+                                onLaunch: { launchTarget = .federated(fm) },
+                                onResume: { resumeTarget = .federated(fm) })
                         }
                         // Known machine whose rooms are gated (unpaired / revoked /
                         // re-keyed): offer re-pair instead of a silent empty listing.
@@ -679,6 +681,7 @@ private struct FederatedMachineLaunchRow: View {
     @Environment(\.appTheme) private var theme
     let machine: FederatedMachine
     let onLaunch: () -> Void
+    let onResume: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
@@ -711,13 +714,18 @@ private struct FederatedMachineLaunchRow: View {
             }
         }
         .padding(.vertical, 2)
-        // Launch only (user UX parity with local machines); federated RESUME
-        // rides the same machinery but stays deferred until the sheet wiring
-        // for remote stored-session listings exists.
+        // Launch + resume (resume cap-gated: a pre-session_resume daemon
+        // would silently ignore sessions_list, so the affordance is gated —
+        // same rule as the local machine row).
         .contextMenu {
             if model.daemonSupports("remote_launch", federated: machine) {
                 Button(action: onLaunch) {
                     Label("New Conversation…", systemImage: "plus.bubble")
+                }
+                if model.daemonSupports("session_resume", federated: machine) {
+                    Button(action: onResume) {
+                        Label("Resume Session…", systemImage: "clock.arrow.circlepath")
+                    }
                 }
             }
         }

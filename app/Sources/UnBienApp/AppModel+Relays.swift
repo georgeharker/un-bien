@@ -82,10 +82,13 @@ extension AppModel {
             // Single-label hosts (no dot) are local-network names — mDNS
             // (.local) or MagicDNS short forms (e.g. `cascade`) — both only
             // meaningful inside the user's own network, so skip the warning.
-            let isTailscale =
-                host.hasSuffix(".ts.net") || isTailscaleCGNAT(host)
-                || !host.contains(".")
-            if isTailscale { return }
+            // Tailscale CGNAT (100.64.0.0/10) and RFC1918 LAN/private space
+            // (10/8, 172.16/12, 192.168/16) are private by construction too —
+            // relays listen on 0.0.0.0 and operators reach them by LAN or
+            // tailnet IP, so those transports never need the warning.
+            let isPrivateTransport =
+                host.hasSuffix(".ts.net") || isPrivateIPv4(host)
+            if isPrivateTransport { return }
             let isLocal = host.hasPrefix("127.0.0.1") || host.hasPrefix("localhost")
             let scope = isLocal ? "fine for a local relay" : "fine on Tailscale/LAN — avoid on public networks"
             pushTransientNotice(
@@ -358,12 +361,20 @@ extension AppModel {
     /// the affordance is cap-gated upstream).
     public func listMachineSessions(machine: PairedMachine,
                                     filter: String? = nil) async -> MachineSessionListing {
-        guard let connection = connections[machine.relayID],
-              let room = Base64.deriveControlRoom(epk: machine.epk) else {
+        await listMachineSessions(relayID: machine.relayID, epk: machine.epk, filter: filter)
+    }
+
+    /// The (relayID, epk) core, shared with FEDERATED machines — a listing is
+    /// a machine question, so any known-routing machine answers the same
+    /// (the local relay outer-forwards to the peer relay that owns it).
+    public func listMachineSessions(relayID: UUID, epk: String,
+                                    filter: String? = nil) async -> MachineSessionListing {
+        guard let connection = connections[relayID],
+              let room = Base64.deriveControlRoom(epk: epk) else {
             return .refused(code: nil, message: "machine not connected")
         }
         let rid = UUID().uuidString
-        let peer = machine.epk
+        let peer = epk
         let reply: JSONValue? = await withCheckedContinuation { continuation in
             pendingSessionLists[rid] = (continuation, peer)
             Task { @MainActor [weak self] in
@@ -592,11 +603,21 @@ extension AppModel {
     }
 }
 
-/// True when `host` is a Tailscale CGNAT address (100.64.0.0/10 — octets
-/// 100.64.0.0 through 100.127.255.255). Those IPs exist only inside a
-/// tailnet, so plaintext transport to them is private.
-private func isTailscaleCGNAT(_ host: String) -> Bool {
-    let parts = host.split(separator: ".").compactMap { Int($0) }
-    guard parts.count == 4, parts[0] == 100 else { return false }
-    return parts[1] >= 64 && parts[1] <= 127
+/// True when `host` is a private-network address: Tailscale CGNAT
+/// (100.64.0.0/10), RFC1918 private space (10/8, 172.16/12, 192.168/16).
+/// Those IPs exist only inside private networks, so plaintext transport to
+/// them is not a public expose.
+private func isPrivateIPv4(_ host: String) -> Bool {
+    let parts = ipv4Parts(host)
+    guard parts.count == 4 else { return false }
+    let (a, b) = (parts[0], parts[1])
+    if a == 100 { return b >= 64 && b <= 127 } // Tailscale CGNAT
+    if a == 10 { return true }                // RFC1918 10/8
+    if a == 192, b == 168 { return true }     // RFC1918 192.168/16
+    if a == 172 { return b >= 16 && b <= 31 } // RFC1918 172.16/12
+    return false
+}
+
+private func ipv4Parts(_ host: String) -> [Int] {
+    host.split(separator: ".").compactMap { Int($0) }
 }
