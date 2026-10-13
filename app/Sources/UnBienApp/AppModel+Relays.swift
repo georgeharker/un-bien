@@ -279,7 +279,9 @@ extension AppModel {
     }
 
     public func daemonSupports(_ cap: String, federated fm: FederatedMachine) -> Bool {
-        daemonPresence(federated: fm)?.supports(cap) ?? false
+        // Caps come from the federated rooms themselves (no reply route for
+        // app clients — see federatedMachineCaps on AppModel).
+        federatedMachineCaps[fm.epk]?.contains(cap) ?? false
     }
 
     /// Federated machines known via one relay's peer list (display order).

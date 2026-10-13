@@ -152,6 +152,14 @@ public final class AppModel: ObservableObject {
     /// Machines known through RELAY-TO-RELAY FEDERATION (relay-peering.md):
     /// Home renders each as a machine launch row (server-rack adorned).
     @Published public var federatedMachines: [FederatedMachine] = []
+    /// FEDERATED machines' advertised caps, derived from their rooms' caps in
+    /// the pushed federated_peer_list — NO per-machine cross-relay presence
+    /// polling. (An app client has NO reply route: a presence poll outer-
+    /// forwards to the peer relay, but the daemon's reply targets the phone's
+    /// epk, which hosts no rooms and so can't be routed back — the poll spun
+    /// forever. The caps ride the list we're ALREADY pushed, so the machine
+    /// row settles with zero extra traffic.) Keyed by machine epk.
+    @Published public var federatedMachineCaps: [String: Set<String>] = [:]
     /// A pairing invite opened via the `unbien://` scheme, awaiting a relay
     /// choice. Drives the deep-link relay chooser sheet.
     @Published public var pendingPairing: PendingPairing?

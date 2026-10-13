@@ -283,20 +283,68 @@ struct HomeView: View {
     /// Probe each paired machine's presence daemon until it answers, regardless
     /// of row visibility. Stops probing a machine once its caps land; keeps
     /// sweeping the ones still unknown (daemon not up yet).
+    // Presence sweeps: a machine that never answers (launcher down, or a
+    // registry-ghost control room) must NOT be polled forever — each poll to a
+    // FEDERATED machine is a cross-relay forward + 5s remote ack timeout, so
+    // unbounded sweeps would mean a perpetual slow packet loop (user: "we
+    // don't infinitely ping packets back and forth on a bidirectional mesh").
+    // Cap consecutive unanswered sweeps; the counter resets when presence
+    // lands, and when the sweep's machine SET changes (rows re-added/pruned by
+    // a fresh federated frame) so a re-appearing machine gets a fresh window.
+    @State private var presenceAttempts: [String: Int] = [:]
+    @State private var lastSweptMachineSet: Set<String> = []
+    /// Max consecutive sweeps with no presence answer before we stop probing
+    /// that machine (5 × 3s ≈ 15s of patience; caps usually land in 1–2).
+    private static let presenceAttemptCap = 5
+
+    /// One presence sweep over relays + machines (local and federated), with
+    /// the unanswered-attempt cap above. Returns the current machine-key set so
+    /// the caller can detect topology changes between sweeps.
+    private func sweepPresence() -> Set<String> {
+        var swept = Set<String>()
+        for relay in model.mesh.config.relays {
+            for machine in model.mesh.config.machines(onRelay: relay.id) {
+                let key = model.machineCapsKey(relayID: machine.relayID, epk: machine.epk)
+                swept.insert(key)
+                if model.daemonPresence(for: machine) != nil {
+                    presenceAttempts.removeValue(forKey: key)
+                    continue
+                }
+                guard (presenceAttempts[key] ?? 0) < Self.presenceAttemptCap else {
+                    continue // capped: stop probing until presence lands or the set changes
+                }
+                presenceAttempts[key, default: 0] += 1
+                let machine = machine
+                Task { await model.requestDaemonStatus(machine: machine) }
+            }
+            for fm in model.federatedMachines(onRelay: relay.id) {
+                let key = model.machineCapsKey(relayID: fm.relayID, epk: fm.epk)
+                swept.insert(key)
+                if model.daemonPresence(federated: fm) != nil {
+                    presenceAttempts.removeValue(forKey: key)
+                    continue
+                }
+                guard (presenceAttempts[key] ?? 0) < Self.presenceAttemptCap else {
+                    continue
+                }
+                presenceAttempts[key, default: 0] += 1
+                let fm = fm
+                Task { await model.requestDaemonStatus(relayID: fm.relayID, epk: fm.epk) }
+            }
+        }
+        return swept
+    }
+
     private func pollDaemons() async {
         while !Task.isCancelled {
-            for relay in model.mesh.config.relays {
-                for machine in model.mesh.config.machines(onRelay: relay.id)
-                where model.daemonPresence(for: machine) == nil {
-                    await model.requestDaemonStatus(machine: machine)
-                }
-                // FEDERATED machines ride the same caps store, so the same
-                // sweep probes them (stop-once-answered applies identically).
-                for fm in model.federatedMachines(onRelay: relay.id)
-                where model.daemonPresence(federated: fm) == nil {
-                    await model.requestDaemonStatus(relayID: fm.relayID, epk: fm.epk)
-                }
+            let swept = sweepPresence()
+            // Topology change (a machine re-added after prune / new federated
+            // peer): reset the attempt counters so re-appearing machines get
+            // a fresh window — but only keys NOT in the new set expire away.
+            if swept != lastSweptMachineSet {
+                presenceAttempts = presenceAttempts.filter { swept.contains($0.key) }
             }
+            lastSweptMachineSet = swept
             try? await Task.sleep(nanoseconds: 3_000_000_000)
         }
     }
@@ -732,11 +780,10 @@ private struct FederatedMachineLaunchRow: View {
     }
 
     private var subtitle: String {
-        guard let d = model.daemonPresence(federated: machine) else {
-            return "remote machine — searching for daemon…"
+        if model.federatedMachineCaps[machine.epk]?.isEmpty == false {
+            return "remote · ready to launch"
         }
-        let backend = d.backend.map { " · \($0)" } ?? ""
-        return "remote · ready to launch" + backend
+        return "remote machine — waiting for discovery…"
     }
 }
 

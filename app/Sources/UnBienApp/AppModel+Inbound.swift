@@ -920,6 +920,14 @@ extension AppModel {
                 if !federatedMachines.contains(fm) {
                     federatedMachines.append(fm)
                 }
+                // Caps ride the pushed rooms (the machine row settles with
+                // zero polling — app clients have no reply route).
+                let caps = Set(realRooms.flatMap { $0.caps ?? [] })
+                if !caps.isEmpty {
+                    federatedMachineCaps[fedPeer.epk] = caps
+                } else {
+                    federatedMachineCaps.removeValue(forKey: fedPeer.epk)
+                }
             }
             // Prune machines this relay no longer federates (peer left the
             // mesh / peering torn down) — the list frame IS the topology.
