@@ -10,6 +10,9 @@
  */
 
 import { execFile } from "node:child_process"
+import { readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
+import { join } from "node:path"
 import { promisify } from "node:util"
 
 const execFileAsync = promisify(execFile)
@@ -22,9 +25,29 @@ export interface CliInstallResult {
   log: string[]
 }
 
+/** Channel: a DEV extension installs the CLI from the `dev` npm tag rather
+ *  than the stable `latest` — so the whole installation rides one channel.
+ *  Detect dev by the running extension's own package version (a "-dev"
+ *  pre-release suffix). */
+export function extIsDevChannel(): boolean {
+  try {
+    const here = fileURLToPath(import.meta.url)
+    // dist/daemon/cliInstall.js → ../.. = the extension package root
+    const pkg = JSON.parse(
+      readFileSync(join(here, "..", "..", "package.json"), "utf8"),
+    ) as { version?: string }
+    return typeof pkg.version === "string" && pkg.version.includes("-dev")
+  } catch {
+    return false
+  }
+}
+
 export async function installCliPackage(
   onLog?: (line: string) => void,
+  opts?: { dev?: boolean },
 ): Promise<CliInstallResult> {
+  const dev = opts?.dev ?? extIsDevChannel()
+  const spec = dev ? `${CLI_PACKAGE}@dev` : CLI_PACKAGE
   const log: string[] = []
   const push = (l: string) => {
     log.push(l)
@@ -35,11 +58,11 @@ export async function installCliPackage(
   // from process.execPath's tree so we don't depend on `npm` being on a
   // possibly-sparse PATH (same reasoning as findNodeBinary in install.ts).
   const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm"
-  push(`npm install -g ${CLI_PACKAGE} …`)
+  push(`npm install -g ${spec}${dev ? "  (dev channel — matches this dev extension)" : ""} …`)
 
   const { stdout, stderr } = await execFileAsync(
     npmCmd,
-    ["install", "-g", CLI_PACKAGE],
+    ["install", "-g", spec],
     { timeout: 5 * 60_000, maxBuffer: 4 * 1024 * 1024 },
   ).catch((err) => {
     const detail =

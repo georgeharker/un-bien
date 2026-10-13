@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, test } from "vitest"
 import {
   existsSync,
   lstatSync,
@@ -9,6 +9,7 @@ import {
   writeFileSync,
   mkdirSync,
 } from "node:fs"
+import { extIsDevChannel } from "./cliInstall.js"
 import { tmpdir } from "node:os"
 import { basename, dirname, isAbsolute, join } from "node:path"
 
@@ -482,3 +483,12 @@ describe.skipIf(!posixOnly)(
     })
   },
 )
+
+describe("cliInstall channel detection", () => {
+  it("dev-channel detector returns a boolean without throwing", () => {
+    // The installed dev extension's package.json carries a -dev suffix, so
+    // this returns true in dev trees and false in prod trees — either way
+    // it must not throw (the install flow relies on it degrading gracefully).
+    expect(typeof extIsDevChannel()).toBe("boolean")
+  })
+})

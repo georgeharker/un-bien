@@ -29,6 +29,7 @@ import {
   renderUnbienEnvSystemd,
   resolvePiAgentDirSnapshot,
 } from "./install.js"
+import { extIsDevChannel } from "./cliInstall.js"
 import { dirname, join } from "node:path"
 import { userInfo } from "node:os"
 import { homedir } from "node:os"
@@ -233,6 +234,9 @@ export async function installRelayService(opts: {
       throw new Error(
         "`unbien-relay` binary not found. Either:\n" +
           "  • cargo install un-bien-relay        (compiles from source; needs Rust)\n" +
+          (extIsDevChannel()
+            ? "    dev channel: pick the latest -dev version from crates.io\n    (un-bien-relay versions publish as relay-v* tags; see docs/relay-peering.md)\n"
+            : "") +
           "  • download a release binary: https://github.com/georgeharker/un-bien/releases\n" +
           "then re-run /unbien install relay",
       )
