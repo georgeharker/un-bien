@@ -53,7 +53,11 @@ relays must know the same owner. It is **opt-in**:
    `relay-peers.json` — per-machine topology; the config root's
    `relay.json` holds the settings.)
 
-5. **Verify** — with a pi session running on each machine (its
+5. **Launch sessions remotely from the CLI** — `unbien create-session
+   droplet` (or `resume-session`) resolves federated machines from the
+   peer list and launches through your local relay.
+
+6. **Verify** — with a pi session running on each machine (its
    `pairing_set` populates the relay's owner registry):
 
    ```sh

@@ -79,17 +79,44 @@ machines.
 Relay resolution order: `--relay` flag → `$UNBIEN_RELAY` env → single
 remembered relay (auto-picked) → multiple remembered (listed for explicit pick).
 
+## `unbien create-session` / `unbien resume-session`
+
+```bash
+unbien create-session <machine> [--dir <cwd>] [--name <name>] [--relay <url>]
+unbien resume-session <machine> [--dir <cwd>] [--name <name>] [--all]
+```
+
+Spawns a fresh pi session (or resumes a stored one) on a machine's launcher
+daemon — the same path the app's Launch control uses. `<machine>` is a paired
+machine name or epk prefix.
+
+**Remote (federated) machines work too**: the machine is also resolved from
+the local relay's federated peer list — `unbien create-session droplet` from
+`cascade` launches pi on droplet. Routing goes through your LOCAL relay; the
+cross-relay hop is invisible.
+
 ## `unbien relay`
 
 ```bash
-unbien relay add <url> [name]      # remember a relay
-unbien relay remove <url|name>     # forget a relay
-unbien relay list                  # show remembered relays (default)
+unbien relay peer pair [url] [--name <name>]   # print a pairing URL for THIS relay
+unbien relay peer add <url> <name>             # add a federated peer (plain)
+unbien relay peer add relay-pair://<b64>       # add + pin pubkey from a pairing URL
+unbien relay peer remove <name>                # remove a peer
+unbien relay peer federation on|off|status     # the federation gate (default off)
+unbien relay peer list                         # peers + gate state
+unbien relay list                              # local relay + remembered + peers (default)
+unbien relay add <url> [name]                  # remember a relay
+unbien relay remove <url|name>                 # forget a relay
 ```
 
-The relay registry is advisory: peers carry their own relay URLs (set at pair
-time). The registry is what `unbien pair` falls back to when no `--relay` is
-specified.
+- `relay list` shows the local relay's identity (name, URL, pubkey) — pipe a
+  pairing URL from `unbien relay peer pair | pbcopy`.
+- Federation is opt-in: `federation.enabled` in `~/.config/un-bien/relay.json`
+  (the relay refuses `/relay-peer` while off). `peer add` (either form)
+  auto-enables it.
+- Peers live in `~/.local/state/un-bien/relay-peers.json` (per-machine state);
+  the gate in the config root (settings). No restart needed — the relay
+  watches the file and connects within seconds.
 
 ## Slash commands
 
