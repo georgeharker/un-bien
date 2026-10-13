@@ -95,8 +95,22 @@ pub struct RelayPeerConfig {
 /// relay-peers.json FRESH on every call: the CLI can flip it live
 /// (`unbien relay federation on|off`). Default false — federation is opt-in.
 pub fn federation_enabled() -> bool {
-    let path = relay_peers_path();
-    match std::fs::read_to_string(&path) {
+    // CONFIG first: `federation.enabled` in ~/.config/un-bien/relay.json.
+    if let Ok(raw) = std::fs::read_to_string(crate::paths::relay_config_path()) {
+        if let Some(enabled) = serde_json::from_str::<serde_json::Value>(&raw)
+            .ok()
+            .and_then(|v| {
+                v.get("federation")
+                    .and_then(|f| f.get("enabled"))
+                    .and_then(|e| e.as_bool())
+            })
+        {
+            return enabled;
+        }
+    }
+    // Legacy fallback: the flag used to live in the state file's
+    // federation.enabled (before the settings/state split).
+    match std::fs::read_to_string(relay_peers_path()) {
         Ok(raw) => serde_json::from_str::<serde_json::Value>(&raw)
             .ok()
             .and_then(|v| {
@@ -659,7 +673,7 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
             return;
         }
         // Pinning: a configured peer with this name must present the pinned pubkey.
-        if peer_name.len() > 0 {
+        if !peer_name.is_empty() {
             let configured = read_peer_config().into_iter().find(|p| p.name == peer_name);
             if let Some(cfg) = configured {
                 if let Some(pinned) = &cfg.pubkey {

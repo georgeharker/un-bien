@@ -13,12 +13,13 @@ relay) discover and message each other. Same-owner validated — both
 relays must know the same owner. It is **opt-in**:
 
 1. **Enable the gate on each relay** — the relay refuses the peering
-   route entirely unless `federation.enabled` is true:
+   route entirely unless `federation.enabled` is true in the relay's
+   CONFIG (`~/.config/un-bien/relay.json`):
 
    ```sh
    unbien relay peer federation on
-   # federation on|off|status — flips federation.enabled in relay-peers.json
-   # (the CLI writes the file; the relay picks the change up live)
+   # federation on|off|status — flips federation.enabled in relay.json
+   # (the CLI writes the config file; the relay picks the change up live)
    ```
 
 2. **Set the relay's reachable URL** — in the relay's plist/service env
@@ -48,7 +49,9 @@ relays must know the same owner. It is **opt-in**:
    ```
 
    No restart needed — the relay watches `relay-peers.json` (fswatch)
-   and connects within seconds.
+   and connects within seconds. (Peers live in the state root's
+   `relay-peers.json` — per-machine topology; the config root's
+   `relay.json` holds the settings.)
 
 5. **Verify** — with a pi session running on each machine (its
    `pairing_set` populates the relay's owner registry):

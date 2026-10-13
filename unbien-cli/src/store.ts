@@ -126,33 +126,61 @@ export function loadRelayPeers(path = RELAY_PEERS_PATH): RelayPeer[] {
   }
 }
 
-/** The relay federation gate — `federation.enabled` in relay-peers.json.
- *  Default false: federation is OPT-IN (the relay refuses /relay-peer +
- *  never starts its peering loops otherwise). */
-export function isFederationEnabled(path = RELAY_PEERS_PATH): boolean {
+/** The relay's CONFIG file — settings (federation gate), in the config root
+ *  (dotfile-syncable). The peers list stays in the state root's
+ *  relay-peers.json (per-machine topology). Mirrors the relay's
+ *  paths::relay_config_path. */
+export const RELAY_CONFIG_PATH = join(
+  homedir(),
+  ".config",
+  "un-bien",
+  "relay.json",
+)
+
+/** The relay federation gate — `federation.enabled` in
+ *  ~/.config/un-bien/relay.json (settings). Legacy fallback: the old flag in
+ *  the state file. Default false: federation is OPT-IN (the relay refuses
+ *  /relay-peer + never starts its peering loops otherwise). */
+export function isFederationEnabled(configPath = RELAY_CONFIG_PATH): boolean {
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as {
+    const parsed = JSON.parse(readFileSync(configPath, "utf8")) as {
       federation?: { enabled?: boolean }
     }
-    return parsed.federation?.enabled === true
+    if (parsed.federation?.enabled !== undefined) return parsed.federation.enabled === true
+  } catch {
+    // no config file — fall through to legacy
+  }
+  try {
+    const legacy = JSON.parse(readFileSync(RELAY_PEERS_PATH, "utf8")) as {
+      federation?: { enabled?: boolean }
+    }
+    return legacy.federation?.enabled === true
   } catch {
     return false
   }
 }
 
-/** Flip the federation gate. Preserves the peers list. */
-export function setFederationEnabled(enabled: boolean, path = RELAY_PEERS_PATH): void {
-  let parsed: { peers?: RelayPeer[] } = {}
+/** Flip the federation gate — writes ONLY the config file (settings live in
+ *  config, state file holds just the peers list). */
+export function setFederationEnabled(enabled: boolean, configPath = RELAY_CONFIG_PATH): void {
+  let parsed: { federation?: { enabled?: boolean } } = {}
   try {
-    parsed = JSON.parse(readFileSync(path, "utf8")) as { peers?: RelayPeer[] }
+    parsed = JSON.parse(readFileSync(configPath, "utf8")) as {
+      federation?: { enabled?: boolean }
+    }
   } catch {
     // fresh file
   }
-  const peers = parsed.peers ?? []
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  mkdirSync(dirname(configPath), { recursive: true, mode: 0o700 })
+  // Merge: parsed fields first, then the NEW gate — the flip must win over
+  // any existing federation block (a trailing spread would resurrect it).
   writeFileSync(
-    path,
-    JSON.stringify({ federation: { enabled }, peers }, null, 2),
+    configPath,
+    JSON.stringify(
+      { ...parsed, federation: { ...(parsed.federation ?? {}), enabled } },
+      null,
+      2,
+    ),
     { mode: 0o600 },
   )
 }
