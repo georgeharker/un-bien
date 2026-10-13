@@ -1,5 +1,5 @@
 import { loadPeers } from "./store.js"
-import { requireMachine, connectControlRoom, launchAndWait, waitForRoom, handoffToConnect } from "./machine.js"
+import { connectControlRoom, launchAndWait, waitForRoom, handoffToConnect, requireMachineOrRemote } from "./machine.js"
 import { Shell } from "./tui.js"
 
 /**
@@ -33,9 +33,12 @@ export async function run(argv: string[]): Promise<void> {
     Shell.exitAfterDrain(1)
     process.exit(1)
   }
-  const machine = requireMachine(target)
+  // Paired local-relay machine first; federated remote machine via the local
+  // relay's federated_peer_list (gap 5) — routing goes through the LOCAL
+  // relay, the cross-relay hop is invisible.
+  const machine = await requireMachineOrRemote(target, flags.get("relay"))
   const label = machine.name ?? machine.epk.slice(0, 12)
-  const client = await connectControlRoom(machine, flags.get("relay"))
+  const client = await connectControlRoom(machine, machine.relayUrl)
 
   const cwd = flags.get("dir") || undefined
   const name = flags.get("name") || undefined

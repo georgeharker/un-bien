@@ -26,6 +26,70 @@ export function resolveMachine(target: string): PairedPeer | null {
   )
 }
 
+/** A federated (remote-relay) machine resolved via the local relay's
+ *  federated_peer_list. `relayUrl` is the LOCAL relay: the CLI connects
+ *  through it and the cross-relay forwarding is invisible (gap 5). */
+export interface RemoteMachineRef {
+  epk: string
+  name: string // peer relay's name (peerRelay)
+  relayUrl: string // the LOCAL relay's URL — routing goes through it
+  /** Structurally compatible with PairedPeer (timestamp placeholder). */
+  pairedAt: string
+}
+
+/** Resolve a machine label (exact/prefix match on the peer relay name) or epk
+ *  prefix to a federated machine, by asking the local relay for its
+ *  federated_peer_list. Returns null when no federated machine matches. */
+export async function resolveRemoteMachine(
+  target: string,
+  relayUrl: string,
+): Promise<RemoteMachineRef | null> {
+  const probe = new SessionClient(
+    relayUrl,
+    loadOrCreateIdentity(),
+    { token: "", epk: "0".repeat(43), roomId: "main" },
+  )
+  let client: SessionClient | null = null
+  try {
+    // The probe's invite epk is a placeholder — we never route to it; we only
+    // need the connection for the federated_peer_list pull.
+    await probe.connect()
+    client = probe
+  } catch {
+    return null
+  }
+  try {
+    const rooms = await client.listFederatedSessions()
+    const t = target.toLowerCase()
+    // Group by (peerRelay + peer_epk): one RemoteMachineRef per machine.
+    const byEpk = new Map<string, RemoteMachineRef>()
+    for (const room of rooms) {
+      if (!room.peer_epk) continue
+      const ref: RemoteMachineRef = {
+        epk: room.peer_epk,
+        name: room.peerRelay ?? "?",
+        relayUrl,
+        pairedAt: new Date().toISOString(), // placeholder — not persisted
+      }
+      byEpk.set(room.peer_epk, ref)
+    }
+    const matches = [...byEpk.values()].filter(
+      (m) =>
+        m.name.toLowerCase() === t ||
+        m.name.toLowerCase().startsWith(t) ||
+        m.epk.startsWith(target),
+    )
+    if (matches.length === 1) return matches[0] ?? null
+    if (matches.length > 1) {
+      console.error(`ambiguous remote machine '${target}': ${matches.map((m) => m.name).join(", ")}`)
+      return null
+    }
+    return null
+  } finally {
+    client.close()
+  }
+}
+
 /** Resolve + print the no-match error; exits the process when unresolved. */
 export function requireMachine(target: string): PairedPeer {
   const machine = resolveMachine(target)
@@ -181,4 +245,31 @@ export async function connectControlRoom(
   if (daemonRoom) client.setRoom(daemonRoom.room_id)
 
   return client
+}
+
+/** Sync local resolution first; on miss, probe the local relay's federated
+ *  peer list (gap 5). Exits the process when neither resolves. */
+export async function requireMachineOrRemote(
+  target: string,
+  relayFlag?: string,
+): Promise<PairedPeer> {
+  const local = resolveMachine(target)
+  if (local) return local
+  const relayUrl =
+    relayFlag ?? process.env.UNBIEN_RELAY ?? process.env.UNBIEN_RELAY_URL ?? ""
+  if (!relayUrl) {
+    console.error(
+      `no machine matching '${target}' and no --relay to probe federation`,
+    )
+    Shell.exitAfterDrain(1)
+    process.exit(1) // narrowing: drain is async
+  }
+  const remote = await resolveRemoteMachine(target, relayUrl)
+  if (remote) {
+    console.error(`(federated via ${remote.name} — routing through the local relay)`)
+    return remote
+  }
+  console.error(`no machine matching '${target}' (local or federated)`)
+  Shell.exitAfterDrain(1)
+  process.exit(1) // narrowing
 }

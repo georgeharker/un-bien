@@ -270,7 +270,7 @@ The extension deduplicates infos by `(cwd, name)`.
 ### Discovery
 
 1. Agent A calls `list_peers` → the extension's `BrokerRemote` returns
-   local peers + cross-PC siblings + **federated peers** (from the
+   local peers + remote-machine siblings + **federated peers** (from the
    `federated_peer_list` push). Federated peers appear as
    `<relayName>:<cwd>@<name>`.
 2. Agent A sees Agent B as `hostB:/path/to/cwd@name`.

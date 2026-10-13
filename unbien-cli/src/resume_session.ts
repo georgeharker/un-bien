@@ -1,4 +1,4 @@
-import { requireMachine, connectControlRoom, launchAndWait, waitForRoom, handoffToConnect } from "./machine.js"
+import { requireMachine, connectControlRoom, launchAndWait, waitForRoom, handoffToConnect, requireMachineOrRemote } from "./machine.js"
 import { pickRaw } from "./picker.js"
 import { Shell } from "./tui.js"
 
@@ -119,9 +119,9 @@ export async function run(argv: string[]): Promise<void> {
     else if (!a.startsWith("--")) target = a
   }
 
-  const machine = requireMachine(target)
+  const machine = await requireMachineOrRemote(target, flags.get("relay"))
   const label = machine.name ?? machine.epk.slice(0, 12)
-  const client = await connectControlRoom(machine, flags.get("relay"))
+  const client = await connectControlRoom(machine, machine.relayUrl)
 
   // Default GLOBAL: bare `resume-session` must not depend on the daemon's
   // cwd (under launchd that's "/", and scoping to it is meaningless — and

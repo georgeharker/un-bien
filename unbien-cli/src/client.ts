@@ -37,6 +37,9 @@ export interface RoomInfo {
    *  The value is the peer relay's name. Absent = direct (local to the
    *  relay the CLI connected to). */
   peerRelay?: string
+  /** The ROOM-OWNING machine's epk for federated sessions (from the
+   *  federated_peer_list) — used for control-room routing (remote launch). */
+  peer_epk?: string
 }
 
 export interface SessionClientEvents {
@@ -111,9 +114,12 @@ export class SessionClient extends EventEmitter<SessionClientEvents> {
         const rooms: RoomInfo[] = []
         for (const peer of peers as Record<string, unknown>[]) {
           const relayName = typeof peer.relay_name === "string" ? peer.relay_name : "?"
+          const remoteEpk = typeof peer.epk === "string" ? peer.epk : ""
           const peerRooms = Array.isArray(peer.rooms) ? peer.rooms : []
           for (const room of peerRooms as RoomInfo[]) {
-            rooms.push({ ...room, peerRelay: relayName })
+            // peer_epk lets the caller construct control-room invites for
+            // remote machines (gap 5: remote session launch).
+            rooms.push({ ...room, peerRelay: relayName, peer_epk: remoteEpk })
           }
         }
         resolve(rooms)
