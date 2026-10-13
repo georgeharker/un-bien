@@ -69,6 +69,9 @@ extension AppModel {
         // Insecure-transport notice (plan 01M14ZS3): plaintext ws:// relays are
         // user-specified — fine on localhost/Tailscale, risky elsewhere. One
         // warning per relay per app-run (not per reconnect).
+        // Tailscale-only transports skip the warning: a `*.ts.net` MagicDNS
+        // host resolves ONLY inside the tailnet, and 100.64.0.0/10 is the
+        // Tailscale CGNAT range — both are private by construction.
         let lower = relay.url.lowercased()
         if lower.hasPrefix("ws://") || lower.hasPrefix("http://"),
            insecureRelayWarned.insert(relay.id).inserted {
@@ -76,6 +79,8 @@ extension AppModel {
                 .replacingOccurrences(of: "ws://", with: "")
                 .replacingOccurrences(of: "http://", with: "")
             let host = hostPart.split(separator: "/").first.map(String.init) ?? hostPart
+            let isTailscale = host.hasSuffix(".ts.net") || isTailscaleCGNAT(host)
+            if isTailscale { return }
             let isLocal = host.hasPrefix("127.0.0.1") || host.hasPrefix("localhost")
             let scope = isLocal ? "fine for a local relay" : "fine on Tailscale/LAN — avoid on public networks"
             pushTransientNotice(
@@ -549,4 +554,13 @@ extension AppModel {
             }
         }
     }
+}
+
+/// True when `host` is a Tailscale CGNAT address (100.64.0.0/10 — octets
+/// 100.64.0.0 through 100.127.255.255). Those IPs exist only inside a
+/// tailnet, so plaintext transport to them is private.
+private func isTailscaleCGNAT(_ host: String) -> Bool {
+    let parts = host.split(separator: ".").compactMap { Int($0) }
+    guard parts.count == 4, parts[0] == 100 else { return false }
+    return parts[1] >= 64 && parts[1] <= 127
 }
