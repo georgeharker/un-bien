@@ -84,7 +84,8 @@ mesh tools), set in `~/.config/pi/agent/extensions/un-bien.json`:
 `federation` — absent or `true` ⇒ this machine participates in cross-relay
 federation (discovery, routing, inbound); `false` ⇒ local/same-relay mesh
 only. Distinct from `tools`: you can have tools without federation. The
-relay's `federation.enabled` gate (relay-peers.json) is the master opt-in;
+relay's `federation.enabled` gate (~/.config/un-bien/relay.json) is the
+master opt-in;
 `mesh.federation` is the per-machine refusal switch. Restart pi on a flip.
 
 ## Tools
