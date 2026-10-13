@@ -36,6 +36,10 @@ pub use rooms::{RoomManager, RoomMeta, RoomMetaPatch};
 /// they all read from this struct.
 #[derive(Clone)]
 pub struct AppState {
+    /// This relay's own peering identity (hello name + visited stamping).
+    /// Defaults to the hostname in production; tests override it so multiple
+    /// in-process relays have distinct identities.
+    pub relay_name: String,
     pub registry: Arc<PeerRegistry>,
     pub presence: Arc<PresenceManager>,
     pub rooms: Arc<RoomManager>,

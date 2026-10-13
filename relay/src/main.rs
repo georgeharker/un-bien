@@ -85,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
         mesh,
         mesh_auth,
         metrics,
+        relay_name: relay::peering::default_relay_name(),
         federated: Arc::clone(&federated),
     };
     relay::peering::start_peering(

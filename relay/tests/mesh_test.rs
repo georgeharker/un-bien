@@ -43,6 +43,7 @@ async fn spawn_relay() -> (String, tempfile::TempDir) {
         mesh,
         mesh_auth,
         federated: Arc::new(relay::peering::FederatedSessions::new()),
+        relay_name: relay::peering::default_relay_name(),
         metrics,
     };
 

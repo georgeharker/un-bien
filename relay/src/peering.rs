@@ -359,7 +359,7 @@ async fn connect_and_verify(
     let ours: Vec<String> = trust_root_hashes(mesh, pairing).into_iter().collect();
     let keypair = crate::relay_keypair::load_or_generate(None);
     let nonce = gen_relay_nonce();
-    let name = relay_own_name();
+    let name = federated.own_name();
     let url = relay_own_url().unwrap_or_default();
     let sig = sign_relay_identity(&keypair, &nonce, &name, &url);
     let hello = RelayHello {
@@ -429,7 +429,7 @@ async fn connect_and_verify(
     let local_rooms = FederatedSessions::local_rooms_by_epk(registry);
     let peer_list = RelayPeerList {
         kind: "relay_peer_list".into(),
-        relay_name: relay_own_name(),
+        relay_name: federated.own_name(),
         rooms_by_epk: local_rooms,
     };
     ws.send(tokio_tungstenite::tungstenite::Message::Text(
@@ -503,7 +503,7 @@ async fn connect_and_verify(
                 }
                 // Try relay_forward (deliver to local pi + send ack).
                 if let Ok(forward) = serde_json::from_str::<RelayForward>(&text) {
-                    if forward.visited.contains(&relay_own_name()) {
+                    if forward.visited.contains(&federated.own_name()) {
                         let ack = RelayForwardAck {
                             kind: "relay_forward_ack".into(),
                             request_id: forward.request_id,
@@ -551,6 +551,8 @@ async fn connect_and_verify(
                     // pairing gate (the SENDING relay's local pairing + the
                     // federation shared-owner check cover it).
                     if forward.room.is_some() && forward.ct.is_some() {
+                        eprintln!("[feddbg:B] rooms_of(target) main?: {:?} registry-has-main: {}", registry.rooms_of(&forward.target_epk).is_empty(), !registry.rooms_of(&forward.target_epk).is_empty());
+                        eprintln!("[feddbg:B2] registry rooms_of(target) empty={} target_tail={}", registry.rooms_of(&forward.target_epk).is_empty(), &forward.target_epk[0..8]);
                         let ack_status = if registry.forward(
                             &forward.target_epk,
                             forward.room.as_deref().unwrap_or_default(),
@@ -562,12 +564,13 @@ async fn connect_and_verify(
                                 })
                                 .to_string(),
                             ),
-                            0, // no skip-conn: no local sender conn
+                            PeerRegistry::NO_SKIP_CONN,
                         ) {
                             "forwarded"
                         } else {
                             "unknown_peer"
                         };
+                        eprintln!("[feddbg:B] outer ack={}", ack_status);
                         let ack = RelayForwardAck {
                             kind: "relay_forward_ack".into(),
                             request_id: forward.request_id.clone(),
@@ -707,7 +710,7 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
     // Send relay_hello_ack (with relay identity for pairing).
     let keypair = crate::relay_keypair::load_or_generate(None);
     let nonce = gen_relay_nonce();
-    let name = relay_own_name();
+    let name = state.federated.own_name();
     let url = relay_own_url().unwrap_or_default();
     let sig = sign_relay_identity(&keypair, &nonce, &name, &url);
     let ack = RelayHelloAck {
@@ -766,7 +769,7 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
     let local_rooms = FederatedSessions::local_rooms_by_epk(&state.registry);
     let our_list = RelayPeerList {
         kind: "relay_peer_list".into(),
-        relay_name: relay_own_name(), // our own name (was "self" placeholder)
+        relay_name: state.federated.own_name(), // our own name (was "self" placeholder)
         rooms_by_epk: local_rooms,
     };
     if socket
@@ -833,8 +836,9 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
                 }
                 // Try relay_forward (deliver to local pi + send ack).
                 if let Ok(forward) = serde_json::from_str::<RelayForward>(&text) {
+                    eprintln!("[feddbg:B] forward req={} from={} dest={} room={:?} ct={:?}", forward.request_id, forward.from_epk, forward.target_epk, forward.room, forward.ct.is_some());
                     // Loop prevention: drop if we've already handled this forward.
-                    if forward.visited.contains(&relay_own_name()) {
+                    if forward.visited.contains(&state.federated.own_name()) {
                         let ack = RelayForwardAck {
                             kind: "relay_forward_ack".into(),
                             request_id: forward.request_id,
@@ -874,6 +878,7 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
                     // pairing gate (the SENDING relay's local pairing + the
                     // federation shared-owner check cover it).
                     if forward.room.is_some() && forward.ct.is_some() {
+                        eprintln!("[feddbg:B2] rooms_of(target).is_empty={} room={}", state.registry.rooms_of(&forward.target_epk).is_empty(), forward.room.clone().unwrap_or_default());
                         let ack_status = if state.registry.forward(
                             &forward.target_epk,
                             forward.room.as_deref().unwrap_or_default(),
@@ -885,12 +890,13 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
                                 })
                                 .to_string(),
                             ),
-                            0, // no skip-conn: no local sender conn
+                            PeerRegistry::NO_SKIP_CONN,
                         ) {
                             "forwarded"
                         } else {
                             "unknown_peer"
                         };
+                        eprintln!("[feddbg:B] outer ack={}", ack_status);
                         let ack = RelayForwardAck {
                             kind: "relay_forward_ack".into(),
                             request_id: forward.request_id.clone(),
@@ -1088,6 +1094,8 @@ pub struct RelayForwardAck {
 /// → Vec<RoomMeta>. Also maintains an epk → peer_relay_name index for
 /// forwarding (which peer relay handles a given target epk?).
 pub struct FederatedSessions {
+    /// This relay's identity for hello/visited stamping (default: hostname).
+    own_name: String,
     /// (peer_relay_name, epk) → Vec<RoomMeta>
     sessions: Mutex<HashMap<(String, String), Vec<RoomMeta>>>,
     /// epk → list of peer_relay_names (for forwarding — multi-route fallback)
@@ -1098,14 +1106,28 @@ pub struct FederatedSessions {
     pending_forwards: Mutex<HashMap<String, oneshot::Sender<RelayForwardAck>>>,
 }
 
+pub fn default_relay_name() -> String {
+    relay_own_name()
+}
+
 impl FederatedSessions {
     pub fn new() -> Self {
+        Self::with_name(&default_relay_name())
+    }
+
+    /// Explicit identity (tests / multi-relay in-process rigs).
+    pub fn with_name(own_name: &str) -> Self {
         Self {
+            own_name: own_name.to_string(),
             sessions: Mutex::new(HashMap::new()),
             epk_to_relays: Mutex::new(HashMap::new()),
             forward_senders: Mutex::new(HashMap::new()),
             pending_forwards: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub fn own_name(&self) -> String {
+        self.own_name.clone()
     }
 
     /// Learn that `epk` is reachable via `relay_name`, from a SIG-VERIFIED
@@ -1346,7 +1368,7 @@ impl FederatedSessions {
         if relay_names.is_empty() {
             return None;
         }
-        let own_name = relay_own_name();
+        let own_name = self.own_name.clone();
         let tx = {
             let senders = self.forward_senders.lock().await;
             let mut found = None;
@@ -1410,7 +1432,7 @@ impl FederatedSessions {
         if relay_names.is_empty() {
             return None;
         }
-        let own_name = relay_own_name();
+        let own_name = self.own_name.clone();
         let tx = {
             let senders = self.forward_senders.lock().await;
             let mut found = None;
@@ -1462,7 +1484,7 @@ impl FederatedSessions {
     /// Called when a local pi connects ("add") or disconnects ("remove").
     /// Uses `relay_own_name()` so the receiver keys the session correctly.
     pub async fn broadcast_update(&self, action: &str, epk: &str, room: serde_json::Value) {
-        let relay_name = relay_own_name();
+        let relay_name = self.own_name.clone();
         let update = RelayPeerUpdate {
             kind: "relay_peer_update".into(),
             relay_name,

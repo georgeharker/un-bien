@@ -167,6 +167,11 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
     let room_meta_json = serde_json::to_value(&room_meta).unwrap_or_default();
+    eprintln!(
+        "[feddbg:PEER] registered epk={}.. relay={}",
+        &peer_id[..16],
+        state.relay_name
+    );
     let conn_id = registry.register(peer_id.clone(), room_meta, tx).await;
 
     // Phase 4: push the current federated_peer_list to this new connection

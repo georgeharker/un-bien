@@ -50,6 +50,7 @@ pub async fn start_relay_state() -> (u16, Arc<relay::PairingRegistry>) {
         mesh,
         mesh_auth,
         federated: Arc::new(relay::peering::FederatedSessions::new()),
+        relay_name: relay::peering::default_relay_name(),
         metrics,
     };
     let app = build_router(state);

@@ -276,6 +276,11 @@ impl PeerRegistry {
             .collect()
     }
 
+    /// Sentinel for `forward`'s skip-conn: "don't skip anyone". NOT 0 —
+    /// conn ids start at 0, so a first-conn conn_id 0 would be silently
+    /// skipped by every federated delivery that meant "no skip".
+    pub const NO_SKIP_CONN: u64 = u64::MAX;
+
     /// Broadcasts `msg` to every live connection at `(dest_peer, dest_room)`
     /// **except** the one whose conn_id equals `from_conn_id` (skip-sender).
     ///
@@ -293,6 +298,14 @@ impl PeerRegistry {
         let lock = self.senders.lock().unwrap();
         let key = (dest_peer.to_string(), dest_room.to_string());
         let Some(v) = lock.get(&key) else {
+            eprintln!(
+                "[feddbg:REG] forward MISS key=({}.., {}) keys={:?}",
+                dest_peer,
+                dest_room,
+                lock.keys()
+                    .map(|(p, r)| (p.clone(), r.clone()))
+                    .collect::<Vec<_>>()
+            );
             return false;
         };
         let mut delivered = false;
