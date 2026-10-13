@@ -551,8 +551,6 @@ async fn connect_and_verify(
                     // pairing gate (the SENDING relay's local pairing + the
                     // federation shared-owner check cover it).
                     if forward.room.is_some() && forward.ct.is_some() {
-                        eprintln!("[feddbg:B] rooms_of(target) main?: {:?} registry-has-main: {}", registry.rooms_of(&forward.target_epk).is_empty(), !registry.rooms_of(&forward.target_epk).is_empty());
-                        eprintln!("[feddbg:B2] registry rooms_of(target) empty={} target_tail={}", registry.rooms_of(&forward.target_epk).is_empty(), &forward.target_epk[0..8]);
                         let ack_status = if registry.forward(
                             &forward.target_epk,
                             forward.room.as_deref().unwrap_or_default(),
@@ -570,7 +568,6 @@ async fn connect_and_verify(
                         } else {
                             "unknown_peer"
                         };
-                        eprintln!("[feddbg:B] outer ack={}", ack_status);
                         let ack = RelayForwardAck {
                             kind: "relay_forward_ack".into(),
                             request_id: forward.request_id.clone(),
@@ -610,7 +607,25 @@ async fn connect_and_verify(
                 }
                 // Try relay_forward_ack (resolve pending forward).
                 if let Ok(ack) = serde_json::from_str::<RelayForwardAck>(&text) {
-                    federated.resolve_forward_ack(ack).await;
+                    let failed = ack.status != "forwarded";
+                    if let Some((from_epk, target_epk)) =
+                        federated.resolve_forward_ack(ack.clone()).await
+                    {
+                        if failed {
+                            // Refuse BACK to the original sender — parity with
+                            // the local-path refusal, so the app's attach
+                            // fails visibly instead of spinning forever.
+                            let refusal = serde_json::json!({
+                                "type": "error",
+                                "code": "unknown_peer",
+                                "peer": target_epk,
+                            })
+                            .to_string();
+                            if !registry.forward_to_peer(&from_epk, Message::Text(refusal)) {
+                                tracing::warn!(from = %from_epk, "federated refusal undeliverable (origin not local)");
+                            }
+                        }
+                    }
                 }
             }
             // Outbound forwards from the channel (from handle_pi_envelope).
@@ -836,7 +851,6 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
                 }
                 // Try relay_forward (deliver to local pi + send ack).
                 if let Ok(forward) = serde_json::from_str::<RelayForward>(&text) {
-                    eprintln!("[feddbg:B] forward req={} from={} dest={} room={:?} ct={:?}", forward.request_id, forward.from_epk, forward.target_epk, forward.room, forward.ct.is_some());
                     // Loop prevention: drop if we've already handled this forward.
                     if forward.visited.contains(&state.federated.own_name()) {
                         let ack = RelayForwardAck {
@@ -878,7 +892,6 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
                     // pairing gate (the SENDING relay's local pairing + the
                     // federation shared-owner check cover it).
                     if forward.room.is_some() && forward.ct.is_some() {
-                        eprintln!("[feddbg:B2] rooms_of(target).is_empty={} room={}", state.registry.rooms_of(&forward.target_epk).is_empty(), forward.room.clone().unwrap_or_default());
                         let ack_status = if state.registry.forward(
                             &forward.target_epk,
                             forward.room.as_deref().unwrap_or_default(),
@@ -896,7 +909,6 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
                         } else {
                             "unknown_peer"
                         };
-                        eprintln!("[feddbg:B] outer ack={}", ack_status);
                         let ack = RelayForwardAck {
                             kind: "relay_forward_ack".into(),
                             request_id: forward.request_id.clone(),
@@ -932,7 +944,24 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
                 }
                 // Try relay_forward_ack (resolve pending forward).
                 if let Ok(ack) = serde_json::from_str::<RelayForwardAck>(&text) {
-                    state.federated.resolve_forward_ack(ack).await;
+                    let failed = ack.status != "forwarded";
+                    if let Some((from_epk, target_epk)) =
+                        state.federated.resolve_forward_ack(ack.clone()).await
+                    {
+                        if failed {
+                            // Refuse BACK to the original sender — parity with
+                            // the local-path refusal (see loop 1 comment).
+                            let refusal = serde_json::json!({
+                                "type": "error",
+                                "code": "unknown_peer",
+                                "peer": target_epk,
+                            })
+                            .to_string();
+                            if !state.registry.forward_to_peer(&from_epk, Message::Text(refusal)) {
+                                tracing::warn!(from = %from_epk, "federated refusal undeliverable (origin not local)");
+                            }
+                        }
+                    }
                 }
             }
             // Outbound forwards from the channel (from handle_pi_envelope).
@@ -1082,7 +1111,7 @@ pub struct RelayForward {
 }
 
 /// Wire frame: the ack for a relay_forward (Phase 3c).
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RelayForwardAck {
     #[serde(rename = "type")]
     pub kind: String,
@@ -1093,6 +1122,15 @@ pub struct RelayForwardAck {
 /// Stores rooms from federated peer relays. Keyed by (peer_relay_name, epk)
 /// → Vec<RoomMeta>. Also maintains an epk → peer_relay_name index for
 /// forwarding (which peer relay handles a given target epk?).
+/// A pending forwarded frame awaiting its peer relay's ack.
+pub type PendingForward = (
+    oneshot::Sender<RelayForwardAck>,
+    // original sender epk (for back-routed refusals on failure)
+    String,
+    // target epk (named in the refusal)
+    String,
+);
+
 pub struct FederatedSessions {
     /// This relay's identity for hello/visited stamping (default: hostname).
     own_name: String,
@@ -1102,8 +1140,11 @@ pub struct FederatedSessions {
     epk_to_relays: Mutex<HashMap<String, Vec<String>>>,
     /// peer_relay_name → WS sender channel (for relay_forward, raw JSON text)
     forward_senders: Mutex<HashMap<String, Vec<mpsc::UnboundedSender<String>>>>,
-    /// request_id → oneshot sender (for relay_forward_ack replies)
-    pending_forwards: Mutex<HashMap<String, oneshot::Sender<RelayForwardAck>>>,
+    /// request_id → (ack channel, original sender epk, target epk) — the
+    /// origin pair lets a FAILED forward be refused BACK to the sender,
+    /// matching the local-path refusal (federated misses become visible to
+    /// the app instead of an invisible 5s warn).
+    pending_forwards: Mutex<HashMap<String, PendingForward>>,
 }
 
 pub fn default_relay_name() -> String {
@@ -1402,10 +1443,10 @@ impl FederatedSessions {
             ct: None,
         };
         let (otx, orx) = oneshot::channel();
-        self.pending_forwards
-            .lock()
-            .await
-            .insert(request_id.clone(), otx);
+        self.pending_forwards.lock().await.insert(
+            request_id.clone(),
+            (otx, from_epk.to_string(), target_epk.to_string()),
+        );
         let _ = tx.send(serde_json::to_string(&forward).unwrap_or_default());
         Some((request_id, orx))
     }
@@ -1464,19 +1505,24 @@ impl FederatedSessions {
             ct: Some(ct.to_string()),
         };
         let (otx, orx) = oneshot::channel();
-        self.pending_forwards
-            .lock()
-            .await
-            .insert(request_id.clone(), otx);
+        self.pending_forwards.lock().await.insert(
+            request_id.clone(),
+            (otx, from_epk.to_string(), target_epk.to_string()),
+        );
         let _ = tx.send(serde_json::to_string(&forward).unwrap_or_default());
         Some((request_id, orx))
     }
 
     /// Handle a relay_forward_ack received from a peer relay. Resolves the
     /// pending oneshot.
-    pub async fn resolve_forward_ack(&self, ack: RelayForwardAck) {
-        if let Some(tx) = self.pending_forwards.lock().await.remove(&ack.request_id) {
+    pub async fn resolve_forward_ack(&self, ack: RelayForwardAck) -> Option<(String, String)> {
+        if let Some((tx, from_epk, target_epk)) =
+            self.pending_forwards.lock().await.remove(&ack.request_id)
+        {
             let _ = tx.send(ack);
+            Some((from_epk, target_epk))
+        } else {
+            None
         }
     }
 

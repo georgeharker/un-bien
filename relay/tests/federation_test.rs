@@ -182,6 +182,18 @@ async fn next_text(ws: &mut WsStream) -> Option<String> {
     None
 }
 
+/// Like next_text but does NOT skip typed frames (for refusal assertions).
+async fn next_any_text(ws: &mut WsStream) -> Option<String> {
+    while let Ok(Some(m)) = tokio::time::timeout(Duration::from_secs(5), ws.next()).await {
+        match m.ok()? {
+            Message::Text(t) => return Some(t.to_string()),
+            Message::Pong(_) | Message::Ping(_) => continue,
+            _ => return None,
+        }
+    }
+    None
+}
+
 fn inner_of(outer_wire: &str) -> Value {
     let outer: Value = serde_json::from_str(outer_wire).unwrap();
     let ct = outer["ct"].as_str().unwrap();
@@ -297,4 +309,28 @@ async fn app_request_and_machine_reply_cross_two_relays() {
         let got = next_text(&mut app).await.expect("app lost the stream");
         assert_eq!(inner_of(&got)["delta"], json!(i));
     }
+
+    // ── Dead-room refusal: attaching an address the machine does NOT host
+    // must fail VISIBLY at the app (the back-routed refusal, local-path
+    // parity), not spin silently.
+    app.send(Message::text(outer_frame(
+        &machine_epk,
+        "dead-room-xyz",
+        &json!({"type": "ub", "ub": {"t": "session_sync", "session_id": "dead"}}),
+    )))
+    .await
+    .unwrap();
+    let mut refusal: Option<Value> = None;
+    for _ in 0..5 {
+        if let Some(txt) = next_any_text(&mut app).await {
+            let wire: Value = serde_json::from_str(&txt).unwrap_or(Value::Null);
+            if wire["type"] == "error" {
+                refusal = Some(wire);
+                break;
+            }
+        }
+    }
+    let wire = refusal.expect("app got no refusal for the dead-room attach");
+    assert_eq!(wire["code"], "unknown_peer", "refusal code");
+    assert_eq!(wire["peer"], machine_epk, "refusal names the destination");
 }
