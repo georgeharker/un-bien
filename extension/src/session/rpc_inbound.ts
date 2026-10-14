@@ -26,12 +26,13 @@ export interface GetEntriesResult {
 }
 
 /** Page budget for get_entries replies (design: get_entries backfill paging;
- *  raised 256 KiB → 1 MiB → 2 MiB after device testing, 2026-09-10).
- *  2 MiB of entry JSON per page — 8× fewer round trips than the original,
- *  still wide margin under every cap: body ≈ 2 MiB + envelope overhead →
- *  ≈ 2.7 MiB base64 wire → decoded estimate ≈ 2 MiB, ~1.9 MiB UNDER the
- *  relay's 4 MiB ct cap (RELAY_MAX_CT_MIB) < the app's 8 MiB WS receive.
- *  A page carrying one MAX_ENTRY_JSON_BYTES (2 MiB) fitted entry alone also
+ *  raised 256 KiB → 1 MiB → 2 MiB → 5 MiB (device testing 2026-09-10; the
+ *  5 MiB raise rides relay 0.7.31's 16 MiB ct ceiling so long-response
+ *  backfill never reaches the truncation ladder in practice).
+ *  5 MiB of entry JSON per page — still wide margin under every cap:
+ *  body ≈ 5 MiB + envelope overhead → ≈ 6.7 MiB base64 wire, UNDER the
+ *  app's 8 MiB WS receive < the relay's 16 MiB ct cap (RELAY_MAX_CT_MIB).
+ *  A page carrying one MAX_ENTRY_JSON_BYTES (5 MiB) fitted entry alone also
  *  fits with the same margin. (The 500 KiB POST /mesh cap does NOT apply —
  *  pages ride the peer WS plane, not mesh.) Fold cost: the reader folds a
  *  page on its main actor; 2 MiB parses in ~5-10 ms — device-verified smooth.
@@ -39,7 +40,7 @@ export interface GetEntriesResult {
  *  1 MiB — the refusal frames make that visible now. This is chunking
  *  BEHAVIOR, not protocol — frames stay byte-faithful to pi's rpc
  *  (`success(id, "get_entries", { entries, leafId })`). */
-export const GET_ENTRIES_PAGE_BUDGET_BYTES = 2 * 1024 * 1024
+export const GET_ENTRIES_PAGE_BUDGET_BYTES = 5 * 1024 * 1024
 
 /** Hard ceiling for a SINGLE entry's JSON (design: transport-fit paging). The
  *  at-least-one-entry progress rule means an entry beyond the relay's ct cap
@@ -49,7 +50,7 @@ export const GET_ENTRIES_PAGE_BUDGET_BYTES = 2 * 1024 * 1024
  *  strings (suffix marker) so shape + ids survive and the walk always crosses.
  *  2 MiB JSON → ≈2.7 MiB base64 ≈ 2.7 MiB decoded estimate — half the relay
  *  cap, deliberately, so a page carrying one fitted entry still has margin. */
-export const MAX_ENTRY_JSON_BYTES = 2 * 1024 * 1024
+export const MAX_ENTRY_JSON_BYTES = 5 * 1024 * 1024
 
 const truncationMarker = (cut: number, total: number) =>
   `…[transport-truncated ${total - cut}/${total} bytes]`

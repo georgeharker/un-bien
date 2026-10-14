@@ -208,7 +208,10 @@ describe("dispatchRpcCommand", () => {
       }) as unknown as SessionEntry
 
     it("an entry beyond the transport ceiling is string-truncated (walk still crosses)", () => {
-      const giant = mk("big", 3 * 1024 * 1024)
+      // 6 MiB raw > the raised 5 MiB ceiling → still gets string-truncated
+      // (the ladder must survive the cap raise; it now guards pathological
+      // entries only, never normal long responses).
+      const giant = mk("big", 6 * 1024 * 1024)
       const after = mk("after", 50)
       const page = pageEntries([giant, after], undefined, "after", 1024 * 1024)
       // Fitted ≈ 64 KiB + marker → under both the ceiling AND the budget, so
