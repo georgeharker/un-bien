@@ -627,12 +627,18 @@ extension AppModel {
     /// get_entries backfill PAGING walk (design 01M1BANZ).
     private func handleGetEntriesPaging(rpc: JSONValue, key: String,
                                        envelope: RoutedEnvelope, relayID: UUID) {
-        // get_entries backfill PAGING (design 01M1BANZ): the reply is ONE
-        // budget-bounded page of a possibly multi-MB entry log; pi-faithful
-        // ({entries, leafId}) — the loop is implied by the since-cursor
-        // semantics: fetch with the page's leafId until an empty page. Folding
-        // is idempotent, so pages + live frames interleave freely. The terminal
-        // page marks the session backfilled (paged-backfill × restore, 01M1B9F6).
+        // get_entries backfill PAGING (design 01M1BANZ): the
+        // reply is ONE budget-bounded page of a possibly
+        // multi-MB entry log. The frame stays pi-faithful
+        // ({entries, leafId}, no extra fields) — the loop is
+        // implied by pi's own since-cursor semantics: keep
+        // fetching with the page's leafId until an empty page
+        // (or an error / nil leaf). Folding is idempotent
+        // (identify dedup), so pages + live frames interleave
+        // freely. The terminal page also marks the session
+        // backfilled so TranscriptView's scroll-restore can stop
+        // WAITING for the remembered row (paged-backfill ×
+        // restore interaction, designs 01M1BANZ + 01M1B9F6).
         guard rpc["command"]?.stringValue == "get_entries" else { return }
         // Which paging CHAIN is this a page of? The current walk keeps
         // activeWalks[key] == its id across pages (next-page reuses the id);
@@ -673,7 +679,6 @@ extension AppModel {
                         log.error("get_entries page leaf REPEATED (no advance) key=\(keyTail, privacy: .public) leaf=\(leafTail, privacy: .public) — paging loop broken, treating as terminal")
                         backfilledSessions.insert(key)
                         endWalk(key: key)
-                        syncRetryIfLagging(key: key)
                     }
                     return
                 }
@@ -725,7 +730,6 @@ extension AppModel {
                     log.notice("WALK terminal key=\(String(key.suffix(12)), privacy: .public) — backfilled")
                     backfilledSessions.insert(key)
                     endWalk(key: key)
-                    syncRetryIfLagging(key: key)
                 }
             }
         } else {
@@ -788,7 +792,6 @@ extension AppModel {
               let since = envelopeReducers[key]?.leafId,
               let session = sessions[key],
               let conn = connections[relayID] else { return }
-        syncWatch[key] = since; syncRetries[key] = nil
         // Pull the just-settled tail's DURABLE ids as a gated delta WALK that
         // pages to the empty terminal + derives — re-keying live 'a<seq>' rows to
         // their entry ids (design 01M2435). The old bare one-shot never paged, so

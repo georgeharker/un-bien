@@ -668,36 +668,3 @@ extension AppModel {
         log.notice("session resumed: ended banner retracted key=\(String(key.suffix(12)), privacy: .public)")
     }
 }
-
-// MARK: - message_end append-lag sync watch
-extension AppModel {
-    /// A sync-triggered walk terminalled with NO leaf advance past its
-    /// baseline: the announced entry was not in the machine's log at fetch
-    /// time (append lags message_end; no post-append hook exists). Re-issue
-    /// the delta walk once the flush should have landed — bounded, so a
-    /// genuinely dead fetch reverts to today's behavior. Clears on advance.
-    func syncRetryIfLagging(key: String) {
-        guard let baseline = syncWatch[key] else { return }
-        if envelopeReducers[key]?.leafId != baseline {
-            syncWatch[key] = nil
-            syncRetries[key] = nil
-            return
-        }
-        let n = syncRetries[key] ?? 0
-        if n >= 2 {
-            log.error("sync append-lag: entry still unfetched after \(n, privacy: .public) retries key=\(String(key.suffix(12)), privacy: .public)")
-            syncWatch[key] = nil
-            syncRetries[key] = nil
-            return
-        }
-        syncRetries[key] = n + 1
-        guard let s = sessions[key] else { return }
-        log.notice("sync append-lag: re-walking in 400ms key=\(String(key.suffix(12)), privacy: .public) attempt=\(n + 1, privacy: .public)")
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 400_000_000)
-            guard let self, let s2 = self.sessions[key],
-                  let conn = self.connections[s2.relayID] else { return }
-            self.startDeltaWalk(s2, connection: conn, since: baseline)
-        }
-    }
-}
