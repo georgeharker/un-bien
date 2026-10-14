@@ -27,6 +27,7 @@ describe("launch backends — tmux/herdr argv + tilde expansion", () => {
       "pi-foo",
       "-c",
       "/tmp/work",
+      "--",
       "pi",
       "-n",
       "My Session",
@@ -45,6 +46,7 @@ describe("launch backends — tmux/herdr argv + tilde expansion", () => {
       "pi-foo",
       "-c",
       "/tmp/work",
+      "--",
       "pi",
     ])
   })
@@ -72,6 +74,7 @@ describe("launch backends — tmux/herdr argv + tilde expansion", () => {
       "pi-foo",
       "-c",
       "/tmp/work",
+      "--",
       "pi",
       "-n",
       "My Session",

@@ -115,6 +115,7 @@ export function _buildTmuxLaunchArgs(
         windowName,
         "-c",
         cwd,
+        "--",
         ...(commandArgv ?? ["pi", ...nameArgv, ...resumeArgv]),
       ]
     : [
@@ -126,6 +127,7 @@ export function _buildTmuxLaunchArgs(
         windowName,
         "-c",
         cwd,
+        "--",
         ...(commandArgv ?? ["pi", ...nameArgv, ...resumeArgv]),
       ]
 }
