@@ -89,10 +89,7 @@ public final class AppModel: ObservableObject {
     /// Last page-arrival time per walk-in-flight session — the watchdog's STALL
     /// signal (a walk still receiving pages is alive; only a silent one retries).
     var walkLastActivity: [String: Date] = [:]
-    /// Content-derived FETCH FRONTIER (design: log-cursor split): the last
-    /// entry id actually folded from a non-empty page — advanced ONLY there,
-    /// never by terminal pages' reported tail, so lost content stays BEHIND
-    /// the frontier and the next reconcile re-serves it (docs/log-cursor).
+    /// Content-derived FETCH FRONTIER (log-cursor split; docs/log-cursor-design.md).
     var foldedFrontier: [String: String] = [:]
     var liveFrameBuffer: [String: [(env: EnvelopeMessage, envelope: RoutedEnvelope,
                                    relayID: UUID)]] = [:]
@@ -455,7 +452,10 @@ public final class AppModel: ObservableObject {
     /// (uncertain) re-timestamping. Tunable.
     static let queuedChipGraceNanos: UInt64 = 5 * 60 * 1_000_000_000  // 5 min
     static let reconnectBaseDelay: Double = 1
-    static let reconnectMaxDelay: Double = 30
+    static let reconnectMaxDelay: Double = 60
+    /// Failures before an unreachable relay PAUSES; fg heal retries once.
+    static let reconnectPauseAfter = 4
+    var reconnectPaused: [UUID: Bool] = [:]
 
     public init(mesh: MeshStore = MeshStore(), identityStore: OwnerIdentityStore? = nil) {
         // Wipe stale persisted bounds/scroll if the cache schema version
@@ -588,13 +588,8 @@ public final class AppModel: ObservableObject {
     /// The TWO independent reconstruction requests (design 01M15FMQ), issued on
     /// open AND on relay reconnect: (1) native pi `get_entries` rpc for the
     /// TRANSCRIPT — `since` the last leaf cursor for a delta fetch, reduced by
-    /// `SessionState.applyEntries`; (2) `session_sync` for un-bien's NON-rpc
-    /// panels + pending extension_ui. Both are idempotent (identify dedup /
-    /// panel ns-merge), so re-issuing them freely is safe.
     func requestReconstruction(_ session: LiveSession, connection: RelayConnection) async {
-        // Fetch origin = folded frontier (content-derived; design: log-cursor
-        // split). Falls back to the rendering beacon, then the cache — never
-        // TRUSTS the beacon over held content.
+        // Fetch origin = folded frontier; fallbacks: beacon, then cache.
         var since = foldedFrontier[session.id] ?? envelopeReducers[session.id]?.leafId
         // CACHE-FIRST (design 01M1M4N8RZZANDX6NWY7FCSBT5): with no in-memory
         /// cursor (cold launch), consult the local entry cache BEFORE the
@@ -604,9 +599,11 @@ public final class AppModel: ObservableObject {
         /// new content or none. The cache NEVER replaces the network check.
         /// Version mismatch → discard → ordinary full walk. Demo sessions
         /// are in-memory only — never cached.
+        var entryCacheLoaded = false
         if since == nil, !isDemoKey(session.id) {
             let t0 = Date()
             if let cached = await entryCache.load(key: session.id) {
+                entryCacheLoaded = true
                 var reducer = envelopeReducers[session.id] ?? EnvelopeReducer()
                 reducer.setHideReasoning(!showThinking)
                 RenderActivity.getEntriesCached += 1
@@ -618,7 +615,10 @@ public final class AppModel: ObservableObject {
                 log.notice("entry cache hit: \(cached.entries.count, privacy: .public) entries folded in \(foldMs, privacy: .public)ms — delta walk from leaf=\(leafTail, privacy: .public)")
             } else {
                 log.notice("entry cache miss — full walk key=\(String(session.id.suffix(12)), privacy: .public)")
-            }
+        }
+        if UserDefaults.standard.bool(forKey: "unbien.debug.sync") {
+            appendSessionNotice(key: session.id, code: "sync",
+                message: "walk since=\(since.map { String($0.suffix(10)) } ?? "nil") cache=\(entryCacheLoaded ? "hit" : "miss")")            }
         }
         // A previous full walk died mid-flight (connection drop): unblock its
         // buffered live frames before this walk proceeds.
