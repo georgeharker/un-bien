@@ -89,12 +89,10 @@ public final class AppModel: ObservableObject {
     /// Last page-arrival time per walk-in-flight session — the watchdog's STALL
     /// signal (a walk still receiving pages is alive; only a silent one retries).
     var walkLastActivity: [String: Date] = [:]
-    /// Content-derived FETCH FRONTIER per session (design: log-cursor split):
-    /// the last entry id actually folded from a non-empty get_entries page —
-    /// advanced ONLY there, never by terminal pages' reported machine tail.
-    /// requestReconstruction resumes from this, so entries lost to a dead
-    /// socket (bg after typing) stay BEHIND the frontier and are re-served by
-    /// the next reconcile, instead of being skipped by a machine-echoed leaf.
+    /// Content-derived FETCH FRONTIER (design: log-cursor split): the last
+    /// entry id actually folded from a non-empty page — advanced ONLY there,
+    /// never by terminal pages' reported tail, so lost content stays BEHIND
+    /// the frontier and the next reconcile re-serves it (docs/log-cursor).
     var foldedFrontier: [String: String] = [:]
     var liveFrameBuffer: [String: [(env: EnvelopeMessage, envelope: RoutedEnvelope,
                                    relayID: UUID)]] = [:]

@@ -1,4 +1,7 @@
 import Foundation
+import os
+
+private let connLog = Logger(subsystem: "un-bien", category: "relay-conn")
 
 /// One authenticated connection to a single relay (DESIGN §6). Opens the
 /// WebSocket, runs the Ed25519 `hello`/`challenge`/`auth` handshake with the
@@ -217,6 +220,11 @@ public actor RelayConnection {
                 guard let frame = try? InboundFrame.parse(line) else { continue }
                 eventContinuation?.yield(frame)
             } catch {
+                // The receive loop's LAST WORD before teardown: every silent
+                // conn death (foreground flaps, bg kills, half-open) funnels
+                // here — log the URLError/code so device console (Console.app
+                // → device geoifon, filter 'un-bien') names the killer.
+                connLog.error("ws receive ended: \(String(describing: error), privacy: .public)")
                 finishStream()
                 return
             }
