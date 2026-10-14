@@ -157,6 +157,35 @@ with the chain rig as acceptance.
 4. **Launch bug** (relay + rig): fix the rig to push pairing state; chase the
    B-pump frame mystery with the §3 gates in place.
 
+## As built — slice 2 decisions (2026-10-14)
+
+- `authorize_send` threads `target_owners: Option<&HashSet<String>>` in
+  (computed at the `handle_pi_envelope` call site from
+  `federated.machine_owners`) — membership.rs stays testable without
+  FederatedSessions. Sender owners come from the LOCAL PairingRegistry only
+  (no mesh-store union): both sides of the intersection are then
+  machine-signed, matching the target side's provenance.
+- The outer-plane SRC gate implements the same matrix: dest set unknown ⇒
+  refuse for ALL senders; known ⇒ owner-device (`dest set contains peer_id`)
+  OR machine (`sender-owners ∩ dest-owners ≠ ∅`). Machine exemption gone —
+  a machine IS its owner set. Routed `unknown_peer` refusal preserved; no
+  dest-side re-checks (9779b88 preserved).
+- Contract change: a dest the source relay cannot authorize AT ALL (no local
+  session, no federated route, no exchanged owner set) now gets the routed
+  refusal instead of a silent drop. The silent-drop contract survives where
+  intended: a KNOWN federated machine with a dead room still drops silently.
+- **Follow-up for slice 4 (production gap, flagged)**: machine→APP replies
+  over federation now require the reply DEST (the app device's key) to have
+  an advertised owner set — i.e. the app pushes a self-signed pairing_set
+  (`{machine_pk: <app key>, owners: [<owner opk>]}`) on connect, "a device
+  advertises the owner it belongs to". The extension's real pairing_set
+  push already carries `[app, owner]` for machines; the Swift app does NOT
+  push one today, so federated transcript replies/launch acks will be
+  refused at the machine's relay until the app adds this push.
+- Rigs: both federation rigs now have the app push its signed owner set
+  (modelling the production follow-up); the chain smoke direct-hop passes —
+  the B-pump mystery did not bite there.
+
 ## As built — slice 1 decisions (2026-10-14)
 
 - Declines are NAMED: `relay_hello_ack` gains a `reason` field

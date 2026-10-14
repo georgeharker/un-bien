@@ -97,19 +97,31 @@ fn direct_members_from_blobs(pi_pk: &str, blobs: &[Vec<u8>]) -> Option<HashSet<S
 
 /// Gate #5, in one place: may `sender` deliver an envelope to `target`?
 /// - Local target: full sender+target membership (mesh store + PairingRegistry).
-/// - Federated target (on a peer relay): sender must be a valid local member;
-///   the federation's shared-owner verification covers the target side (the
-///   receiving relay's membership is not visible to this relay — PairingRegistry
-///   is per-relay).
+/// - Federated target (on a peer relay): federation v2 §3 — the SENDER's
+///   machine-signed owner set (local PairingRegistry, `owners_of`) must
+///   intersect the TARGET's advertised machine-signed owner set (learned
+///   from the peering exchange — `FederatedSessions::machine_owners`, passed
+///   in by the caller so this stays testable without FederatedSessions).
+///   Either side unknown/empty ⇒ REFUSE — strict, no optimistic forwarding
+///   and no machine exemptions: a machine IS its owner set. The deciding
+///   relay is always the SOURCE (the 9779b88 lesson — the dest relay never
+///   re-refuses on its own stale view).
 pub fn authorize_send(
     sender: &str,
     target: &str,
     mesh: &MeshStore,
     pairing: &PairingRegistry,
     is_federated_target: bool,
+    target_owners: Option<&HashSet<String>>,
 ) -> bool {
     if is_federated_target {
-        return !authorized_peers(sender, mesh, pairing).is_empty();
+        let (Some(sender_owners), Some(target_owners)) = (pairing.owners_of(sender), target_owners)
+        else {
+            return false;
+        };
+        return !sender_owners.is_empty()
+            && !target_owners.is_empty()
+            && sender_owners.intersection(target_owners).next().is_some();
     }
     authorized_peers(sender, mesh, pairing).contains(target)
 }
@@ -131,5 +143,129 @@ pub fn verify_relay_forward(
             super::relay_keypair::RelayKeypair::verify(pk, msg.as_bytes(), sig)
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn registry_with(machine: &str, owners: &[&str]) -> PairingRegistry {
+        let pairing = PairingRegistry::new();
+        pairing.set(
+            machine.to_string(),
+            owners.iter().map(|o| o.to_string()).collect(),
+        );
+        pairing
+    }
+
+    /// Federation v2 §3 — the agent-plane federated branch: machine-signed
+    /// owner-set intersection, strict on unknown/empty, NO machine exemption.
+    #[test]
+    fn federated_branch_requires_owner_set_intersection() {
+        let mesh = MeshStore::open_in_memory().unwrap();
+        let sender = "sender-machine";
+        let shared: HashSet<String> = ["owner-x"].into_iter().map(String::from).collect();
+
+        // Shared owner in both signed sets ⇒ authorized.
+        let pairing = registry_with(sender, &["owner-x", "owner-s"]);
+        assert!(authorize_send(
+            sender,
+            "target-machine",
+            &mesh,
+            &pairing,
+            true,
+            Some(&shared)
+        ));
+
+        // Disjoint owner sets ⇒ refused (cross-owner).
+        let pairing = registry_with(sender, &["owner-s"]);
+        let other: HashSet<String> = ["owner-t"].into_iter().map(String::from).collect();
+        assert!(!authorize_send(
+            sender,
+            "target-machine",
+            &mesh,
+            &pairing,
+            true,
+            Some(&other)
+        ));
+
+        // Sender owner set unknown (no signed pairing_set push) ⇒ refused —
+        // even though the sender is a "valid local member" by mesh/pairing
+        // sibling rules (the old, now-retired federated branch).
+        let pairing = PairingRegistry::new();
+        pairing.set(
+            "some-machine".into(),
+            vec![sender.into(), "target-machine".into()],
+        );
+        assert!(!authorize_send(
+            sender,
+            "target-machine",
+            &mesh,
+            &pairing,
+            true,
+            Some(&shared)
+        ));
+
+        // Target owner set unknown (not exchanged yet) ⇒ refused.
+        let pairing = registry_with(sender, &["owner-x"]);
+        assert!(!authorize_send(
+            sender,
+            "target-machine",
+            &mesh,
+            &pairing,
+            true,
+            None
+        ));
+
+        // Either side EMPTY (configured but empty push) ⇒ refused.
+        let pairing = registry_with(sender, &[]);
+        assert!(!authorize_send(
+            sender,
+            "target-machine",
+            &mesh,
+            &pairing,
+            true,
+            Some(&shared)
+        ));
+        let pairing = registry_with(sender, &["owner-x"]);
+        let empty: HashSet<String> = HashSet::new();
+        assert!(!authorize_send(
+            sender,
+            "target-machine",
+            &mesh,
+            &pairing,
+            true,
+            Some(&empty)
+        ));
+    }
+
+    /// The LOCAL-target branch is unchanged: full sender+target membership.
+    #[test]
+    fn local_branch_unchanged_membership_check() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+        let key = |byte: u8| B64.encode([byte; 32]);
+        let mesh = MeshStore::open_in_memory().unwrap();
+        let sender = key(0x0a);
+        let target = key(0x0b);
+        let owner = key(0xcc);
+        // Siblings under one owner (both machines' allow-lists name the same
+        // owner) ⇒ authorized — the target owner set is IGNORED on the local
+        // branch (None must not refuse).
+        let pairing = PairingRegistry::new();
+        pairing.set(sender.clone(), vec![owner.clone()]);
+        pairing.set(target.clone(), vec![owner]);
+        assert!(authorize_send(
+            &sender, &target, &mesh, &pairing, false, None
+        ));
+        // Not a member ⇒ refused.
+        assert!(!authorize_send(
+            &sender,
+            &key(0x0c),
+            &mesh,
+            &pairing,
+            false,
+            None
+        ));
     }
 }

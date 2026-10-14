@@ -42,27 +42,44 @@ async fn two_peers_route_message() {
     assert_eq!(received_json["ct"], ct, "ct must be forwarded unchanged");
 }
 
-/// Sending to an unknown peer ID is silently dropped; the sender's connection stays alive.
+/// Sending to a dest the relay cannot authorize AT ALL (no local session,
+/// no federated route, no advertised owner set) is REFUSED to the sender
+/// with a routed `unknown_peer` error frame — federation v2 §3 STRICT: an
+/// unknown dest owner set refuses ALL senders, no optimistic forwarding.
+/// The connection stays alive. (The pre-slice-2 contract was a silent drop;
+/// the routed refusal is what lets the app distinguish not-paired from
+/// offline. A KNOWN federated machine with a dead ROOM still drops silently —
+/// pinned by federation_test.rs's dead-room leg.)
 #[tokio::test]
-async fn dest_offline_drops_silently() {
+async fn dest_unknown_refused_to_sender() {
     let (port, pairing) = start_relay_state().await;
     let (mut ws_a, peer_a) = connect_and_auth(port).await;
 
-    // Authorize the (offline) dest so the content gate PASSES and we exercise
-    // the offline-drop path (design 01M1ZE43), not a pairing refusal. Configured
-    // in-process (signed-only wire protocol is covered by the pairing tests).
-    pairing.set(peer_a.clone(), vec!["bm9uZXhpc3RlbnRwZWVy".to_string()]);
+    // Authorize the (offline) dest in the SENDER's own allow-list so the
+    // first content gate PASSES and we exercise the SRC owner-set gate
+    // (strict-unknown), not a pairing refusal. Configured in-process
+    // (signed-only wire protocol is covered by the pairing tests).
+    let dest = "bm9uZXhpc3RlbnRwZWVy".to_string();
+    pairing.set(peer_a.clone(), vec![dest.clone()]);
 
-    let envelope = json!({"peer": "bm9uZXhpc3RlbnRwZWVy", "ct": "aGVsbG8="}).to_string();
+    let envelope = json!({"peer": dest, "ct": "aGVsbG8="}).to_string();
     ws_a.send(Message::text(envelope)).await.unwrap();
 
-    // If the relay silently drops it, no message arrives and no close frame is sent.
-    let result = tokio::time::timeout(tokio::time::Duration::from_millis(200), ws_a.next()).await;
+    let refused = tokio::time::timeout(tokio::time::Duration::from_secs(1), ws_a.next())
+        .await
+        .expect("timed out waiting for the routed refusal")
+        .unwrap()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(refused.to_text().unwrap()).unwrap();
+    assert_eq!(v["type"], "error");
+    assert_eq!(v["code"], "unknown_peer");
+    assert_eq!(v["peer"], json!(dest), "the refusal names the dest");
 
+    // The connection stays alive (no close frame follows the refusal).
+    let alive = tokio::time::timeout(tokio::time::Duration::from_millis(200), ws_a.next()).await;
     assert!(
-        result.is_err(),
-        "expected no message (connection alive), got {:?}",
-        result
+        alive.is_err(),
+        "refusal must not close the sender, got {alive:?}"
     );
 }
 

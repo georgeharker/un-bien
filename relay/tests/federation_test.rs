@@ -205,11 +205,14 @@ async fn app_request_and_machine_reply_cross_two_relays() {
         .set(machine_epk.clone(), vec![app_epk.clone()]);
 
     // Strict pairing world: the machine pushes its machine-SIGNED pairing_set
-    // to relay B (owners = [app]) — the handshake then exchanges it and the
-    // source relay's check-before-forward forwards the app's requests.
+    // to relay B (owners = [app, owner] — the app device it serves + the
+    // shared human owner, the same shape the real extension pushes). The
+    // handshake then exchanges it and the source relay's §3 owner-set gate
+    // forwards the app's requests.
+    let owner_pk_b64 = B64.encode(owner.verifying_key().to_bytes());
     {
         let machine_pk = B64.encode(machine_sk.verifying_key().to_bytes());
-        let owners = vec![app_epk.clone()];
+        let owners = vec![app_epk.clone(), owner_pk_b64.clone()];
         let blob_bytes = serde_json::to_vec(&json!({
             "machine_pk": machine_pk,
             "owners": owners,
@@ -223,6 +226,31 @@ async fn app_request_and_machine_reply_cross_two_relays() {
             .pairing
             .set_signed(machine_epk.clone(), owners, 1, &blob_bytes, &sig.to_bytes())
             .expect("e2e machine pairing push");
+    }
+
+    // Owner-set gates are strict on BOTH sides (federation v2 §3): the
+    // machine→app REPLY leg is decided at relay B, whose §3 gate needs the
+    // APP's advertised owner set too. The rig therefore pushes the app's
+    // machine-SIGNED pairing_set to relay A (owners = [owner] — the app
+    // declares the owner it belongs to, exactly as a paired device would),
+    // so A's handshake exchange advertises it and B's gate sees the
+    // sender-owner ∩ dest-owner intersection (the owner) ≠ ∅.
+    {
+        let app_pk = B64.encode(app_sk.verifying_key().to_bytes());
+        let owners = vec![owner_pk_b64];
+        let blob_bytes = serde_json::to_vec(&json!({
+            "machine_pk": app_pk,
+            "owners": owners,
+            "version": 1,
+            "issued_at": 1_700_000_000_000u64,
+        }))
+        .unwrap();
+        let sig = app_sk.sign(&blob_bytes);
+        relay_a
+            .state
+            .pairing
+            .set_signed(app_epk.clone(), owners, 1, &blob_bytes, &sig.to_bytes())
+            .expect("e2e app pairing push");
     }
 
     // Peering: A connects out to B (same mechanism as production: config file
@@ -447,4 +475,530 @@ async fn federated_pairing_exchange_and_source_refusal() {
     // The machine hears nothing for the stranger's span.
     let quiet = tokio::time::timeout(Duration::from_millis(800), next_text(&mut machine)).await;
     assert!(quiet.is_err(), "machine must NOT receive stranger traffic");
+}
+
+// ── Federation v2 slice 2 — owner-set content gates (§3), pinned e2e ──────
+//
+// One rule over MACHINE-SIGNED owner sets, decided at the SOURCE relay only,
+// strict on unknown: sender-owner ∩ target-owner ≠ ∅. Below, the agent
+// plane (pi_envelope) and the outer plane (app→machine envelopes) each get
+// an intersection-allow case, a cross-owner refusal, and a strict-unknown
+// refusal. NO machine exemptions: a machine IS its owner set.
+
+/// Push a machine-SIGNED pairing_set IN-PROCESS (the sanctioned rig path —
+/// the wire push is signed-only and covered by the pairing tests): the same
+/// blob shape the extension signs, stored via set_signed so the peering
+/// handshake advertises it to the peer relay.
+fn push_signed_pairing(
+    sk: &SigningKey,
+    machine_epk: &str,
+    owners: Vec<String>,
+    version: u64,
+    registry: &relay::PairingRegistry,
+) {
+    let blob_bytes = serde_json::to_vec(&json!({
+        "machine_pk": B64.encode(sk.verifying_key().to_bytes()),
+        "owners": owners,
+        "version": version,
+        "issued_at": 1_700_000_000_000u64,
+    }))
+    .unwrap();
+    let sig = sk.sign(&blob_bytes);
+    registry
+        .set_signed(
+            machine_epk.to_string(),
+            owners,
+            version,
+            &blob_bytes,
+            &sig.to_bytes(),
+        )
+        .expect("rig pairing push");
+}
+
+/// Start relay A's peering loop (A dials B, pinned on the shared in-process
+/// identity keypair — federation v2 §1's gate; §3's owner sets are CONTENT
+/// data, not link data).
+fn start_peering_on(relay_a: &common::TestRelay) {
+    relay::peering::start_peering(
+        relay_a.state.mesh.clone(),
+        relay_a.state.registry.clone(),
+        relay_a.state.pairing.clone(),
+        relay_a.state.federated.clone(),
+    );
+}
+
+/// A fresh random keypair's pubkey b64 (owner/device keys for the signed
+/// sets — opaque epk material to the relay).
+fn fresh_epk() -> String {
+    B64.encode(
+        SigningKey::generate(&mut rand::thread_rng())
+            .verifying_key()
+            .to_bytes(),
+    )
+}
+
+/// Send a pi_envelope frame; returns the envelope sent (for verbatim checks).
+async fn send_pi_envelope(ws: &mut WsStream, to_pc: &str, id: &str) -> Value {
+    let envelope = json!({
+        "from": "source:agent",
+        "to": "target:agent",
+        "id": id,
+        "re": null,
+        "body": { "type": "ping" },
+    });
+    ws.send(Message::text(
+        json!({
+            "type": "pi_envelope",
+            "to_pc": to_pc,
+            "envelope": envelope,
+        })
+        .to_string(),
+    ))
+    .await
+    .unwrap();
+    envelope
+}
+
+/// Hunt typed AND untyped frames until `probe` hits (5 s deadline). Typed
+/// control traffic (federated_peer_list churn, presence) is skipped by the
+/// probe, not by the transport.
+async fn next_matching<T>(ws: &mut WsStream, what: &str, probe: impl Fn(&Value) -> Option<T>) -> T {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while tokio::time::Instant::now() < deadline {
+        let Some(text) = next_any_text(ws).await else {
+            break;
+        };
+        let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        if let Some(hit) = probe(&v) {
+            return hit;
+        }
+    }
+    panic!("never received {what}");
+}
+
+/// Assert NO frame matching `probe` arrives within the span (typed control
+/// frames are permitted through — the probe decides what counts).
+async fn assert_never_matches(ws: &mut WsStream, what: &str, probe: impl Fn(&Value) -> bool) {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(800);
+    while tokio::time::Instant::now() < deadline {
+        let Some(text) = next_any_text(ws).await else {
+            return; // transport idle for 5 s — quiet
+        };
+        let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        assert!(!probe(&v), "{what} MUST NOT arrive, got: {v}");
+    }
+}
+
+/// AGENT PLANE — shared owner in both machine-signed sets ⇒ forwarded
+/// cross-relay. Sender pi on A and target pi on B both advertise owner O;
+/// the pi_envelope crosses and arrives verbatim as pi_envelope_in.
+#[tokio::test]
+async fn pi_envelope_owner_intersection_forwards_cross_relay() {
+    let _state = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let state_dir = tempfile::tempdir().unwrap();
+    unsafe {
+        std::env::set_var("UNBIEN_STATE_DIR", state_dir.path());
+    }
+    let relay_a = spawn_relay_named("relay-a").await;
+    let relay_b = spawn_relay_named("relay-b").await;
+
+    let shared_owner = fresh_epk();
+    let sender_sk = SigningKey::generate(&mut rand::thread_rng());
+    let target_sk = SigningKey::generate(&mut rand::thread_rng());
+    let (mut sender, sender_epk) = connect_and_auth_with_key(relay_a.port, &sender_sk).await;
+    let (mut target, target_epk) = connect_and_auth_with_key(relay_b.port, &target_sk).await;
+
+    // Both machines' SIGNED sets name the SAME owner — the §3 intersection.
+    push_signed_pairing(
+        &sender_sk,
+        &sender_epk,
+        vec![shared_owner.clone()],
+        1,
+        &relay_a.state.pairing,
+    );
+    push_signed_pairing(
+        &target_sk,
+        &target_epk,
+        vec![shared_owner],
+        1,
+        &relay_b.state.pairing,
+    );
+
+    let pinned_pk = relay::relay_keypair::load_or_generate(None).pubkey_b64();
+    state_dir_setup(&format!("http://127.0.0.1:{}", relay_b.port), &pinned_pk);
+    start_peering_on(&relay_a);
+
+    // Strict gate: A must know the TARGET's advertised set before deciding.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if relay_a
+            .state
+            .federated
+            .machine_owners(&target_epk)
+            .await
+            .is_some()
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "relay A never learned the target's advertised owner set"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let envelope = send_pi_envelope(
+        &mut sender,
+        &target_epk,
+        "00000000-0000-4000-8000-0000000000f1",
+    )
+    .await;
+    let frame = next_matching(&mut target, "pi_envelope_in at the target", |v| {
+        (v["type"] == "pi_envelope_in" && v["from_pc"] == json!(sender_epk)).then(|| v.clone())
+    })
+    .await;
+    assert_eq!(
+        frame["envelope"], envelope,
+        "envelope must round-trip verbatim"
+    );
+}
+
+/// AGENT PLANE — cross-owner refusal: the sender machine's owner set and the
+/// target's advertised set are DISJOINT ⇒ refused AT THE SOURCE with
+/// not_authorized (the old federated branch authorized any local member).
+#[tokio::test]
+async fn pi_envelope_cross_owner_refused_at_source() {
+    let _state = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let state_dir = tempfile::tempdir().unwrap();
+    unsafe {
+        std::env::set_var("UNBIEN_STATE_DIR", state_dir.path());
+    }
+    let relay_a = spawn_relay_named("relay-a").await;
+    let relay_b = spawn_relay_named("relay-b").await;
+
+    let sender_sk = SigningKey::generate(&mut rand::thread_rng());
+    let target_sk = SigningKey::generate(&mut rand::thread_rng());
+    let (mut sender, sender_epk) = connect_and_auth_with_key(relay_a.port, &sender_sk).await;
+    let (mut target, target_epk) = connect_and_auth_with_key(relay_b.port, &target_sk).await;
+
+    // DISJOINT signed sets: sender belongs to owner S, target to owner T.
+    push_signed_pairing(
+        &sender_sk,
+        &sender_epk,
+        vec![fresh_epk()],
+        1,
+        &relay_a.state.pairing,
+    );
+    push_signed_pairing(
+        &target_sk,
+        &target_epk,
+        vec![fresh_epk()],
+        1,
+        &relay_b.state.pairing,
+    );
+
+    let pinned_pk = relay::relay_keypair::load_or_generate(None).pubkey_b64();
+    state_dir_setup(&format!("http://127.0.0.1:{}", relay_b.port), &pinned_pk);
+    start_peering_on(&relay_a);
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if relay_a
+            .state
+            .federated
+            .machine_owners(&target_epk)
+            .await
+            .is_some()
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "relay A never learned the target's advertised owner set"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    send_pi_envelope(
+        &mut sender,
+        &target_epk,
+        "00000000-0000-4000-8000-0000000000f2",
+    )
+    .await;
+    let err = next_matching(&mut sender, "not_authorized transport error", |v| {
+        (v["type"] == "pi_envelope_in" && v["envelope"]["body"]["reason"] == "not_authorized")
+            .then(|| v.clone())
+    })
+    .await;
+    assert_eq!(err["from_pc"], "_relay");
+    assert_eq!(
+        err["envelope"]["re"],
+        "00000000-0000-4000-8000-0000000000f2"
+    );
+    // The target hears nothing.
+    assert_never_matches(&mut target, "cross-owner pi_envelope", |v| {
+        v["type"] == "pi_envelope_in" && v["from_pc"] == json!(sender_epk)
+    })
+    .await;
+}
+
+/// AGENT PLANE — strict-unknown: the target's owner set was never exchanged
+/// (target machine pushed NO pairing_set) ⇒ refused, even though the sender
+/// is a fully valid local machine with its own signed set.
+#[tokio::test]
+async fn pi_envelope_strict_unknown_target_refused() {
+    let _state = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let state_dir = tempfile::tempdir().unwrap();
+    unsafe {
+        std::env::set_var("UNBIEN_STATE_DIR", state_dir.path());
+    }
+    let relay_a = spawn_relay_named("relay-a").await;
+    let relay_b = spawn_relay_named("relay-b").await;
+
+    let sender_sk = SigningKey::generate(&mut rand::thread_rng());
+    let target_sk = SigningKey::generate(&mut rand::thread_rng());
+    let (mut sender, _sender_epk) = connect_and_auth_with_key(relay_a.port, &sender_sk).await;
+    let (mut target, target_epk) = connect_and_auth_with_key(relay_b.port, &target_sk).await;
+
+    // Sender has a KNOWN signed owner set; the target advertises NOTHING.
+    push_signed_pairing(
+        &sender_sk,
+        &_sender_epk,
+        vec![fresh_epk()],
+        1,
+        &relay_a.state.pairing,
+    );
+
+    let pinned_pk = relay::relay_keypair::load_or_generate(None).pubkey_b64();
+    state_dir_setup(&format!("http://127.0.0.1:{}", relay_b.port), &pinned_pk);
+    start_peering_on(&relay_a);
+
+    // The target's ROOM is announced (it is a federated target), but its
+    // owner set never lands — the strict-unknown state.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if !relay_a
+            .state
+            .federated
+            .rooms_for_epk(&target_epk)
+            .await
+            .is_empty()
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "relay A never learned the target's room"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        relay_a
+            .state
+            .federated
+            .machine_owners(&target_epk)
+            .await
+            .is_none(),
+        "rig setup error: the target's owner set IS known"
+    );
+
+    send_pi_envelope(
+        &mut sender,
+        &target_epk,
+        "00000000-0000-4000-8000-0000000000f3",
+    )
+    .await;
+    let err = next_matching(
+        &mut sender,
+        "not_authorized transport error (strict-unknown)",
+        |v| {
+            (v["type"] == "pi_envelope_in" && v["envelope"]["body"]["reason"] == "not_authorized")
+                .then(|| v.clone())
+        },
+    )
+    .await;
+    assert_eq!(
+        err["envelope"]["re"],
+        "00000000-0000-4000-8000-0000000000f3"
+    );
+    assert_never_matches(&mut target, "strict-unknown pi_envelope", |v| {
+        v["type"] == "pi_envelope_in"
+    })
+    .await;
+}
+
+/// OUTER PLANE — strict-unknown refuses ALL senders: a dest whose owner set
+/// was never exchanged is refused for an owner-device app AND for a machine
+/// sender (the retired machine exemption), each with a routed unknown_peer.
+#[tokio::test]
+async fn outer_unknown_dest_owner_set_refused_for_all_senders() {
+    let _state = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let state_dir = tempfile::tempdir().unwrap();
+    unsafe {
+        std::env::set_var("UNBIEN_STATE_DIR", state_dir.path());
+    }
+    let relay_a = spawn_relay_named("relay-a").await;
+    let relay_b = spawn_relay_named("relay-b").await;
+
+    let target_sk = SigningKey::generate(&mut rand::thread_rng());
+    let machine_sk = SigningKey::generate(&mut rand::thread_rng());
+    let app_sk = SigningKey::generate(&mut rand::thread_rng());
+    let (mut target, target_epk) = connect_and_auth_with_key(relay_b.port, &target_sk).await;
+    let (mut machine, machine_epk) = connect_and_auth_with_key(relay_a.port, &machine_sk).await;
+    let (mut app, _app_epk) = connect_and_auth_with_key(relay_a.port, &app_sk).await;
+
+    // The target machine advertises NOTHING (strict-unknown); the sender
+    // machine has its own signed set — no exemption.
+    push_signed_pairing(
+        &machine_sk,
+        &machine_epk,
+        vec![fresh_epk()],
+        1,
+        &relay_a.state.pairing,
+    );
+
+    let pinned_pk = relay::relay_keypair::load_or_generate(None).pubkey_b64();
+    state_dir_setup(&format!("http://127.0.0.1:{}", relay_b.port), &pinned_pk);
+    start_peering_on(&relay_a);
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if !relay_a
+            .state
+            .federated
+            .rooms_for_epk(&target_epk)
+            .await
+            .is_empty()
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "relay A never learned the target's room"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let payload = json!({"type": "ub", "ub": {"t": "session_sync", "session_id": "x"}});
+
+    // Owner-device app sender: routed refusal.
+    app.send(Message::text(outer_frame(&target_epk, "main", &payload)))
+        .await
+        .unwrap();
+    let err = next_matching(&mut app, "app routed refusal", |v| {
+        (v["type"] == "error" && v["code"] == "unknown_peer").then(|| v.clone())
+    })
+    .await;
+    assert_eq!(err["peer"], json!(target_epk));
+
+    // MACHINE sender: same routed refusal — the exemption is gone.
+    machine
+        .send(Message::text(outer_frame(&target_epk, "main", &payload)))
+        .await
+        .unwrap();
+    let err = next_matching(&mut machine, "machine sender routed refusal", |v| {
+        (v["type"] == "error" && v["code"] == "unknown_peer").then(|| v.clone())
+    })
+    .await;
+    assert_eq!(err["peer"], json!(target_epk));
+
+    assert_never_matches(&mut target, "strict-unknown outer frame", |v| {
+        v["type"] != "federated_peer_list" && v.get("type").map(|t| t != "error").unwrap_or(true)
+    })
+    .await;
+}
+
+/// OUTER PLANE — owner-device send: in-set ⇒ forwarded, out-of-set ⇒ routed
+/// refusal. The out-of-set app is a KNOWN owner device (another machine's
+/// signed set names it) — the old gate forwarded it optimistically; §3
+/// requires the dest machine's own advertised set to name it.
+#[tokio::test]
+async fn owner_device_outer_send_in_set_vs_out_of_set() {
+    let _state = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let state_dir = tempfile::tempdir().unwrap();
+    unsafe {
+        std::env::set_var("UNBIEN_STATE_DIR", state_dir.path());
+    }
+    let relay_a = spawn_relay_named("relay-a").await;
+    let relay_b = spawn_relay_named("relay-b").await;
+
+    // Machine M on B advertises [app_a] ONLY.
+    let m_sk = SigningKey::generate(&mut rand::thread_rng());
+    let app_a_sk = SigningKey::generate(&mut rand::thread_rng());
+    let app_b_sk = SigningKey::generate(&mut rand::thread_rng());
+    let n_sk = SigningKey::generate(&mut rand::thread_rng());
+    let (mut m_ws, m_epk) = connect_and_auth_with_key(relay_b.port, &m_sk).await;
+    let (mut app_a, app_a_epk) = connect_and_auth_with_key(relay_a.port, &app_a_sk).await;
+    let (mut app_b, app_b_epk) = connect_and_auth_with_key(relay_a.port, &app_b_sk).await;
+    let (mut _n_ws, n_epk) = connect_and_auth_with_key(relay_a.port, &n_sk).await;
+
+    // M's signed set names app_a; N's signed set names app_b (so app_b is a
+    // KNOWN owner pubkey on relay A — the sharpest contrast with the old
+    // optimistic forward).
+    push_signed_pairing(
+        &m_sk,
+        &m_epk,
+        vec![app_a_epk.clone()],
+        1,
+        &relay_b.state.pairing,
+    );
+    push_signed_pairing(
+        &n_sk,
+        &n_epk,
+        vec![app_b_epk.clone()],
+        1,
+        &relay_a.state.pairing,
+    );
+
+    let pinned_pk = relay::relay_keypair::load_or_generate(None).pubkey_b64();
+    state_dir_setup(&format!("http://127.0.0.1:{}", relay_b.port), &pinned_pk);
+    start_peering_on(&relay_a);
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if relay_a
+            .state
+            .federated
+            .machine_owners(&m_epk)
+            .await
+            .is_some_and(|o| o.contains(&app_a_epk))
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "relay A never learned M's advertised owner set"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let payload = json!({"type": "ub", "ub": {"t": "session_sync", "session_id": "in-set"}});
+
+    // IN-SET: app_a is named in M's advertised set ⇒ forwarded.
+    app_a
+        .send(Message::text(outer_frame(&m_epk, "main", &payload)))
+        .await
+        .unwrap();
+    let got = next_matching(&mut m_ws, "in-set forward at M", |v| {
+        (v.get("type").is_none() && v["peer"] == json!(app_a_epk)).then(|| v.clone())
+    })
+    .await;
+    assert_eq!(inner_of(&got.to_string()), payload);
+
+    // OUT-OF-SET: app_b (a KNOWN owner device) is NOT in M's advertised set
+    // ⇒ routed refusal at the source; M hears nothing.
+    let bad = json!({"type": "ub", "ub": {"t": "session_sync", "session_id": "out-of-set"}});
+    app_b
+        .send(Message::text(outer_frame(&m_epk, "main", &bad)))
+        .await
+        .unwrap();
+    let err = next_matching(&mut app_b, "out-of-set routed refusal", |v| {
+        (v["type"] == "error" && v["code"] == "unknown_peer").then(|| v.clone())
+    })
+    .await;
+    assert_eq!(err["peer"], json!(m_epk));
+    assert_never_matches(&mut m_ws, "out-of-set outer frame", |v| {
+        v.get("type").is_none() && v["peer"] == json!(app_b_epk)
+    })
+    .await;
 }

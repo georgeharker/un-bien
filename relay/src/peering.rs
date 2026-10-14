@@ -688,9 +688,9 @@ async fn connect_and_verify(
                     // {peer, room, ct} rides the SAME verified provenance the
                     // inner form has — authenticated-forwarding REQUIRED, so it
                     // reaches here only after the sig check above. Delivered
-                    // verbatim to (target, room), skipping the receiving-side
-                    // pairing gate (the SENDING relay's local pairing + the
-                    // federation shared-owner check cover it).
+                    // verbatim to (target, room), with NO dest-side re-check
+                    // (9779b88 — the deciding relay is always the SOURCE:
+                    // its pairing + the §3 owner-set gates decided).
                     if forward.room.is_some() && forward.ct.is_some() {
                         let ack_status = if registry.forward(
                             &forward.target_epk,
@@ -1223,9 +1223,9 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
                     // {peer, room, ct} rides the SAME verified provenance the
                     // inner form has — authenticated-forwarding REQUIRED, so it
                     // reaches here only after the sig check above. Delivered
-                    // verbatim to (target, room), skipping the receiving-side
-                    // pairing gate (the SENDING relay's local pairing + the
-                    // federation shared-owner check cover it).
+                    // verbatim to (target, room), with NO dest-side re-check
+                    // (9779b88 — the deciding relay is always the SOURCE:
+                    // its pairing + the §3 owner-set gates decided).
                     if forward.room.is_some() && forward.ct.is_some() {
                         let ack_status = if state.registry.forward(
                             &forward.target_epk,
@@ -1610,8 +1610,8 @@ impl FederatedSessions {
             // VERIFY (settled design): the exchange carries MACHINE-SIGNED
             // pairing envelopes; claims without a valid machine signature are
             // dropped — a peer cannot inject owner claims it cannot sign.
-            // Forwarding behavior is unchanged: transitively discovered peers
-            // still forward; validation is per-hop (sig-verified provenance).
+            // These verified sets are the load-bearing authorization data for
+            // the §3 content gates (both planes), strict on unknown.
             let Ok(blob_bytes) = B64.decode(blob_b64.as_bytes()) else {
                 continue;
             };
@@ -1656,8 +1656,10 @@ impl FederatedSessions {
         )
         .await;
     }
-    /// The dest machine's advertised owner set, for the pre-forward check.
-    /// None ⇒ no information yet ⇒ the caller forwards (dest decides).
+    /// The dest machine's advertised owner set, for the source-side
+    /// check-before-forward gate (federation v2 §3). None ⇒ not exchanged
+    /// yet ⇒ the deciding source relay REFUSES (strict — no optimistic
+    /// forwarding; the dest relay never re-decides, 9779b88).
     pub async fn machine_owners(&self, machine_epk: &str) -> Option<HashSet<String>> {
         self.machine_pairings
             .lock()

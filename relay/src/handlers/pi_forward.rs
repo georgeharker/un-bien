@@ -324,11 +324,22 @@ pub async fn handle_pi_envelope(
 
     // Authorization via the shared policy (membership.rs): local targets get
     // the full sender+target membership check; federated targets require the
-    // sender to be a valid local member (the federation's shared-owner
-    // verification covers the target side).
+    // SENDER's machine-signed owner set (local PairingRegistry) to intersect
+    // the TARGET's advertised machine-signed owner set (federation v2 §3,
+    // learned via the peering exchange) — either side unknown/empty ⇒ refuse,
+    // no machine exemptions (a machine IS its owner set). Decided at the
+    // SOURCE; the dest relay never re-refuses (9779b88).
     let target_is_federated = federated.relay_for_epk(&target).await.is_some();
     let authorized = if target_is_federated {
-        crate::membership::authorize_send(&sender, &target, &mesh, &pairing, true)
+        let target_owners = federated.machine_owners(&target).await;
+        crate::membership::authorize_send(
+            &sender,
+            &target,
+            &mesh,
+            &pairing,
+            true,
+            target_owners.as_ref(),
+        )
     } else {
         cache
             .is_authorized_canonical(&sender, &target, mesh, pairing)

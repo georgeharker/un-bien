@@ -623,10 +623,11 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                 // the app distinguishes not-paired from offline.
                                 let paired = pairing.allows(&dest_peer, &peer_id)
                                     || pairing.allows(&peer_id, &dest_peer);
-                                // Federated targets bypass the local pairing gate:
-                                // the sending relay's local pairing + federation
-                                // shared-owner verification cover this (the
-                                // remote machine's pairing_set isn't visible here).
+                                // Federated targets bypass the local pairing
+                                // gate: the sending relay's local pairing + the
+                                // §3 owner-set SRC gate below cover this (the
+                                // remote machine's pairing_set isn't visible
+                                // here — its advertised owner set is).
                                 let target_is_federated = federated
                                     .relay_for_epk(&dest_peer)
                                     .await
@@ -661,37 +662,48 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                     Message::Text(fwd_line),
                                     conn_id,
                                 ) {
-                                    // Check-before-forward (design): the dest
-                                    // machine's advertised owner set (learned via
-                                    // the pairing exchange) — refuse AT THE SOURCE
-                                    // when it definitively excludes this sender;
-                                    // unknown ⇒ forward (dest decides on arrival).
+                                    // Check-before-forward SRC gate (federation
+                                    // v2 §3): the deciding relay is ALWAYS the
+                                    // source, one rule over MACHINE-SIGNED owner
+                                    // sets, STRICT on unknown — no optimistic
+                                    // forwarding, no machine exemptions (a
+                                    // machine IS its owner set):
+                                    //   - dest owner set unknown (not yet
+                                    //     exchanged) ⇒ refuse for ALL senders;
+                                    //   - owner device: the sender's peer_id
+                                    //     must appear in the dest machine's
+                                    //     machine-signed advertised set;
+                                    //   - machine sender: sender owner set ∩
+                                    //     dest owner set ≠ ∅.
+                                    // Routed unknown_peer refusal so the app
+                                    // distinguishes not-paired from offline.
+                                    // NO dest-side re-checks anywhere (9779b88).
                                     let dest_owners = federated.machine_owners(&dest_peer).await;
-                                    // Sender classes (design): OWNER devices gate on
-                                    // the dest machine's advertised set; MACHINES
-                                    // (agent-plane senders) are trusted infra and
-                                    // exempt; strangers are refused at the source.
-                                    let sender_is_machine = pairing.owners_of(&peer_id).is_some()
-                                        || federated.machine_owners(&peer_id).await.is_some();
-                                    let sender_untrusted = !pairing.all_owner_pubkeys().contains(&peer_id)
-                                        && !sender_is_machine;
-                                    // STRICT (no unpinned option): with transitive
-                                    // doc/owner exchange, a dest owner set is always
-                                    // known in steady state; None ⇒ refuse (unknown
-                                    // dest is not forwarded).
-                                    let dest_excludes_sender =
-                                        !dest_owners
-                                            .as_ref()
-                                            .is_some_and(|o| o.contains(&peer_id));
+                                    let sender_owners = pairing.owners_of(&peer_id);
+                                    let gate_ok = match &dest_owners {
+                                        None => false,
+                                        Some(dest_owners) => {
+                                            dest_owners.contains(&peer_id)
+                                                || sender_owners.as_ref().is_some_and(
+                                                    |sender_owners| {
+                                                        !sender_owners.is_empty()
+                                                            && sender_owners
+                                                                .intersection(dest_owners)
+                                                                .next()
+                                                                .is_some()
+                                                    },
+                                                )
+                                        }
+                                    };
                                     debug!(
                                         peer = %peer_short,
                                         dest = %&dest_peer[..dest_peer.len().min(8)],
                                         dest_owners_known = dest_owners.is_some(),
-                                        sender_untrusted,
-                                        dest_excludes_sender,
-                                        "check-before-forward SRC gate"
+                                        sender_owner_set_known = sender_owners.is_some(),
+                                        gate_ok,
+                                        "check-before-forward SRC gate (owner-set intersection, strict)"
                                     );
-                                    if dest_excludes_sender && sender_untrusted {
+                                    if !gate_ok {
                                         let refusal = serde_json::json!({
                                             "type": "error",
                                             "code": "unknown_peer",

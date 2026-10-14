@@ -491,9 +491,24 @@ async function buildRig(): Promise<Rig> {
   })
 
   // 5. The app client (own ed25519 key) on relay-a — same transport, no
-  //    lifecycle, like the real app's raw WS client.
+  //    lifecycle, like the real app's raw WS client. Federation v2 §3 makes
+  //    the owner-set gates STRICT on both sides: the machine→app REPLY leg is
+  //    decided at relay-b, whose gate needs the APP's advertised owner set too
+  //    (unknown ⇒ refused, no optimistic forwarding). The rig therefore has the
+  //    app push its machine-SIGNED pairing_set (owners = [owner] — the app
+  //    declares the owner it belongs to), exactly as a paired device does;
+  //    relay-a advertises it in the pairings exchange and relay-b's gate sees
+  //    sender-owner ∩ dest-owner = {owner} ≠ ∅.
   const appRelay = new RelayClient(`ws://127.0.0.1:${relayA.port}`, app)
   await appRelay.connect({ roomId: "main" })
+  appRelay.sendControl({
+    type: "pairing_set",
+    ...buildSignedAllowList(
+      app,
+      [Buffer.from(owner.publicKey).toString("base64")],
+      1,
+    ),
+  })
   const appTap = tapLines(appRelay)
 
   // 6. The machine side: real attach path + real ub-plane router.
