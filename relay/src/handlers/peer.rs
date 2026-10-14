@@ -23,7 +23,9 @@ use crate::rooms::{RoomMeta, RoomMetaPatch};
 /// cap (RELAY_MAX_CT_MIB, default 4 MiB decoded) is the tighter ceiling peers
 /// actually hit; framing must merely exceed it with margin — a max-size ct
 /// (~5.34 MiB base64 + envelope) has to fit in ONE frame/message.
-const MAX_WS_FRAME_BYTES: usize = 16 * 1024 * 1024;
+// 32 MiB: a 16 MiB ct payload base64s to ~21.4 MiB in one frame, so the
+// frame cap must clear the ct ceiling (64 MiB message cap unchanged).
+const MAX_WS_FRAME_BYTES: usize = 32 * 1024 * 1024;
 const MAX_WS_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
 
 /// Axum route handler: validates the WebSocket upgrade and hands the upgraded

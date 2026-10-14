@@ -68,15 +68,16 @@ async fn dest_offline_drops_silently() {
 
 /** An envelope whose ct exceeds RELAY_MAX_CT_MIB is REFUSED TO THE SENDER with
  * a payload_too_large error frame (not a silent drop) and the connection stays
- * alive; an unparseable envelope gets invalid_envelope the same way. */
+ * alive; an unparseable envelope gets invalid_envelope the same way. (Oversize
+ * rides the 16 MiB default after the backfill raise.) */
 #[tokio::test]
 async fn oversized_ct_refused_to_sender() {
     let (port, _pairing) = start_relay_state().await;
     let (mut ws_a, peer_a) = connect_and_auth(port).await;
 
     use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
-    // 5 MiB decoded payload → over the 4 MiB default cap.
-    let ct = B64.encode(vec![0u8; 5 * 1024 * 1024]);
+    // 20 MiB decoded payload → over the 16 MiB default cap.
+    let ct = B64.encode(vec![0u8; 20 * 1024 * 1024]);
     ws_a.send(Message::text(json!({"peer": peer_a, "ct": ct}).to_string()))
         .await
         .unwrap();

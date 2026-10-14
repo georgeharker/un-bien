@@ -69,12 +69,13 @@ mod pair_envelope_tests {
 /// Nome da env var que sobrescreve o teto do outer envelope (inteiro em MiB).
 pub const MAX_CT_ENV: &str = "RELAY_MAX_CT_MIB";
 
-/// Default do teto: 4 MiB de payload base64-decoded. Históricamente era 1 MiB
-/// fixo, mas imagens passam por base64 duplo (inner `data` + outer `ct` ≈
-/// 1,333× o JPEG bruto), então 1 MiB dropava em silêncio qualquer imagem
-/// acima de ~768 KB e travava o app em "sending…". 4 MiB cobre o teto de
-/// compressão do app (~1,5 MB, ~2 MB estimado) com folga.
-pub const DEFAULT_MAX_CT_MIB: usize = 4;
+/// Default do teto: 16 MiB de payload base64-decoded. Histórico: 1 MiB fixo
+/// dropava imagens em silêncio (>~768 KB); 4 MiB cobriu o teto de compressão
+/// do app com folga. 16 MiB passa entradas de transcript de até ~11 MiB de
+/// JSON inteiras (backfill de respostas longas — o truncamento 2 MiB do
+/// extension nunca chega a disparar), com folga para o WS receive do app
+/// (8 MiB wire) em todos os sentidos. Env-tunable via RELAY_MAX_CT_MIB.
+pub const DEFAULT_MAX_CT_MIB: usize = 16;
 
 /// Teto efetivo do outer envelope, em bytes. Lido **uma vez** de
 /// [`MAX_CT_ENV`] (valor em MiB) na primeira chamada e memoizado. Ausência ou
@@ -143,9 +144,8 @@ mod tests {
 
     #[test]
     fn rejects_too_large() {
-        // 12 MiB de "A" → estimativa 9 MiB, acima do default de 4 MiB.
-        // (Antes era 2 MiB → 1,5 MiB estimado, que agora PASSARIA no default.)
-        let big = "A".repeat(12 * 1024 * 1024);
+        // 24 MiB de "A" → estimativa 18 MiB, acima do default de 16 MiB.
+        let big = "A".repeat(24 * 1024 * 1024);
         let line = format!(r#"{{"peer":"abc","ct":"{}"}}"#, big);
         assert!(matches!(parse_line(&line), Err(ParseError::TooLarge(..))));
     }
@@ -162,10 +162,10 @@ mod tests {
     }
 
     #[test]
-    fn default_max_ct_bytes_is_four_mib() {
-        // Sem RELAY_MAX_CT_MIB no ambiente de teste, o teto efetivo é 4 MiB.
+    fn default_max_ct_bytes_is_sixteen_mib() {
+        // Sem RELAY_MAX_CT_MIB no ambiente de teste, o teto efetivo é 16 MiB.
         assert_eq!(max_ct_bytes(), DEFAULT_MAX_CT_MIB * 1024 * 1024);
-        assert_eq!(max_ct_bytes(), 4 * 1024 * 1024);
+        assert_eq!(max_ct_bytes(), 16 * 1024 * 1024);
     }
 
     #[test]
