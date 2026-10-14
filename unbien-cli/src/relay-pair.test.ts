@@ -21,8 +21,10 @@ import {
   addRelayPeer,
   decodeRelayPairUrl,
   encodeRelayPairUrl,
+  isPendingLive,
   loadPendingRelayPairs,
   loadRelayPeers,
+  PENDING_TTL_MS,
 } from "./store.js"
 
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
@@ -83,19 +85,62 @@ describe("relay-peers.json pending entries", () => {
   const tmpDir = mkdtempSync(join(tmpdir(), "unbien-pending-test-"))
   const peersPath = join(tmpDir, "relay-peers.json")
 
-  it("addPendingRelayPair appends + reads back", () => {
+  it("addPendingRelayPair upserts by name — re-minting revokes the old secret", () => {
     addPendingRelayPair(
-      { secret: "tok", name: "self", url: "http://a:3000", at: "t" },
+      { secret: "tok", name: "self", url: "http://a:3000", at: "t", at_ms: Date.now() },
       peersPath,
     )
     addPendingRelayPair(
-      { secret: "tok2", name: "self", url: "http://a:3000", at: "t2" },
+      { secret: "tok2", name: "self", url: "http://a:3000", at: "t2", at_ms: Date.now() },
+      peersPath,
+    )
+    // Same name: the new invitation REPLACES the old — re-issuing is
+    // revocation (the old secret no longer pairs).
+    expect(loadPendingRelayPairs(peersPath).map((p) => p.secret)).toEqual([
+      "tok2",
+    ])
+    // A different name appends: one live invitation per peer name.
+    addPendingRelayPair(
+      { secret: "tok3", name: "other", url: "http://b:3000", at: "t3", at_ms: Date.now() },
       peersPath,
     )
     expect(loadPendingRelayPairs(peersPath).map((p) => p.secret)).toEqual([
-      "tok",
       "tok2",
+      "tok3",
     ])
+  })
+
+  it("expired invitations are pruned on mint + report not live", () => {
+    addPendingRelayPair(
+      {
+        secret: "tok-dead",
+        name: "stale",
+        url: "http://s:3000",
+        at: "t",
+        at_ms: Date.now() - PENDING_TTL_MS - 60_000,
+      },
+      peersPath,
+    )
+    const dead = loadPendingRelayPairs(peersPath).find((p) => p.secret === "tok-dead")
+    expect(dead).toBeDefined()
+    expect(isPendingLive(dead!)).toBe(false)
+    // A fresh mint prunes the expired entry from the file.
+    addPendingRelayPair(
+      { secret: "tok-new", name: "fresh", url: "http://f:3000", at: "t", at_ms: Date.now() },
+      peersPath,
+    )
+    expect(
+      loadPendingRelayPairs(peersPath).some((p) => p.secret === "tok-dead"),
+    ).toBe(false)
+    // Legacy entries without at_ms never expire.
+    addPendingRelayPair(
+      { secret: "tok-legacy", name: "legacy", url: "http://l:3000", at: "t" },
+      peersPath,
+    )
+    const legacy = loadPendingRelayPairs(peersPath).find(
+      (p) => p.secret === "tok-legacy",
+    )
+    expect(isPendingLive(legacy!)).toBe(true)
   })
 
   it("addRelayPeer PRESERVES pending entries + other fields (one shared file)", () => {
@@ -109,8 +154,10 @@ describe("relay-peers.json pending entries", () => {
     >
     expect(loadRelayPeers(peersPath).map((p) => p.name)).toEqual(["hostB"])
     expect(loadPendingRelayPairs(peersPath).map((p) => p.secret)).toEqual([
-      "tok",
       "tok2",
+      "tok3",
+      "tok-new",
+      "tok-legacy",
     ])
     expect(doc["federation"]).toBeUndefined() // untouched fields survive
   })

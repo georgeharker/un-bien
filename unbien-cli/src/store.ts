@@ -122,7 +122,15 @@ export interface PendingRelayPair {
   name: string
   url: string
   at: string
+  /** Mint time, epoch millis (expiry vs PENDING_TTL_MS). Legacy entries
+   *  without it never expire. */
+  at_ms?: number
 }
+
+/** A pending pairing invitation is single-use AND short-lived: 24h from
+ *  mint. Without this, an unconsumed entry stays a live pairing secret in
+ *  relay-peers.json forever (each `relay pair` mints a fresh one). */
+export const PENDING_TTL_MS = 24 * 60 * 60 * 1000
 
 /** The full relay-peers.json document. The relay ALSO writes this file (the
  *  pairing auto-add), so writers must preserve every field they don't own
@@ -175,9 +183,21 @@ export function addPendingRelayPair(
   path = RELAY_PEERS_PATH,
 ): void {
   const doc = readRelayPeersDoc(path)
-  const pending = doc.pending ?? []
-  pending.push(entry)
-  writeRelayPeersDoc({ ...doc, pending }, path)
+  // UPSERT by name: re-minting for the same peer replaces the previous
+  // invitation (the old secret dies with it — re-issuing IS revocation),
+  // and expired entries are pruned while we hold the doc.
+  const fresh = (doc.pending ?? []).filter(
+    (p) => p.name !== entry.name && isPendingLive(p),
+  )
+  fresh.push(entry)
+  writeRelayPeersDoc({ ...doc, pending: fresh }, path)
+}
+
+/** A pending entry is live when it has no at_ms (legacy) or is inside the
+ *  TTL window. Expired entries are dead — their secret no longer pairs. */
+export function isPendingLive(p: PendingRelayPair): boolean {
+  if (!p.at_ms) return true
+  return Date.now() - p.at_ms < PENDING_TTL_MS
 }
 
 /** The relay's CONFIG file — settings (federation gate), in the config root

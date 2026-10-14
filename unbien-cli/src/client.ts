@@ -5,6 +5,7 @@ import {
   RPC_KIND,
   UB_KIND,
   RelayClient,
+  ed25519Sign,
   type EnvelopeMessage,
   type Ed25519Keypair,
 } from "@geohar/un-bien/client"
@@ -59,6 +60,7 @@ export interface SessionClientEvents {
  */
 export class SessionClient extends EventEmitter<SessionClientEvents> {
   private readonly relay: RelayClient
+  private readonly keypair: Ed25519Keypair
 
   /** The room being driven. Mutable: one pairing reaches every room the pi
    *  owns, so picking a session is a routing change, not a re-pair. */
@@ -71,6 +73,7 @@ export class SessionClient extends EventEmitter<SessionClientEvents> {
   ) {
     super()
     this.room = invite.roomId
+    this.keypair = keypair
     this.relay = new RelayClient(toWsUrl(relayUrl), keypair)
   }
 
@@ -138,6 +141,31 @@ export class SessionClient extends EventEmitter<SessionClientEvents> {
     // daemon's control room (verified: handler never fired, replies timed out).
     await this.relay.connect(
       options?.roomId ? { roomId: options.roomId } : undefined,
+    )
+    // A device advertises the owner it belongs to (federation v2 §3): this
+    // CLI is its own owner device (proxy-identity.json), so its set names
+    // itself. Without the push, federated reply legs to this epk are
+    // refused at the remote machine's relay (strict owner-set gates) — the
+    // same rule the phone app's connect-time push satisfies. Version =
+    // epoch seconds (monotonic across reconnects AND reinstalls; the relay
+    // rejects a version at or below its stored one).
+    const pk = Buffer.from(this.keypair.publicKey).toString("base64")
+    const blobBytes = Buffer.from(
+      JSON.stringify({
+        machine_pk: pk,
+        owners: [pk],
+        version: Math.floor(Date.now() / 1000),
+        issued_at: Date.now(),
+      }),
+      "utf8",
+    )
+    const sig = ed25519Sign(this.keypair.secretKey, new Uint8Array(blobBytes))
+    this.relay.send(
+      JSON.stringify({
+        type: "pairing_set",
+        blob: blobBytes.toString("base64"),
+        sig: Buffer.from(sig).toString("base64"),
+      }),
     )
   }
 

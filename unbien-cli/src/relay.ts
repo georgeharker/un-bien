@@ -16,6 +16,7 @@ import {
   forgetRelay,
   loadRelayPeers,
   loadPendingRelayPairs,
+  isPendingLive,
   addRelayPeer,
   addPendingRelayPair,
   removeRelayPeer,
@@ -89,6 +90,7 @@ function doPair(args: string[]): void {
     name: pairName,
     url,
     at: new Date().toISOString(),
+    at_ms: Date.now(),
   })
   const pairUrlFull = encodeRelayPairUrl({ url, name: pairName, pubkey, secret })
   console.log(pairUrlFull)
@@ -299,9 +301,13 @@ switch (verb) {
         }
         if (pending.length > 0) {
           console.error(
-            `\nPending pairing invitations: ${pending.length} (single-use; secrets not shown)\n` +
+            `\nPending pairing invitations: ${pending.length} (single-use, 24h; secrets not shown)\n` +
               pending
-                .map((p) => `  ${p.name} → ${p.url}  (issued ${p.at})`)
+                .map((p) => {
+                  const live = isPendingLive(p)
+                  return `  ${p.name} → ${p.url}  (issued ${p.at})` +
+                    (live ? "" : "  [EXPIRED — re-mint with `unbien relay pair`]")
+                })
                 .join("\n"),
           )
         }
