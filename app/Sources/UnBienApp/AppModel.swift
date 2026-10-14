@@ -89,6 +89,13 @@ public final class AppModel: ObservableObject {
     /// Last page-arrival time per walk-in-flight session — the watchdog's STALL
     /// signal (a walk still receiving pages is alive; only a silent one retries).
     var walkLastActivity: [String: Date] = [:]
+    /// Content-derived FETCH FRONTIER per session (design: log-cursor split):
+    /// the last entry id actually folded from a non-empty get_entries page —
+    /// advanced ONLY there, never by terminal pages' reported machine tail.
+    /// requestReconstruction resumes from this, so entries lost to a dead
+    /// socket (bg after typing) stay BEHIND the frontier and are re-served by
+    /// the next reconcile, instead of being skipped by a machine-echoed leaf.
+    var foldedFrontier: [String: String] = [:]
     var liveFrameBuffer: [String: [(env: EnvelopeMessage, envelope: RoutedEnvelope,
                                    relayID: UUID)]] = [:]
     /// Pending interactive prompt per session (extension_ui_request).
@@ -544,7 +551,6 @@ public final class AppModel: ObservableObject {
         #endif
         needsOnboarding = true
     }
-
     // MARK: - Session actions
 
     public func openSession(_ session: LiveSession, limit: Int = 100) async {
@@ -588,7 +594,10 @@ public final class AppModel: ObservableObject {
     /// panels + pending extension_ui. Both are idempotent (identify dedup /
     /// panel ns-merge), so re-issuing them freely is safe.
     func requestReconstruction(_ session: LiveSession, connection: RelayConnection) async {
-        var since = envelopeReducers[session.id]?.leafId
+        // Fetch origin = folded frontier (content-derived; design: log-cursor
+        // split). Falls back to the rendering beacon, then the cache — never
+        // TRUSTS the beacon over held content.
+        var since = foldedFrontier[session.id] ?? envelopeReducers[session.id]?.leafId
         // CACHE-FIRST (design 01M1M4N8RZZANDX6NWY7FCSBT5): with no in-memory
         /// cursor (cold launch), consult the local entry cache BEFORE the
         /// walk. A hit folds the cached history prefix locally (log-ordered,

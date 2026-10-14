@@ -76,6 +76,13 @@ public struct RootView: View {
                 // so the heal above never re-asks for its state and the busy
                 // surfaces stay wrong in whichever direction we missed.
                 model.refreshBusyState()
+                // The fg heal only re-runs reconstruction when a relay had to
+                // reconnect - a session backgrounded across a turn on a
+                // HEALTHY socket never re-asked for state (comment above).
+                // Unconditional reconcile from the FOLDED FRONTIER (design:
+                // log-cursor split) closes that: delta from held content, so
+                // anything streamed into the dead window re-arrives.
+                Task { await model.reconcileForeground() }
             }
         }
         .sheet(item: $model.pendingPairing) { pending in

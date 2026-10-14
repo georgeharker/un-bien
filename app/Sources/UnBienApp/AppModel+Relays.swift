@@ -668,3 +668,35 @@ extension AppModel {
         log.notice("session resumed: ended banner retracted key=\(String(key.suffix(12)), privacy: .public)")
     }
 }
+
+// Carved from AppModel.swift / AppModel+Inbound.swift (line caps).
+extension AppModel {
+    /// Foreground reconciliation (bg-after-typing heal): every open session
+    /// re-issues its reconstruction from the FOLDED FRONTIER — a delta walk
+    /// that re-serves anything lost while the socket was down. Idempotent
+    /// (identify dedup); cheap for quiet sessions (delta + get_state only).
+    public func reconcileForeground() async {
+        for (_, s) in openSessions {
+            guard let c = connections[s.relayID] else { continue }
+            await requestReconstruction(s, connection: c)
+        }
+    }
+
+    /// Clear ONE oldest pending queue chip whose text matches a CONSUMED user
+    /// message (FIFO — pi delivers in order; the same text queued twice clears
+    /// the oldest match per consumption, not all copies). Shared by the LIVE
+    /// user message_end path AND the entry-born get_entries backfill: if the
+    /// live consumption frame was missed (app backgrounded), the message returns
+    /// only as a get_entries entry, so the backfill clears the chip ACTIVELY
+    /// instead of leaving it to the 5-min backstop. Design 01M158S7.
+    func clearPendingChip(key: String, userText: String) {
+        let norm = userText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !norm.isEmpty else { return }
+        if let idx = queued[key]?.firstIndex(where: {
+            $0.pending && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == norm
+        }) {
+            queued[key]?.remove(at: idx)
+        }
+    }
+
+}

@@ -705,6 +705,13 @@ extension AppModel {
                     Task { await entryCache.append(key: key, roomID: room,
                                                    entries: page, leafId: leaf) }
                 }
+                // Folded-frontier advance (design: log-cursor split): the fetch
+                // origin moves only over entries this walk FOLDED — never an
+                // empty terminal page's machine-reported tail, which can sit
+                // ahead of held content after a lost-reply window.
+                if isCurrentWalk, let tail = entries.last?["id"]?.stringValue {
+                    foldedFrontier[key] = tail
+                }
                 let peer = envelope.peer, room = envelope.room
                 let n = entries.count
                 let leafTail = String(leaf.suffix(8))
@@ -761,24 +768,7 @@ extension AppModel {
         }
     }
 
-    /// Clear ONE oldest pending queue chip whose text matches a CONSUMED user
-    /// message (FIFO — pi delivers in order; the same text queued twice clears
-    /// the oldest match per consumption, not all copies). Shared by the LIVE
-    /// user message_end path AND the entry-born get_entries backfill: if the
-    /// live consumption frame was missed (app backgrounded), the message returns
-    /// only as a get_entries entry, so the backfill clears the chip ACTIVELY
-    /// instead of leaving it to the 5-min backstop. Design 01M158S7.
-    func clearPendingChip(key: String, userText: String) {
-        let norm = userText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !norm.isEmpty else { return }
-        if let idx = queued[key]?.firstIndex(where: {
-            $0.pending && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == norm
-        }) {
-            queued[key]?.remove(at: idx)
-        }
-    }
-
-    /// entryID acquisition (id-scheme v2): a live `message_end` means pi has
+   /// entryID acquisition (id-scheme v2): a live `message_end` means pi has
     /// (or is one synchronous beat from) persisting that message as an entry —
     /// the wire round trip IS the lag, so a delta `get_entries` issued here
     /// always sees it. The entries fold through applyEntries' MATCH LOOP: live
