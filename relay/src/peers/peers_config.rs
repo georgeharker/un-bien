@@ -243,7 +243,26 @@ pub fn consume_pending_and_add_peer_at(
         .iter_mut()
         .find(|p| p.get("name").and_then(|n| n.as_str()) == Some(presented_name))
     {
-        Some(existing) => *existing = new_peer,
+        Some(existing) => {
+            // INHERIT the existing url when the presenter's is empty (its
+            // process may have lost UNBIEN_RELAY_URL — observed live after
+            // restarts): a re-pair must never clobber a dialable entry
+            // with an empty one.
+            let url = if presented_url.is_empty() {
+                existing
+                    .get("url")
+                    .and_then(|u| u.as_str())
+                    .unwrap_or_default()
+                    .to_string()
+            } else {
+                presented_url.to_string()
+            };
+            *existing = serde_json::json!({
+                "url": url,
+                "name": presented_name,
+                "pubkey": presented_pubkey,
+            });
+        }
         None => peers.push(new_peer),
     }
 
@@ -423,6 +442,46 @@ mod tests {
             pending[0].secret, "tok-fresh",
             "the sweep persisted: only the expired entry is removed"
         );
+    }
+
+    #[test]
+    fn consume_with_empty_url_inherits_existing() {
+        let path = tmp_path("inherit-url");
+        write_seed(
+            &path,
+            serde_json::json!({
+                "peers": [{"url": "http://good:3000", "name": "relay-a", "pubkey": "pk-old"}],
+                "pending": [
+                    {"secret": "tok", "name": "self", "url": "http://a:3000", "at": "t1", "at_ms": now_ms()}
+                ]
+            }),
+        );
+        // The presenter's process lost UNBIEN_RELAY_URL (empty presented
+        // url): the re-pair must federate AND keep the dialable url.
+        assert!(consume_pending_and_add_peer_at(&path, "tok", "", "relay-a", "pk-new").unwrap());
+        let peers = read_peer_config_at(&path);
+        let entry = peers.iter().find(|p| p.name == "relay-a").unwrap();
+        assert_eq!(
+            entry.url, "http://good:3000",
+            "empty presented url inherits the existing entry's"
+        );
+        assert_eq!(entry.pubkey.as_deref(), Some("pk-new"));
+        // A NON-empty presented url still replaces (the upsert contract).
+        write_seed(
+            &path,
+            serde_json::json!({
+                "peers": [{"url": "http://good:3000", "name": "relay-a", "pubkey": "pk-old"}],
+                "pending": [
+                    {"secret": "tok2", "name": "self", "url": "http://a:3000", "at": "t2", "at_ms": now_ms()}
+                ]
+            }),
+        );
+        assert!(
+            consume_pending_and_add_peer_at(&path, "tok2", "http://fresh:9", "relay-a", "pk-new")
+                .unwrap()
+        );
+        let peers = read_peer_config_at(&path);
+        assert_eq!(peers[0].url, "http://fresh:9");
     }
 
     #[test]

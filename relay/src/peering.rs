@@ -773,13 +773,16 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
             .await;
             return;
         }
-        // The auto-added entry records the presenter's OWN advertised
-        // url/name — both required non-empty (a nameless/urlless entry can
-        // never be dialed back).
-        if peer_url.is_empty() || peer_name.is_empty() {
+        // The auto-added/updated entry is keyed by the presenter's NAME —
+        // an empty one can never be keyed, so it stays a hard decline. The
+        // URL is LENIENT: a presenter whose process lost UNBIEN_RELAY_URL
+        // (observed live after restarts) must not be locked out of a
+        // pairing it already holds — the auto-add upsert INHERITS the
+        // existing entry's url when the presented one is empty.
+        if peer_name.is_empty() {
             warn!(
                 peer = %peer_name,
-                "relay-peer: pairing hello missing relay_name/relay_url, declining"
+                "relay-peer: pairing hello missing relay_name, declining"
             );
             send_hello_ack(
                 &mut socket,
@@ -790,6 +793,12 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
             )
             .await;
             return;
+        }
+        if peer_url.is_empty() {
+            warn!(
+                peer = %peer_name,
+                "relay-peer: pairing hello has no relay_url (UNBIEN_RELAY_URL unset on the presenter) — the auto-add will inherit the existing entry's url"
+            );
         }
         match crate::peers::peers_config::consume_pending_and_add_peer(
             pair_secret,

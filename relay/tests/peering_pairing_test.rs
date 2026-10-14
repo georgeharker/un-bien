@@ -398,3 +398,63 @@ async fn no_common_owner_still_federates_when_pinned() {
 fn _uses_app_state(state: &AppState) -> Arc<relay::FederatedSessions> {
     state.federated.clone()
 }
+
+// ── (ii-b) the auto-add tolerates a presenter without UNBIEN_RELAY_URL ────
+
+/// A re-pairing presenter whose process lost UNBIEN_RELAY_URL (empty
+/// relay_url in the hello) must NOT be declined: it federates via the valid
+/// secret, and the auto-add INHERITS the existing entry's url instead of
+/// clobbering it. An empty NAME still declines — the entry is keyed by name.
+#[tokio::test]
+async fn pairing_secret_with_missing_url_inherits_existing_entry() {
+    let _state = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _dir = hermetic_state_dir();
+    let secret = mint_secret();
+    // The ISSUER's file: a pending entry AND an already-pinned presenter
+    // entry carrying a GOOD url (the pre-restart pairing's record).
+    write_peers_doc(json!({
+        "federation": {"enabled": true},
+        "peers": [{"name": "relay-a", "url": "http://good:1234", "pubkey": "pk-stale"}],
+        "pending": [
+            {"secret": secret, "name": "relay-a", "url": "http://x:2", "at": "2026-10-14T00:00:00Z"}
+        ]
+    }));
+    let relay_b = spawn_relay_named("relay-b").await;
+
+    let sk = SigningKey::generate(&mut rand::thread_rng());
+    let pk = B64.encode(sk.verifying_key().to_bytes());
+    // EMPTY url in the hello — must federate, and the entry must KEEP the
+    // good url (no clobber).
+    let mut ws = connect_relay_peer(relay_b.port).await;
+    let ack = hello_and_ack(&mut ws, &signed_hello(&sk, "relay-a", "", Some(&secret))).await;
+    assert_eq!(
+        ack["federate"], true,
+        "url-less presenter with a valid secret must federate: {ack}"
+    );
+    let doc = read_peers_doc();
+    assert_eq!(
+        doc["peers"],
+        json!([{"name": "relay-a", "url": "http://good:1234", "pubkey": pk}]),
+        "entry keeps the existing url; pubkey refreshed: {doc}"
+    );
+    assert_eq!(doc["pending"], json!([]), "pending consumed");
+
+    // An empty NAME still declines (the entry is keyed by name).
+    let sk2 = SigningKey::generate(&mut rand::thread_rng());
+    let secret2 = mint_secret();
+    write_peers_doc(json!({
+        "federation": {"enabled": true},
+        "peers": [],
+        "pending": [
+            {"secret": secret2, "name": "relay-z", "url": "http://x:2", "at": "2026-10-14T00:00:00Z"}
+        ]
+    }));
+    let mut ws = connect_relay_peer(relay_b.port).await;
+    let ack = hello_and_ack(
+        &mut ws,
+        &signed_hello(&sk2, "", "http://127.0.0.1:5", Some(&secret2)),
+    )
+    .await;
+    assert_eq!(ack["federate"], false, "nameless presenter must decline");
+    assert_eq!(ack["reason"], "pairing_missing_name_or_url");
+}
