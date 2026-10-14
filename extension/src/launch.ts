@@ -57,15 +57,6 @@ export function _launchShell(): string {
   return "zsh"
 }
 
-/** The shell argv PREFIX for a launch command: [shell, ...extra args]
- *  (default ["-l"]) — `-c` and the command are appended by the caller, so
- *  configured args can never displace the command. Config
- *  `launch.shell_args` lets an operator add e.g. -i for interactive rc
- *  files. */
-function _launchShellArgv(): string[] {
-  return [_launchShell(), ...(loadConfig().launch?.shell_args ?? ["-l"])]
-}
-
 function _safeTmuxName(name: string | undefined, fallback: string): string {
   const base = (name ?? "").trim() || fallback
   // tmux disallows `.` and `:` in session names; strip anything risky.
@@ -351,23 +342,24 @@ export function _launchSession(
     // (config `launch.shell` → $SHELL → the user's LOGIN SHELL from the OS —
     // launchd/systemd strip SHELL from the daemon env — → zsh last resort;
     // never assume the user's shell).
-    const commandArgv = launchReq
-      ? [
-          ..._launchShellArgv(),
-          "-c",
-          'exec env "UNBIEN_LAUNCH_REQ=$1" pi ${2:+-n "$2"}',
-          "pi",
-          launchReq,
-          name ?? "",
-        ]
-      : [
-          ..._launchShellArgv(),
-          "-c",
-          'exec pi ${2:+-n "$2"}',
-          "pi",
-          "",
-          name ?? "",
-        ]
+    // …and the launch runs through the user's login shell. The command is
+    // ONE shell-quoted string: tmux joins trailing argv with spaces into a
+    // single shell-command, so a multi-arg `-c …` form would lose its
+    // quoting (zsh -c received just `exec` — the launch-failure this
+    // fixes). _shellQuote is POSIX single-quote escaping: the launchReq and
+    // name ride INSIDE the quoted inner command — injection-safe, spaces
+    // in names included.
+    const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
+    const piArgs = name ? ` -n ${q(name)}` : ""
+    const inner = launchReq
+      ? `exec env UNBIEN_LAUNCH_REQ=${q(launchReq)} pi${piArgs}`
+      : `exec pi${piArgs}`
+    // Extra shell args (launch.shell_args, default ["-l"]) ride quoted
+    // before -c — configured args can never displace the command.
+    const extraArgs = (loadConfig().launch?.shell_args ?? ["-l"])
+      .map(q)
+      .join(" ")
+    const commandArgv = [`${q(_launchShell())} ${extraArgs} -c ${q(inner)}`]
     const child = spawn(
       "tmux",
       _buildTmuxLaunchArgs(
