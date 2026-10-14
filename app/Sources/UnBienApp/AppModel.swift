@@ -89,6 +89,12 @@ public final class AppModel: ObservableObject {
     /// Last page-arrival time per walk-in-flight session — the watchdog's STALL
     /// signal (a walk still receiving pages is alive; only a silent one retries).
     var walkLastActivity: [String: Date] = [:]
+    /// message_end delta-sync watch (append-lag): the `since` baseline of the
+    /// latest sync-triggered walk. pi's entry-add can't be hooked post-id (no
+    /// on() event after append) and its flush may land AFTER message_end, so
+    /// the walk can terminal with the announced entry unfetched.
+    var syncWatch: [String: String] = [:]
+    var syncRetries: [String: Int] = [:]
     var liveFrameBuffer: [String: [(env: EnvelopeMessage, envelope: RoutedEnvelope,
                                    relayID: UUID)]] = [:]
     /// Pending interactive prompt per session (extension_ui_request).
