@@ -1370,7 +1370,7 @@ impl FederatedSessions {
         entries: Vec<(String, u64, String, String)>,
     ) {
         let mut map = self.machine_pairings.lock().await;
-        for (machine, envelope_version, blob_b64, sig_b64) in entries {
+        for (machine, _envelope_version, blob_b64, sig_b64) in entries {
             // VERIFY (settled design): the exchange carries MACHINE-SIGNED
             // pairing envelopes; claims without a valid machine signature are
             // dropped — a peer cannot inject owner claims it cannot sign.
@@ -1383,18 +1383,9 @@ impl FederatedSessions {
                 continue;
             };
             let Ok(p) = crate::peers::pairing::verify_pairing_blob(&blob_bytes, &sig_bytes) else {
-                eprintln!(
-                    "[dbgpair] verify FAILED machine={}",
-                    &machine[..machine.len().min(16)]
-                );
                 continue;
             };
             if p.machine_pk != machine {
-                eprintln!(
-                    "[dbgpair] binding mismatch: presented {} want {}",
-                    &p.machine_pk[..p.machine_pk.len().min(16)],
-                    &machine[..machine.len().min(16)]
-                );
                 continue;
             }
             let version = p.version;

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Build the un-bien iOS app for a paired device and install it (no launch).
 #
-# Usage: scripts/build-iphone.sh [device-name]     (default: geoifon)
+# Usage: scripts/build-iphone.sh [device-name]     (default: geoiphon)
 #
 # - Resolves the device by NAME via devicectl (falls back to listing devices).
 # - Builds the UnBien-iOS scheme for the concrete device (Release by default;

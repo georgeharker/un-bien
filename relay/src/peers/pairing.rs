@@ -297,10 +297,8 @@ impl PairingRegistry {
         }
     }
 
-    /// The current allow-set for `machine` when configured — used to re-filter
-    /// existing subscribers the moment a push lands (revocation completeness +
-    /// reconnect-race cleanup). `None` = unconfigured.
-
+    /// The current allow-set for `machine` when configured — re-filtered
+    /// subscribers on push. `None` = unconfigured (fails closed).
     pub fn owners_of(&self, machine: &str) -> Option<HashSet<String>> {
         self.allow.lock().unwrap().get(machine).cloned()
     }
