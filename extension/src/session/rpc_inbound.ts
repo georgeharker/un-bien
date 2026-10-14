@@ -143,9 +143,16 @@ export function pageEntries(
     // Transport-fit FIRST: an oversized entry must never ride raw (it would be
     // refused and stall the walk); budget accounting uses the FITTED size.
     const fitted = fitEntryForTransport(e)
+    const size = JSON.stringify(fitted).length
+    // PREFLIGHT the budget: the entry that would push the page PAST the
+    // budget begins the NEXT page. Every page is therefore ≤ budget by
+    // construction (a lone entry is always included, so progress holds), and
+    // MAX_ENTRY_JSON_BYTES bounds the single-entry worst case to the budget
+    // itself — keeping the page's base64 envelope (≈ JSON × 4/3) inside the
+    // APP's WS frame cap, which the receiving socket depends on.
+    if (page.length > 0 && used + size > budgetBytes) break
     page.push(fitted)
-    used += JSON.stringify(fitted).length
-    if (used >= budgetBytes) break
+    used += size
   }
   const complete = page.length === remaining.length
   return {

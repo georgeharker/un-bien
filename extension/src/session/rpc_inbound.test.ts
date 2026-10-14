@@ -254,8 +254,25 @@ describe("dispatchRpcCommand", () => {
     it("budget exceeded → partial page, leafId = last INCLUDED entry id", () => {
       const all = [mk("e1", 100_000), mk("e2", 100_000), mk("e3", 100_000)]
       const page = pageEntries(all, undefined, "e3", 150_000)
-      expect(page.entries.map((e) => e.id)).toEqual(["e1", "e2"])
-      expect(page.leafId).toBe("e2")
+      expect(page.entries.map((e) => e.id)).toEqual(["e1"])
+      expect(page.leafId).toBe("e1")
+    })
+
+    it("preflight: a page NEVER exceeds the budget (the crossing entry starts the next page)", () => {
+      // Transport contract: every page is ≤ budget by construction (except a
+      // lone oversized entry), so the base64 envelope (≈ JSON × 4/3) stays
+      // inside the app's WS frame cap and every page is deliverable.
+      const budget = 300_000
+      const all = [mk("e1", 100_000), mk("e2", 100_000), mk("e3", 100_000), mk("e4", 100_000)]
+      const p1 = pageEntries(all, undefined, "e4", budget)
+      expect(p1.entries.map((e) => e.id)).toEqual(["e1", "e2", "e3"])
+      expect(p1.leafId).toBe("e3")
+      expect(JSON.stringify(p1.entries).length).toBeLessThanOrEqual(budget)
+      const p2 = pageEntries(all, "e3", "e4", budget)
+      expect(p2.entries.map((e) => e.id)).toEqual(["e4"])
+      expect(p2.leafId).toBe("e4")
+      const p3 = pageEntries(all, "e4", "e4", budget)
+      expect(p3.entries).toEqual([])
     })
 
     it("resumes after `since`; an unknown since restarts from index 0 (helper tolerance — handlers pre-validate)", () => {
