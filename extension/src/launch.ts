@@ -323,8 +323,16 @@ export function _launchSession(
   // The raw name rides the pi argv (`-n`) — the extension resolves it as the
   // session-scoped agent name (see resolveAgentName). herdr keeps the
   // workspace-label-only plumbing until it can pass args through to pi.
+  // BOTH-LAYER wrap (user insight, live-verified): the daemon's launchd
+  // env has no homebrew PATH, so the OUTER `tmux` invocation itself must
+  // run in the login shell (resolves the binary AND hands a fresh tmux
+  // server the user's env); the INNER pane command keeps its own shell
+  // wrap (windows inherit the SERVER's env — a long-lived server may
+  // predate any env fix).
+  const shell = _launchShell()
+  const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
   const sessionExists =
-    spawnSync("tmux", ["has-session", "-t", session], {
+    spawnSync(shell, ["-l", "-c", `exec tmux has-session -t ${q(session)}`], {
       stdio: "ignore",
       timeout: 5_000,
     }).status === 0
@@ -351,10 +359,10 @@ export function _launchSession(
     // fixes). _shellQuote is POSIX single-quote escaping: the launchReq and
     // name ride INSIDE the quoted inner command — injection-safe, spaces
     // in names included.
-    const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
     // name + resume ride INSIDE the quoted command (nothing is appended
     // after a custom commandArgv — tmux would glue it on and corrupt the
-    // quoting).
+    // quoting). q is hoisted to the function scope (the outer tmux wrap
+    // uses it too).
     const piTail = [
       ...(name ? [`-n`, q(name)] : []),
       ...(resume ? [`--session`, q(resume)] : []),
@@ -368,18 +376,34 @@ export function _launchSession(
       .map(q)
       .join(" ")
     const commandArgv = [`${q(_launchShell())} ${extraArgs} -c ${q(inner)}`]
+    // The WHOLE tmux argv runs inside the login shell, quoted arg-by-arg —
+    // the daemon env cannot resolve homebrew tmux by itself.
     const child = spawn(
-      "tmux",
-      _buildTmuxLaunchArgs(
-        session,
-        windowName,
-        cwd,
-        sessionExists,
-        name,
-        resume,
-        commandArgv,
-      ),
+      shell,
+      [
+        "-l",
+        "-c",
+        `exec tmux ${_buildTmuxLaunchArgs(
+          session,
+          windowName,
+          cwd,
+          sessionExists,
+          name,
+          resume,
+          commandArgv,
+        )
+          .map(q)
+          .join(" ")}`,
+      ],
       { detached: true, stdio: "ignore" },
+    )
+    // LOG THE ASYNC SPAWN FAILURE (the silent-death gap): spawn accepts the
+    // request and errors LATER on the child — without this listener the
+    // failure never reached any log (observed live: no fail line at all).
+    child.on("error", (err) =>
+      envLog(
+        `launch spawn failed: ${err instanceof Error ? err.message : String(err)}`,
+      ),
     )
     child.unref()
     return null
