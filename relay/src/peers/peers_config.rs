@@ -53,6 +53,24 @@ pub struct PendingRelayPair {
     pub url: String,
     #[serde(default)]
     pub at: String,
+    /// Mint time, epoch millis (expiry is checked against PENDING_TTL_MS).
+    /// Absent (0) on legacy entries ⇒ no expiry — entries minted before the
+    /// TTL behaves as they always did.
+    #[serde(default)]
+    pub at_ms: u64,
+}
+
+/// A pending pairing invitation is single-use AND short-lived: 24h from
+/// mint. An unconsumed entry otherwise stays a live pairing secret in a
+/// state file forever (each `relay pair` mints a fresh one; nothing else
+/// ever removed them).
+pub const PENDING_TTL_MS: u64 = 24 * 60 * 60 * 1000;
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 /// Read the raw document at `path`, fresh. `None` when absent or unparsable
@@ -180,6 +198,17 @@ pub fn consume_pending_and_add_peer_at(
     let Some(pending) = obj.get_mut("pending").and_then(|v| v.as_array_mut()) else {
         return Ok(false); // no pending array at all ⇒ the token matches nothing
     };
+    // Sweep EXPIRED invitations while we hold the doc: a pending is
+    // single-use AND short-lived (PENDING_TTL_MS) — an unconsumed entry
+    // otherwise stays a live pairing secret in this file forever. Legacy
+    // entries without at_ms never expire.
+    let now = now_ms();
+    let before = pending.len();
+    pending.retain(|p| match p.get("at_ms").and_then(|v| v.as_u64()) {
+        None | Some(0) => true, // legacy / unset ⇒ no expiry
+        Some(at_ms) => now.saturating_sub(at_ms) < PENDING_TTL_MS,
+    });
+    let swept_expired = pending.len() != before;
     let matched = pending.iter().position(|p| {
         p.get("secret")
             .and_then(|s| s.as_str())
@@ -188,7 +217,12 @@ pub fn consume_pending_and_add_peer_at(
             == Some(presented_hash.as_str())
     });
     let Some(matched) = matched else {
-        return Ok(false); // present-but-unmatched ⇒ decline, nothing written
+        // Unmatched (wrong, spent, or swept-expired secret): persist the
+        // sweep so expired entries don't accumulate in the file.
+        if swept_expired {
+            write_doc_atomic(path, &doc)?;
+        }
+        return Ok(false); // decline, nothing else written
     };
     pending.remove(matched);
 
@@ -320,6 +354,75 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn expired_pending_is_not_consumable() {
+        let path = tmp_path("ttl-dead");
+        let old_ms = now_ms().saturating_sub(PENDING_TTL_MS + 60_000);
+        write_seed(
+            &path,
+            serde_json::json!({
+                "peers": [],
+                "pending": [
+                    {"secret": "tok-stale", "name": "self", "url": "http://a:3000", "at": "t1", "at_ms": old_ms}
+                ]
+            }),
+        );
+        assert!(
+            !consume_pending_and_add_peer_at(&path, "tok-stale", "http://b:9", "relay-b", "pk-b")
+                .unwrap(),
+            "an expired invitation's secret no longer pairs"
+        );
+        assert!(read_peer_config_at(&path).is_empty(), "no peer was added");
+        assert!(
+            read_pending_at(&path).is_empty(),
+            "the sweep removed the expired entry (persisted even on no-match)"
+        );
+    }
+
+    #[test]
+    fn legacy_pending_without_at_ms_never_expires() {
+        let path = tmp_path("ttl-legacy");
+        write_seed(
+            &path,
+            serde_json::json!({
+                "peers": [],
+                "pending": [
+                    {"secret": "tok-old", "name": "self", "url": "http://a:3000", "at": "t1"}
+                ]
+            }),
+        );
+        assert!(
+            consume_pending_and_add_peer_at(&path, "tok-old", "http://b:9", "relay-b", "pk-b")
+                .unwrap(),
+            "legacy entries (no at_ms) keep the pre-TTL behavior"
+        );
+    }
+
+    #[test]
+    fn sweep_keeps_fresh_and_drops_only_expired() {
+        let path = tmp_path("ttl-sweep");
+        let old_ms = now_ms().saturating_sub(PENDING_TTL_MS + 60_000);
+        write_seed(
+            &path,
+            serde_json::json!({
+                "peers": [],
+                "pending": [
+                    {"secret": "tok-dead", "name": "self", "url": "http://a:3000", "at": "t1", "at_ms": old_ms},
+                    {"secret": "tok-fresh", "name": "self", "url": "http://a:3000", "at": "t2", "at_ms": now_ms()}
+                ]
+            }),
+        );
+        assert!(
+            !consume_pending_and_add_peer_at(&path, "tok-nope", "http://x:1", "x", "pk-x").unwrap()
+        );
+        let pending = read_pending_at(&path);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(
+            pending[0].secret, "tok-fresh",
+            "the sweep persisted: only the expired entry is removed"
+        );
     }
 
     #[test]

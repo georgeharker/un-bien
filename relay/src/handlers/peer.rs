@@ -704,6 +704,17 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                         "check-before-forward SRC gate (owner-set intersection, strict)"
                                     );
                                     if !gate_ok {
+                                        // WARN, not debug: a gate refusal is the
+                                        // #1 live-debugging signal (the sender sees a
+                                        // silent unknown_peer — without this line the
+                                        // failure mode is an unexplained blank/spinner).
+                                        warn!(
+                                            peer = %peer_short,
+                                            dest = %&dest_peer[..dest_peer.len().min(8)],
+                                            dest_owners_known = dest_owners.is_some(),
+                                            sender_owner_set_known = sender_owners.is_some(),
+                                            "SRC gate REFUSED (owner-set intersection, strict)"
+                                        );
                                         let refusal = serde_json::json!({
                                             "type": "error",
                                             "code": "unknown_peer",
