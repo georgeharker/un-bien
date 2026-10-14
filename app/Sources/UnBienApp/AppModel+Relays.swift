@@ -132,6 +132,11 @@ extension AppModel {
                 return
             }
             connections[relay.id] = connection
+            await connection.setOnStreamEnd { [weak self] msg in
+                Task { @MainActor [weak self] in
+                    self?.pushTransientNotice(message: msg, level: "error")
+                }
+            }
             relayHealth[relay.id] = .online
             reconnectAttempts[relay.id] = 0
             startEventLoop(relayID: relay.id, connection: connection, generation: generation)

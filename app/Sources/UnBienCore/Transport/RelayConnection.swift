@@ -20,6 +20,13 @@ public actor RelayConnection {
     private let identity: Ed25519Identity
     private let appRoomID: String
     private var eventContinuation: AsyncStream<InboundFrame>.Continuation?
+    /// Called once when the receive stream ends (close/error) — the death
+    /// reason surfaces in-app (toast), no Console/cable required.
+    private var onStreamEnd: ((String) -> Void)?
+    /// Actor-isolated setter (called from connect before the loop starts).
+    public func setOnStreamEnd(_ cb: @escaping (String) -> Void) {
+        onStreamEnd = cb
+    }
 
     public init(channel: WebSocketChannel, identity: Ed25519Identity, appRoomID: String = "main") {
         self.channel = channel
@@ -224,7 +231,9 @@ public actor RelayConnection {
                 // conn death (foreground flaps, bg kills, half-open) funnels
                 // here — log the URLError/code so device console (Console.app
                 // → device geoifon, filter 'un-bien') names the killer.
-                connLog.error("ws receive ended: \(String(describing: error), privacy: .public)")
+                let msg = "conn ended: \(String(describing: error))"
+                connLog.error("ws receive ended: \(msg, privacy: .public)")
+                onStreamEnd?(msg)
                 finishStream()
                 return
             }
