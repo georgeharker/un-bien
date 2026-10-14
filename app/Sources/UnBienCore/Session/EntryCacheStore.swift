@@ -40,10 +40,18 @@ public actor EntryCacheStore {
     public struct CachedEntries: Sendable {
         public let entries: [JSONValue]
         public let leafId: String
+        /// Content-derived cursor (log-cursor split): the id of the LAST
+        /// entry actually written together with this cache state — the
+        /// machine-reported tail can claim unheld content across an
+        /// app-kill; this one cannot (it travels with the entries).
+        public let foldedLeaf: String?
     }
 
     private struct Meta: Codable {
         var v: Int
+        /// Folded cursor (persists with the entries it covers; optional for
+        /// metas written by older builds).
+        var foldedLeaf: String? = nil
         /// Raw sessionKey (relayUUID:peer:piSessionId) — filenames are
         /// sanitized; this is the authoritative key.
         var key: String
@@ -133,7 +141,7 @@ public actor EntryCacheStore {
             // parsed; the cursor moves BACK to the last good entry.
             rewrite(file: file, entries: entries)
             write(metaFile: metaFile, key: key, roomID: meta.roomID,
-                  leafId: lastId, count: entries.count)
+                  leafId: lastId, foldedLeaf: lastId, count: entries.count)
             log.notice("cache truncated at \(entries.count, privacy: .public) good entries (corrupt tail) key=\(String(key.suffix(12)), privacy: .public)")
         }
         // STAGE 0 CHAIN VALIDATION (run 2026-09-18 — the blank branched
@@ -171,7 +179,7 @@ public actor EntryCacheStore {
             }
         }
         knownIds[key] = ids
-        return CachedEntries(entries: entries, leafId: corrupt ? lastId : meta.leafId)
+        return CachedEntries(entries: entries, leafId: corrupt ? lastId : meta.leafId, foldedLeaf: corrupt ? nil : meta.foldedLeaf)
     }
 
     // MARK: - append
@@ -183,7 +191,13 @@ public actor EntryCacheStore {
     /// skipped whole; the next delta from the trusted cursor re-covers any
     /// hole (identify dedup makes the re-fetch harmless).
     @discardableResult
-    public func append(key: String, roomID: String, entries: [JSONValue], leafId: String) -> Bool {
+    public func append(
+        key: String,
+        roomID: String,
+        entries: [JSONValue],
+        leafId: String,
+        foldedLeaf: String? = nil
+    ) -> Bool {
         guard !entries.isEmpty else { return false }
         let ids = idsForKey(key)
         // SUFFIX-APPEND (run 2026-09-18 — the straddle hole, the blank
@@ -235,7 +249,10 @@ public actor EntryCacheStore {
         // the next delta re-covers).
         var merged = ids
         for entry in suffix { if let id = entry["id"]?.stringValue { merged.insert(id) } }
-        write(metaFile: metaURL(key), key: key, roomID: roomID, leafId: leafId, count: merged.count)
+        write(
+            metaFile: metaURL(key), key: key, roomID: roomID,
+            leafId: leafId, foldedLeaf: foldedLeaf, count: merged.count
+        )
         knownIds[key] = merged
         return true
     }
@@ -283,11 +300,22 @@ public actor EntryCacheStore {
         return knownIds[key] ?? []
     }
 
-    private func write(metaFile: URL, key: String, roomID: String, leafId: String, count: Int) {
+    private func write(
+        metaFile: URL, key: String, roomID: String,
+        leafId: String, foldedLeaf: String?, count: Int
+    ) {
         let identity = identity(of: key)
-        let meta = Meta(v: Self.cacheVersion, key: key,
-                        relayID: identity?.relayID ?? "", peer: identity?.peer ?? "",
-                        roomID: roomID, leafId: leafId, count: count, at: Date())
+        let meta = Meta(
+            v: Self.cacheVersion,
+            foldedLeaf: foldedLeaf,
+            key: key,
+            relayID: identity?.relayID ?? "",
+            peer: identity?.peer ?? "",
+            roomID: roomID,
+            leafId: leafId,
+            count: count,
+            at: Date()
+        )
         if let data = try? encoder.encode(meta) {
             try? data.write(to: metaFile, options: .atomic)
         }

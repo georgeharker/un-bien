@@ -609,7 +609,9 @@ public final class AppModel: ObservableObject {
                 RenderActivity.getEntriesCached += 1
                 reducer.applyEntries(cached.entries, leafId: cached.leafId)
                 commitFold(session.id, reducer)
-                since = cached.leafId
+                // Prefer the CONTENT-derived persisted cursor (single-cursor merge):
+                // the machine tail can claim unheld content across an app kill.
+                since = cached.foldedLeaf ?? cached.leafId
                 let foldMs = Int(-t0.timeIntervalSinceNow * 1000)
                 let leafTail = String(cached.leafId.suffix(8))
                 log.notice("entry cache hit: \(cached.entries.count, privacy: .public) entries folded in \(foldMs, privacy: .public)ms — delta walk from leaf=\(leafTail, privacy: .public)")

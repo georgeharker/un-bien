@@ -702,8 +702,13 @@ extension AppModel {
                 if !isDemoKey(key) {
                     let page = entries
                     let room = envelope.room
-                    Task { await entryCache.append(key: key, roomID: room,
-                                                   entries: page, leafId: leaf) }
+                    Task {
+                        await entryCache.append(
+                            key: key, roomID: room, entries: page,
+                            leafId: leaf,
+                            foldedLeaf: entries.last?["id"]?.stringValue
+                        )
+                    }
                 }
                 // Folded-frontier advance (design: log-cursor split): the fetch
                 // origin moves only over entries this walk FOLDED — never an
