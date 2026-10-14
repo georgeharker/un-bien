@@ -255,6 +255,7 @@ export async function startLauncher(
     // revoke-detach path (unlike the extension), so consult peers.json each
     // request — a revoked owner stops launching without a daemon restart.
     if (!(await _findKnownPeer(peer))) {
+      launcherLog(`launcher session_launch REFUSED: peer ${peer} not in known-peers (re-scan QR) — the error goes to the sender, this line is the log record`)
       sender.send({
         type: "error",
         code: "unknown_peer",

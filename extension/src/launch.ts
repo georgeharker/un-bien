@@ -3,7 +3,7 @@ import { basename, join, resolve } from "node:path"
 import { existsSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { loadConfig } from "./config.js"
-import { envLog } from "./session/debug_log.js"
+import { envLog, launcherLog } from "./session/debug_log.js"
 
 /**
  * Launch backends for remote `session_launch` — shared by the extension (index.ts)
@@ -400,8 +400,10 @@ export function _launchSession(
     // LOG THE ASYNC SPAWN FAILURE (the silent-death gap): spawn accepts the
     // request and errors LATER on the child — without this listener the
     // failure never reached any log (observed live: no fail line at all).
+    // launcherLog, not envLog: a launch failure is OPERATIONAL, not debug —
+    // envLog's gate would have hidden it (the wrong-sink mistake).
     child.on("error", (err) =>
-      envLog(
+      launcherLog(
         `launch spawn failed: ${err instanceof Error ? err.message : String(err)}`,
       ),
     )
