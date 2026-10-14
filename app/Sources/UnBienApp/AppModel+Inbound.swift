@@ -65,17 +65,21 @@ extension AppModel {
         guard rpc["success"]?.boolValue ?? false else {
             let detail = rpc["error"]?.stringValue ?? "?"
             log.error("rpc response \(command, privacy: .public) failed: \(detail, privacy: .public)")
-            // Cursor heal: pi REWRITES entry ids on compaction/resume, so a
-            // cached leaf can point at a dropped entry whose get_entries now
-            // throws — previously only logged, so every later walk re-sent the
-            // dead cursor and backfill never filled (identify makes refold safe).
+            // Cursor heal: the machine can rewrite its entry ids under the app
+            // (the legacy v1→v2 resume migration; compaction itself does NOT
+            // rewrite ids), so a held cursor can point at a dropped entry and
+            // get_entries answers 'Entry not found' — terminal for every held
+            // cursor. Force a FULL walk: forceFull drops the folded frontier
+            // and ignores the beacon/cache (since: nil rebuilds from the log
+            // root, identify dedup makes the refold safe); the cache is
+            // trashed so it re-seeds with the new ids.
             if command == "get_entries", detail.contains("Entry not found"),
                let s = sessions[key], let c = connections[s.relayID] {
                 endWalk(key: key)
-                log.notice("cursor heal: stale leaf discarded, full walk key=\(String(key.suffix(12)), privacy: .public)")
+                log.notice("cursor heal: stale cursor discarded, full walk key=\(String(key.suffix(12)), privacy: .public)")
                 Task {
                     await entryCache.remove(key: key)
-                    await requestReconstruction(s, connection: c)
+                    await requestReconstruction(s, connection: c, forceFull: true)
                 }
             }
             return

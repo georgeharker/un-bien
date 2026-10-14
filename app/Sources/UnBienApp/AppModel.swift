@@ -588,9 +588,20 @@ public final class AppModel: ObservableObject {
     /// The TWO independent reconstruction requests (design 01M15FMQ), issued on
     /// open AND on relay reconnect: (1) native pi `get_entries` rpc for the
     /// TRANSCRIPT — `since` the last leaf cursor for a delta fetch, reduced by
-    func requestReconstruction(_ session: LiveSession, connection: RelayConnection) async {
-        // Fetch origin = folded frontier; fallbacks: beacon, then cache.
-        var since = foldedFrontier[session.id] ?? envelopeReducers[session.id]?.leafId
+    func requestReconstruction(_ session: LiveSession, connection: RelayConnection,
+                               forceFull: Bool = false) async {
+        // Fetch origin = folded frontier; fallbacks: beacon, then cache. A
+        // FORCED full walk (cursor heal — the machine rewrote its entry ids,
+        // the legacy v1→v2 resume migration, so EVERY held cursor is stale:
+        // get_entries(since:) would throw 'Entry not found' forever) trusts
+        // NONE of them: since = nil rebuilds from the log root (identify
+        // dedup makes the refold safe; the terminal page's authoritative
+        // beacon re-derives the path), and the stale in-memory frontier is
+        // discarded here so a later ordinary walk can't resume from it.
+        if forceFull { foldedFrontier[session.id] = nil }
+        var since = forceFull
+            ? nil
+            : foldedFrontier[session.id] ?? envelopeReducers[session.id]?.leafId
         // CACHE-FIRST (design 01M1M4N8RZZANDX6NWY7FCSBT5): with no in-memory
         /// cursor (cold launch), consult the local entry cache BEFORE the
         /// walk. A hit folds the cached history prefix locally (log-ordered,
@@ -600,7 +611,7 @@ public final class AppModel: ObservableObject {
         /// Version mismatch → discard → ordinary full walk. Demo sessions
         /// are in-memory only — never cached.
         var entryCacheLoaded = false
-        if since == nil, !isDemoKey(session.id) {
+        if since == nil, !forceFull, !isDemoKey(session.id) {
             let t0 = Date()
             if let cached = await entryCache.load(key: session.id) {
                 entryCacheLoaded = true
@@ -617,10 +628,11 @@ public final class AppModel: ObservableObject {
                 log.notice("entry cache hit: \(cached.entries.count, privacy: .public) entries folded in \(foldMs, privacy: .public)ms — delta walk from leaf=\(leafTail, privacy: .public)")
             } else {
                 log.notice("entry cache miss — full walk key=\(String(session.id.suffix(12)), privacy: .public)")
+            }
         }
         if UserDefaults.standard.bool(forKey: "unbien.debug.sync") {
             appendSessionNotice(key: session.id, code: "sync",
-                message: "walk since=\(since.map { String($0.suffix(10)) } ?? "nil") cache=\(entryCacheLoaded ? "hit" : "miss")")            }
+                message: "walk since=\(since.map { String($0.suffix(10)) } ?? "nil") cache=\(entryCacheLoaded ? "hit" : "miss")")
         }
         // A previous full walk died mid-flight (connection drop): unblock its
         // buffered live frames before this walk proceeds.
@@ -940,46 +952,6 @@ public final class AppModel: ObservableObject {
         guard let connection = connections[session.relayID],
               let target = transcripts[session.id]?.activeTurnID else { return }
         try? await connection.send(.cancel(id: UUID().uuidString, targetID: target),
-                                   toPeer: session.peerEPK, room: session.roomID)
-    }
-
-    // MARK: - Model / thinking control
-
-    /// Ask the peer for its model roster (`list_models`).
-    public func requestModels(for session: LiveSession) async {
-        guard let connection = connections[session.relayID] else { return }
-        try? await connection.send(.listModels(id: UUID().uuidString),
-                                   toPeer: session.peerEPK, room: session.roomID)
-    }
-
-    public func setModel(_ model: WireModel, session: LiveSession) async {
-        currentModel[session.id] = model
-        guard let connection = connections[session.relayID] else { return }
-        try? await connection.send(
-            .modelSet(id: UUID().uuidString, provider: model.provider, modelID: model.id),
-            toPeer: session.peerEPK, room: session.roomID)
-    }
-
-    public func setThinking(_ level: ThinkingLevel, session: LiveSession) async {
-        thinkingLevel[session.id] = level
-        guard let connection = connections[session.relayID] else { return }
-        try? await connection.send(.thinkingSet(id: UUID().uuidString, level: level),
-                                   toPeer: session.peerEPK, room: session.roomID)
-    }
-
-    /// Start a fresh pi session (`session_new` -> pi `new_session`). Wired to the
-    /// envelope but NOT yet surfaced in the UI (no caller) — the fork handles it.
-    public func newSession(_ session: LiveSession) async {
-        guard let connection = connections[session.relayID] else { return }
-        try? await connection.send(.sessionNew(id: UUID().uuidString),
-                                   toPeer: session.peerEPK, room: session.roomID)
-    }
-
-    /// Compact the pi context (`session_compact` -> pi `compact`). Wired to the
-    /// envelope but NOT yet surfaced in the UI (no caller) — the fork handles it.
-    public func compact(_ session: LiveSession) async {
-        guard let connection = connections[session.relayID] else { return }
-        try? await connection.send(.sessionCompact(id: UUID().uuidString),
                                    toPeer: session.peerEPK, room: session.roomID)
     }
 
