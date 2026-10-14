@@ -139,6 +139,7 @@ extension AppModel {
             }
             relayHealth[relay.id] = .online
             reconnectAttempts[relay.id] = 0
+            reconnectPaused[relay.id] = nil
             startEventLoop(relayID: relay.id, connection: connection, generation: generation)
             // Recover every open session on this relay after a (re)connect: the
             // transcript (get_entries) + panels (session_sync). Idempotent, so a
@@ -148,7 +149,7 @@ extension AppModel {
             }
         } catch {
             relayHealth[relay.id] = .failed(String(describing: error))
-            scheduleReconnect(relay)
+            scheduleReconnect(relay, reason: (error as? URLError).map(Self.unreachableReason))
         }
     }
 
@@ -168,7 +169,7 @@ extension AppModel {
                   let relay = mesh.config.relays.first(where: { $0.id == relayID }) else { return }
             relayHealth[relayID] = .offline
             connections[relayID] = nil
-            scheduleReconnect(relay)
+            scheduleReconnect(relay, reason: "connection dropped")
         }
     }
 
@@ -193,7 +194,7 @@ extension AppModel {
                     await connection.close()
                     self.relayHealth[relayID] = .offline
                     self.connections[relayID] = nil
-                    self.scheduleReconnect(relay)
+                    self.scheduleReconnect(relay, reason: "timed out")
                     return
                 }
                 // Ping SUCCEEDED — the socket survived, but a backgrounded app
@@ -243,9 +244,17 @@ extension AppModel {
 
     /// Retry a relay with exponential backoff (1s→…→30s), replacing any
     /// pending timer for it. `bootstrap`/`connect` reset the attempt counter.
-    private func scheduleReconnect(_ relay: RelayConfig) {
-        let attempt = reconnectAttempts[relay.id] ?? 0
-        reconnectAttempts[relay.id] = attempt + 1
+    private func scheduleReconnect(_ relay: RelayConfig, reason: String? = nil) {
+        let attempt = (reconnectAttempts[relay.id] ?? 0) + 1
+        reconnectAttempts[relay.id] = attempt
+        if attempt >= Self.reconnectPauseAfter {
+            // Unreachable: PAUSE (no retry timer) — one attempt per foreground
+            // heal instead of a metronome against an offline host.
+            relayHealth[relay.id] = .offline
+            reconnectPaused[relay.id] = true
+            pushTransientNotice(message: "Relay '\(relay.name)' unreachable\(reason.map { " (\($0))" } ?? "") — paused;\nwill retry next time you open the app.", level: "warning")
+            return
+        }
         let delay = min(Self.reconnectBaseDelay * pow(2, Double(attempt)), Self.reconnectMaxDelay)
         reconnectTasks[relay.id]?.cancel()
         reconnectTasks[relay.id] = Task { @MainActor [weak self] in
@@ -704,4 +713,21 @@ extension AppModel {
         }
     }
 
+}
+
+// MARK: - Dead-relay notice copy
+extension AppModel {
+    /// URLError → one-phrase reason for the pause notice (the raw NSURLError
+    /// dump stays in the device log; users get one calm phrase).
+    static func unreachableReason(_ e: URLError) -> String {
+        switch e.code {
+        case .notConnectedToInternet: return "no network"
+        case .networkConnectionLost: return "connection dropped"
+        case .timedOut: return "timed out"
+        case .cannotConnectToHost, .cannotFindHost: return "host unreachable"
+        case .dnsLookupFailed: return "DNS lookup failed"
+        case .resourceUnavailable: return "unreachable through proxy"
+        default: return e.localizedDescription.isEmpty ? "unreachable" : e.localizedDescription
+        }
+    }
 }

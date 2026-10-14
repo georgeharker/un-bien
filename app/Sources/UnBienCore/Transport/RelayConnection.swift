@@ -231,9 +231,7 @@ public actor RelayConnection {
                 // conn death (foreground flaps, bg kills, half-open) funnels
                 // here — log the URLError/code so device console (Console.app
                 // → device geoifon, filter 'un-bien') names the killer.
-                let msg = "conn ended: \(String(describing: error))"
-                connLog.error("ws receive ended: \(msg, privacy: .public)")
-                onStreamEnd?(msg)
+                connLog.error("ws receive ended: \(String(describing: error), privacy: .public)")
                 finishStream()
                 return
             }
