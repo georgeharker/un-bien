@@ -395,8 +395,22 @@ export function _launchSession(
           .map(q)
           .join(" ")}`,
       ],
-      { detached: true, stdio: "ignore" },
+      { detached: true, stdio: ["ignore", "ignore", "pipe"] },
     )
+    // tmux's OWN failure mode: it starts fine and then EXITS nonzero (bad
+    // flag, bad cwd, session errors) — the spawn 'error' event does NOT
+    // fire for that, and stdio:ignore was swallowing the stderr verbatim.
+    // Both now land in launcher.log — the launch failure can no longer be
+    // silent in ANY path.
+    child.stderr?.on("data", (d) =>
+      launcherLog(
+        `launch tmux stderr: ${String(d).trim().slice(0, 400)}`,
+      ),
+    )
+    child.on("exit", (code, sig) => {
+      if (code !== 0 || sig)
+        launcherLog(`launch tmux exited: code=${code ?? "-"} signal=${sig ?? "-"}`)
+    })
     // LOG THE ASYNC SPAWN FAILURE (the silent-death gap): spawn accepts the
     // request and errors LATER on the child — without this listener the
     // failure never reached any log (observed live: no fail line at all).
