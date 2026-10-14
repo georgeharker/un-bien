@@ -20,12 +20,14 @@ public final class URLSessionWebSocketChannel: WebSocketChannel, @unchecked Send
     private let task: URLSessionWebSocketTask
 
     /// URLSessionWebSocketTask's DEFAULT maximumMessageSize is 1 MiB — an
-    /// inbound frame above it makes `receive()` throw and the frame is silently
-    /// dropped (this is exactly how a long session's get_entries backfill
-    /// vanished; design: get_entries backfill paging). Raise it so single
-    /// frames up to the relay's 4 MiB outer-envelope cap land; paged replies
-    /// stay far below even the old 1 MiB, so this is headroom, not license.
-    private static let maximumMessageSizeBytes = 8 * 1024 * 1024
+    /// inbound frame above it makes `receive()` throw and the receive loop
+    /// tears the connection down. Sized to the RELAY's caps (ct ceiling
+    /// 16 MiB, WS frame cap 32 MiB): the largest deliverable envelope is
+    /// ≈ 16 MiB ct + wrapper, so 32 MiB is 2× headroom. INVARIANT: this cap
+    /// stays ≥ (relay ct ceiling × 4/3) — a frame the relay can forward but
+    /// the app cannot receive is undeliverable by construction, and a
+    /// get_entries walk that produces one can never cross it.
+    private static let maximumMessageSizeBytes = 32 * 1024 * 1024
 
     public init(url: URL, session: URLSession = .shared) {
         self.task = session.webSocketTask(with: url)
