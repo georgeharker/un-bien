@@ -65,6 +65,19 @@ extension AppModel {
         guard rpc["success"]?.boolValue ?? false else {
             let detail = rpc["error"]?.stringValue ?? "?"
             log.error("rpc response \(command, privacy: .public) failed: \(detail, privacy: .public)")
+            // Cursor heal: pi REWRITES entry ids on compaction/resume, so a
+            // cached leaf can point at a dropped entry whose get_entries now
+            // throws — previously only logged, so every later walk re-sent the
+            // dead cursor and backfill never filled (identify makes refold safe).
+            if command == "get_entries", detail.contains("Entry not found"),
+               let s = sessions[key], let c = connections[s.relayID] {
+                endWalk(key: key)
+                log.notice("cursor heal: stale leaf discarded, full walk key=\(String(key.suffix(12)), privacy: .public)")
+                Task {
+                    await entryCache.remove(key: key)
+                    await requestReconstruction(s, connection: c)
+                }
+            }
             return
         }
         switch command {
