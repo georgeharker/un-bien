@@ -87,10 +87,14 @@ export function _buildTmuxLaunchArgs(
   sessionExists: boolean,
   sessionName?: string | undefined,
   resume?: string | undefined,
-  /** Pane command override — defaults to bare `pi`. `launchReq` correlation
-   *  passes `env UNBIEN_LAUNCH_REQ=<id> pi` so the spawned extension can echo
-   *  the request id (launch auto-open). */
-  commandArgv: string[] = ["pi"],
+  /** Pane command override — the FULL tmux shell-command argv, verbatim.
+   *  When provided, NOTHING is appended after it (the legacy path appends
+   *  the -n name and --session resume args; a custom command carries them
+   * INSIDE — tmux joins trailing args with spaces, so appending onto a
+   * quoted one-string command corrupts it: observed live as every launch
+   * failing at tmux itself). Absent ⇒ the legacy argv: `pi` + name +
+   *  resume. */
+  commandArgv?: string[],
 ): string[] {
   const nameArgv =
     typeof sessionName === "string" && sessionName.trim().length > 0
@@ -111,9 +115,7 @@ export function _buildTmuxLaunchArgs(
         windowName,
         "-c",
         cwd,
-        ...commandArgv,
-        ...nameArgv,
-        ...resumeArgv,
+        ...(commandArgv ?? ["pi", ...nameArgv, ...resumeArgv]),
       ]
     : [
         "new-session",
@@ -124,9 +126,7 @@ export function _buildTmuxLaunchArgs(
         windowName,
         "-c",
         cwd,
-        ...commandArgv,
-        ...nameArgv,
-        ...resumeArgv,
+        ...(commandArgv ?? ["pi", ...nameArgv, ...resumeArgv]),
       ]
 }
 
@@ -350,10 +350,16 @@ export function _launchSession(
     // name ride INSIDE the quoted inner command — injection-safe, spaces
     // in names included.
     const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
-    const piArgs = name ? ` -n ${q(name)}` : ""
+    // name + resume ride INSIDE the quoted command (nothing is appended
+    // after a custom commandArgv — tmux would glue it on and corrupt the
+    // quoting).
+    const piTail = [
+      ...(name ? [`-n`, q(name)] : []),
+      ...(resume ? [`--session`, q(resume)] : []),
+    ].join(" ")
     const inner = launchReq
-      ? `exec env UNBIEN_LAUNCH_REQ=${q(launchReq)} pi${piArgs}`
-      : `exec pi${piArgs}`
+      ? `exec env UNBIEN_LAUNCH_REQ=${q(launchReq)} pi${piTail ? ` ${piTail}` : ""}`
+      : `exec pi${piTail ? ` ${piTail}` : ""}`
     // Extra shell args (launch.shell_args, default ["-l"]) ride quoted
     // before -c — configured args can never displace the command.
     const extraArgs = (loadConfig().launch?.shell_args ?? ["-l"])
