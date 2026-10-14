@@ -82,6 +82,13 @@ export type UnBienConfig = {
     backend?: "tmux" | "herdr"
     tmux_session?: string
     dirs?: "*" | string[]
+    /** The shell remote launches run through (a LOGIN shell, so the user's
+     *  PATH/env load — launchd daemons otherwise spawn pi devoid of the
+     *  user's environment). Absent ⇒ $SHELL ⇒ the OS login shell ⇒ zsh. */
+    shell?: string
+    /** Extra args for the launch shell (before the -c command): e.g.
+     *  ["-l", "-i"] to also load interactive rc files. Default ["-l"]. */
+    shell_args?: string[]
   }
   /**
    * Subagent surfacing. When `rooms` is true, a

@@ -23,6 +23,49 @@ export function _expandTilde(p: string): string {
 }
 
 /** Sanitize a tmux session name: keep it shell-safe and tmux-legal. */
+/** The shell remote launches run through (launchd fix): config
+ *  `launch.shell` → $SHELL → the user's LOGIN SHELL from the OS (launchd /
+ *  systemd strip SHELL from the daemon env, so the OS is the only reliable
+ *  source) → `zsh` as the final fallback. NEVER assume the user's shell —
+ *  a bash user with a zsh default would get an empty environment, the
+ *  exact bug this resolves. */
+export function _launchShell(): string {
+  const configured = loadConfig().launch?.shell
+  if (configured && configured.trim()) return configured.trim()
+  if (process.env.SHELL) return process.env.SHELL
+  try {
+    if (process.platform === "darwin") {
+      const r = spawnSync(
+        "dscl",
+        [".", "-read", `/Users/${process.env.USER}`, "UserShell"],
+        { encoding: "utf8", timeout: 3_000 },
+      )
+      const m = /UserShell:\s*(\S+)/.exec(r.stdout ?? "")
+      if (m?.[1]) return m[1]
+    } else {
+      const r = spawnSync(
+        "getent",
+        ["passwd", String(process.getuid?.() ?? "")],
+        { encoding: "utf8", timeout: 3_000 },
+      )
+      const shell = (r.stdout ?? "").trim().split(":").pop()
+      if (shell && shell.includes("/")) return shell
+    }
+  } catch {
+    // OS lookup failed (unusual platform / dscl restrictions) — fall through.
+  }
+  return "zsh"
+}
+
+/** The shell argv PREFIX for a launch command: [shell, ...extra args]
+ *  (default ["-l"]) — `-c` and the command are appended by the caller, so
+ *  configured args can never displace the command. Config
+ *  `launch.shell_args` lets an operator add e.g. -i for interactive rc
+ *  files. */
+function _launchShellArgv(): string[] {
+  return [_launchShell(), ...(loadConfig().launch?.shell_args ?? ["-l"])]
+}
+
 function _safeTmuxName(name: string | undefined, fallback: string): string {
   const base = (name ?? "").trim() || fallback
   // tmux disallows `.` and `:` in session names; strip anything risky.
@@ -293,14 +336,38 @@ export function _launchSession(
       timeout: 5_000,
     }).status === 0
   try {
-    // launchReq rides INTO the pane command via `env` (tmux-version-proof —
-    // no reliance on `new-window -e`): the spawned pi's extension reads it at
-    // startup and echoes it in room_meta, so the launching app can match the
-    // announcing room to its request and auto-open the chat (launch
-    // correlation — resume flow). Undefined → plain `pi` command.
+    // SHELL-WRAPPED (launchd fix, observed live): the daemon runs under
+    // launchd with a minimal environment — a direct `pi` exec had no PATH
+    // (volta/nvm/homebrew live in the USER's shell env), so every remote
+    // launch spawned a pi that died instantly: tmux windows present,
+    // processes broken, room never announced, NOTHING logged (the daemon
+    // only knows tmux accepted the command). The pane command now runs
+    // through the user's LOGIN SHELL so .zprofile/.zshenv (PATH, version
+    // managers, env vars) load first — the same semantics as a terminal.
+    // launchReq still rides via `env` (tmux-version-proof) and the name via
+    // pi's `-n` — both as POSITIONAL args ($1/$2), never interpolated into
+    // the command string, so a hostile session name off the wire cannot
+    // escape into shell syntax. The shell resolves via _launchShell()
+    // (config `launch.shell` → $SHELL → the user's LOGIN SHELL from the OS —
+    // launchd/systemd strip SHELL from the daemon env — → zsh last resort;
+    // never assume the user's shell).
     const commandArgv = launchReq
-      ? ["env", `UNBIEN_LAUNCH_REQ=${launchReq}`, "pi"]
-      : ["pi"]
+      ? [
+          ..._launchShellArgv(),
+          "-c",
+          'exec env "UNBIEN_LAUNCH_REQ=$1" pi ${2:+-n "$2"}',
+          "pi",
+          launchReq,
+          name ?? "",
+        ]
+      : [
+          ..._launchShellArgv(),
+          "-c",
+          'exec pi ${2:+-n "$2"}',
+          "pi",
+          "",
+          name ?? "",
+        ]
     const child = spawn(
       "tmux",
       _buildTmuxLaunchArgs(
