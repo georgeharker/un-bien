@@ -20,13 +20,6 @@ public actor RelayConnection {
     private let identity: Ed25519Identity
     private let appRoomID: String
     private var eventContinuation: AsyncStream<InboundFrame>.Continuation?
-    /// Called once when the receive stream ends (close/error) — the death
-    /// reason surfaces in-app (toast), no Console/cable required.
-    private var onStreamEnd: (@Sendable (String) -> Void)?
-    /// Actor-isolated setter (called from connect before the loop starts).
-    public func setOnStreamEnd(_ cb: @escaping @Sendable (String) -> Void) {
-        onStreamEnd = cb
-    }
 
     public init(channel: WebSocketChannel, identity: Ed25519Identity, appRoomID: String = "main") {
         self.channel = channel

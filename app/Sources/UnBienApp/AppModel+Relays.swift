@@ -66,41 +66,6 @@ extension AppModel {
     }
 
     private func connect(_ relay: RelayConfig) async {
-        // Insecure-transport notice (plan 01M14ZS3): plaintext ws:// relays are
-        // user-specified — fine on localhost/Tailscale, risky elsewhere. One
-        // warning per relay per app-run (not per reconnect).
-        // Tailscale-only transports skip the warning: a `*.ts.net` MagicDNS
-        // host resolves ONLY inside the tailnet, and 100.64.0.0/10 is the
-        // Tailscale CGNAT range — both are private by construction.
-        // Scheme + host via URLComponents — no replace-and-split string math
-        // (the port-blind parse bug came from exactly that): the stored URL's
-        // host and port are separate accessors, so the decisions below see
-        // only the host.
-        let parsed = URLComponents(string: relay.url)
-        if let scheme = parsed?.scheme?.lowercased(), scheme == "ws" || scheme == "http",
-           insecureRelayWarned.insert(relay.id).inserted {
-            let host = (parsed?.host ?? "").lowercased()
-            // NOTE: this block must NEVER `return` — it only selects whether a
-            // notice is pushed. An early return here silently SKIPPED THE
-            // CONNECTION for every private transport (the .ts.net skip was
-            // disconnecting cascade entirely — "nothing shows in app at all").
-            if host.isEmpty {
-                // Unparseable/unknown transport — err on the side of warning.
-                pushTransientNotice(
-                    message: "Relay '\(relay.name)' is not TLS-encrypted — could not parse its URL.",
-                    level: "warning")
-            } else {
-                let isPrivateTransport =
-                    privateTransportSuffixes.contains(where: host.hasSuffix)
-                    || isPrivateIPv4(host)
-                    || !host.contains(".") || host == "localhost" || host == "127.0.0.1"
-                if !isPrivateTransport {
-                    pushTransientNotice(
-                        message: "Relay '\(relay.name)' is not TLS-encrypted — fine on Tailscale/LAN, avoid on public networks.",
-                        level: "warning")
-                }
-            }
-        }
         guard let owner, let url = relay.webSocketURL else { return }
         reconnectTasks[relay.id]?.cancel()
         reconnectTasks[relay.id] = nil
@@ -132,11 +97,6 @@ extension AppModel {
                 return
             }
             connections[relay.id] = connection
-            await connection.setOnStreamEnd { [weak self] msg in
-                Task { @MainActor [weak self] in
-                    self?.pushTransientNotice(message: msg, level: "error")
-                }
-            }
             relayHealth[relay.id] = .online
             reconnectAttempts[relay.id] = 0
             reconnectPaused[relay.id] = nil
@@ -149,7 +109,7 @@ extension AppModel {
             }
         } catch {
             relayHealth[relay.id] = .failed(String(describing: error))
-            scheduleReconnect(relay, reason: (error as? URLError).map(Self.unreachableReason))
+            scheduleReconnect(relay)
         }
     }
 
@@ -169,7 +129,7 @@ extension AppModel {
                   let relay = mesh.config.relays.first(where: { $0.id == relayID }) else { return }
             relayHealth[relayID] = .offline
             connections[relayID] = nil
-            scheduleReconnect(relay, reason: "connection dropped")
+            scheduleReconnect(relay)
         }
     }
 
@@ -194,7 +154,7 @@ extension AppModel {
                     await connection.close()
                     self.relayHealth[relayID] = .offline
                     self.connections[relayID] = nil
-                    self.scheduleReconnect(relay, reason: "timed out")
+                    self.scheduleReconnect(relay)
                     return
                 }
                 // Ping SUCCEEDED — the socket survived, but a backgrounded app
@@ -244,15 +204,17 @@ extension AppModel {
 
     /// Retry a relay with exponential backoff (1s→…→30s), replacing any
     /// pending timer for it. `bootstrap`/`connect` reset the attempt counter.
-    private func scheduleReconnect(_ relay: RelayConfig, reason: String? = nil) {
+    private func scheduleReconnect(_ relay: RelayConfig) {
         let attempt = (reconnectAttempts[relay.id] ?? 0) + 1
         reconnectAttempts[relay.id] = attempt
         if attempt >= Self.reconnectPauseAfter {
             // Unreachable: PAUSE (no retry timer) — one attempt per foreground
-            // heal instead of a metronome against an offline host.
+            // heal instead of a metronome against an offline host. No UI notice:
+            // Home's relay chip already shows the offline state; the pause
+            // stays in the device log for debugging.
             relayHealth[relay.id] = .offline
             reconnectPaused[relay.id] = true
-            pushTransientNotice(message: "Relay '\(relay.name)' unreachable\(reason.map { " (\($0))" } ?? "") — paused;\nwill retry next time you open the app.", level: "warning")
+            log.notice("relay '\(relay.name, privacy: .public)' unreachable — paused after \(attempt, privacy: .public) attempts; retry on next foreground heal")
             return
         }
         let delay = min(Self.reconnectBaseDelay * pow(2, Double(attempt)), Self.reconnectMaxDelay)
@@ -625,35 +587,6 @@ extension AppModel {
     }
 }
 
-/// Transports whose PLAINTEXT is private by NETWORK CONSTRUCTION: only
-/// resolvable/reachable inside their mesh or LAN. A single-label host has
-/// no public DNS; `.ts.net` is Tailscale MagicDNS; RFC1918/CGNAT ranges
-/// are covered by isPrivateIPv4. EXTENSION POINT: user-suggested (2026-10)
-/// — other tailnet/MagicDNS-style domains belong here; when a config file
-/// for the app lands, drive this suffix set from it rather than changing
-/// the literal.
-private let privateTransportSuffixes: Set<String> = [".ts.net"]
-
-/// True when `host` is a private-network address: Tailscale CGNAT
-/// (100.64.0.0/10), RFC1918 private space (10/8, 172.16/12, 192.168/16).
-/// Those IPs exist only inside private networks, so plaintext transport to
-/// them is not a public expose.
-private func isPrivateIPv4(_ host: String) -> Bool {
-    let parts = ipv4Parts(host)
-    guard parts.count == 4 else { return false }
-    let (a, b) = (parts[0], parts[1])
-    if a == 100 { return b >= 64 && b <= 127 } // Tailscale CGNAT
-    if a == 10 { return true }                // RFC1918 10/8
-    if a == 192, b == 168 { return true }     // RFC1918 192.168/16
-    if a == 172 { return b >= 16 && b <= 31 } // RFC1918 172.16/12
-    return false
-}
-
-private func ipv4Parts(_ host: String) -> [Int] {
-    host.split(separator: ".").compactMap { Int($0) }
-}
-
-
 // Folding-surface helpers relocated from AppModel+Inbound.swift (line cap) —
 // touch only non-private AppModel state, so an extension is safe.
 extension AppModel {
@@ -713,21 +646,4 @@ extension AppModel {
         }
     }
 
-}
-
-// MARK: - Dead-relay notice copy
-extension AppModel {
-    /// URLError → one-phrase reason for the pause notice (the raw NSURLError
-    /// dump stays in the device log; users get one calm phrase).
-    static func unreachableReason(_ e: URLError) -> String {
-        switch e.code {
-        case .notConnectedToInternet: return "no network"
-        case .networkConnectionLost: return "connection dropped"
-        case .timedOut: return "timed out"
-        case .cannotConnectToHost, .cannotFindHost: return "host unreachable"
-        case .dnsLookupFailed: return "DNS lookup failed"
-        case .resourceUnavailable: return "unreachable through proxy"
-        default: return e.localizedDescription.isEmpty ? "unreachable" : e.localizedDescription
-        }
-    }
 }
