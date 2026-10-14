@@ -82,7 +82,7 @@ fn spawn_relay_proc(name: &str, port: u16, peers: &[(&str, String)]) -> RelayPro
         // Scrub ambient heredity: everything state-ish lives in the rig dir.
         .env("XDG_CONFIG_HOME", dir.path().join("xdg-config"))
         .env("XDG_STATE_HOME", dir.path().join("xdg-state"))
-        .env("RUST_LOG", "relay=info")
+        .env("RUST_LOG", "relay=debug")
         .stdout({
             let f = std::fs::File::create(std::env::temp_dir().join(format!(
                 "unbien-rig-{name}-{port}.out.log"
