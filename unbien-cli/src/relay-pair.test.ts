@@ -132,7 +132,9 @@ describe("relay-peers.json pending entries", () => {
     expect(
       loadPendingRelayPairs(peersPath).some((p) => p.secret === "tok-dead"),
     ).toBe(false)
-    // Legacy entries without at_ms never expire.
+    // Legacy entries: an unparseable `at` never expires; a REAL old ISO
+    // stamp ages out by the data the entry already carries (CLI < 0.3.31
+    // mints have no at_ms but a valid ISO at).
     addPendingRelayPair(
       { secret: "tok-legacy", name: "legacy", url: "http://l:3000", at: "t" },
       peersPath,
@@ -141,6 +143,33 @@ describe("relay-peers.json pending entries", () => {
       (p) => p.secret === "tok-legacy",
     )
     expect(isPendingLive(legacy!)).toBe(true)
+    addPendingRelayPair(
+      {
+        secret: "tok-iso-old",
+        name: "iso-old",
+        url: "http://o:3000",
+        at: new Date(Date.now() - PENDING_TTL_MS - 60_000).toISOString(),
+      },
+      peersPath,
+    )
+    const isoOld = loadPendingRelayPairs(peersPath).find(
+      (p) => p.secret === "tok-iso-old",
+    )
+    expect(isPendingLive(isoOld!)).toBe(false)
+    // The next mint prunes the dead legacy entry from the file.
+    addPendingRelayPair(
+      {
+        secret: "tok-sweep",
+        name: "sweep",
+        url: "http://s:3000",
+        at: "t",
+        at_ms: Date.now(),
+      },
+      peersPath,
+    )
+    expect(
+      loadPendingRelayPairs(peersPath).some((p) => p.secret === "tok-iso-old"),
+    ).toBe(false)
   })
 
   it("addRelayPeer PRESERVES pending entries + other fields (one shared file)", () => {
@@ -158,6 +187,7 @@ describe("relay-peers.json pending entries", () => {
       "tok3",
       "tok-new",
       "tok-legacy",
+      "tok-sweep",
     ])
     expect(doc["federation"]).toBeUndefined() // untouched fields survive
   })

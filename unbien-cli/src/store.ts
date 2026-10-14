@@ -193,11 +193,14 @@ export function addPendingRelayPair(
   writeRelayPeersDoc({ ...doc, pending: fresh }, path)
 }
 
-/** A pending entry is live when it has no at_ms (legacy) or is inside the
- *  TTL window. Expired entries are dead — their secret no longer pairs. */
+/** A pending entry is live when it is inside the TTL window. Entries
+ *  minted before at_ms exist (CLI < 0.3.31) fall back to their ISO `at`
+ *  stamp — legacy entries are aged by the data they already carry, so a
+ *  stale pre-TTL invitation cannot linger as a live pairing secret forever. */
 export function isPendingLive(p: PendingRelayPair): boolean {
-  if (!p.at_ms) return true
-  return Date.now() - p.at_ms < PENDING_TTL_MS
+  const mintedAt = p.at_ms ?? Date.parse(p.at)
+  if (!Number.isFinite(mintedAt)) return true // no usable stamp ⇒ keep
+  return Date.now() - mintedAt < PENDING_TTL_MS
 }
 
 /** The relay's CONFIG file — settings (federation gate), in the config root
