@@ -581,31 +581,6 @@ async fn connect_and_verify(
                     // table entry for the reply leg; refreshed per frame,
                     // purged with the link).
                     federated.learn_route(&forward.from_epk, &peer.name).await;
-                    // DEST-SIDE DECISION (design): our own pairing view. The
-                    // source relay checked before forwarding; if ours says no
-                    // (set known, sender excluded), ack refused. No locally
-                    // pushed pairing_set for this machine → None → dest machine
-                    // decides (optimistic forward). Machines (agent-plane
-                    // senders) are trusted infra and exempt.
-                    let from_is_machine = pairing.owners_of(&forward.from_epk).is_some()
-                        || federated.machine_owners(&forward.from_epk).await.is_some();
-                    if !from_is_machine
-                        && pairing
-                            .owners_of(&forward.target_epk)
-                            .is_some_and(|o| !o.contains(&forward.from_epk))
-                    {
-                        let ack = RelayForwardAck {
-                            kind: "relay_forward_ack".into(),
-                            request_id: forward.request_id.clone(),
-                            status: "unknown_peer".into(),
-                        };
-                        let _ = ws_sink
-                            .send(tokio_tungstenite::tungstenite::Message::Text(
-                                serde_json::to_string(&ack).unwrap_or_default().into(),
-                            ))
-                            .await;
-                        continue;
-                    }
                     // Outer-envelope forward (app→pi / ub frames): the opaque
                     // {peer, room, ct} rides the SAME verified provenance the
                     // inner form has — authenticated-forwarding REQUIRED, so it
@@ -970,28 +945,6 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
                         continue;
                     }
                     state.federated.learn_route(&forward.from_epk, &peer_list.relay_name).await;
-                    // Dest-side decision (see loop 1 comment); machine-exempt.
-                    let from_is_machine = state
-                        .pairing
-                        .owners_of(&forward.from_epk)
-                        .is_some()
-                        || state.federated.machine_owners(&forward.from_epk).await.is_some();
-                    if !from_is_machine
-                        && state
-                            .pairing
-                            .owners_of(&forward.target_epk)
-                            .is_some_and(|o| !o.contains(&forward.from_epk))
-                    {
-                        let ack = RelayForwardAck {
-                            kind: "relay_forward_ack".into(),
-                            request_id: forward.request_id.clone(),
-                            status: "unknown_peer".into(),
-                        };
-                        let _ = socket_sink
-                            .send(Message::Text(serde_json::to_string(&ack).unwrap_or_default()))
-                            .await;
-                        continue;
-                    }
                     // Outer-envelope forward (app→pi / ub frames): the opaque
                     // {peer, room, ct} rides the SAME verified provenance the
                     // inner form has — authenticated-forwarding REQUIRED, so it
