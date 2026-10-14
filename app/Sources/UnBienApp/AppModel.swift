@@ -160,6 +160,11 @@ public final class AppModel: ObservableObject {
     /// forever. The caps ride the list we're ALREADY pushed, so the machine
     /// row settles with zero extra traffic.) Keyed by machine epk.
     @Published public var federatedMachineCaps: [String: Set<String>] = [:]
+    /// Live room ids per federated machine (keyed `"relayID:epk"`), from the
+    /// pushed `federated_peer_list` — the list frame IS the machine's live
+    /// room set, so it is the liveness authority for dead-room attach gating
+    /// and stale-row pruning (no wire attempt, no silent-relay spinner).
+    @Published public var federatedLiveRooms: [String: Set<String>] = [:]
     /// A pairing invite opened via the `unbien://` scheme, awaiting a relay
     /// choice. Drives the deep-link relay chooser sheet.
     @Published public var pendingPairing: PendingPairing?
@@ -543,6 +548,20 @@ public final class AppModel: ObservableObject {
     // MARK: - Session actions
 
     public func openSession(_ session: LiveSession, limit: Int = 100) async {
+        // Dead-room gate (federated; plan 01M18 + 2026-10-13 reconcile): the
+        // machine's pushed room set is the liveness authority. A federated
+        // room absent from a KNOWN live set is dead — the relay will drop
+        // the backfill silently (contract), so refusing here is the only
+        // non-spinner attach. Positive knowledge only: an unknown set (list
+        // not yet pushed) attaches as before.
+        if session.peerRelay != nil,
+           let live = federatedLiveRooms["\(session.relayID.uuidString):\(session.peerEPK)"],
+           !live.contains(session.roomID) {
+            sessions[session.id] = nil
+            pushTransientNotice(message: "This session's room is no longer live on\n\(session.peerRelay ?? "the remote machine") — the row has been removed.", level: "warn")
+            log.notice("open refused: federated room gone key=\(String(session.id.suffix(12)), privacy: .public)")
+            return
+        }
         openSessions[session.id] = session
         let rosterCount = availableModels[session.id]?.count ?? -1
         let hasCurrent = currentModel[session.id] != nil
@@ -778,13 +797,6 @@ public final class AppModel: ObservableObject {
     /// immediately re-add it. The in-memory transcript is KEPT: if the session
     /// proves live again (a fresh instance's `ub hello`), the row resurrects
     /// with its history and the ended banner retracts.
-    /// Manually dismiss a chat that already ENDED on the machine (plan
-    /// 01M18X3B): client-side ONLY — no wire command, nothing sent, on-disk pi
-    /// history untouched. Drops the row from `sessions` and pins it in
-    /// `dismissedSessions` so the relay's lingering room snapshot doesn't
-    /// immediately re-add it. The in-memory transcript is KEPT: if the session
-    /// proves live again (a fresh instance's `ub hello`), the row resurrects
-    /// with its history and the ended banner retracts.
     public func removeEndedSession(_ session: LiveSession) {
         guard !isDemo(session) else { return }  // demo fixtures never persist pins
         guard isRemovable(session) else { return }  // a live row gets Terminate, never Remove
@@ -978,22 +990,4 @@ public final class AppModel: ObservableObject {
         transcripts[session.id] ?? SessionState()
     }
 
-    #if DEBUG
-    /// Inject a large demo session so the real app UI (session list → transcript
-    /// + panels) can be exercised WITHOUT a live protocol data feed. Launch with
-    /// the `UNBIEN_DEMO` env var set to trigger it (see RootView).
-    public func loadDemoSession(turns: Int = 140) {
-        needsOnboarding = false
-        // Canned fake relay so the session appears in HomeView (which groups
-        // sessions under mesh.config.relays); transient, so it isn't persisted.
-        let relayID = UUID(uuidString: "F00DBEEF-0000-4000-8000-000000000001")!
-        mesh.addTransientRelay(RelayConfig(id: relayID, name: "Demo relay", url: "demo://local"))
-        let session = LiveSession(relayID: relayID, peerEPK: "demo-peer", roomID: "demo-room",
-                                  sessionID: "demo-session",
-                                  name: "Demo (\(turns) turns)", cwd: "/demo", model: "claude-opus-4-8",
-                                  parentSessionID: nil, parentRoomID: nil, subagentID: nil)
-        sessions[session.id] = session
-        transcripts[session.id] = .demo(turns: turns)
-    }
-    #endif
 }

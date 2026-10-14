@@ -210,3 +210,25 @@ extension AppModel {
         }
     }
 }
+
+#if DEBUG
+extension AppModel {
+    /// Inject a large demo session so the real app UI (session list → transcript
+    /// + panels) can be exercised WITHOUT a live protocol data feed. Launch with
+    /// the `UNBIEN_DEMO` env var set to trigger it (see RootView). Carved from
+    /// AppModel.swift (line cap) into its natural home beside the demo fixtures.
+    public func loadDemoSession(turns: Int = 140) {
+        needsOnboarding = false
+        let relayID = AppModel.demoRelayID.uuidString == UUID(uuidString: "F00DBEEF-0000-4000-8000-000000000001")!.uuidString
+            ? UUID(uuidString: "F00DBEEF-0000-4000-8000-000000000001")!
+            : UUID(uuidString: "F00DBEEF-0000-4000-8000-000000000001")!
+        mesh.addTransientRelay(RelayConfig(id: relayID, name: "Demo relay", url: "demo://local"))
+        let session = LiveSession(relayID: relayID, peerEPK: "demo-peer", roomID: "demo-room",
+                                  sessionID: "demo-session",
+                                  name: "Demo (\(turns) turns)", cwd: "/demo", model: "claude-opus-4-8",
+                                  parentSessionID: nil, parentRoomID: nil, subagentID: nil)
+        sessions[session.id] = session
+        transcripts[session.id] = .demo(turns: turns)
+    }
+}
+#endif
