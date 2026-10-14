@@ -219,6 +219,11 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                             Message::Binary(_) => continue, // ignore binary
                         };
 
+                        eprintln!(
+                            "[feddbg:PUMP] conn={} got {} bytes",
+                            &peer_id[..peer_id.len().min(8)],
+                            text.len()
+                        );
                         // Parse as JSON to check for relay control frames.
                         let frame: serde_json::Value = match serde_json::from_str(&text) {
                             Ok(v) => v,
@@ -241,6 +246,13 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                             }
                         };
 
+                        // Frame dispatch trace (rig debug; remove with the debug work).
+                        let pre = if frame.get("peer").is_some() && frame.get("room").is_some() {
+                            "envelope"
+                        } else {
+                            frame.get("type").and_then(|v| v.as_str()).unwrap_or("opaque")
+                        };
+                        eprintln!("[feddbg:DISPATCH] {pre}");
                         // Frames with a top-level "type" are handled by the relay itself.
                         if let Some(t) = frame.get("type").and_then(|v| v.as_str()) {
                             let peers: Vec<String> = frame
