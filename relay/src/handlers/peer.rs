@@ -341,6 +341,15 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                                             ) {
                                                                 Ok(()) => {
                                                                     tracing::info!(machine = %peer_id, count = set.len(), version, "pairing_set: stored SIGNED allow-list");
+                                                                    // Check-before-forward: peered relays refresh their
+                                                                    // owner-set view promptly (not only at re-handshake).
+                                                                    federated
+                                                                        .broadcast_machine_pairing(
+                                                                            &peer_id,
+                                                                            version,
+                                                                            &set,
+                                                                        )
+                                                                        .await;
                                                                     Some(set)
                                                                 }
                                                                 Err(stale) => {
@@ -648,6 +657,34 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                     Message::Text(fwd_line),
                                     conn_id,
                                 ) {
+                                    // Check-before-forward (design): the dest
+                                    // machine's advertised owner set (learned via
+                                    // the pairing exchange) — refuse AT THE SOURCE
+                                    // when it definitively excludes this sender;
+                                    // unknown ⇒ forward (dest decides on arrival).
+                                    let dest_owners = federated.machine_owners(&dest_peer).await;
+                                    // Sender classes (design): OWNER devices gate on
+                                    // the dest machine's advertised set; MACHINES
+                                    // (agent-plane senders) are trusted infra and
+                                    // exempt; strangers are refused at the source.
+                                    let sender_is_machine = pairing.owners_of(&peer_id).is_some()
+                                        || federated.machine_owners(&peer_id).await.is_some();
+                                    let sender_untrusted = !pairing.all_owner_pubkeys().contains(&peer_id)
+                                        && !sender_is_machine;
+                                    let dest_excludes_sender =
+                                        dest_owners.as_ref().is_some_and(|o| !o.contains(&peer_id));
+                                    if dest_excludes_sender && sender_untrusted {
+                                        let refusal = serde_json::json!({
+                                            "type": "error",
+                                            "code": "unknown_peer",
+                                            "peer": dest_peer,
+                                        })
+                                        .to_string();
+                                        if sink.send(Message::Text(refusal)).await.is_err() {
+                                            break;
+                                        }
+                                        continue;
+                                    }
                                     // Not local — try cross-relay forward (gap 5:
                                     // remote session launch, app→machine frames).
                                     if let Some((req_id, ack_rx)) = federated

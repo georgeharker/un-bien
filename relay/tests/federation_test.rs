@@ -182,6 +182,18 @@ async fn next_text(ws: &mut WsStream) -> Option<String> {
     None
 }
 
+/// Next text frame INCLUDING typed frames (refusals are typed; next_text
+/// skips them).
+async fn next_any_text(ws: &mut WsStream) -> Option<String> {
+    while let Ok(Some(m)) = tokio::time::timeout(Duration::from_secs(5), ws.next()).await {
+        match m.ok()? {
+            Message::Text(t) => return Some(t.to_string()),
+            Message::Pong(_) | Message::Ping(_) => continue,
+            _ => return None,
+        }
+    }
+    None
+}
 fn inner_of(outer_wire: &str) -> Value {
     let outer: Value = serde_json::from_str(outer_wire).unwrap();
     let ct = outer["ct"].as_str().unwrap();
@@ -316,4 +328,126 @@ async fn app_request_and_machine_reply_cross_two_relays() {
         result.is_err(),
         "dead-room attach must be dropped silently, got {result:?}"
     );
+}
+
+/// Check-before-forward + federated pairing exchange (design: the relay
+/// receives for all federated targets + self, checks the dest machine's
+/// ADVERTISED owner set before forwarding, dest decides on arrival):
+/// 1. machine on B declares pairing (owners = [app]) — the handshake
+///    propagates the set to relay A's federated view.
+/// 2. app (an owner) on A sends → forwarded (dest machine receives).
+/// 3. a STRANGER on A sends → refused AT THE SOURCE (unknown_peer error
+///    frame), machine receives nothing.
+#[tokio::test]
+async fn federated_pairing_exchange_and_source_refusal() {
+    let state_dir = tempfile::tempdir().unwrap();
+    unsafe {
+        std::env::set_var("UNBIEN_STATE_DIR", state_dir.path());
+    }
+    let relay_a = spawn_relay_named("relay-a").await;
+    let relay_b = spawn_relay_named("relay-b").await;
+    let owner = SigningKey::generate(&mut rand::thread_rng());
+
+    let machine_sk = SigningKey::generate(&mut rand::thread_rng());
+    let app_sk = SigningKey::generate(&mut rand::thread_rng());
+    let stranger_sk = SigningKey::generate(&mut rand::thread_rng());
+    let (mut machine, machine_epk) = connect_and_auth_with_key(relay_b.port, &machine_sk).await;
+    let (mut app, app_epk) = connect_and_auth_with_key(relay_a.port, &app_sk).await;
+    let (mut stranger, stranger_epk) = connect_and_auth_with_key(relay_a.port, &stranger_sk).await;
+
+    publish_shared_owner(
+        &owner,
+        &[machine_epk.clone(), app_epk.clone(), stranger_epk.clone()],
+        &format!("http://127.0.0.1:{}", relay_a.port),
+        &format!("http://127.0.0.1:{}", relay_b.port),
+    )
+    .await;
+
+    // Machine declares its pairing on relay B: owners = [app] ONLY.
+    {
+        let mkey = machine_sk.verifying_key().to_bytes();
+        let b64u = |b: &[u8]| B64.encode(b);
+        let _ = &mkey;
+        let owners = vec![app_epk.clone()];
+        let blob = json!({
+            "machine_pk": b64u(&mkey),
+            "owners": owners,
+            "version": 1,
+        });
+        let blob_bytes = serde_json::to_vec(&blob).unwrap();
+        let sig = machine_sk.sign(&blob_bytes);
+        relay_b
+            .state
+            .pairing
+            .set_signed(machine_epk.clone(), owners, 1, &blob_bytes, &sig.to_bytes())
+            .expect("machine pairing set (v1)");
+    }
+
+    // Peering: A connects out to B (handshake exchanges room lists AND the
+    // pairing snapshot).
+    state_dir_setup(&format!("http://127.0.0.1:{}", relay_b.port));
+    relay::peering::start_peering(
+        relay_a.state.mesh.clone(),
+        relay_a.state.registry.clone(),
+        relay_a.state.pairing.clone(),
+        relay_a.state.federated.clone(),
+    );
+
+    // Leg 1: the owner set propagated to A's federated view.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let learned = loop {
+        if tokio::time::Instant::now() >= deadline {
+            break false;
+        }
+        if let Some(owners) = relay_a.state.federated.machine_owners(&machine_epk).await
+            && owners.contains(&app_epk)
+        {
+            break true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert!(
+        learned,
+        "relay A never learned the machine's advertised owner set"
+    );
+
+    // Leg 2: an owner forwards; the dest machine receives.
+    let payload = json!({"type": "ub", "ub": {"t": "session_sync", "session_id": "s1"}});
+    app.send(Message::text(outer_frame(&machine_epk, "main", &payload)))
+        .await
+        .unwrap();
+    let got = next_text(&mut machine)
+        .await
+        .expect("owner forward blocked");
+    assert_eq!(inner_of(&got), payload);
+
+    // Leg 3: a STRANGER is refused AT THE SOURCE; the machine gets nothing.
+    stranger
+        .send(Message::text(outer_frame(
+            &machine_epk,
+            "main",
+            &json!({"type": "ub", "ub": {"t": "session_sync", "session_id": "bad"}}),
+        )))
+        .await
+        .unwrap();
+    // Refusal hunt: skip typed control frames (federated_peer_list broadcasts
+    // fire on connect/room churn) until the error frame arrives.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut err: Option<Value> = None;
+    while tokio::time::Instant::now() < deadline {
+        let Some(text) = next_any_text(&mut stranger).await else {
+            break;
+        };
+        let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        if v["type"] == "error" {
+            err = Some(v);
+            break;
+        }
+    }
+    let err = err.expect("stranger got no refusal");
+    assert_eq!(err["code"], "unknown_peer");
+    assert_eq!(err["peer"], json!(machine_epk));
+    // The machine hears nothing for the stranger's span.
+    let quiet = tokio::time::timeout(Duration::from_millis(800), next_text(&mut machine)).await;
+    assert!(quiet.is_err(), "machine must NOT receive stranger traffic");
 }

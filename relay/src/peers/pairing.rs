@@ -262,6 +262,26 @@ impl PairingRegistry {
     /// The current allow-set for `machine` when configured — used to re-filter
     /// existing subscribers the moment a push lands (revocation completeness +
     /// reconnect-race cleanup). `None` = unconfigured.
+    /// Federated handshake snapshot (design: check-before-forward): every
+    /// machine's advertised (version, owners) as PUBLIC data — owner epks are
+    /// public by construction and the peering link is owner-gated, so no
+    /// signed/private material is exchanged. The receiving relay re-enforces
+    /// monotonic versions on its side.
+    pub fn federated_owners_snapshot(&self) -> Vec<(String, u64, Vec<String>)> {
+        let allow = self.allow.lock().unwrap();
+        let versions = self.versions.lock().unwrap();
+        allow
+            .iter()
+            .map(|(machine, owners)| {
+                (
+                    machine.clone(),
+                    versions.get(machine).copied().unwrap_or(0),
+                    owners.iter().cloned().collect(),
+                )
+            })
+            .collect()
+    }
+
     pub fn owners_of(&self, machine: &str) -> Option<HashSet<String>> {
         self.allow.lock().unwrap().get(machine).cloned()
     }

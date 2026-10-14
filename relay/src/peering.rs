@@ -431,6 +431,15 @@ async fn connect_and_verify(
         kind: "relay_peer_list".into(),
         relay_name: federated.own_name(),
         rooms_by_epk: local_rooms,
+        machine_pairings: pairing
+            .federated_owners_snapshot()
+            .into_iter()
+            .map(|(machine, version, owners)| RelayMachinePairing {
+                machine,
+                version,
+                owners,
+            })
+            .collect(),
     };
     ws.send(tokio_tungstenite::tungstenite::Message::Text(
         serde_json::to_string(&peer_list)?.into(),
@@ -449,6 +458,16 @@ async fn connect_and_verify(
     let peer_list: RelayPeerList = serde_json::from_str(&text)?;
     federated
         .set_peer_rooms(&peer_list.relay_name, peer_list.rooms_by_epk)
+        .await;
+    federated
+        .learn_machine_pairings(
+            &peer.name,
+            peer_list
+                .machine_pairings
+                .into_iter()
+                .map(|p| (p.machine, p.version, p.owners))
+                .collect(),
+        )
         .await;
     info!(peer = %peer.name, "stored federated sessions from peer relay");
     broadcast_federated_list(registry, federated).await;
@@ -501,6 +520,25 @@ async fn connect_and_verify(
                     }
                     continue;
                 }
+                // Try relay_pairings_update: peered pairing change (pairing_set push).
+                if let Ok(upd) = serde_json::from_str::<serde_json::Value>(&text)
+                    && upd["kind"].as_str() == Some("relay_pairings_update")
+                {
+                    if let (Some(machine), Some(owners)) = (
+                        upd["machine"].as_str(),
+                        upd["owners"].as_array(),
+                    ) {
+                        federated
+                            .learn_machine_pairing(
+                                &peer.name,
+                                machine,
+                                upd["version"].as_u64().unwrap_or(0),
+                                owners.iter().filter_map(|o| o.as_str().map(str::to_string)).collect(),
+                            )
+                            .await;
+                    }
+                    continue;
+                }
                 // Try relay_forward (deliver to local pi + send ack).
                 if let Ok(forward) = serde_json::from_str::<RelayForward>(&text) {
                     if forward.visited.contains(&federated.own_name()) {
@@ -543,6 +581,31 @@ async fn connect_and_verify(
                     // table entry for the reply leg; refreshed per frame,
                     // purged with the link).
                     federated.learn_route(&forward.from_epk, &peer.name).await;
+                    // DEST-SIDE DECISION (design): our own pairing view. The
+                    // source relay checked before forwarding; if ours says no
+                    // (set known, sender excluded), ack refused. No locally
+                    // pushed pairing_set for this machine → None → dest machine
+                    // decides (optimistic forward). Machines (agent-plane
+                    // senders) are trusted infra and exempt.
+                    let from_is_machine = pairing.owners_of(&forward.from_epk).is_some()
+                        || federated.machine_owners(&forward.from_epk).await.is_some();
+                    if !from_is_machine
+                        && pairing
+                            .owners_of(&forward.target_epk)
+                            .is_some_and(|o| !o.contains(&forward.from_epk))
+                    {
+                        let ack = RelayForwardAck {
+                            kind: "relay_forward_ack".into(),
+                            request_id: forward.request_id.clone(),
+                            status: "unknown_peer".into(),
+                        };
+                        let _ = ws_sink
+                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                serde_json::to_string(&ack).unwrap_or_default().into(),
+                            ))
+                            .await;
+                        continue;
+                    }
                     // Outer-envelope forward (app→pi / ub frames): the opaque
                     // {peer, room, ct} rides the SAME verified provenance the
                     // inner form has — authenticated-forwarding REQUIRED, so it
@@ -756,6 +819,17 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
         .federated
         .set_peer_rooms(&peer_list.relay_name, peer_list.rooms_by_epk)
         .await;
+    state
+        .federated
+        .learn_machine_pairings(
+            &peer_list.relay_name,
+            peer_list
+                .machine_pairings
+                .into_iter()
+                .map(|p| (p.machine, p.version, p.owners))
+                .collect(),
+        )
+        .await;
     info!(
         relay = %peer_list.relay_name,
         "stored federated sessions from inbound peer relay"
@@ -768,6 +842,16 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
         kind: "relay_peer_list".into(),
         relay_name: state.federated.own_name(), // our own name (was "self" placeholder)
         rooms_by_epk: local_rooms,
+        machine_pairings: state
+            .pairing
+            .federated_owners_snapshot()
+            .into_iter()
+            .map(|(machine, version, owners)| RelayMachinePairing {
+                machine,
+                version,
+                owners,
+            })
+            .collect(),
     };
     if socket
         .send(Message::Text(
@@ -831,6 +915,26 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
                     }
                     continue;
                 }
+                // Try relay_pairings_update: peered pairing change (pairing_set push).
+                if let Ok(upd) = serde_json::from_str::<serde_json::Value>(&text)
+                    && upd["kind"].as_str() == Some("relay_pairings_update")
+                {
+                    if let (Some(machine), Some(owners)) = (
+                        upd["machine"].as_str(),
+                        upd["owners"].as_array(),
+                    ) {
+                        state
+                            .federated
+                            .learn_machine_pairing(
+                                &peer_list.relay_name,
+                                machine,
+                                upd["version"].as_u64().unwrap_or(0),
+                                owners.iter().filter_map(|o| o.as_str().map(str::to_string)).collect(),
+                            )
+                            .await;
+                    }
+                    continue;
+                }
                 // Try relay_forward (deliver to local pi + send ack).
                 if let Ok(forward) = serde_json::from_str::<RelayForward>(&text) {
                     // Loop prevention: drop if we've already handled this forward.
@@ -866,6 +970,28 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
                         continue;
                     }
                     state.federated.learn_route(&forward.from_epk, &peer_list.relay_name).await;
+                    // Dest-side decision (see loop 1 comment); machine-exempt.
+                    let from_is_machine = state
+                        .pairing
+                        .owners_of(&forward.from_epk)
+                        .is_some()
+                        || state.federated.machine_owners(&forward.from_epk).await.is_some();
+                    if !from_is_machine
+                        && state
+                            .pairing
+                            .owners_of(&forward.target_epk)
+                            .is_some_and(|o| !o.contains(&forward.from_epk))
+                    {
+                        let ack = RelayForwardAck {
+                            kind: "relay_forward_ack".into(),
+                            request_id: forward.request_id.clone(),
+                            status: "unknown_peer".into(),
+                        };
+                        let _ = socket_sink
+                            .send(Message::Text(serde_json::to_string(&ack).unwrap_or_default()))
+                            .await;
+                        continue;
+                    }
                     // Outer-envelope forward (app→pi / ub frames): the opaque
                     // {peer, room, ct} rides the SAME verified provenance the
                     // inner form has — authenticated-forwarding REQUIRED, so it
@@ -1097,6 +1223,11 @@ pub struct FederatedSessions {
     /// peer_relay_name → WS sender channel (for relay_forward, raw JSON text)
     forward_senders: Mutex<HashMap<String, Vec<mpsc::UnboundedSender<String>>>>,
     pending_forwards: Mutex<HashMap<String, oneshot::Sender<RelayForwardAck>>>,
+    /// Federated pairing snapshot (check-before-forward design):
+    /// machine epk → (version, owners, source peer relay). PUBLIC data
+    /// exchanged over the owner-gated peering link; version-monotonic per
+    /// machine; purged with the source link in clear_peer.
+    machine_pairings: Mutex<FederatedMachinePairings>,
 }
 
 pub fn default_relay_name() -> String {
@@ -1116,6 +1247,7 @@ impl FederatedSessions {
             epk_to_relays: Mutex::new(HashMap::new()),
             forward_senders: Mutex::new(HashMap::new()),
             pending_forwards: Mutex::new(HashMap::new()),
+            machine_pairings: Mutex::new(HashMap::new()),
         }
     }
 
@@ -1204,6 +1336,78 @@ impl FederatedSessions {
         }
     }
 
+    /// Learn pairing snapshots from a peering handshake (check-before-
+    /// forward): machine epk → owners as PUBLIC data over the owner-gated
+    /// link. Version-monotonic per machine.
+    pub async fn learn_machine_pairings(
+        &self,
+        peer_relay: &str,
+        entries: Vec<(String, u64, Vec<String>)>,
+    ) {
+        let mut map = self.machine_pairings.lock().await;
+        for (machine, version, owners) in entries {
+            if let Some((cur, _, _)) = map.get(&machine)
+                && *cur >= version
+            {
+                continue;
+            }
+            map.insert(
+                machine,
+                (
+                    version,
+                    owners.into_iter().collect(),
+                    peer_relay.to_string(),
+                ),
+            );
+        }
+    }
+
+    /// Learn one update pushed by a peered relay (pairing_set change event).
+    pub async fn learn_machine_pairing(
+        &self,
+        peer_relay: &str,
+        machine: &str,
+        version: u64,
+        owners: Vec<String>,
+    ) {
+        self.learn_machine_pairings(peer_relay, vec![(machine.to_string(), version, owners)])
+            .await;
+    }
+
+    /// The dest machine's advertised owner set, for the pre-forward check.
+    /// None ⇒ no information yet ⇒ the caller forwards (dest decides).
+    pub async fn machine_owners(&self, machine_epk: &str) -> Option<HashSet<String>> {
+        self.machine_pairings
+            .lock()
+            .await
+            .get(machine_epk)
+            .map(|(_, owners, _)| owners.clone())
+    }
+
+    /// Push a machine pairing update to all peered relays — a machine's
+    /// pairing_set change must reach every relay holding a check-before-
+    /// forward view of its owners.
+    pub async fn broadcast_machine_pairing(
+        &self,
+        machine: &str,
+        version: u64,
+        owners: &HashSet<String>,
+    ) {
+        let frame = serde_json::json!({
+            "kind": "relay_pairings_update",
+            "machine": machine,
+            "version": version,
+            "owners": owners,
+        })
+        .to_string();
+        let senders = self.forward_senders.lock().await;
+        for txs in senders.values() {
+            for tx in txs {
+                let _ = tx.send(frame.clone());
+            }
+        }
+    }
+
     /// Remove all sessions from a peer relay (on disconnect).
     pub async fn clear_peer(&self, peer_relay: &str) {
         let mut sessions = self.sessions.lock().await;
@@ -1213,6 +1417,11 @@ impl FederatedSessions {
             relays.retain(|r| r != peer_relay);
         }
         epk_map.retain(|_, relays| !relays.is_empty());
+        // Owner-set snapshots ride the same link — purge on disconnect.
+        self.machine_pairings
+            .lock()
+            .await
+            .retain(|_, (_, _, src)| src != peer_relay);
     }
 
     /// Get all federated rooms for a given epk (for rooms_check).
@@ -1510,6 +1719,23 @@ pub struct RelayPeerList {
     pub relay_name: String,
     /// Rooms grouped by the remote machine's epk.
     pub rooms_by_epk: HashMap<String, Vec<RoomMeta>>,
+    /// Federated pairing snapshot (check-before-forward): sender relay's
+    /// machines' owner sets, PUBLIC data. Default keeps the handshake
+    /// wire-compatible with peers on older versions.
+    #[serde(default)]
+    pub machine_pairings: Vec<RelayMachinePairing>,
+}
+
+/// Federated machine pairing snapshots: machine epk -> (version, owners,
+/// source peer relay).
+pub type FederatedMachinePairings = HashMap<String, (u64, HashSet<String>, String)>;
+
+/// One machine's advertised owner set (check-before-forward design).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RelayMachinePairing {
+    pub machine: String,
+    pub version: u64,
+    pub owners: Vec<String>,
 }
 
 /// Wire frame: an incremental room update (add/remove).
