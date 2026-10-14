@@ -15,16 +15,15 @@
 //! 4. live deltas both ways across the chain
 //! 5. dead room through the chain = silent drop (contract)
 //!
-//! Legs 1–5 are `#[ignore]` until the relay implements the two pieces the
-//! chain requires (the harness is the spec; each is small):
-//!   (1) transit announcements: `relay_peer_list` payloads carry only the
-//!       sender's OWN registry rooms; B must also announce rooms learned
-//!       from C so A learns "machine-epk reachable via B".
-//!   (2) onward hop: the inbound `relay_forward` handler delivers only
-//!       LOCALLY (miss → `unknown_peer` ack); a transit relay must append
-//!       its own name to `visited`, re-sign, and forward onward per its
-//!       own `epk_to_relays`, chaining the ack hop-by-hop (same request_
-//!       id; `visited` growth is the loop guard).
+//! Legs 1–5 are the slice-3 acceptance spec (federation v2 §4 — transitive
+//! exchange + directed hops), now LIVE:
+//!   (1) transit announcements: the advertisement is ONE SEGMENT PER
+//!       ORIGIN — B re-announces rooms + pairings learned from C so A
+//!       learns "machine-epk is hosted at origin relay-c, reachable via
+//!       link relay-b" without any A–C pairing.
+//!   (2) onward hop: a transit relay (B) re-signs an inbound relay_forward
+//!       (visited + own name) and forwards it per its own route table;
+//!       the ack returns along the recorded id→backlink chain, verbatim.
 
 mod common;
 
@@ -254,7 +253,6 @@ fn inner_of(outer_wire: &str) -> Value {
 
 /// THE indirect-routing end-to-end across a 3-relay chain (A↔B↔C).
 #[tokio::test]
-#[ignore = "needs transit announcements (1) + onward hop (2) — see file header"]
 async fn app_machine_request_reply_stream_across_three_relay_chain() {
     let port_b = pick_port();
     let port_a = pick_port();
@@ -312,12 +310,58 @@ async fn app_machine_request_reply_stream_across_three_relay_chain() {
     let (mut machine, machine_epk) = connect_and_auth_with_key(port_c, &machine_sk).await;
     let (mut app, app_epk) = connect_and_auth_with_key(port_a, &app_sk).await;
 
-    publish_shared_owner_n(
+    let owner_pk = publish_shared_owner_n(
         &SigningKey::generate(&mut rand::rngs::OsRng),
         &[machine_epk.clone(), app_epk.clone()],
         &[base(port_a), base(port_b), base(port_c)],
     )
     .await;
+
+    // Signed pairing_sets, BEFORE any traffic (the slice-1/2 rig pattern):
+    // the machine's set names the app device + the shared owner; the app's
+    // set names the owner it belongs to (the slice-2 production follow-up —
+    // machine→APP replies need the app's advertised owner set at the
+    // deciding relay too). Both advertise transitively: C→B→A and A→B→C
+    // via the pairing re-advertisement (slice 3 (2)).
+    {
+        let doc = json!({
+            "machine_pk": B64.encode(machine_sk.verifying_key().to_bytes()),
+            "owners": [app_epk, owner_pk],
+            "version": 1,
+            "issued_at": 1_700_000_000_000_u64,
+        });
+        let doc_bytes = serde_json::to_vec(&doc).unwrap();
+        machine
+            .send(Message::text(
+                json!({
+                    "type": "pairing_set",
+                    "blob": B64.encode(&doc_bytes),
+                    "sig": B64.encode(machine_sk.sign(&doc_bytes).to_bytes()),
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+    }
+    {
+        let doc = json!({
+            "machine_pk": B64.encode(app_sk.verifying_key().to_bytes()),
+            "owners": [owner_pk],
+            "version": 1,
+            "issued_at": 1_700_000_000_000_u64,
+        });
+        let doc_bytes = serde_json::to_vec(&doc).unwrap();
+        app.send(Message::text(
+            json!({
+                "type": "pairing_set",
+                "blob": B64.encode(&doc_bytes),
+                "sig": B64.encode(app_sk.sign(&doc_bytes).to_bytes()),
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+    }
 
     // Leg 1: A must learn the machine's room THROUGH B (transit announcement).
     let mut learned = false;
@@ -338,36 +382,32 @@ async fn app_machine_request_reply_stream_across_three_relay_chain() {
     }
     assert!(learned, "A never learned the machine's room via transit B");
 
-    // Strict pairing gate: the machine pushes its MACHINE-SIGNED pairing_set
-    // (its owner set = the app's epk) before app→machine traffic can forward.
-    let doc = json!({
-        "machine_pk": B64.encode(machine_sk.verifying_key().to_bytes()),
-        "owners": [app_epk],
-        "version": 1,
-        "issued_at": 1_700_000_000_000_u64,
-    });
-    let doc_bytes = serde_json::to_vec(&doc).unwrap();
-    machine
-        .send(Message::text(
-            json!({
-                "type": "pairing_set",
-                "blob": B64.encode(&doc_bytes),
-                "sig": B64.encode(machine_sk.sign(&doc_bytes).to_bytes()),
-            })
-            .to_string(),
-        ))
-        .await
-        .unwrap();
-
-    // Leg 2: request crosses A→B→C.
+    // Leg 2: request crosses A→B→C. The §3 gate at the SOURCE relay (A) is
+    // strict unknown-refuse, and the machine's owner set propagates
+    // C→B→A as an incremental update — so the first send can be refused
+    // while the advertisement settles. Retry (as the direct-hop smoke
+    // does), then drain duplicate deliveries before the stream legs.
     let payload = json!({"type": "ub", "ub": {"t": "session_sync", "session_id": "s1"}});
-    app.send(Message::text(outer_frame(&machine_epk, "main", &payload)))
-        .await
-        .unwrap();
-    let got = next_text(&mut machine)
-        .await
-        .expect("machine never got request");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    let mut delivered = None;
+    while tokio::time::Instant::now() < deadline {
+        app.send(Message::text(outer_frame(&machine_epk, "main", &payload)))
+            .await
+            .unwrap();
+        if let Ok(Some(got)) =
+            tokio::time::timeout(Duration::from_millis(400), next_text(&mut machine)).await
+        {
+            delivered = Some(got);
+            break;
+        }
+    }
+    let got = delivered.expect("machine never got request (logs: /tmp/unbien-rig-*)");
     assert_eq!(inner_of(&got), payload);
+    // Drain any duplicate retries + the app's typed refusal frames before
+    // the reply/stream legs.
+    while let Ok(Some(_)) = tokio::time::timeout(Duration::from_millis(100), machine.next()).await {
+    }
+    while let Ok(Some(_)) = tokio::time::timeout(Duration::from_millis(100), app.next()).await {}
 
     // Leg 3: reply crosses back C→B→A.
     let reply = json!({"type": "ub", "t": "session_sync_data", "frames": []});
@@ -390,7 +430,10 @@ async fn app_machine_request_reply_stream_across_three_relay_chain() {
         assert_eq!(inner_of(&got)["delta"], json!(i));
     }
 
-    // Leg 5: dead room through the chain = silent drop, conn alive.
+    // Leg 5: dead room through the chain = silent drop, conn alive. Control
+    // frames (federated_peer_list broadcasts fire on late handshakes) are
+    // legitimate traffic — the CONTRACT is that no routed envelope and no
+    // error frame comes back for the dead-room attach.
     app.send(Message::text(outer_frame(
         &machine_epk,
         "dead-room-xyz",
@@ -398,8 +441,28 @@ async fn app_machine_request_reply_stream_across_three_relay_chain() {
     )))
     .await
     .unwrap();
-    let r = tokio::time::timeout(Duration::from_millis(1500), app.next()).await;
-    assert!(r.is_err(), "dead-room drop must be silent, got {r:?}");
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(1500);
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_millis(300), app.next()).await {
+            // Nothing at all within the window — silent, done.
+            Err(_) => break,
+            Ok(Some(Ok(Message::Text(t)))) => {
+                let wire: Value = serde_json::from_str(&t).unwrap_or(Value::Null);
+                if wire.get("type").is_some() {
+                    // Typed control frame — allowed, EXCEPT errors (a
+                    // dead-room refusal would surface as unknown_peer).
+                    assert_ne!(
+                        wire["type"].as_str(),
+                        Some("error"),
+                        "dead-room attach must be dropped silently, got error: {t}"
+                    );
+                    continue;
+                }
+                panic!("dead-room attach must be dropped silently, got {t}");
+            }
+            other => panic!("dead-room drop must be silent, got {other:?}"),
+        }
+    }
 }
 
 /// Harness self-check that PASSES today: the direct A↔B hop inside the

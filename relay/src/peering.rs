@@ -8,14 +8,29 @@
 //! The shared-owner hash intersection RETIRED as a gate: owner sets stay on
 //! the wire and are logged for observability, but pairing decides.
 //!
+//! Federation v2 (slice 3, transitive exchange + directed hops): all hosts
+//! become transitively known to the entire paired network — the
+//! `relay_peer_list` advertisement is ONE SEGMENT PER ORIGIN (the sender's
+//! own rooms + machine pairings, plus everything it learned from other
+//! peers, origin-tagged, self-origin filtered, never back to the arrival
+//! link — propagation terminates), and incremental `relay_peer_update` /
+//! `relay_pairings_update` frames re-advertise onward minus their arrival
+//! link. Advertisement implies route: a forward to a target epk resolves
+//! the ORIGIN and rides the via link (origin → arrival links); a `visited`
+//! loop guard + per-hop re-signing carry an onward hop, whose ack returns
+//! verbatim along the delivery path via a bounded request_id → backlink
+//! map.
+//!
 //! Each relay reads `relay-peers.json` (per-machine, CLI-owned — see
 //! [`crate::peers::peers_config`]) fresh, connects outbound to each pinned
 //! peer relay's `/relay-peer` endpoint, and exchanges `relay_hello` frames
 //! carrying the owner public-key hashes each relay knows (from
-//! `mesh_versions`). After the gate both sides exchange `relay_peer_list`
-//! (rooms + machine pairing sets) and stay open for cross-relay forwarding.
+//! `mesh_versions`). After the gate both sides exchange the segmented
+//! `relay_peer_list` (rooms + machine pairing sets, per origin) and stay
+//! open for cross-relay forwarding.
 
 use std::collections::HashSet;
+use std::time::{Duration, Instant};
 
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -54,6 +69,20 @@ fn relay_own_url() -> Option<String> {
         .ok()
         .filter(|u| !u.is_empty())
 }
+
+/// Federation protocol version this relay speaks (federation v2 §4).
+/// 1 = pre-slice-3: one `relay_peer_list` frame (local rooms only), no
+/// sequence marker, direct-hop forwarding only. 2 = slice 3: segmented
+/// transitive advertisement (`done: true` on the last segment) + onward
+/// hops + ack backlinks. Absent on the wire ⇒ 1 (old peers, both
+/// directions degrade to old behavior).
+pub const FED_PROTO: u32 = 2;
+
+/// Bound for the request_id → backlink map (onward hops awaiting their
+/// dest ack): the source's forward timeout is 5 s, so 30 s covers the ack
+/// generously; the map is also hard-capped (LRU-evicted).
+const HOP_BACKLINK_TTL: Duration = Duration::from_secs(30);
+const HOP_BACKLINK_MAX: usize = 1024;
 
 /// Generate a random 32-byte nonce, base64-encoded.
 fn gen_relay_nonce() -> String {
@@ -183,6 +212,10 @@ pub struct RelayHello {
     /// the relay's private keys never leave their machine.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pair_secret: Option<String>,
+    /// The sender's federation protocol version ([`FED_PROTO`]) — gates the
+    /// segmented advertisement + onward-hop exchange (slice 3). Absent ⇒ 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fed_proto: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -210,6 +243,10 @@ pub struct RelayHelloAck {
     /// dialing relay's logs show WHY the handshake failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The sender's federation protocol version ([`FED_PROTO`]) — gates the
+    /// segmented advertisement + onward-hop exchange (slice 3). Absent ⇒ 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fed_proto: Option<u32>,
 }
 
 /// Start the outbound peering tasks. Each peer relay gets a tokio task.
@@ -437,6 +474,7 @@ async fn connect_and_verify(
         nonce: Some(nonce),
         sig: Some(sig),
         pair_secret: peer.pair_secret.clone(),
+        fed_proto: Some(FED_PROTO),
     };
     ws.send(tokio_tungstenite::tungstenite::Message::Text(
         serde_json::to_string(&hello)?.into(),
@@ -508,268 +546,109 @@ async fn connect_and_verify(
 
     info!(peer = %peer.name, "federated with peer relay (explicitly paired: pinned key verified)");
 
-    // Phase 3: exchange peer lists.
-    let local_rooms = FederatedSessions::local_rooms_by_epk(registry);
-    let peer_list = RelayPeerList {
-        kind: "relay_peer_list".into(),
-        relay_name: federated.own_name(),
-        rooms_by_epk: local_rooms,
-        machine_pairings: pairing
-            .signed_blobs()
-            .into_iter()
-            .map(|(machine, version, blob, sig)| RelayMachinePairing {
-                machine,
-                version,
-                blob: B64.encode(&blob),
-                sig: B64.encode(&sig),
-            })
-            .collect(),
-        peer_doc: {
-            let kp = crate::relay_keypair::load_or_generate(None);
-            Some(build_peer_doc_envelope(&kp, &peer.name))
-        },
-    };
-    ws.send(tokio_tungstenite::tungstenite::Message::Text(
-        serde_json::to_string(&peer_list)?.into(),
-    ))
-    .await?;
-
-    // Receive the peer's relay_peer_list.
-    let msg = ws
-        .next()
-        .await
-        .ok_or("peer closed before relay_peer_list")?;
-    let text = match msg? {
-        tokio_tungstenite::tungstenite::Message::Text(t) => t,
-        _ => return Err("expected relay_peer_list".into()),
-    };
-    let peer_list: RelayPeerList = serde_json::from_str(&text)?;
-    // Key the learned state by the CONFIGURED peer name — the peer's
-    // announced relay_name can be a URL-style identity (e.g. a host whose
-    // UNBIEN_RELAY_NAME was never set), while our forward_senders are keyed
-    // by the config name. Mismatching the two made every federated forward
-    // to that peer fail (rooms under the URL, senders under "droplet").
-    let peer_relay_key = &peer.name;
-    federated
-        .set_peer_rooms(peer_relay_key, peer_list.rooms_by_epk)
-        .await;
-    federated
-        .learn_machine_pairings(
-            peer_relay_key,
-            peer_list
-                .machine_pairings
-                .into_iter()
-                .map(|p| (p.machine, p.version, p.blob, p.sig))
-                .collect(),
-        )
-        .await;
-    info!(peer = %peer.name, "stored federated sessions from peer relay");
-    learn_peer_doc_or_warn(
-        federated,
-        ack.relay_pubkey.as_deref().unwrap_or(""),
-        &peer_list.peer_doc,
-        &peer.name,
-        &federated.own_name(),
-    );
-    broadcast_federated_list(registry, federated).await;
-
-    // Keep the connection open for incremental updates + forwarding (Phase 3c).
-    // Split the WS so we can read incoming frames + send outbound forwards.
+    // ── Slice 3: the TRANSITIVE advertisement exchange (federation v2 §4) ──
+    // Everything outbound (advertisement, acks, forwards) rides ONE FIFO
+    // channel drained by the writer task — the shared frame handler can
+    // then ack on the arrival connection without owning a sink, and the
+    // steady loop only reads.
     let (mut ws_sink, mut ws_stream) = ws.split();
-
-    // Channel for outbound relay_forward frames (written by handle_pi_envelope
-    // via FederatedSessions::forward_to_federated).
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    federated.register_sender(&peer.name, tx).await;
-
-    loop {
-        tokio::select! {
-            // Incoming frames from the peer relay.
-            msg = ws_stream.next() => {
-                let text = match msg {
-                    None | Some(Err(_)) => break,
-                    Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_))) => break,
-                    Some(Ok(tokio_tungstenite::tungstenite::Message::Text(t))) => t,
-                    Some(Ok(_)) => continue,
-                };
-                // Try relay_peer_update (incremental session changes).
-                if let Ok(update) = serde_json::from_str::<RelayPeerUpdate>(&text) {
-                    match update.action.as_str() {
-                        "add" => {
-                            if let Ok(room) =
-                                serde_json::from_value::<RoomMeta>(update.room.clone())
-                            {
-                                federated
-                                    .add_room(&update.relay_name, &update.epk, room)
-                                    .await;
-                                broadcast_federated_list(registry, federated)
-                                    .await;
-                            }
-                        }
-                        "remove" => {
-                            if let Some(room_id) =
-                                update.room.get("room_id").and_then(|v| v.as_str())
-                            {
-                                federated
-                                    .remove_room(&update.relay_name, &update.epk, room_id)
-                                    .await;
-                                broadcast_federated_list(registry, federated)
-                                    .await;
-                            }
-                        }
-                        _ => {}
-                    }
-                    continue;
-                }
-                // Try relay_pairings_update: peered pairing change (pairing_set push).
-                if let Ok(upd) = serde_json::from_str::<serde_json::Value>(&text)
-                    && upd["kind"].as_str() == Some("relay_pairings_update")
-                {
-                    if let (Some(machine), Some(blob), Some(sig)) = (
-                        upd["machine"].as_str(),
-                        upd["blob"].as_str(),
-                        upd["sig"].as_str(),
-                    ) {
-                        federated
-                            .learn_machine_pairing(
-                                &peer.name,
-                                machine,
-                                upd["version"].as_u64().unwrap_or(0),
-                                blob.to_string(),
-                                sig.to_string(),
-                            )
-                            .await;
-                    }
-                    continue;
-                }
-                // Try relay_forward (deliver to local pi + send ack).
-                if let Ok(forward) = serde_json::from_str::<RelayForward>(&text) {
-                    if forward.visited.contains(&federated.own_name()) {
-                        let ack = RelayForwardAck {
-                            kind: "relay_forward_ack".into(),
-                            request_id: forward.request_id,
-                            status: "unknown_peer".into(),
-                        };
-                        let _ = ws_sink
-                            .send(tokio_tungstenite::tungstenite::Message::Text(
-                                serde_json::to_string(&ack).unwrap_or_default().into(),
-                            ))
-                            .await;
-                        continue;
-                    }
-                    // Verify the forward's provenance (shared helper).
-                    let sig_valid = crate::membership::verify_relay_forward(
-                        &forward.request_id,
-                        &forward.from_epk,
-                        &forward.target_epk,
-                        &forward.visited,
-                        &forward.relay_pubkey,
-                        &forward.relay_sig,
-                    );
-                    if !sig_valid {
-                        let ack = RelayForwardAck {
-                            kind: "relay_forward_ack".into(),
-                            request_id: forward.request_id,
-                            status: "unknown_peer".into(),
-                        };
-                        let _ = ws_sink
-                            .send(tokio_tungstenite::tungstenite::Message::Text(
-                                serde_json::to_string(&ack).unwrap_or_default().into(),
-                            ))
-                            .await;
-                        continue;
-                    }
-                    // The verified packet IS the route source: learn that
-                    // the sender's origin epk rides this peer relay (route
-                    // table entry for the reply leg; refreshed per frame,
-                    // purged with the link).
-                    federated.learn_route(&forward.from_epk, &peer.name).await;
-                    // Outer-envelope forward (app→pi / ub frames): the opaque
-                    // {peer, room, ct} rides the SAME verified provenance the
-                    // inner form has — authenticated-forwarding REQUIRED, so it
-                    // reaches here only after the sig check above. Delivered
-                    // verbatim to (target, room), with NO dest-side re-check
-                    // (9779b88 — the deciding relay is always the SOURCE:
-                    // its pairing + the §3 owner-set gates decided).
-                    if forward.room.is_some() && forward.ct.is_some() {
-                        let ack_status = if registry.forward(
-                            &forward.target_epk,
-                            forward.room.as_deref().unwrap_or_default(),
-                            Message::Text(
-                                serde_json::json!({
-                                    "peer": forward.from_epk,
-                                    "room": forward.room.clone().unwrap_or_default(),
-                                    "ct": forward.ct.clone().unwrap_or_default(),
-                                })
-                                .to_string(),
-                            ),
-                            PeerRegistry::NO_SKIP_CONN,
-                        ) {
-                            "forwarded"
-                        } else {
-                            "unknown_peer"
-                        };
-                        let ack = RelayForwardAck {
-                            kind: "relay_forward_ack".into(),
-                            request_id: forward.request_id.clone(),
-                            status: ack_status.into(),
-                        };
-                        let _ = ws_sink
-                            .send(tokio_tungstenite::tungstenite::Message::Text(
-                                serde_json::to_string(&ack).unwrap_or_default().into(),
-                            ))
-                            .await;
-                        continue;
-                    }
-                    let outbound = serde_json::json!({
-                        "type": "pi_envelope_in",
-                        "from_pc": forward.from_epk,
-                        "envelope": forward.envelope,
-                    });
-                    let status = if registry.forward_to_peer(
-                        &forward.target_epk,
-                        Message::Text(outbound.to_string()),
-                    ) {
-                        "forwarded"
-                    } else {
-                        "unknown_peer"
-                    };
-                    let ack = RelayForwardAck {
-                        kind: "relay_forward_ack".into(),
-                        request_id: forward.request_id,
-                        status: status.into(),
-                    };
-                    let _ = ws_sink
-                        .send(tokio_tungstenite::tungstenite::Message::Text(
-                            serde_json::to_string(&ack).unwrap_or_default().into(),
-                        ))
-                        .await;
-                    continue;
-                }
-                // Try relay_forward_ack (resolve pending forward).
-                if let Ok(ack) = serde_json::from_str::<RelayForwardAck>(&text) {
-                    federated.resolve_forward_ack(ack).await;
-                }
-            }
-            // Outbound forwards from the channel (from handle_pi_envelope).
-            outbound = rx.recv() => {
-                match outbound {
-                    Some(text) => {
-                        if ws_sink
-                            .send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                    None => break,
-                }
+    let writer = tokio::spawn(async move {
+        while let Some(text) = rx.recv().await {
+            if ws_sink
+                .send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
+                .await
+                .is_err()
+            {
+                break;
             }
         }
+    });
+
+    // The peer's protocol version decides the wire shape (additive +
+    // back-compat): a pre-slice-3 peer gets EXACTLY ONE segment (our local
+    // rooms) with NO marker — old behavior preserved.
+    let peer_proto = ack.fed_proto.unwrap_or(1);
+    // The peer's announced relay_name — an origin never advertised back to
+    // itself, and a link never advertises the peer at its far end the
+    // peer's own data.
+    let peer_origin = ack.relay_name.clone().unwrap_or_default();
+    send_advertisement(
+        federated,
+        registry,
+        pairing,
+        &tx,
+        &AdvertiseTarget {
+            proto: peer_proto,
+            link: &peer.name,
+            origin: &peer_origin,
+            doc_for: &peer.name,
+        },
+    )
+    .await;
+
+    // Receive the peer's advertisement: ONE segment per origin; `done:
+    // Some(true)` marks the last. A pre-slice-3 peer sends exactly ONE
+    // unmarked frame. Non-segment frames interleaving the sequence
+    // (incremental updates, forwards) are handled generically, not
+    // dropped.
+    let presented_pk = ack.relay_pubkey.clone().unwrap_or_default();
+    let mut received = 0usize;
+    loop {
+        if peer_proto < FED_PROTO && received >= 1 {
+            break;
+        }
+        let text = match tokio::time::timeout(Duration::from_secs(10), ws_stream.next()).await {
+            Ok(Some(Ok(tokio_tungstenite::tungstenite::Message::Text(t)))) => t,
+            Ok(Some(Ok(_))) => continue,
+            _ => break, // closed or stalled mid-sequence — keep what we learned
+        };
+        if let Ok(list) = serde_json::from_str::<RelayPeerList>(&text) {
+            let done = list.done == Some(true);
+            received += 1;
+            if received == 1 {
+                learn_peer_doc_or_warn(
+                    federated,
+                    &presented_pk,
+                    &list.peer_doc,
+                    &peer.name,
+                    &federated.own_name(),
+                );
+            }
+            learn_peer_list_segment(federated, registry, &peer.name, list).await;
+            if done {
+                break;
+            }
+        } else {
+            handle_peer_frame(federated, registry, &peer.name, &tx, &text).await;
+        }
+    }
+    if received == 0 {
+        writer.abort();
+        return Err("peer closed before relay_peer_list".into());
+    }
+    info!(peer = %peer.name, "stored federated sessions from peer relay");
+
+    // Register the link's channel: onward re-advertisement (updates minus
+    // their arrival link) + via-routing ride it from the first moment.
+    federated.register_sender(&peer.name, tx.clone()).await;
+
+    // Steady state: incremental updates, forwards + acks (shared handler —
+    // the SAME code as the inbound loop, so the two cannot drift).
+    loop {
+        let text = match ws_stream.next().await {
+            None | Some(Err(_)) => break,
+            Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_))) => break,
+            Some(Ok(tokio_tungstenite::tungstenite::Message::Text(t))) => t,
+            Some(Ok(_)) => continue,
+        };
+        handle_peer_frame(federated, registry, &peer.name, &tx, &text).await;
     }
 
-    // Cleanup on disconnect.
+    // Cleanup on disconnect: the writer task owns the sink — aborting it
+    // closes the socket and closes the channel, so the registered sender
+    // reports dead and is dropped by unregister_sender.
+    writer.abort();
     federated.unregister_sender(&peer.name).await;
     federated.clear_peer(&peer.name).await;
     broadcast_federated_list(registry, federated).await;
@@ -819,6 +698,7 @@ async fn send_hello_ack(
         sig: Some(sig),
         pair_secret: None,
         reason: reason.map(String::from),
+        fed_proto: Some(FED_PROTO),
     };
     let _ = socket
         .send(Message::Text(
@@ -1032,282 +912,423 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
 
     info!("relay-peer: federated (explicitly paired)");
 
-    // Phase 3: receive the peer's relay_peer_list, store it, then send ours.
-    let msg = match socket.recv().await {
-        Some(Ok(Message::Text(t))) => t,
-        _ => {
-            warn!("relay-peer: expected relay_peer_list, got disconnect");
-            return;
+    // ── Slice 3: the TRANSITIVE advertisement exchange (federation v2 §4) ──
+    // Same single-write-path design as the outbound loop: everything
+    // outbound (advertisement, acks, forwards) rides ONE FIFO channel
+    // drained by the writer task, so the shared frame handler can ack on
+    // the arrival connection without owning a sink.
+    let (mut socket_sink, mut socket_stream) = socket.split();
+    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let writer = tokio::spawn(async move {
+        while let Some(text) = rx.recv().await {
+            if socket_sink.send(Message::Text(text)).await.is_err() {
+                break;
+            }
         }
-    };
-    let peer_list: RelayPeerList = match serde_json::from_str(&msg) {
-        Ok(l) => l,
-        Err(e) => {
-            warn!("relay-peer: failed to parse relay_peer_list: {e}");
-            return;
+    });
+
+    // Receive the peer's advertisement: ONE segment per origin; `done:
+    // Some(true)` marks the last; a pre-slice-3 peer sends exactly ONE
+    // unmarked frame. The FIRST segment's relay_name is the arrival LINK
+    // name (the dialing relay's own segment is always first). Non-segment
+    // frames interleaving the sequence are handled generically, not
+    // dropped.
+    let peer_proto = hello.fed_proto.unwrap_or(1);
+    let presented_pk = hello.relay_pubkey.clone().unwrap_or_default();
+    let mut arrival_link: Option<String> = None;
+    let mut received = 0usize;
+    loop {
+        if peer_proto < FED_PROTO && received >= 1 {
+            break;
         }
-    };
+        let text = match tokio::time::timeout(Duration::from_secs(10), socket_stream.next()).await {
+            Ok(Some(Ok(Message::Text(t)))) => t,
+            Ok(Some(Ok(_))) => continue,
+            _ => break, // closed or stalled mid-sequence — keep what we learned
+        };
+        if let Ok(list) = serde_json::from_str::<RelayPeerList>(&text) {
+            let done = list.done == Some(true);
+            received += 1;
+            if received == 1 {
+                learn_peer_doc_or_warn(
+                    &state.federated,
+                    &presented_pk,
+                    &list.peer_doc,
+                    "inbound",
+                    &state.federated.own_name(),
+                );
+            }
+            let link = arrival_link.get_or_insert_with(|| list.relay_name.clone());
+            learn_peer_list_segment(&state.federated, &state.registry, link, list).await;
+            if done {
+                break;
+            }
+        } else {
+            handle_peer_frame(
+                &state.federated,
+                &state.registry,
+                arrival_link.as_deref().unwrap_or(""),
+                &tx,
+                &text,
+            )
+            .await;
+        }
+    }
+    if received == 0 {
+        warn!("relay-peer: expected relay_peer_list, got disconnect");
+        writer.abort();
+        return;
+    }
+    let arrival_link = arrival_link.unwrap_or_default();
+    info!(
+        relay = %arrival_link,
+        "stored federated sessions from inbound peer relay"
+    );
+
+    // Register the link's channel: onward re-advertisement (updates minus
+    // their arrival link) + via-routing ride it from the first moment.
     state
         .federated
-        .set_peer_rooms(&peer_list.relay_name, peer_list.rooms_by_epk)
+        .register_sender(&arrival_link, tx.clone())
         .await;
-    state
-        .federated
+
+    // Send OUR advertisement: self segment (own local rooms + pairings)
+    // plus one segment per known ORIGIN — never the peer's own data back,
+    // never back to the arrival link, self-origin filtered.
+    send_advertisement(
+        &state.federated,
+        &state.registry,
+        &state.pairing,
+        &tx,
+        &AdvertiseTarget {
+            proto: peer_proto,
+            link: &arrival_link,
+            origin: &arrival_link,
+            doc_for: hello.relay_name.as_deref().unwrap_or(""),
+        },
+    )
+    .await;
+
+    // Steady state: incremental updates, forwards + acks (shared handler —
+    // the SAME code as the outbound loop, so the two cannot drift).
+    loop {
+        let text = match socket_stream.next().await {
+            None | Some(Err(_)) => break,
+            Some(Ok(Message::Close(_))) => break,
+            Some(Ok(Message::Text(t))) => t,
+            Some(Ok(_)) => continue,
+        };
+        handle_peer_frame(&state.federated, &state.registry, &arrival_link, &tx, &text).await;
+    }
+
+    // Cleanup on disconnect: the writer task owns the sink — aborting it
+    // closes the socket and closes the channel, so the registered sender
+    // reports dead and is dropped by unregister_sender.
+    writer.abort();
+    state.federated.unregister_sender(&arrival_link).await;
+    state.federated.clear_peer(&arrival_link).await;
+    broadcast_federated_list(&state.registry, &state.federated).await;
+}
+
+// ── Shared advertisement + frame handling (ONE code path for BOTH peering
+//    loops — the inbound/outbound drift bugs live in the dual-loop history) ─
+
+/// Learn one origin-tagged `relay_peer_list` segment (federation v2 §4).
+/// `arrival_link` is the LINK name the segment arrived on (the via-map
+/// entry: advertisement implies route). SELF-ORIGIN segments are IGNORED
+/// — a relay never accepts advertisements naming itself; this is the
+/// propagation terminator (together with the never-back rule).
+async fn learn_peer_list_segment(
+    federated: &Arc<FederatedSessions>,
+    registry: &Arc<PeerRegistry>,
+    arrival_link: &str,
+    list: RelayPeerList,
+) {
+    if list.relay_name == federated.own_name() {
+        warn!(
+            origin = %list.relay_name,
+            "ignoring advertisement naming ourselves (self-origin filter)"
+        );
+        return;
+    }
+    federated.learn_via(&list.relay_name, arrival_link).await;
+    federated
+        .set_peer_rooms(&list.relay_name, list.rooms_by_epk)
+        .await;
+    federated
         .learn_machine_pairings(
-            &peer_list.relay_name,
-            peer_list
-                .machine_pairings
+            arrival_link,
+            &list.relay_name,
+            list.machine_pairings
                 .into_iter()
                 .map(|p| (p.machine, p.version, p.blob, p.sig))
                 .collect(),
         )
         .await;
-    info!(
-        relay = %peer_list.relay_name,
-        "stored federated sessions from inbound peer relay"
-    );
-    broadcast_federated_list(&state.registry, &state.federated).await;
-    learn_peer_doc_or_warn(
-        &state.federated,
-        hello.relay_pubkey.as_deref().unwrap_or(""),
-        &peer_list.peer_doc,
-        "inbound",
-        &state.federated.own_name(),
-    );
+    broadcast_federated_list(registry, federated).await;
+}
 
-    // Send our local rooms.
-    let local_rooms = FederatedSessions::local_rooms_by_epk(&state.registry);
-    let our_list = RelayPeerList {
-        kind: "relay_peer_list".into(),
-        relay_name: state.federated.own_name(), // our own name (was "self" placeholder)
-        rooms_by_epk: local_rooms,
-        machine_pairings: state
-            .pairing
-            .signed_blobs()
-            .into_iter()
-            .map(|(machine, version, blob, sig)| RelayMachinePairing {
-                machine,
-                version,
-                blob: B64.encode(&blob),
-                sig: B64.encode(&sig),
-            })
-            .collect(),
-        peer_doc: {
-            let kp = crate::relay_keypair::load_or_generate(None);
-            Some(build_peer_doc_envelope(
-                &kp,
-                hello.relay_name.as_deref().unwrap_or(""),
-            ))
-        },
-    };
-    if socket
-        .send(Message::Text(
-            serde_json::to_string(&our_list).unwrap_or_default(),
-        ))
-        .await
-        .is_err()
+/// Build + send the full advertisement for one peer link (federation v2 §4):
+/// the SELF segment (own local rooms + own machines' signed pairings,
+/// ALWAYS FIRST so a pre-slice-3 peer reading one frame gets exactly the
+/// old behavior) plus one segment per known ORIGIN — everything learned
+/// from other peers, origin-tagged, self-origin filtered, never the peer
+/// its own data back, never back to the link it arrived on.
+///
+/// Sequence semantics: protocol-2 peers get `done: Some(false)` on every
+/// segment except the last (`done: Some(true)`); a pre-slice-3 peer gets
+/// EXACTLY ONE segment (its local rooms) with NO marker — additive +
+/// back-compat.
+async fn send_advertisement(
+    federated: &Arc<FederatedSessions>,
+    registry: &Arc<PeerRegistry>,
+    pairing: &Arc<PairingRegistry>,
+    conn: &mpsc::UnboundedSender<String>,
+    target: &AdvertiseTarget<'_>,
+) {
+    let mut segments = federated
+        .advertisement_segments(registry, pairing, target.link, target.origin)
+        .await;
+    // The self segment carries OUR signed peer-pairing doc (presenting
+    // ourselves to `target.doc_for`); transit segments carry none — a
+    // transit relay cannot present the origin's identity.
+    if let Some(first) = segments.first_mut() {
+        let kp = crate::relay_keypair::load_or_generate(None);
+        first.peer_doc = Some(build_peer_doc_envelope(&kp, target.doc_for));
+    }
+    if target.proto >= FED_PROTO {
+        let last = segments.len();
+        for (i, seg) in segments.iter_mut().enumerate() {
+            seg.done = Some(i + 1 == last);
+            let _ = conn.send(serde_json::to_string(seg).unwrap_or_default());
+        }
+    } else {
+        // Pre-slice-3 peer: ONE segment (local rooms), no marker.
+        if let Some(seg) = segments.first() {
+            let _ = conn.send(serde_json::to_string(seg).unwrap_or_default());
+        }
+    }
+}
+
+/// The peer-side context of ONE link's advertisement exchange: what proto
+/// the peer speaks (segment markers vs the single legacy frame), which LINK
+/// the advertisement rides (never-back exclusion), the peer's announced
+/// ORIGIN name (never advertise a peer its own data back), and the name to
+/// present in our peer-pairing doc.
+struct AdvertiseTarget<'a> {
+    proto: u32,
+    link: &'a str,
+    origin: &'a str,
+    doc_for: &'a str,
+}
+
+/// Handle ONE inbound text frame from a federated peer relay — the SHARED
+/// steady-state path for BOTH peering loops (and for frames interleaving
+/// the advertisement sequence). `arrival_link` is the LINK name the frame
+/// arrived on (never-back exclusion + via routing + route learning);
+/// `conn_tx` is the arrival connection's outbound channel — acks and
+/// onward re-advertisements ride it (or another link's channel).
+async fn handle_peer_frame(
+    federated: &Arc<FederatedSessions>,
+    registry: &Arc<PeerRegistry>,
+    arrival_link: &str,
+    conn_tx: &mpsc::UnboundedSender<String>,
+    text: &str,
+) {
+    // relay_peer_update — incremental session change (origin-tagged via
+    // relay_name). Self-origin updates are ignored (self-origin filter);
+    // everything else re-advertises ONWARD minus the arrival link.
+    if let Ok(update) = serde_json::from_str::<RelayPeerUpdate>(text) {
+        if update.relay_name == federated.own_name() {
+            return;
+        }
+        match update.action.as_str() {
+            "add" => {
+                if let Ok(room) = serde_json::from_value::<RoomMeta>(update.room.clone()) {
+                    federated.learn_via(&update.relay_name, arrival_link).await;
+                    federated
+                        .add_room(&update.relay_name, &update.epk, room)
+                        .await;
+                    broadcast_federated_list(registry, federated).await;
+                    federated.relay_update_onward(arrival_link, text).await;
+                }
+            }
+            "remove" => {
+                if let Some(room_id) = update.room.get("room_id").and_then(|v| v.as_str()) {
+                    federated
+                        .remove_room(&update.relay_name, &update.epk, room_id)
+                        .await;
+                    broadcast_federated_list(registry, federated).await;
+                    federated.relay_update_onward(arrival_link, text).await;
+                }
+            }
+            _ => {}
+        }
+        return;
+    }
+    // relay_pairings_update — incremental pairing change. Origin-tagged
+    // (slice 3): an ABSENT origin field means the sending relay itself
+    // (pre-slice-3 peers broadcast only their OWN machines' pushes — the
+    // attribution is then the arrival link, conservative for purge).
+    if let Ok(upd) = serde_json::from_str::<serde_json::Value>(text)
+        && upd["kind"].as_str() == Some("relay_pairings_update")
     {
+        let origin = upd["origin"].as_str().unwrap_or(arrival_link).to_string();
+        if origin == federated.own_name() {
+            return; // self-origin filter
+        }
+        if let (Some(machine), Some(blob), Some(sig)) = (
+            upd["machine"].as_str(),
+            upd["blob"].as_str(),
+            upd["sig"].as_str(),
+        ) {
+            federated
+                .learn_machine_pairing(
+                    arrival_link,
+                    &origin,
+                    machine,
+                    upd["version"].as_u64().unwrap_or(0),
+                    blob.to_string(),
+                    sig.to_string(),
+                )
+                .await;
+            federated.learn_via(&origin, arrival_link).await;
+            federated.relay_update_onward(arrival_link, text).await;
+        }
+        return;
+    }
+    // relay_forward — deliver locally, HOP ONWARD, or ack (slice 3).
+    if let Ok(forward) = serde_json::from_str::<RelayForward>(text) {
+        handle_relay_forward(federated, registry, arrival_link, conn_tx, forward).await;
+        return;
+    }
+    // relay_forward_ack — return VERBATIM along the hop path (the bounded
+    // id→backlink map), or resolve our own pending forward.
+    if let Ok(ack) = serde_json::from_str::<RelayForwardAck>(text) {
+        if let Some(backlink) = federated.take_hop_backlink(&ack.request_id).await {
+            let _ = backlink.send(text.to_string());
+        } else {
+            federated.resolve_forward_ack(ack).await;
+        }
+    }
+}
+
+/// One verified `relay_forward`: deliver locally when the target is ours;
+/// otherwise HOP ONWARD per the advertisement-implied route (re-signed by
+/// THIS relay, `visited` + own name, ack relayed back along the recorded
+/// backlink). Unroutable targets still ack `unknown_peer` — a route miss is
+/// refused + logged, never fanned out (federation v2 §4).
+async fn handle_relay_forward(
+    federated: &Arc<FederatedSessions>,
+    registry: &Arc<PeerRegistry>,
+    arrival_link: &str,
+    conn_tx: &mpsc::UnboundedSender<String>,
+    forward: RelayForward,
+) {
+    let ack_on = |status: &str| {
+        let ack = RelayForwardAck {
+            kind: "relay_forward_ack".into(),
+            request_id: forward.request_id.clone(),
+            status: status.to_string(),
+        };
+        let _ = conn_tx.send(serde_json::to_string(&ack).unwrap_or_default());
+    };
+    // Loop guard (unchanged): a relay never handles a forward twice.
+    if forward.visited.contains(&federated.own_name()) {
+        ack_on("unknown_peer");
+        return;
+    }
+    // Per-hop provenance (unchanged): the IMMEDIATE sender's signature over
+    // (request_id + from_epk + target_epk + visited).
+    let sig_valid = crate::membership::verify_relay_forward(
+        &forward.request_id,
+        &forward.from_epk,
+        &forward.target_epk,
+        &forward.visited,
+        &forward.relay_pubkey,
+        &forward.relay_sig,
+    );
+    if !sig_valid {
+        ack_on("unknown_peer");
+        return;
+    }
+    // The verified packet IS the route source: learn that the sender's
+    // origin epk rides this link (reply legs for app epks — refreshed per
+    // frame, purged with the link).
+    federated.learn_route(&forward.from_epk, arrival_link).await;
+
+    // Local delivery — only when the target is OURS. A target that is
+    // online here but hits a DEAD ROOM drops silently (the contract);
+    // forwarding a local target onward to a federated route would be
+    // wrong (the machine is HERE).
+    if registry.is_online(&forward.target_epk) {
+        // Outer-envelope forward (app→pi / ub frames): the opaque
+        // {peer, room, ct} rides the SAME verified provenance the inner
+        // form has — authenticated-forwarding REQUIRED. Delivered
+        // verbatim to (target, room), with NO dest-side re-check (9779b88
+        // — the deciding relay is always the SOURCE: its pairing + the §3
+        // owner-set gates decided).
+        if forward.room.is_some() && forward.ct.is_some() {
+            let ack_status = if registry.forward(
+                &forward.target_epk,
+                forward.room.as_deref().unwrap_or_default(),
+                Message::Text(
+                    serde_json::json!({
+                        "peer": forward.from_epk,
+                        "room": forward.room.clone().unwrap_or_default(),
+                        "ct": forward.ct.clone().unwrap_or_default(),
+                    })
+                    .to_string(),
+                ),
+                PeerRegistry::NO_SKIP_CONN,
+            ) {
+                "forwarded"
+            } else {
+                "unknown_peer"
+            };
+            ack_on(ack_status);
+            return;
+        }
+        let outbound = serde_json::json!({
+            "type": "pi_envelope_in",
+            "from_pc": forward.from_epk,
+            "envelope": forward.envelope,
+        });
+        let status =
+            if registry.forward_to_peer(&forward.target_epk, Message::Text(outbound.to_string())) {
+                "forwarded"
+            } else {
+                "unknown_peer"
+            };
+        ack_on(status);
         return;
     }
 
-    // Keep open for incremental updates + forwarding (Phase 3c).
-    // Split the socket so we can read incoming frames + send outbound forwards.
-    let (mut socket_sink, mut socket_stream) = socket.split();
-
-    // Channel for outbound relay_forward frames (from handle_pi_envelope).
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    state
-        .federated
-        .register_sender(&peer_list.relay_name, tx)
-        .await;
-
-    loop {
-        tokio::select! {
-            // Incoming frames from the peer relay.
-            msg = socket_stream.next() => {
-                let text = match msg {
-                    None | Some(Err(_)) => break,
-                    Some(Ok(Message::Close(_))) => break,
-                    Some(Ok(Message::Text(t))) => t,
-                    Some(Ok(_)) => continue,
-                };
-                // Try relay_peer_update (incremental session changes).
-                if let Ok(update) = serde_json::from_str::<RelayPeerUpdate>(&text) {
-                    match update.action.as_str() {
-                        "add" => {
-                            if let Ok(room) =
-                                serde_json::from_value::<RoomMeta>(update.room.clone())
-                            {
-                                state
-                                    .federated
-                                    .add_room(&update.relay_name, &update.epk, room)
-                                    .await;
-                                broadcast_federated_list(&state.registry, &state.federated)
-                                    .await;
-                            }
-                        }
-                        "remove" => {
-                            if let Some(room_id) =
-                                update.room.get("room_id").and_then(|v| v.as_str())
-                            {
-                                state
-                                    .federated
-                                    .remove_room(&update.relay_name, &update.epk, room_id)
-                                    .await;
-                                broadcast_federated_list(&state.registry, &state.federated)
-                                    .await;
-                            }
-                        }
-                        _ => {}
-                    }
-                    continue;
-                }
-                // Try relay_pairings_update: peered pairing change (pairing_set push).
-                if let Ok(upd) = serde_json::from_str::<serde_json::Value>(&text)
-                    && upd["kind"].as_str() == Some("relay_pairings_update")
-                {
-                    if let (Some(machine), Some(blob), Some(sig)) = (
-                        upd["machine"].as_str(),
-                        upd["blob"].as_str(),
-                        upd["sig"].as_str(),
-                    ) {
-                        state
-                            .federated
-                            .learn_machine_pairing(
-                                &peer_list.relay_name,
-                                machine,
-                                upd["version"].as_u64().unwrap_or(0),
-                                blob.to_string(),
-                                sig.to_string(),
-                            )
-                            .await;
-                    }
-                    continue;
-                }
-                // Try relay_forward (deliver to local pi + send ack).
-                if let Ok(forward) = serde_json::from_str::<RelayForward>(&text) {
-                    // Loop prevention: drop if we've already handled this forward.
-                    if forward.visited.contains(&state.federated.own_name()) {
-                        let ack = RelayForwardAck {
-                            kind: "relay_forward_ack".into(),
-                            request_id: forward.request_id,
-                            status: "unknown_peer".into(),
-                        };
-                        let _ = socket_sink
-                            .send(Message::Text(serde_json::to_string(&ack).unwrap_or_default()))
-                            .await;
-                        continue;
-                    }
-                    // Verify the forward's provenance (shared helper).
-                    let sig_valid = crate::membership::verify_relay_forward(
-                        &forward.request_id,
-                        &forward.from_epk,
-                        &forward.target_epk,
-                        &forward.visited,
-                        &forward.relay_pubkey,
-                        &forward.relay_sig,
-                    );
-                    if !sig_valid {
-                        let ack = RelayForwardAck {
-                            kind: "relay_forward_ack".into(),
-                            request_id: forward.request_id,
-                            status: "unknown_peer".into(),
-                        };
-                        let _ = socket_sink
-                            .send(Message::Text(serde_json::to_string(&ack).unwrap_or_default()))
-                            .await;
-                        continue;
-                    }
-                    state.federated.learn_route(&forward.from_epk, &peer_list.relay_name).await;
-                    // Outer-envelope forward (app→pi / ub frames): the opaque
-                    // {peer, room, ct} rides the SAME verified provenance the
-                    // inner form has — authenticated-forwarding REQUIRED, so it
-                    // reaches here only after the sig check above. Delivered
-                    // verbatim to (target, room), with NO dest-side re-check
-                    // (9779b88 — the deciding relay is always the SOURCE:
-                    // its pairing + the §3 owner-set gates decided).
-                    if forward.room.is_some() && forward.ct.is_some() {
-                        let ack_status = if state.registry.forward(
-                            &forward.target_epk,
-                            forward.room.as_deref().unwrap_or_default(),
-                            Message::Text(
-                                serde_json::json!({
-                                    "peer": forward.from_epk,
-                                    "room": forward.room.clone().unwrap_or_default(),
-                                    "ct": forward.ct.clone().unwrap_or_default(),
-                                })
-                                .to_string(),
-                            ),
-                            PeerRegistry::NO_SKIP_CONN,
-                        ) {
-                            "forwarded"
-                        } else {
-                            "unknown_peer"
-                        };
-                        let ack = RelayForwardAck {
-                            kind: "relay_forward_ack".into(),
-                            request_id: forward.request_id.clone(),
-                            status: ack_status.into(),
-                        };
-                        let _ = socket_sink
-                            .send(Message::Text(serde_json::to_string(&ack).unwrap_or_default()))
-                            .await;
-                        continue;
-                    }
-                    let outbound = serde_json::json!({
-                        "type": "pi_envelope_in",
-                        "from_pc": forward.from_epk,
-                        "envelope": forward.envelope,
-                    });
-                    let status = if state
-                        .registry
-                        .forward_to_peer(&forward.target_epk, Message::Text(outbound.to_string()))
-                    {
-                        "forwarded"
-                    } else {
-                        "unknown_peer"
-                    };
-                    let ack = RelayForwardAck {
-                        kind: "relay_forward_ack".into(),
-                        request_id: forward.request_id,
-                        status: status.into(),
-                    };
-                    let _ = socket_sink
-                        .send(Message::Text(serde_json::to_string(&ack).unwrap_or_default()))
-                        .await;
-                    continue;
-                }
-                // Try relay_forward_ack (resolve pending forward).
-                if let Ok(ack) = serde_json::from_str::<RelayForwardAck>(&text) {
-                    state.federated.resolve_forward_ack(ack).await;
-                }
-            }
-            // Outbound forwards from the channel (from handle_pi_envelope).
-            outbound = rx.recv() => {
-                match outbound {
-                    Some(text) => {
-                        if socket_sink.send(Message::Text(text)).await.is_err() {
-                            break;
-                        }
-                    }
-                    None => break,
-                }
-            }
-        }
+    // Not local — ONWARD HOP (federation v2 §4): re-sign with THIS relay's
+    // keypair (same request_id + from/target + payload, visited + own
+    // name), send on the advertisement-implied via link, and record the
+    // id→backlink so the dest's ack returns verbatim along the delivery
+    // path. `visited` stays the loop guard; no ack here — the dest acks.
+    let keypair = crate::relay_keypair::load_or_generate(None);
+    if federated
+        .hop_forward(&keypair, arrival_link, &forward, conn_tx.clone())
+        .await
+        .is_some()
+    {
+        return;
     }
-
-    // Cleanup on disconnect.
-    state
-        .federated
-        .unregister_sender(&peer_list.relay_name)
-        .await;
-    state.federated.clear_peer(&peer_list.relay_name).await;
-    broadcast_federated_list(&state.registry, &state.federated).await;
+    // Unknown/unroutable target — the routed refusal (never a fan-out).
+    warn!(
+        target = %&forward.target_epk[..forward.target_epk.len().min(8)],
+        "relay_forward target has no local session and no federated route — acking unknown_peer"
+    );
+    ack_on("unknown_peer");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
     use std::collections::HashSet;
 
     #[test]
@@ -1335,6 +1356,7 @@ mod tests {
             nonce: None,
             sig: None,
             pair_secret: None,
+            fed_proto: None,
         };
         let json = serde_json::to_string(&hello).unwrap();
         assert!(json.contains("\"type\":\"relay_hello\""));
@@ -1417,13 +1439,310 @@ mod tests {
         assert!(result.is_err()); // malformed JSON → error → empty
         let _ = std::fs::remove_file(&tmp);
     }
+
+    // ── Slice 3 (federation v2 §4): wire serde, via-routing, onward hop +
+    //    ack backlink, advertisement segments, link-death purge ─────────
+
+    #[test]
+    fn peer_list_done_and_fed_proto_serde() {
+        // `done` + `fed_proto` are ADDITIVE: absent ⇒ None on the wire (old
+        // peers see neither field), present ⇒ round-trip.
+        let old_frame = serde_json::from_str::<RelayPeerList>(
+            r#"{"type":"relay_peer_list","relay_name":"relay-a","rooms_by_epk":{}}"#,
+        )
+        .unwrap();
+        assert!(old_frame.done.is_none());
+        assert!(
+            serde_json::to_string(&old_frame)
+                .unwrap()
+                .find("done")
+                .is_none()
+        );
+
+        let marked = RelayPeerList {
+            done: Some(false),
+            ..old_frame.clone()
+        };
+        let json = serde_json::to_string(&marked).unwrap();
+        assert!(json.contains("\"done\":false"));
+        let back: RelayPeerList = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.done, Some(false));
+
+        let hello = serde_json::from_str::<RelayHello>(
+            r#"{"type":"relay_hello","owners":[],"fed_proto":2}"#,
+        )
+        .unwrap();
+        assert_eq!(hello.fed_proto, Some(FED_PROTO));
+        let ack = serde_json::from_str::<RelayHelloAck>(
+            r#"{"type":"relay_hello_ack","federate":true,"owners":[]}"#,
+        )
+        .unwrap();
+        assert!(ack.fed_proto.is_none(), "absent proto ⇒ old peer (1)");
+    }
+
+    fn room(id: &str) -> RoomMeta {
+        RoomMeta {
+            room_id: id.into(),
+            name: None,
+            cwd: None,
+            model: None,
+            thinking: None,
+            working: false,
+            started_at: 0,
+            extra: Default::default(),
+        }
+    }
+
+    /// A machine-SIGNED pairing blob (b64 blob + b64 sig) — the same shape
+    /// the extension pushes and the exchange carries.
+    fn signed_pairing_blob(
+        machine: &SigningKey,
+        owners: &[String],
+        version: u64,
+    ) -> (String, String, String) {
+        let machine_pk = B64.encode(machine.verifying_key().to_bytes());
+        let blob = serde_json::json!({
+            "machine_pk": machine_pk,
+            "owners": owners,
+            "version": version,
+            "issued_at": 1_700_000_000_000_u64,
+        });
+        let blob_bytes = serde_json::to_vec(&blob).unwrap();
+        let sig = machine.sign(&blob_bytes);
+        (
+            machine_pk,
+            B64.encode(&blob_bytes),
+            B64.encode(sig.to_bytes()),
+        )
+    }
+
+    #[tokio::test]
+    async fn via_routing_resolves_transitive_origins() {
+        // B knows origin "relay-c" (rooms) via LINK "link-bc" — a forward to
+        // the machine's epk must ride the VIA link's channel, even though no
+        // sender is registered under the ORIGIN name (advertisement implies
+        // route).
+        let fed = FederatedSessions::with_name("relay-b");
+        let mut rooms = HashMap::new();
+        rooms.insert("machine-epk".to_string(), vec![room("main")]);
+        fed.set_peer_rooms("relay-c", rooms).await;
+        fed.learn_via("relay-c", "link-bc").await;
+        assert_eq!(fed.relays_for_epk("machine-epk").await, vec!["relay-c"]);
+
+        let (tx, rx) = mpsc::unbounded_channel::<String>();
+        fed.register_sender("link-bc", tx).await;
+
+        let tx = fed.sender_for_candidate("relay-c", None).await;
+        assert!(tx.is_some(), "origin resolves through the via map");
+        // The direct-link resolution still works (a candidate that IS a link).
+        assert!(fed.sender_for_candidate("link-bc", None).await.is_some());
+        // The arrival link is excluded on the onward hop.
+        assert!(
+            fed.sender_for_candidate("relay-c", Some("link-bc"))
+                .await
+                .is_none()
+        );
+        drop(rx);
+    }
+
+    #[tokio::test]
+    async fn hop_forward_re_signs_and_acks_relay_verbatim() {
+        // The chain A→B→C: B holds a route for the machine (origin relay-c
+        // via link-bc) and receives A's forward on the A-link. The HOP must
+        // re-sign with B's key (visited + relay-b) and record the backlink so
+        // C's ack returns VERBATIM to A's connection.
+        let fed = FederatedSessions::with_name("relay-b");
+        let mut rooms = HashMap::new();
+        rooms.insert("machine-epk".to_string(), vec![room("main")]);
+        fed.set_peer_rooms("relay-c", rooms).await;
+        fed.learn_via("relay-c", "link-bc").await;
+        let (onward_tx, mut onward_rx) = mpsc::unbounded_channel::<String>();
+        fed.register_sender("link-bc", onward_tx).await;
+        let (arrival_tx, mut arrival_rx) = mpsc::unbounded_channel::<String>();
+
+        // A's signed forward (target NOT local at B).
+        let a_sk = SigningKey::generate(&mut rand::thread_rng());
+        let a_kp = RelayKeypair {
+            verifying_key: a_sk.verifying_key(),
+            signing_key: a_sk,
+        };
+        let forward = RelayForward {
+            kind: "relay_forward".into(),
+            request_id: "req-1".into(),
+            from_epk: "app-epk".into(),
+            target_epk: "machine-epk".into(),
+            envelope: serde_json::json!({"opaque": true}),
+            visited: vec!["relay-a".into()],
+            relay_pubkey: Some(a_kp.pubkey_b64()),
+            relay_sig: Some(a_kp.sign(b"sig")),
+            room: None,
+            ct: None,
+        };
+        let b_sk = SigningKey::generate(&mut rand::thread_rng());
+        let b_kp = RelayKeypair {
+            verifying_key: b_sk.verifying_key(),
+            signing_key: b_sk,
+        };
+        let onward = fed
+            .hop_forward(&b_kp, "link-ab", &forward, arrival_tx)
+            .await;
+        assert_eq!(onward.as_deref(), Some("relay-c"), "hop rides the via link");
+
+        // The onward frame: same request_id + payload, visited grown, signed
+        // by B (per-hop provenance — verify_relay_forward passes).
+        let text = onward_rx.recv().await.expect("onward frame");
+        let hop: RelayForward = serde_json::from_str(&text).unwrap();
+        assert_eq!(hop.request_id, "req-1");
+        assert_eq!(
+            hop.visited,
+            vec!["relay-a".to_string(), "relay-b".to_string()]
+        );
+        assert_eq!(hop.envelope, serde_json::json!({"opaque": true}));
+        assert!(crate::membership::verify_relay_forward(
+            &hop.request_id,
+            &hop.from_epk,
+            &hop.target_epk,
+            &hop.visited,
+            &hop.relay_pubkey,
+            &hop.relay_sig,
+        ));
+
+        // No immediate ack (the dest acks) — but the backlink relays C's ack
+        // VERBATIM to the arrival connection.
+        let back = fed.take_hop_backlink("req-1").await;
+        assert!(back.is_some(), "backlink recorded for the hop");
+        assert!(fed.take_hop_backlink("req-1").await.is_none(), "single ack");
+        let ack_text = serde_json::to_string(&RelayForwardAck {
+            kind: "relay_forward_ack".into(),
+            request_id: "req-1".into(),
+            status: "forwarded".into(),
+        })
+        .unwrap();
+        back.unwrap().send(ack_text.clone()).unwrap();
+        assert_eq!(arrival_rx.recv().await.as_deref(), Some(ack_text.as_str()));
+    }
+
+    fn empty_registry() -> Arc<PeerRegistry> {
+        Arc::new(PeerRegistry::new(
+            Arc::new(crate::PresenceManager::new()),
+            Arc::new(crate::RoomManager::new()),
+            Arc::new(crate::metrics::FirehoseMetrics::new()),
+        ))
+    }
+
+    #[tokio::test]
+    async fn advertisement_segments_origin_tagged_and_filtered() {
+        use ed25519_dalek::SigningKey;
+        // B knows origin relay-c (rooms + a pairing) via link-bc. Advertising
+        // to A: the SELF segment first, then an origin-tagged relay-c segment
+        // (never A's own data back, never back to link-bc).
+        let fed = FederatedSessions::with_name("relay-b");
+        let mut rooms = HashMap::new();
+        rooms.insert("machine-epk".to_string(), vec![room("main")]);
+        fed.set_peer_rooms("relay-c", rooms).await;
+        fed.learn_via("relay-c", "link-bc").await;
+        let machine = SigningKey::generate(&mut rand::thread_rng());
+        let (machine_pk, blob, sig) = signed_pairing_blob(&machine, &[B64.encode([7u8; 32])], 1);
+        fed.learn_machine_pairings(
+            "link-bc",
+            "relay-c",
+            vec![(machine_pk.clone(), 1, blob.clone(), sig.clone())],
+        )
+        .await;
+
+        let registry = empty_registry();
+        let pairing = PairingRegistry::new();
+
+        // To A (link-ab, origin relay-a): self + relay-c.
+        let segments = fed
+            .advertisement_segments(&registry, &pairing, "link-ab", "relay-a")
+            .await;
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].relay_name, "relay-b", "self segment FIRST");
+        assert_eq!(segments[1].relay_name, "relay-c", "origin-tagged transit");
+        assert_eq!(segments[1].rooms_by_epk.len(), 1);
+        assert_eq!(segments[1].machine_pairings.len(), 1);
+        assert_eq!(segments[1].machine_pairings[0].machine, machine_pk);
+        assert_eq!(
+            segments[1].machine_pairings[0].blob, blob,
+            "signed blob verbatim"
+        );
+        assert!(
+            segments[1].peer_doc.is_none(),
+            "transit segments carry no doc"
+        );
+
+        // Never-back: advertising on link-bc (the arrival link) excludes relay-c.
+        let segments = fed
+            .advertisement_segments(&registry, &pairing, "link-bc", "relay-c")
+            .await;
+        assert_eq!(segments.len(), 1, "origin arrived on link-bc — never back");
+        assert_eq!(segments[0].relay_name, "relay-b");
+    }
+
+    #[tokio::test]
+    async fn clear_peer_purges_origins_and_pairings_conservatively() {
+        use ed25519_dalek::SigningKey;
+        // A machine's pairing learned via B purges when B's link dies —
+        // even though the origin is named relay-c; rooms keyed by the
+        // origin purge when the origin loses its LAST via link.
+        let fed = FederatedSessions::with_name("relay-a");
+        let mut rooms = HashMap::new();
+        rooms.insert("machine-epk".to_string(), vec![room("main")]);
+        fed.set_peer_rooms("relay-c", rooms).await;
+        fed.learn_via("relay-c", "link-bc").await;
+        let machine = SigningKey::generate(&mut rand::thread_rng());
+        let (machine_pk, blob, sig) = signed_pairing_blob(&machine, &[B64.encode([7u8; 32])], 1);
+        fed.learn_machine_pairings(
+            "link-bc",
+            "relay-c",
+            vec![(machine_pk.clone(), 1, blob, sig)],
+        )
+        .await;
+        assert!(fed.machine_owners(&machine_pk).await.is_some());
+
+        fed.clear_peer("link-bc").await;
+        assert!(fed.relays_for_epk("machine-epk").await.is_empty());
+        assert!(
+            fed.machine_owners(&machine_pk).await.is_none(),
+            "source-link purge"
+        );
+
+        // Multi-link survival: an origin reachable via TWO links keeps its
+        // sessions + pairings when ONE dies.
+        let mut rooms = HashMap::new();
+        rooms.insert("machine-epk".to_string(), vec![room("main")]);
+        fed.set_peer_rooms("relay-c", rooms).await;
+        fed.learn_via("relay-c", "link-bc").await;
+        fed.learn_via("relay-c", "link-cd").await;
+        let machine = SigningKey::generate(&mut rand::thread_rng());
+        let (machine_pk, blob, sig) = signed_pairing_blob(&machine, &[B64.encode([7u8; 32])], 2);
+        fed.learn_machine_pairings(
+            "link-cd",
+            "relay-c",
+            vec![(machine_pk.clone(), 2, blob, sig)],
+        )
+        .await;
+        fed.clear_peer("link-bc").await;
+        assert_eq!(
+            fed.relays_for_epk("machine-epk").await.len(),
+            1,
+            "still via link-cd"
+        );
+        assert!(fed.machine_owners(&machine_pk).await.is_some());
+        fed.clear_peer("link-cd").await;
+        assert!(
+            fed.relays_for_epk("machine-epk").await.is_empty(),
+            "last link gone"
+        );
+    }
 }
 
 // ── Phase 3: FederatedSessions + peer list exchange + cross-relay forwarding ─
 
 use crate::peers::registry::PeerRegistry;
 use crate::rooms::RoomMeta;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 /// Wire frame: a pi_envelope forwarded across relays (Phase 3c).
@@ -1469,25 +1788,45 @@ pub struct RelayForwardAck {
 /// Stores rooms from federated peer relays. Keyed by (peer_relay_name, epk)
 /// → Vec<RoomMeta>. Also maintains an epk → peer_relay_name index for
 /// forwarding (which peer relay handles a given target epk?).
+/// Stores rooms from federated peer relays. Keyed by (ORIGIN relay name,
+/// epk) → Vec<RoomMeta> (federation v2 §4: origin-tagged — a transit relay
+/// re-advertises segments under the origin's name). Also maintains an epk →
+/// origin/link name index for forwarding (which relay handles a given
+/// target epk?) and the VIA map (origin → the links its advertisement
+/// arrived on — advertisement implies route).
 pub struct FederatedSessions {
     /// This relay's identity for hello/visited stamping (default: hostname).
     own_name: String,
-    /// (peer_relay_name, epk) → Vec<RoomMeta>
+    /// (origin relay name, epk) → Vec<RoomMeta>
     sessions: Mutex<HashMap<(String, String), Vec<RoomMeta>>>,
-    /// epk → list of peer_relay_names (for forwarding — multi-route fallback)
+    /// epk → list of origin/link names (for forwarding — multi-route fallback;
+    /// room-hosted epks name ORIGINS, app epks name learned-route LINKS)
     epk_to_relays: Mutex<HashMap<String, Vec<String>>>,
-    /// peer_relay_name → WS sender channel (for relay_forward, raw JSON text)
+    /// peer_relay_name (LINK) → WS sender channel (for relay_forward, raw
+    /// JSON text)
     forward_senders: Mutex<HashMap<String, Vec<mpsc::UnboundedSender<String>>>>,
     pending_forwards: Mutex<HashMap<String, oneshot::Sender<RelayForwardAck>>>,
     /// Federated pairing snapshot (check-before-forward design):
-    /// machine epk → (version, owners, source peer relay). PUBLIC data
-    /// exchanged over the owner-gated peering link; version-monotonic per
-    /// machine; purged with the source link in clear_peer.
+    /// machine epk → learned set. PUBLIC data exchanged over the paired
+    /// link; version-monotonic per machine; purged with the SOURCE link in
+    /// clear_peer (conservative). The machine-SIGNED blob+sig are kept
+    /// verbatim so transit re-advertisement needs no re-signing (only the
+    /// machine can sign).
     machine_pairings: Mutex<FederatedMachinePairings>,
     /// Learned peer-pairing documents: presented relay pubkey → (version,
     /// peer names). Signature-verified at the handshake; used for state and
     /// future strict gating.
     peer_docs: Mutex<HashMap<String, (u64, Vec<String>)>>,
+    /// VIA map (federation v2 §4): ORIGIN relay name → the LINK name(s) its
+    /// advertisement arrived on. Advertisement implies route — a forward
+    /// to an origin's epk rides the via link's channel; purged with the
+    /// link (an origin that loses its last link purges entirely).
+    via: Mutex<HashMap<String, Vec<String>>>,
+    /// ONWARD HOP backlinks (federation v2 §4): request_id → the arrival
+    /// connection's outbound channel, so the dest's ack returns VERBATIM
+    /// to the relay the forward arrived from (no id rewriting). Bounded
+    /// (LRU-evicted) + TTL-pruned.
+    hop_backlinks: Mutex<VecDeque<(String, Instant, mpsc::UnboundedSender<String>)>>,
 }
 
 pub fn default_relay_name() -> String {
@@ -1509,6 +1848,8 @@ impl FederatedSessions {
             pending_forwards: Mutex::new(HashMap::new()),
             machine_pairings: Mutex::new(HashMap::new()),
             peer_docs: Mutex::new(HashMap::new()),
+            via: Mutex::new(HashMap::new()),
+            hop_backlinks: Mutex::new(VecDeque::new()),
         }
     }
 
@@ -1529,6 +1870,55 @@ impl FederatedSessions {
         if !entry.iter().any(|r| r == relay_name) {
             entry.push(relay_name.to_string());
         }
+    }
+
+    /// VIA map (federation v2 §4): record that ORIGIN `origin`'s
+    /// advertisement arrived on LINK `link` — advertisement implies route
+    /// (a forward to the origin's epks rides this link's channel), and the
+    /// entry is the re-advertisement never-back exclusion + the purge
+    /// domain (clear_peer drops the link from every origin's via list; an
+    /// origin that loses its last link is gone entirely).
+    pub async fn learn_via(&self, origin: &str, link: &str) {
+        if origin.is_empty() || link.is_empty() {
+            return;
+        }
+        let mut via = self.via.lock().await;
+        let entry = via.entry(origin.to_string()).or_default();
+        if !entry.iter().any(|l| l == link) {
+            entry.push(link.to_string());
+        }
+    }
+
+    /// Resolve a routing candidate (a direct LINK name or a transitive
+    /// ORIGIN name) to a live outbound channel: direct links win, origins
+    /// resolve through the via map. `exclude_link` skips one link (the
+    /// onward hop never sends back along the arrival link).
+    async fn sender_for_candidate(
+        &self,
+        candidate: &str,
+        exclude_link: Option<&str>,
+    ) -> Option<mpsc::UnboundedSender<String>> {
+        let mut links = vec![candidate.to_string()];
+        links.extend(
+            self.via
+                .lock()
+                .await
+                .get(candidate)
+                .cloned()
+                .unwrap_or_default(),
+        );
+        let senders = self.forward_senders.lock().await;
+        for link in &links {
+            if exclude_link == Some(link.as_str()) {
+                continue;
+            }
+            if let Some(vec) = senders.get(link) {
+                if let Some(alive) = vec.iter().find(|tx| !tx.is_closed()) {
+                    return Some(alive.clone());
+                }
+            }
+        }
+        None
     }
 
     /// Replace all sessions from a given peer relay (on relay_peer_list).
@@ -1597,12 +1987,16 @@ impl FederatedSessions {
         }
     }
 
-    /// Learn pairing snapshots from a peering handshake (check-before-
-    /// forward): machine epk → owners as PUBLIC data over the owner-gated
-    /// link. Version-monotonic per machine.
+    /// Learn pairing snapshots from a peering advertisement (check-before-
+    /// forward): machine epk → owners as PUBLIC data over the paired link.
+    /// Version-monotonic per machine. `source_link` is the LINK the frame
+    /// arrived on (purge domain — conservative: a pairing learned via a
+    /// link is gone when that link dies); `origin` is the ORIGIN relay whose
+    /// machine pushed it (origin-tagged transit re-advertisement).
     pub async fn learn_machine_pairings(
         &self,
-        peer_relay: &str,
+        source_link: &str,
+        origin: &str,
         entries: Vec<(String, u64, String, String)>,
     ) {
         let mut map = self.machine_pairings.lock().await;
@@ -1625,18 +2019,21 @@ impl FederatedSessions {
                 continue;
             }
             let version = p.version;
-            if let Some((cur, _, _)) = map.get(&machine)
-                && *cur >= version
+            if let Some(cur) = map.get(&machine)
+                && cur.version >= version
             {
                 continue;
             }
             map.insert(
                 machine,
-                (
+                FederatedMachinePairing {
                     version,
-                    p.owners.into_iter().collect(),
-                    peer_relay.to_string(),
-                ),
+                    owners: p.owners.into_iter().collect(),
+                    blob: blob_b64,
+                    sig: sig_b64,
+                    origin: origin.to_string(),
+                    source: source_link.to_string(),
+                },
             );
         }
     }
@@ -1644,14 +2041,16 @@ impl FederatedSessions {
     /// Learn one update pushed by a peered relay (pairing_set change event).
     pub async fn learn_machine_pairing(
         &self,
-        peer_relay: &str,
+        source_link: &str,
+        origin: &str,
         machine: &str,
         version: u64,
         blob_b64: String,
         sig_b64: String,
     ) {
         self.learn_machine_pairings(
-            peer_relay,
+            source_link,
+            origin,
             vec![(machine.to_string(), version, blob_b64, sig_b64)],
         )
         .await;
@@ -1665,7 +2064,7 @@ impl FederatedSessions {
             .lock()
             .await
             .get(machine_epk)
-            .map(|(_, owners, _)| owners.clone())
+            .map(|p| p.owners.clone())
     }
 
     /// Learn a verified peer-pairing document (version-monotonic per key).
@@ -1699,7 +2098,10 @@ impl FederatedSessions {
 
     /// Push a machine pairing update to all peered relays — a machine's
     /// pairing_set change must reach every relay holding a check-before-
-    /// forward view of its owners.
+    /// forward view of its owners. Origin-tagged (slice 3): the frame names
+    /// THIS relay as the origin, so transit relays re-advertise it onward
+    /// under the right origin name (absent origin ⇒ the sending relay
+    /// itself, for pre-slice-3 peers).
     pub async fn broadcast_machine_pairing(
         &self,
         machine: &str,
@@ -1709,6 +2111,7 @@ impl FederatedSessions {
     ) {
         let frame = serde_json::json!({
             "kind": "relay_pairings_update",
+            "origin": self.own_name,
             "machine": machine,
             "version": version,
             "blob": owners_blob_b64,
@@ -1723,20 +2126,63 @@ impl FederatedSessions {
         }
     }
 
-    /// Remove all sessions from a peer relay (on disconnect).
+    /// Re-advertise an incremental update (`relay_peer_update` /
+    /// `relay_pairings_update`) ONWARD to every federated link EXCEPT the
+    /// one it arrived on (federation v2 §4 — never back; self-origin
+    /// filtering at the receivers terminates propagation). The frame text
+    /// rides verbatim — its origin tags are already correct.
+    pub async fn relay_update_onward(&self, except_link: &str, text: &str) {
+        let senders = self.forward_senders.lock().await;
+        for (link, txs) in senders.iter() {
+            if link == except_link {
+                continue;
+            }
+            for tx in txs {
+                let _ = tx.send(text.to_string());
+            }
+        }
+    }
+
+    /// Remove all state that rode a LINK (on disconnect): sessions and
+    /// epk-index entries for ORIGINS that lost their last via link, learned
+    /// routes naming the link, and owner-set snapshots whose SOURCE link (or
+    /// whose origin) is the dead one — conservative and correct (a machine's
+    /// pairing learned via B purges when B's link dies; it re-learns on
+    /// re-advertisement).
     pub async fn clear_peer(&self, peer_relay: &str) {
         let mut sessions = self.sessions.lock().await;
-        sessions.retain(|k, _| k.0 != peer_relay);
+        // 1. VIA: drop the dead link from every origin's list; origins that
+        //    lost their LAST link purge entirely (advertisement implied
+        //    their route — the route is gone).
+        let mut via = self.via.lock().await;
+        let mut purged_origins: HashSet<String> = HashSet::new();
+        via.retain(|origin, links| {
+            links.retain(|l| l != peer_relay);
+            if links.is_empty() {
+                purged_origins.insert(origin.clone());
+                false
+            } else {
+                true
+            }
+        });
+        // 2. sessions: purged origins + any legacy entries keyed by the link
+        //    name itself.
+        sessions.retain(|k, _| k.0 != peer_relay && !purged_origins.contains(&k.0));
+        // 3. epk index: the dead link (learned routes) + purged origins.
         let mut epk_map = self.epk_to_relays.lock().await;
         for relays in epk_map.values_mut() {
-            relays.retain(|r| r != peer_relay);
+            relays.retain(|r| r != peer_relay && !purged_origins.contains(r));
         }
         epk_map.retain(|_, relays| !relays.is_empty());
-        // Owner-set snapshots ride the same link — purge on disconnect.
+        drop(epk_map);
+        drop(sessions);
+        drop(via);
+        // 4. owner-set snapshots: source-link purge (conservative) + purged
+        //    origins.
         self.machine_pairings
             .lock()
             .await
-            .retain(|_, (_, _, src)| src != peer_relay);
+            .retain(|_, p| p.source != peer_relay && !purged_origins.contains(&p.origin));
     }
 
     /// Get all federated rooms for a given epk (for rooms_check).
@@ -1866,6 +2312,191 @@ impl FederatedSessions {
         }
     }
 
+    /// Build the full advertisement for one peer link (federation v2 §4):
+    /// the SELF segment (own local rooms + own machines' signed pairings,
+    /// always FIRST — pre-slice-3 peers read exactly one frame) plus one
+    /// segment per known ORIGIN — everything learned from OTHER peers,
+    /// origin-tagged, self-origin filtered, never the peer its own data
+    /// back, never back to the link the origin's data arrived on. No hop
+    /// cap — the self-origin + never-back rules terminate propagation.
+    /// Callers fill `peer_doc` on the self segment + `done` markers per the
+    /// peer's protocol version.
+    pub async fn advertisement_segments(
+        &self,
+        registry: &PeerRegistry,
+        pairing: &PairingRegistry,
+        peer_link: &str,
+        peer_origin: &str,
+    ) -> Vec<RelayPeerList> {
+        // Group the learned state by ORIGIN (sessions are already keyed by
+        // origin; pairings carry their origin).
+        let mut rooms_by_origin: HashMap<String, HashMap<String, Vec<RoomMeta>>> = HashMap::new();
+        {
+            let sessions = self.sessions.lock().await;
+            for ((origin, epk), rooms) in sessions.iter() {
+                rooms_by_origin
+                    .entry(origin.clone())
+                    .or_default()
+                    .insert(epk.clone(), rooms.clone());
+            }
+        }
+        let mut pairings_by_origin: HashMap<String, Vec<(String, FederatedMachinePairing)>> =
+            HashMap::new();
+        {
+            let pairings = self.machine_pairings.lock().await;
+            for (machine, p) in pairings.iter() {
+                pairings_by_origin
+                    .entry(p.origin.clone())
+                    .or_default()
+                    .push((machine.clone(), p.clone()));
+            }
+        }
+
+        let mut segments = vec![RelayPeerList {
+            kind: "relay_peer_list".into(),
+            relay_name: self.own_name.clone(),
+            rooms_by_epk: FederatedSessions::local_rooms_by_epk(registry),
+            machine_pairings: pairing
+                .signed_blobs()
+                .into_iter()
+                .map(|(machine, version, blob, sig)| RelayMachinePairing {
+                    machine,
+                    version,
+                    blob: B64.encode(&blob),
+                    sig: B64.encode(&sig),
+                })
+                .collect(),
+            peer_doc: None, // the caller fills (needs the peer's name)
+            done: None,     // send_advertisement sets the markers
+        }];
+
+        let via = self.via.lock().await;
+        let mut origins: Vec<String> = rooms_by_origin
+            .keys()
+            .chain(pairings_by_origin.keys())
+            .cloned()
+            .collect();
+        origins.sort();
+        origins.dedup();
+        for origin in origins {
+            // Self-origin filter + never the peer its own data back (by
+            // origin name AND by link name — covers both naming styles).
+            if origin == self.own_name || origin == peer_link || origin == peer_origin {
+                continue;
+            }
+            // Never back to the link this origin's data arrived on.
+            if via
+                .get(&origin)
+                .is_some_and(|links| links.iter().any(|l| l == peer_link))
+            {
+                continue;
+            }
+            let rooms = rooms_by_origin.remove(&origin).unwrap_or_default();
+            let pairings: Vec<RelayMachinePairing> = pairings_by_origin
+                .get(&origin)
+                .map(|entries| {
+                    entries
+                        .iter()
+                        .filter(|(_, p)| p.source != peer_link)
+                        .map(|(machine, p)| RelayMachinePairing {
+                            machine: machine.clone(),
+                            version: p.version,
+                            blob: p.blob.clone(),
+                            sig: p.sig.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if rooms.is_empty() && pairings.is_empty() {
+                continue;
+            }
+            segments.push(RelayPeerList {
+                kind: "relay_peer_list".into(),
+                relay_name: origin,
+                rooms_by_epk: rooms,
+                machine_pairings: pairings,
+                peer_doc: None, // only the SELF segment carries our doc
+                done: None,
+            });
+        }
+        segments
+    }
+
+    /// ONWARD HOP (federation v2 §4): re-sign `forward` with THIS relay's
+    /// keypair (same request_id, from_epk/target_epk and payload verbatim,
+    /// with `visited` grown by our own name) and send it down the route the
+    /// target's advertisement implies. Never back along `arrival_link`,
+    /// never to a relay already in `visited`. Records the id→backlink so
+    /// the dest's ack returns verbatim to the relay the forward arrived
+    /// from. Returns the onward link name when a route was found.
+    pub async fn hop_forward(
+        &self,
+        keypair: &crate::relay_keypair::RelayKeypair,
+        arrival_link: &str,
+        forward: &RelayForward,
+        backlink: mpsc::UnboundedSender<String>,
+    ) -> Option<String> {
+        let relay_names = self.relays_for_epk(&forward.target_epk).await;
+        for relay_name in &relay_names {
+            if relay_name == arrival_link || forward.visited.contains(relay_name) {
+                continue;
+            }
+            if let Some(tx) = self
+                .sender_for_candidate(relay_name, Some(arrival_link))
+                .await
+            {
+                let mut visited = forward.visited.clone();
+                visited.push(self.own_name.clone());
+                let sig_msg = format!(
+                    "{}|{}|{}|{}",
+                    forward.request_id,
+                    forward.from_epk,
+                    forward.target_epk,
+                    visited.join(",")
+                );
+                let hop = RelayForward {
+                    kind: "relay_forward".into(),
+                    request_id: forward.request_id.clone(),
+                    from_epk: forward.from_epk.clone(),
+                    target_epk: forward.target_epk.clone(),
+                    envelope: forward.envelope.clone(),
+                    visited: visited.clone(),
+                    relay_pubkey: Some(keypair.pubkey_b64()),
+                    relay_sig: Some(keypair.sign(sig_msg.as_bytes())),
+                    room: forward.room.clone(),
+                    ct: forward.ct.clone(),
+                };
+                self.record_hop_backlink(&forward.request_id, backlink)
+                    .await;
+                let _ = tx.send(serde_json::to_string(&hop).unwrap_or_default());
+                return Some(relay_name.clone());
+            }
+        }
+        None
+    }
+
+    /// Record a hop's id→backlink (bounded LRU + TTL — the source's forward
+    /// times out after 5 s, so 30 s covers the ack generously).
+    async fn record_hop_backlink(&self, request_id: &str, tx: mpsc::UnboundedSender<String>) {
+        let mut q = self.hop_backlinks.lock().await;
+        let now = Instant::now();
+        q.retain(|(_, at, _)| now.duration_since(*at) < HOP_BACKLINK_TTL);
+        while q.len() >= HOP_BACKLINK_MAX {
+            q.pop_front();
+        }
+        q.push_back((request_id.to_string(), now, tx));
+    }
+
+    /// Take the backlink for an ack'd hop, if any (single ack — the entry
+    /// is consumed). None ⇒ the ack is for OUR OWN pending forward.
+    async fn take_hop_backlink(&self, request_id: &str) -> Option<mpsc::UnboundedSender<String>> {
+        let mut q = self.hop_backlinks.lock().await;
+        let now = Instant::now();
+        q.retain(|(_, at, _)| now.duration_since(*at) < HOP_BACKLINK_TTL);
+        let idx = q.iter().position(|(id, _, _)| id == request_id)?;
+        q.remove(idx).map(|(_, _, tx)| tx)
+    }
+
     /// Forward a pi_envelope to a federated peer relay. Looks up which peer
     /// relay has the target epk, sends the relay_forward frame, and returns a
     /// oneshot receiver for the ack. Returns None if no federated relay has
@@ -1876,29 +2507,21 @@ impl FederatedSessions {
         target_epk: &str,
         envelope: serde_json::Value,
     ) -> Option<(String, oneshot::Receiver<RelayForwardAck>)> {
-        // Multi-route fallback: try each relay that has the target epk,
-        // in order, until we find one with an alive sender. The list holds
-        // BOTH sources — room-hosting relays (announced) and learned routes
-        // (from verified inbound forwards) — announced candidates come first
-        // (shortest/direct), learned ones only when the epk hosts no rooms.
+        // Multi-route fallback: try each candidate that has the target epk,
+        // in order, until one resolves to a live sender. The list holds BOTH
+        // kinds — direct LINK names (announced rooms from a directly-paired
+        // relay, learned routes from verified inbound forwards) and transitive
+        // ORIGIN names (which resolve through the via map — advertisement
+        // implies route, federation v2 §4).
         let relay_names = self.relays_for_epk(target_epk).await;
-        if relay_names.is_empty() {
-            return None;
-        }
         let own_name = self.own_name.clone();
-        let tx = {
-            let senders = self.forward_senders.lock().await;
-            let mut found = None;
-            for relay_name in &relay_names {
-                if let Some(vec) = senders.get(relay_name) {
-                    if let Some(alive) = vec.iter().find(|tx| !tx.is_closed()) {
-                        found = Some(alive.clone());
-                        break;
-                    }
-                }
+        let mut tx = None;
+        for relay_name in &relay_names {
+            if let Some(t) = self.sender_for_candidate(relay_name, None).await {
+                tx = Some(t);
+                break;
             }
-            found
-        };
+        }
         let tx = tx?;
         let request_id = format!("{}", rand::random::<u64>());
         // Sign the forward with the relay's keypair (authenticated forwarding).
@@ -1945,24 +2568,18 @@ impl FederatedSessions {
         room: &str,
         ct: &str,
     ) -> Option<(String, oneshot::Receiver<RelayForwardAck>)> {
+        // Same via-map candidate resolution as forward_to_federated
+        // (direct links first, then the origin's via links).
         let relay_names = self.relays_for_epk(target_epk).await;
-        if relay_names.is_empty() {
-            return None;
-        }
         let own_name = self.own_name.clone();
-        let tx = {
-            let senders = self.forward_senders.lock().await;
-            let mut found = None;
-            for relay_name in &relay_names {
-                if let Some(vec) = senders.get(relay_name) {
-                    if let Some(alive) = vec.iter().find(|tx| !tx.is_closed()) {
-                        found = Some(alive.clone());
-                        break;
-                    }
-                }
+        let mut tx = None;
+        for relay_name in &relay_names {
+            if let Some(t) = self.sender_for_candidate(relay_name, None).await {
+                tx = Some(t);
+                break;
             }
-            found
-        }?;
+        }
+        let tx = tx?;
         let request_id = format!("{}", rand::random::<u64>());
         let keypair = crate::relay_keypair::load_or_generate(None);
         let visited = vec![own_name];
@@ -2026,29 +2643,61 @@ impl Default for FederatedSessions {
 }
 
 /// Wire frame: a peer relay's full room list (sent after federation).
-#[derive(Debug, Deserialize, Serialize)]
+/// Federation v2 §4 (slice 3): the advertisement is ONE SEGMENT PER ORIGIN —
+/// `relay_name` names the ORIGIN (the relay whose machines host the rooms
+/// / pushed the pairings), which for the sender's own segment is the sender
+/// itself. `done: Some(true)` marks the LAST segment of the sequence;
+/// `done: Some(false)` means more segments follow; ABSENT means the whole
+/// advertisement is this one frame (pre-slice-3 peers — additive +
+/// back-compat).
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RelayPeerList {
     #[serde(rename = "type")]
     pub kind: String,
-    /// The sending relay's name (for attribution).
+    /// The ORIGIN relay's name (the sender itself for the self segment).
     pub relay_name: String,
     /// Rooms grouped by the remote machine's epk.
     pub rooms_by_epk: HashMap<String, Vec<RoomMeta>>,
-    /// Federated pairing snapshot (check-before-forward): sender relay's
+    /// Federated pairing snapshot (check-before-forward): the origin's
     /// machines' owner sets, PUBLIC data. Default keeps the handshake
     /// wire-compatible with peers on older versions.
     #[serde(default)]
     pub machine_pairings: Vec<RelayMachinePairing>,
     /// The sender's signed peer-pairing document (b64{doc,sig}), presenting
     /// itself (its relay pubkey rides the wire/handshake). Verified against
-    /// the presented key; stored version-monotonically.
-    #[serde(default)]
+    /// the presented key; stored version-monotonically. Only the SELF
+    /// segment carries one (a transit relay cannot present the origin's
+    /// identity).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peer_doc: Option<PeerPairingEnvelope>,
+    /// Sequence marker (slice 3): `Some(true)` on the LAST segment;
+    /// `Some(false)` when more segments follow; absent ⇒ single-frame
+    /// advertisement (pre-slice-3 peers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub done: Option<bool>,
 }
 
-/// Federated machine pairing snapshots: machine epk -> (version, owners,
-/// source peer relay).
-pub type FederatedMachinePairings = HashMap<String, (u64, HashSet<String>, String)>;
+/// Federated machine pairing snapshots (federation v2 §4): machine epk →
+/// the learned, machine-SIGNED owner-set envelope. The blob+sig are kept
+/// verbatim so transit re-advertisement needs no re-signing (only the
+/// machine can sign — transit cannot forge owner sets); `origin` tags the
+/// relay whose machine pushed it (origin-tagged re-advertisement) and
+/// `source` the LINK it arrived on (purge domain — conservative).
+#[derive(Debug, Clone)]
+pub struct FederatedMachinePairing {
+    pub version: u64,
+    pub owners: HashSet<String>,
+    /// The machine-signed pairing envelope (b64 blob + b64 sig), verbatim.
+    pub blob: String,
+    pub sig: String,
+    /// The ORIGIN relay whose machine pushed this set.
+    pub origin: String,
+    /// The LINK this advertisement arrived on.
+    pub source: String,
+}
+
+/// Federated machine pairing snapshots: machine epk → learned set.
+pub type FederatedMachinePairings = HashMap<String, FederatedMachinePairing>;
 
 /// Signed peer-pairing document (relay-pairing as protocol, design
 /// 2026-10-14): a relay signs {relay_pk, peers, version} — its paired relay
