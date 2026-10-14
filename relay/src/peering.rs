@@ -491,12 +491,18 @@ async fn connect_and_verify(
         _ => return Err("expected relay_peer_list".into()),
     };
     let peer_list: RelayPeerList = serde_json::from_str(&text)?;
+    // Key the learned state by the CONFIGURED peer name — the peer's
+    // announced relay_name can be a URL-style identity (e.g. a host whose
+    // UNBIEN_RELAY_NAME was never set), while our forward_senders are keyed
+    // by the config name. Mismatching the two made every federated forward
+    // to that peer fail (rooms under the URL, senders under "droplet").
+    let peer_relay_key = &peer.name;
     federated
-        .set_peer_rooms(&peer_list.relay_name, peer_list.rooms_by_epk)
+        .set_peer_rooms(peer_relay_key, peer_list.rooms_by_epk)
         .await;
     federated
         .learn_machine_pairings(
-            &peer.name,
+            peer_relay_key,
             peer_list
                 .machine_pairings
                 .into_iter()
