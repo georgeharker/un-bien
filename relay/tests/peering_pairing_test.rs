@@ -229,9 +229,25 @@ async fn pairing_secret_auto_adds_peer_and_is_single_use() {
     );
     assert_eq!(doc["pending"], json!([]), "pending entry consumed");
 
-    // SINGLE-USE: the same token presented again declines with the named
-    // reason (the presenter is not pinned under THIS key either — the token
-    // was the only thing it had, and it is spent).
+    // SINGLE-USE token, but NOT a dead connection: the SAME presenter (now
+    // PINNED via the first use's auto-add) re-presents its stored, spent
+    // secret on every reconnect — the pin gate decides and it FEDERATES.
+    // (Declining here killed live links after their first disconnect:
+    // the link worked exactly once per relay restart — the "entire relay
+    // went" after an upgrade.)
+    let mut ws = connect_relay_peer(relay_b.port).await;
+    let ack = hello_and_ack(
+        &mut ws,
+        &signed_hello(&sk, "relay-a", "http://127.0.0.1:1234", Some(&secret)),
+    )
+    .await;
+    assert_eq!(
+        ack["federate"], true,
+        "spent secret from a PINNED presenter must federate via the pin gate: {ack}"
+    );
+
+    // A spent/WRONG secret from an UNPINNED key still declines — the
+    // fall-through lands in the pin gate, so the reason is ITS named one.
     let sk2 = SigningKey::generate(&mut rand::thread_rng());
     let mut ws = connect_relay_peer(relay_b.port).await;
     let ack = hello_and_ack(
@@ -239,11 +255,11 @@ async fn pairing_secret_auto_adds_peer_and_is_single_use() {
         &signed_hello(&sk2, "relay-z", "http://127.0.0.1:5", Some(&secret)),
     )
     .await;
-    assert_eq!(ack["federate"], false, "spent secret must decline");
     assert_eq!(
-        ack["reason"], "pairing_secret_unknown",
-        "named decline: {ack}"
+        ack["federate"], false,
+        "spent secret from an unpinned key must decline"
     );
+    assert_eq!(ack["reason"], "unpinned_peer", "named decline: {ack}");
 
     // A WRONG secret (never minted) declines the same way.
     let mut ws = connect_relay_peer(relay_b.port).await;
@@ -253,7 +269,7 @@ async fn pairing_secret_auto_adds_peer_and_is_single_use() {
     )
     .await;
     assert_eq!(ack["federate"], false);
-    assert_eq!(ack["reason"], "pairing_secret_unknown");
+    assert_eq!(ack["reason"], "unpinned_peer");
 }
 
 // ── (iii) outbound refuses to dial unpinned; picks the pin up later ───────

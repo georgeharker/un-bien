@@ -735,7 +735,8 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
     // valid single-use pairing secret held in relay-peers.json `pending`
     // (auto-add, pinned to the presented key), or (b) the strict pin gate:
     // the presenter's key must already be pinned in peers[].
-    let federate = if let Some(pair_secret) = hello.pair_secret.as_deref() {
+    let mut federate = false;
+    if let Some(pair_secret) = hello.pair_secret.as_deref() {
         // (a) One-pair: identity verification is MANDATORY on this path —
         // the auto-added entry pins the PRESENTED key, so the hello must
         // prove possession of it first.
@@ -802,22 +803,19 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
                     url = %peer_url,
                     "PAIRING: valid pending secret — peer AUTO-ADDED (pinned) + pending entry consumed"
                 );
-                true
+                federate = true;
             }
             Ok(false) => {
-                warn!(
+                // SPENT (or wrong) secret — NOT a decline. A paired peer
+                // re-presents its stored secret on EVERY reconnect, and the
+                // invitation was consumed on the first successful pairing:
+                // the pin gate below decides. Declining here killed the
+                // link after its first disconnect — observed live as "the
+                // entire relay went" after the first relay restart.
+                info!(
                     peer = %peer_name,
-                    "relay-peer: pairing secret matches NO pending entry (wrong or already used), declining"
+                    "pairing secret matches no pending entry (spent or wrong) — pin gate decides"
                 );
-                send_hello_ack(
-                    &mut socket,
-                    false,
-                    ours,
-                    &own_name,
-                    Some("pairing_secret_unknown"),
-                )
-                .await;
-                return;
             }
             Err(e) => {
                 warn!(
@@ -836,10 +834,13 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
                 return;
             }
         }
-    } else {
-        // (b) STRICT PIN GATE: the presenter's key must be PINNED in
-        // relay-peers.json. Identity signature verification is mandatory
-        // for configured peers.
+    }
+    if !federate {
+        // (b) STRICT PIN GATE — reached when NO secret was presented OR the
+        // presented secret was spent/wrong (the fall-through from (a)):
+        // the presenter's key must be PINNED in relay-peers.json. Identity
+        // signature verification is mandatory for configured peers. The pin
+        // decides — not the token's history.
         let Some(peer_pubkey) = hello.relay_pubkey.as_deref() else {
             warn!("relay-peer: unpinned presenter (no relay_pubkey in hello), declining");
             send_hello_ack(&mut socket, false, ours, &own_name, Some("unpinned_peer")).await;
@@ -892,8 +893,8 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
             send_hello_ack(&mut socket, false, ours, &own_name, Some("unpinned_peer")).await;
             return;
         }
-        true
-    };
+        federate = true;
+    }
 
     // Owner-set intersection: OBSERVABILITY ONLY (federation v2 §1) — log
     // it, never decide federation on it. `owners` stays on the wire.
