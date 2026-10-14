@@ -245,6 +245,27 @@ async fn app_request_and_machine_reply_cross_two_relays() {
         .pairing
         .set(machine_epk.clone(), vec![app_epk.clone()]);
 
+    // Strict pairing world: the machine pushes its machine-SIGNED pairing_set
+    // to relay B (owners = [app]) — the handshake then exchanges it and the
+    // source relay's check-before-forward forwards the app's requests.
+    {
+        let machine_pk = B64.encode(machine_sk.verifying_key().to_bytes());
+        let owners = vec![app_epk.clone()];
+        let blob_bytes = serde_json::to_vec(&json!({
+            "machine_pk": machine_pk,
+            "owners": owners,
+            "version": 1,
+            "issued_at": 1_700_000_000_000u64,
+        }))
+        .unwrap();
+        let sig = machine_sk.sign(&blob_bytes);
+        relay_b
+            .state
+            .pairing
+            .set_signed(machine_epk.clone(), owners, 1, &blob_bytes, &sig.to_bytes())
+            .expect("e2e machine pairing push");
+    }
+
     // Peering: A connects out to B (same mechanism as production: config file
     // + start_peering). Machine rooms must already exist on B for the
     // handshake exchange to carry them.
@@ -373,6 +394,7 @@ async fn federated_pairing_exchange_and_source_refusal() {
             "machine_pk": b64u(&mkey),
             "owners": owners,
             "version": 1,
+            "issued_at": 1_700_000_000_000u64,
         });
         let blob_bytes = serde_json::to_vec(&blob).unwrap();
         let sig = machine_sk.sign(&blob_bytes);

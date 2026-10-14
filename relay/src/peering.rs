@@ -1377,9 +1377,11 @@ impl FederatedSessions {
                 continue;
             };
             let Ok(p) = crate::peers::pairing::verify_pairing_blob(&blob_bytes, &sig_bytes) else {
+                eprintln!("[dbgpair] verify FAILED machine={}", &machine[..machine.len().min(16)]);
                 continue;
             };
             if p.machine_pk != machine {
+                eprintln!("[dbgpair] binding mismatch: presented {} want {}", &p.machine_pk[..p.machine_pk.len().min(16)], &machine[..machine.len().min(16)]);
                 continue;
             }
             let version = p.version;
