@@ -82,9 +82,21 @@ fn spawn_relay_proc(name: &str, port: u16, peers: &[(&str, String)]) -> RelayPro
         // Scrub ambient heredity: everything state-ish lives in the rig dir.
         .env("XDG_CONFIG_HOME", dir.path().join("xdg-config"))
         .env("XDG_STATE_HOME", dir.path().join("xdg-state"))
-        .env_remove("RUST_LOG")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .env("RUST_LOG", "relay=info")
+        .stdout({
+            let f = std::fs::File::create(std::env::temp_dir().join(format!(
+                "unbien-rig-{name}-{port}.out.log"
+            )))
+            .unwrap();
+            Stdio::from(f)
+        })
+        .stderr({
+            let f = std::fs::File::create(std::env::temp_dir().join(format!(
+                "unbien-rig-{name}-{port}.err.log"
+            )))
+            .unwrap();
+            Stdio::from(f)
+        })
         .spawn()
         .expect("spawn unbien-relay binary");
 
@@ -103,7 +115,12 @@ fn spawn_relay_proc(name: &str, port: u16, peers: &[(&str, String)]) -> RelayPro
     let mut child = child; // ensure the failed spawn is reaped, not leaked
     let _ = child.kill();
     let _ = child.wait();
-    panic!("relay {name} never started listening");
+    let mut child = child;
+    let _ = child.kill();
+    let _ = child.wait();
+    panic!(
+        "relay {name} never started listening (logs: /tmp/unbien-rig-{name}-{port}.*.log)"
+    );
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -256,6 +273,26 @@ async fn app_machine_request_reply_stream_across_three_relay_chain() {
     }
     assert!(learned, "A never learned the machine's room via transit B");
 
+    // Strict pairing gate: the machine pushes its MACHINE-SIGNED pairing_set
+    // (its owner set = the app's epk) before app→machine traffic can forward.
+    let doc = json!({
+        "machine_pk": B64.encode(machine_sk.verifying_key().to_bytes()),
+        "owners": [app_epk],
+        "version": 1,
+    });
+    let doc_bytes = serde_json::to_vec(&doc).unwrap();
+    machine
+        .send(Message::text(
+            json!({
+                "type": "pairing_set",
+                "blob": B64.encode(&doc_bytes),
+                "sig": B64.encode(machine_sk.sign(&doc_bytes).to_bytes()),
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+
     // Leg 2: request crosses A→B→C.
     let payload = json!({"type": "ub", "ub": {"t": "session_sync", "session_id": "s1"}});
     app.send(Message::text(outer_frame(&machine_epk, "main", &payload)))
@@ -348,7 +385,7 @@ async fn chain_rig_smoke_direct_hop() {
         }
     }
     assert_eq!(
-        inner_of(&delivered.expect("direct hop never delivered")),
+        inner_of(&delivered.expect("direct hop never delivered (logs: /tmp/unbien-rig-*)")),
         payload
     );
 }

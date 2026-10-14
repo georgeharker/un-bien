@@ -88,10 +88,14 @@ pub struct StaleVersion {
 /// fail-closed does not re-open a global leak window on every restart (the two
 /// only compose correctly TOGETHER). The in-memory `allow` map is the hot-path
 /// cache; `store`, when present, is durable write-through backing.
+/// Stored (blob, sig) pairing envelope per machine pub key.
+pub type StoredPairingBlob = (Vec<u8>, Vec<u8>);
+
 #[derive(Default)]
 pub struct PairingRegistry {
     allow: Mutex<HashMap<String, HashSet<String>>>,
     versions: Mutex<HashMap<String, u64>>,
+    blobs: Mutex<HashMap<String, StoredPairingBlob>>,
     store: Mutex<Option<Connection>>,
 }
 
@@ -138,19 +142,28 @@ impl PairingRegistry {
         // Monotonic version floor per machine, so a restart rejects any replay
         // of a signed blob older than one we already accepted (design 01M23MKVG).
         let mut versions: HashMap<String, u64> = HashMap::new();
+        let mut blobs: HashMap<String, StoredPairingBlob> = HashMap::new();
         {
-            let mut stmt = conn.prepare("SELECT machine, version FROM pairing_signed")?;
+            let mut stmt =
+                conn.prepare("SELECT machine, version, blob, sig FROM pairing_signed")?;
             let rows = stmt.query_map([], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)? as u64,
+                    r.get::<_, Vec<u8>>(2)?,
+                    r.get::<_, Vec<u8>>(3)?,
+                ))
             })?;
             for row in rows {
-                let (machine, version) = row?;
-                versions.insert(machine, version);
+                let (machine, version, blob, sig) = row?;
+                versions.insert(machine.clone(), version);
+                blobs.insert(machine, (blob, sig));
             }
         }
         Ok(Self {
             allow: Mutex::new(allow),
             versions: Mutex::new(versions),
+            blobs: Mutex::new(blobs),
             store: Mutex::new(Some(conn)),
         })
     }
@@ -245,9 +258,34 @@ impl PairingRegistry {
                 }
             }
         }
+        self.blobs
+            .lock()
+            .unwrap()
+            .insert(machine.clone(), (blob.to_vec(), sig.to_vec()));
         self.allow.lock().unwrap().insert(machine.clone(), set);
         self.versions.lock().unwrap().insert(machine, version);
         Ok(())
+    }
+
+    /// The federated pairing exchange carries the MACHINE-SIGNED envelopes
+    /// (machine_pk, version, blob, sig) so the receiving relay verifies them
+    /// itself — the settled design: prevents impersonated relays and
+    /// owner-set poisoning, because no peer can inject owner claims it
+    /// cannot sign.
+    pub fn signed_blobs(&self) -> Vec<(String, u64, Vec<u8>, Vec<u8>)> {
+        let versions = self.versions.lock().unwrap();
+        let blobs = self.blobs.lock().unwrap();
+        blobs
+            .iter()
+            .map(|(machine, (blob, sig))| {
+                (
+                    machine.clone(),
+                    versions.get(machine).copied().unwrap_or(0),
+                    blob.clone(),
+                    sig.clone(),
+                )
+            })
+            .collect()
     }
 
     /// May `requester` list/reach `machine`? FAIL-CLOSED: an unconfigured
@@ -262,25 +300,6 @@ impl PairingRegistry {
     /// The current allow-set for `machine` when configured — used to re-filter
     /// existing subscribers the moment a push lands (revocation completeness +
     /// reconnect-race cleanup). `None` = unconfigured.
-    /// Federated handshake snapshot (design: check-before-forward): every
-    /// machine's advertised (version, owners) as PUBLIC data — owner epks are
-    /// public by construction and the peering link is owner-gated, so no
-    /// signed/private material is exchanged. The receiving relay re-enforces
-    /// monotonic versions on its side.
-    pub fn federated_owners_snapshot(&self) -> Vec<(String, u64, Vec<String>)> {
-        let allow = self.allow.lock().unwrap();
-        let versions = self.versions.lock().unwrap();
-        allow
-            .iter()
-            .map(|(machine, owners)| {
-                (
-                    machine.clone(),
-                    versions.get(machine).copied().unwrap_or(0),
-                    owners.iter().cloned().collect(),
-                )
-            })
-            .collect()
-    }
 
     pub fn owners_of(&self, machine: &str) -> Option<HashSet<String>> {
         self.allow.lock().unwrap().get(machine).cloned()

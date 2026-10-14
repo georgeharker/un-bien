@@ -347,7 +347,8 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                                                         .broadcast_machine_pairing(
                                                                             &peer_id,
                                                                             version,
-                                                                            &set,
+                                                                            &B64.encode(&blob),
+                                                                            &B64.encode(&sig),
                                                                         )
                                                                         .await;
                                                                     Some(set)
@@ -671,8 +672,14 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                         || federated.machine_owners(&peer_id).await.is_some();
                                     let sender_untrusted = !pairing.all_owner_pubkeys().contains(&peer_id)
                                         && !sender_is_machine;
+                                    // STRICT (no unpinned option): with transitive
+                                    // doc/owner exchange, a dest owner set is always
+                                    // known in steady state; None ⇒ refuse (unknown
+                                    // dest is not forwarded).
                                     let dest_excludes_sender =
-                                        dest_owners.as_ref().is_some_and(|o| !o.contains(&peer_id));
+                                        !dest_owners
+                                            .as_ref()
+                                            .is_some_and(|o| o.contains(&peer_id));
                                     if dest_excludes_sender && sender_untrusted {
                                         let refusal = serde_json::json!({
                                             "type": "error",

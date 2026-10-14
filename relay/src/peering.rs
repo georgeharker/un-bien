@@ -462,12 +462,13 @@ async fn connect_and_verify(
         relay_name: federated.own_name(),
         rooms_by_epk: local_rooms,
         machine_pairings: pairing
-            .federated_owners_snapshot()
+            .signed_blobs()
             .into_iter()
-            .map(|(machine, version, owners)| RelayMachinePairing {
+            .map(|(machine, version, blob, sig)| RelayMachinePairing {
                 machine,
                 version,
-                owners,
+                blob: B64.encode(&blob),
+                sig: B64.encode(&sig),
             })
             .collect(),
         peer_doc: {
@@ -499,7 +500,7 @@ async fn connect_and_verify(
             peer_list
                 .machine_pairings
                 .into_iter()
-                .map(|p| (p.machine, p.version, p.owners))
+                .map(|p| (p.machine, p.version, p.blob, p.sig))
                 .collect(),
         )
         .await;
@@ -565,16 +566,18 @@ async fn connect_and_verify(
                 if let Ok(upd) = serde_json::from_str::<serde_json::Value>(&text)
                     && upd["kind"].as_str() == Some("relay_pairings_update")
                 {
-                    if let (Some(machine), Some(owners)) = (
+                    if let (Some(machine), Some(blob), Some(sig)) = (
                         upd["machine"].as_str(),
-                        upd["owners"].as_array(),
+                        upd["blob"].as_str(),
+                        upd["sig"].as_str(),
                     ) {
                         federated
                             .learn_machine_pairing(
                                 &peer.name,
                                 machine,
                                 upd["version"].as_u64().unwrap_or(0),
-                                owners.iter().filter_map(|o| o.as_str().map(str::to_string)).collect(),
+                                blob.to_string(),
+                                sig.to_string(),
                             )
                             .await;
                     }
@@ -842,7 +845,7 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
             peer_list
                 .machine_pairings
                 .into_iter()
-                .map(|p| (p.machine, p.version, p.owners))
+                .map(|p| (p.machine, p.version, p.blob, p.sig))
                 .collect(),
         )
         .await;
@@ -867,12 +870,13 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
         rooms_by_epk: local_rooms,
         machine_pairings: state
             .pairing
-            .federated_owners_snapshot()
+            .signed_blobs()
             .into_iter()
-            .map(|(machine, version, owners)| RelayMachinePairing {
+            .map(|(machine, version, blob, sig)| RelayMachinePairing {
                 machine,
                 version,
-                owners,
+                blob: B64.encode(&blob),
+                sig: B64.encode(&sig),
             })
             .collect(),
         peer_doc: {
@@ -949,9 +953,10 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
                 if let Ok(upd) = serde_json::from_str::<serde_json::Value>(&text)
                     && upd["kind"].as_str() == Some("relay_pairings_update")
                 {
-                    if let (Some(machine), Some(owners)) = (
+                    if let (Some(machine), Some(blob), Some(sig)) = (
                         upd["machine"].as_str(),
-                        upd["owners"].as_array(),
+                        upd["blob"].as_str(),
+                        upd["sig"].as_str(),
                     ) {
                         state
                             .federated
@@ -959,7 +964,8 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
                                 &peer_list.relay_name,
                                 machine,
                                 upd["version"].as_u64().unwrap_or(0),
-                                owners.iter().filter_map(|o| o.as_str().map(str::to_string)).collect(),
+                                blob.to_string(),
+                                sig.to_string(),
                             )
                             .await;
                     }
@@ -1355,10 +1361,28 @@ impl FederatedSessions {
     pub async fn learn_machine_pairings(
         &self,
         peer_relay: &str,
-        entries: Vec<(String, u64, Vec<String>)>,
+        entries: Vec<(String, u64, String, String)>,
     ) {
         let mut map = self.machine_pairings.lock().await;
-        for (machine, version, owners) in entries {
+        for (machine, envelope_version, blob_b64, sig_b64) in entries {
+            // VERIFY (settled design): the exchange carries MACHINE-SIGNED
+            // pairing envelopes; claims without a valid machine signature are
+            // dropped — a peer cannot inject owner claims it cannot sign.
+            // Forwarding behavior is unchanged: transitively discovered peers
+            // still forward; validation is per-hop (sig-verified provenance).
+            let Ok(blob_bytes) = B64.decode(blob_b64.as_bytes()) else {
+                continue;
+            };
+            let Ok(sig_bytes) = B64.decode(sig_b64.as_bytes()) else {
+                continue;
+            };
+            let Ok(p) = crate::peers::pairing::verify_pairing_blob(&blob_bytes, &sig_bytes) else {
+                continue;
+            };
+            if p.machine_pk != machine {
+                continue;
+            }
+            let version = p.version;
             if let Some((cur, _, _)) = map.get(&machine)
                 && *cur >= version
             {
@@ -1368,7 +1392,7 @@ impl FederatedSessions {
                 machine,
                 (
                     version,
-                    owners.into_iter().collect(),
+                    p.owners.into_iter().collect(),
                     peer_relay.to_string(),
                 ),
             );
@@ -1381,12 +1405,15 @@ impl FederatedSessions {
         peer_relay: &str,
         machine: &str,
         version: u64,
-        owners: Vec<String>,
+        blob_b64: String,
+        sig_b64: String,
     ) {
-        self.learn_machine_pairings(peer_relay, vec![(machine.to_string(), version, owners)])
-            .await;
+        self.learn_machine_pairings(
+            peer_relay,
+            vec![(machine.to_string(), version, blob_b64, sig_b64)],
+        )
+        .await;
     }
-
     /// The dest machine's advertised owner set, for the pre-forward check.
     /// None ⇒ no information yet ⇒ the caller forwards (dest decides).
     pub async fn machine_owners(&self, machine_epk: &str) -> Option<HashSet<String>> {
@@ -1433,13 +1460,15 @@ impl FederatedSessions {
         &self,
         machine: &str,
         version: u64,
-        owners: &HashSet<String>,
+        owners_blob_b64: &str,
+        owners_sig_b64: &str,
     ) {
         let frame = serde_json::json!({
             "kind": "relay_pairings_update",
             "machine": machine,
             "version": version,
-            "owners": owners,
+            "blob": owners_blob_b64,
+            "sig": owners_sig_b64,
         })
         .to_string();
         let senders = self.forward_senders.lock().await;
@@ -1830,7 +1859,8 @@ pub fn verify_peer_pairing_doc(
 pub struct RelayMachinePairing {
     pub machine: String,
     pub version: u64,
-    pub owners: Vec<String>,
+    pub blob: String,
+    pub sig: String,
 }
 
 /// Wire frame: an incremental room update (add/remove).
