@@ -309,6 +309,36 @@ pub fn start_peering(
 }
 
 /// Per-peer: connect → hello → federate or disconnect → backoff → reconnect.
+/// Verify + learn the peer's doc against its PRESENTED key; loud-warn when
+/// the doc does not name us (strict declination lands with peer management).
+fn learn_peer_doc_or_warn(
+    federated: &Arc<FederatedSessions>,
+    presented_pk: &str,
+    env: &Option<PeerPairingEnvelope>,
+    peer_label: &str,
+    our_name: &str,
+) {
+    let Some(env) = env else { return };
+    match verify_peer_pairing_doc(env, presented_pk) {
+        Ok(doc) => {
+            if !doc.peers.iter().any(|n| n == our_name) {
+                warn!(
+                    peer = %peer_label,
+                    "peer pairing doc does not name us (theirs names {:?})",
+                    doc.peers
+                );
+            }
+            let version = doc.version;
+            let peers = doc.peers;
+            let pk = presented_pk.to_string();
+            let f = Arc::clone(federated);
+            tokio::spawn(async move {
+                f.learn_peer_doc(&pk, version, peers).await;
+            });
+        }
+        Err(e) => warn!(peer = %peer_label, err = %e, "peer pairing doc rejected"),
+    }
+}
 async fn peering_loop(
     mesh: Arc<MeshStore>,
     registry: Arc<PeerRegistry>,
@@ -440,6 +470,10 @@ async fn connect_and_verify(
                 owners,
             })
             .collect(),
+        peer_doc: {
+            let kp = crate::relay_keypair::load_or_generate(None);
+            Some(build_peer_doc_envelope(&kp, &peer.name))
+        },
     };
     ws.send(tokio_tungstenite::tungstenite::Message::Text(
         serde_json::to_string(&peer_list)?.into(),
@@ -470,6 +504,13 @@ async fn connect_and_verify(
         )
         .await;
     info!(peer = %peer.name, "stored federated sessions from peer relay");
+    learn_peer_doc_or_warn(
+        federated,
+        ack.relay_pubkey.as_deref().unwrap_or(""),
+        &peer_list.peer_doc,
+        &peer.name,
+        &federated.own_name(),
+    );
     broadcast_federated_list(registry, federated).await;
 
     // Keep the connection open for incremental updates + forwarding (Phase 3c).
@@ -810,6 +851,13 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
         "stored federated sessions from inbound peer relay"
     );
     broadcast_federated_list(&state.registry, &state.federated).await;
+    learn_peer_doc_or_warn(
+        &state.federated,
+        hello.relay_pubkey.as_deref().unwrap_or(""),
+        &peer_list.peer_doc,
+        "inbound",
+        &state.federated.own_name(),
+    );
 
     // Send our local rooms.
     let local_rooms = FederatedSessions::local_rooms_by_epk(&state.registry);
@@ -827,6 +875,13 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
                 owners,
             })
             .collect(),
+        peer_doc: {
+            let kp = crate::relay_keypair::load_or_generate(None);
+            Some(build_peer_doc_envelope(
+                &kp,
+                hello.relay_name.as_deref().unwrap_or(""),
+            ))
+        },
     };
     if socket
         .send(Message::Text(
@@ -1181,6 +1236,10 @@ pub struct FederatedSessions {
     /// exchanged over the owner-gated peering link; version-monotonic per
     /// machine; purged with the source link in clear_peer.
     machine_pairings: Mutex<FederatedMachinePairings>,
+    /// Learned peer-pairing documents: presented relay pubkey → (version,
+    /// peer names). Signature-verified at the handshake; used for state and
+    /// future strict gating.
+    peer_docs: Mutex<HashMap<String, (u64, Vec<String>)>>,
 }
 
 pub fn default_relay_name() -> String {
@@ -1201,6 +1260,7 @@ impl FederatedSessions {
             forward_senders: Mutex::new(HashMap::new()),
             pending_forwards: Mutex::new(HashMap::new()),
             machine_pairings: Mutex::new(HashMap::new()),
+            peer_docs: Mutex::new(HashMap::new()),
         }
     }
 
@@ -1335,6 +1395,35 @@ impl FederatedSessions {
             .await
             .get(machine_epk)
             .map(|(_, owners, _)| owners.clone())
+    }
+
+    /// Learn a verified peer-pairing document (version-monotonic per key).
+    pub async fn learn_peer_doc(&self, relay_pk: &str, version: u64, peers: Vec<String>) {
+        let mut map = self.peer_docs.lock().await;
+        if let Some((cur, _)) = map.get(relay_pk)
+            && *cur > version
+        {
+            return;
+        }
+        map.insert(relay_pk.to_string(), (version, peers));
+    }
+
+    /// A learned peer's paired-name set (its doc), for state/warn checks.
+    pub async fn peer_doc_peers(&self, relay_pk: &str) -> Option<Vec<String>> {
+        self.peer_docs
+            .lock()
+            .await
+            .get(relay_pk)
+            .map(|(_, p)| p.clone())
+    }
+
+    /// Test/state helper: does ANY learned peer doc name `our_name`?
+    pub async fn paired_by_any_doc(&self, our_name: &str) -> bool {
+        self.peer_docs
+            .lock()
+            .await
+            .values()
+            .any(|(_, peers)| peers.iter().any(|n| n == our_name))
     }
 
     /// Push a machine pairing update to all peered relays — a machine's
@@ -1677,11 +1766,64 @@ pub struct RelayPeerList {
     /// wire-compatible with peers on older versions.
     #[serde(default)]
     pub machine_pairings: Vec<RelayMachinePairing>,
+    /// The sender's signed peer-pairing document (b64{doc,sig}), presenting
+    /// itself (its relay pubkey rides the wire/handshake). Verified against
+    /// the presented key; stored version-monotonically.
+    #[serde(default)]
+    pub peer_doc: Option<PeerPairingEnvelope>,
 }
 
 /// Federated machine pairing snapshots: machine epk -> (version, owners,
 /// source peer relay).
 pub type FederatedMachinePairings = HashMap<String, (u64, HashSet<String>, String)>;
+
+/// Signed peer-pairing document (relay-pairing as protocol, design
+/// 2026-10-14): a relay signs {relay_pk, peers, version} — its paired relay
+/// NAME set, full-set replace, versioned. A peer pairing exists only when
+/// both relays hold and exchange valid docs (strict mutual naming gate lands
+/// with `peer add` management); tonight the doc is exchanged, verified, and
+/// stored, and violations are logged loudly instead of declining live paths.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerPairingDoc {
+    /// The signer's relay pubkey (b64) — binds the doc to the key it signed.
+    pub relay_pk: String,
+    /// Paired peer relay names.
+    pub peers: Vec<String>,
+    pub version: u64,
+}
+/// b64(doc) + b64(sig) over the doc bytes, signed by the presenting relay.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerPairingEnvelope {
+    pub doc: String,
+    pub sig: String,
+}
+/// Verify + decode a peer pairing doc against the PRESENTED relay pubkey.
+/// Build+sign this relay's peer-pairing doc (protocol design 2026-10-14).
+fn build_peer_doc_envelope(kp: &RelayKeypair, peer_name: &str) -> PeerPairingEnvelope {
+    let doc = PeerPairingDoc {
+        relay_pk: kp.pubkey_b64(),
+        peers: vec![peer_name.to_string()],
+        version: 1,
+    };
+    let bytes = serde_json::to_vec(&doc).unwrap_or_default();
+    PeerPairingEnvelope {
+        doc: B64.encode(&bytes),
+        sig: kp.sign(&bytes),
+    }
+}
+
+pub fn verify_peer_pairing_doc(
+    env: &PeerPairingEnvelope,
+    presented_pk: &str,
+) -> Result<PeerPairingDoc, String> {
+    let doc_bytes = B64
+        .decode(env.doc.as_bytes())
+        .map_err(|_| "bad b64 doc".to_string())?;
+    RelayKeypair::verify(presented_pk, &doc_bytes, &env.sig)
+        .then(|| serde_json::from_slice::<PeerPairingDoc>(&doc_bytes))
+        .ok_or("peer pairing doc signature verify failed".to_string())?
+        .map_err(|e| format!("bad peer pairing doc json: {e}"))
+}
 
 /// One machine's advertised owner set (check-before-forward design).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

@@ -411,6 +411,15 @@ async fn federated_pairing_exchange_and_source_refusal() {
         "relay A never learned the machine's advertised owner set"
     );
 
+    // Leg 1b: the signed peer-pairing docs were exchanged AND verified —
+    // relay A holds B's (or the shared rig key's) doc naming relay A
+    // (relay-pairing protocol: paired = both sides hold docs naming each
+    // other; strict declination lands with peer management).
+    assert!(
+        relay_a.state.federated.paired_by_any_doc("relay-a").await,
+        "relay A holds no verified peer-pairing doc naming itself"
+    );
+
     // Leg 2: an owner forwards; the dest machine receives.
     let payload = json!({"type": "ub", "ub": {"t": "session_sync", "session_id": "s1"}});
     app.send(Message::text(outer_frame(&machine_epk, "main", &payload)))
