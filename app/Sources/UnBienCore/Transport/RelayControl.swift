@@ -14,9 +14,14 @@ public enum RelayControlOut: Codable, Equatable, Sendable {
     case unsubscribeRooms(peers: [String])
     case presenceCheck(peers: [String])
     case roomsCheck(peers: [String])
+    /// Self-signed pairing allow-list push (federation v2 §3): a device
+    /// advertises the owner it belongs to. `blob`/`sig` are base64 of the
+    /// machine-signed canonical blob / Ed25519 signature — see
+    /// RelayConnection.pushPairingSet.
+    case pairingSet(blob: String, sig: String)
 
     enum CodingKeys: String, CodingKey {
-        case type, pubkey, sig, peers
+        case type, pubkey, sig, peers, blob
         case roomID = "room_id"
     }
 
@@ -48,6 +53,10 @@ public enum RelayControlOut: Codable, Equatable, Sendable {
         case let .roomsCheck(peers):
             try container.encode("rooms_check", forKey: .type)
             try container.encode(peers, forKey: .peers)
+        case let .pairingSet(blob, sig):
+            try container.encode("pairing_set", forKey: .type)
+            try container.encode(blob, forKey: .blob)
+            try container.encode(sig, forKey: .sig)
         }
     }
 

@@ -97,6 +97,10 @@ extension AppModel {
                 return
             }
             connections[relay.id] = connection
+            // Federation v2 §3: advertise the owner this device belongs to —
+            // federated reply legs are refused at the remote machine's relay
+            // without it (strict owner-set gates, relay slice 2).
+            await connection.pushPairingSet()
             relayHealth[relay.id] = .online
             reconnectAttempts[relay.id] = 0
             reconnectPaused[relay.id] = nil

@@ -80,6 +80,44 @@ public actor RelayConnection {
         try await channel.send(encode(RelayControlOut.roomsCheck(peers: peers)))
     }
 
+    /// The device-advertises-its-owner pairing push (federation v2 §3): a
+    /// self-signed `pairing_set` naming the owner this device belongs to.
+    /// The app's identity IS the owner key, so machine_pk == owners == this
+    /// connection's peer_id (the relay's authority binding). FEDERATED reply
+    /// legs (transcript pages, launch acks) ride the strict owner-set gates —
+    /// machine_owners(<this key>) must be known at the remote machine's
+    /// relay, and this push establishes it via the peering pairing exchange.
+    /// Version = epoch seconds: monotonic across reconnects AND reinstalls
+    /// (the relay rejects a version ≤ its stored one; a reconnect inside the
+    /// same second is a harmless stale-reject that the next push heals).
+    /// NON-FATAL on send failure: the connection stays up; the next
+    /// reconnect retries.
+    public func pushPairingSet(now: Date = Date()) async {
+        let (blob, sig) = Self.buildPairingSet(identity: identity, now: now)
+        do {
+            try await channel.send(encode(RelayControlOut.pairingSet(
+                blob: Base64.standard(blob), sig: Base64.standard(sig))))
+        } catch {
+            connLog.error("pairing_set push failed (federated replies refused until reconnect): \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// Build the signed pairing blob for `identity` — pure + testable.
+    /// The relay verifies the signature over the EXACT blob bytes it
+    /// receives, then parses them; field names must match its
+    /// `PairingBlob` (machine_pk, owners, version, issued_at).
+    static func buildPairingSet(identity: Ed25519Identity, now: Date) -> (blob: Data, sig: Data) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let blob = (try? encoder.encode(PairingSetBlob(
+            machinePk: identity.publicKeyBase64,
+            owners: [identity.publicKeyBase64],
+            version: UInt64(now.timeIntervalSince1970),
+            issuedAt: UInt64(now.timeIntervalSince1970 * 1000)))) ?? Data()
+        let sig = (try? identity.sign(blob)) ?? Data()
+        return (blob, sig)
+    }
+
     /// Re-request presence + rooms snapshots for `peers` WITHOUT re-subscribing:
     /// a manual reconcile (Home drag-to-refresh) that recovers rooms whose live
     /// `room_announced` push was missed.
@@ -240,5 +278,23 @@ public actor RelayConnection {
         // Control/envelope encoders never fail for these fixed shapes.
         let data = (try? JSONEncoder().encode(value)) ?? Data("{}".utf8)
         return String(decoding: data, as: UTF8.self)
+    }
+}
+
+/// The self-signed pairing blob (the relay's `PairingBlob` wire shape —
+/// field names match relay/src/peers/pairing.rs exactly). Signed by the
+/// pushing connection's identity; `machine_pk` must equal the connection's
+/// peer_id (the relay's authority binding).
+struct PairingSetBlob: Codable {
+    let machinePk: String
+    let owners: [String]
+    let version: UInt64
+    let issuedAt: UInt64
+
+    enum CodingKeys: String, CodingKey {
+        case machinePk = "machine_pk"
+        case owners
+        case version
+        case issuedAt = "issued_at"
     }
 }

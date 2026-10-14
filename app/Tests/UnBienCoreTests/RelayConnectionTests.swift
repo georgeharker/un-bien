@@ -132,6 +132,56 @@ final class RelayConnectionTests: XCTestCase {
     }
 }
 
+/// The device-advertises-its-owner pairing push (federation v2 §3): a
+/// self-signed pairing_set that names the owner this device belongs to.
+/// Federated reply legs are refused at the remote machine's relay without
+/// it (strict owner-set gates, relay slice 2).
+final class PairingSetPushTests: XCTestCase {
+    private func decodeBlob(_ base64String: String) throws -> PairingSetBlob {
+        let data = try XCTUnwrap(Base64.decodeTolerant(base64String))
+        return try JSONDecoder().decode(PairingSetBlob.self, from: data)
+    }
+
+    func testBlobNamesTheOwnerAndSignatureVerifies() throws {
+        let identity = Ed25519Identity()
+        let now = Date(timeIntervalSince1970: 1_760_000_000)
+        let (blob, sig) = RelayConnection.buildPairingSet(identity: identity, now: now)
+        XCTAssertFalse(blob.isEmpty)
+        XCTAssertFalse(sig.isEmpty)
+        // The signature verifies over the EXACT blob bytes with the identity key.
+        XCTAssertTrue(Ed25519.verify(signature: sig, message: blob, publicKeyRaw: identity.publicKeyRaw))
+        // Field names round-trip (they must match the relay's PairingBlob);
+        // the device advertises its owner — for the app that IS its own key
+        // (machine_pk == owners).
+        let fields = try decodeBlob(Base64.standard(blob))
+        XCTAssertEqual(fields.machinePk, identity.publicKeyBase64)
+        XCTAssertEqual(fields.owners, [identity.publicKeyBase64])
+        XCTAssertEqual(fields.version, 1_760_000_000)
+        XCTAssertEqual(fields.issuedAt, 1_760_000_000_000)
+    }
+
+    func testPushSendsAPairingSetControlFrame() async throws {
+        let channel = FakeChannel(inbound: [])
+        let connection = RelayConnection(channel: channel, identity: Ed25519Identity())
+        await connection.pushPairingSet(now: Date(timeIntervalSince1970: 1_760_000_000))
+        let sent = await channel.sent
+        XCTAssertEqual(sent.count, 1)
+        let frame = try JSONDecoder().decode([String: JSONValue].self,
+                                             from: Data(sent[0].utf8))
+        XCTAssertEqual(frame["type"]?.stringValue ?? nil, "pairing_set")
+        // Self-consistency — the same check the relay performs: the signature
+        // verifies over the EXACT blob bytes with the key the blob names.
+        let blobB64 = try XCTUnwrap(frame["blob"]?.stringValue ?? nil)
+        let sigB64 = try XCTUnwrap(frame["sig"]?.stringValue ?? nil)
+        let blob = try XCTUnwrap(Base64.decodeTolerant(blobB64))
+        let sig = try XCTUnwrap(Base64.decodeTolerant(sigB64))
+        let fields = try JSONDecoder().decode(PairingSetBlob.self, from: blob)
+        XCTAssertEqual(fields.owners, [fields.machinePk])
+        let machineKey = try XCTUnwrap(Base64.decodeTolerant(fields.machinePk))
+        XCTAssertTrue(Ed25519.verify(signature: sig, message: blob, publicKeyRaw: machineKey))
+    }
+}
+
 /// Plane-mapping regression guard (the silent-drop bug class).
 ///
 /// `RelayConnection.mapToWire` routes every outbound ClientMessage to the rpc
