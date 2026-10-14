@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import {
@@ -102,9 +102,35 @@ export function forgetRelay(urlOrName: string, path = RELAYS_PATH): boolean {
 export interface RelayPeer {
   url: string
   name: string
-  /** The peer relay's pinned Ed25519 public key (base64). If present, the
-   *  relay verifies the peer's identity on connect. */
+  /** The peer relay's pinned Ed25519 public key (base64). Since the strict
+   *  pairing gate, this is MANDATORY — the relay neither dials nor accepts
+   *  an unpinned peer. */
   pubkey?: string
+  /** The one-time pairing secret from the relay-pair:// URL (base64 TOKEN,
+   *  not a key). Presented to the peer in the outbound relay_hello so the
+   *  peer auto-adds us; the pin (pubkey) is the durable trust. */
+  pair_secret?: string
+}
+
+/** A pending pairing entry — `unbien relay pair` mints one and the ISSUING
+ *  relay holds it in relay-peers.json `pending`. The secret is a one-time
+ *  token: the relay matches it by SHA-256 hash, consumes it, and pins the
+ *  PRESENTER's key. name/url are the issuer's own identity as the pairing
+ *  URL advertised it. */
+export interface PendingRelayPair {
+  secret: string
+  name: string
+  url: string
+  at: string
+}
+
+/** The full relay-peers.json document. The relay ALSO writes this file (the
+ *  pairing auto-add), so writers must preserve every field they don't own
+ *  (pending, the legacy federation flag, anything else). */
+interface RelayPeersDoc {
+  peers?: RelayPeer[]
+  pending?: PendingRelayPair[]
+  [key: string]: unknown
 }
 
 const RELAY_PEERS_PATH = join(
@@ -115,15 +141,43 @@ const RELAY_PEERS_PATH = join(
   "relay-peers.json",
 )
 
-export function loadRelayPeers(path = RELAY_PEERS_PATH): RelayPeer[] {
+function readRelayPeersDoc(path = RELAY_PEERS_PATH): RelayPeersDoc {
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as {
-      peers?: RelayPeer[]
-    }
-    return parsed.peers ?? []
+    return JSON.parse(readFileSync(path, "utf8")) as RelayPeersDoc
   } catch {
-    return []
+    return {}
   }
+}
+
+/** Write the doc ATOMICALLY (temp + rename, 0600) so the relay's fswatch
+ *  loop sees one clean event, and PRESERVE every field we don't own. */
+function writeRelayPeersDoc(doc: RelayPeersDoc, path = RELAY_PEERS_PATH): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  const tmp = `${path}.tmp-${process.pid}`
+  writeFileSync(tmp, JSON.stringify(doc, null, 2), { mode: 0o600 })
+  renameSync(tmp, path)
+}
+
+export function loadRelayPeers(path = RELAY_PEERS_PATH): RelayPeer[] {
+  return readRelayPeersDoc(path).peers ?? []
+}
+
+export function loadPendingRelayPairs(
+  path = RELAY_PEERS_PATH,
+): PendingRelayPair[] {
+  return readRelayPeersDoc(path).pending ?? []
+}
+
+/** Hold a freshly-minted pairing secret (the `unbien relay pair` flow).
+ *  Preserves peers + every other field in the file. */
+export function addPendingRelayPair(
+  entry: PendingRelayPair,
+  path = RELAY_PEERS_PATH,
+): void {
+  const doc = readRelayPeersDoc(path)
+  const pending = doc.pending ?? []
+  pending.push(entry)
+  writeRelayPeersDoc({ ...doc, pending }, path)
 }
 
 /** The relay's CONFIG file — settings (federation gate), in the config root
@@ -189,23 +243,64 @@ export function addRelayPeer(
   peer: RelayPeer,
   path = RELAY_PEERS_PATH,
 ): void {
-  const peers = loadRelayPeers(path).filter((p) => p.name !== peer.name)
+  const doc = readRelayPeersDoc(path)
+  const peers = (doc.peers ?? []).filter((p) => p.name !== peer.name)
   peers.push(peer)
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-  writeFileSync(path, JSON.stringify({ peers }, null, 2), { mode: 0o600 })
+  writeRelayPeersDoc({ ...doc, peers }, path)
 }
 
 export function removeRelayPeer(
   name: string,
   path = RELAY_PEERS_PATH,
 ): boolean {
-  const peers = loadRelayPeers(path)
+  const doc = readRelayPeersDoc(path)
+  const peers = doc.peers ?? []
   const filtered = peers.filter((p) => p.name !== name)
   if (filtered.length === peers.length) return false
-  writeFileSync(path, JSON.stringify({ peers: filtered }, null, 2), {
-    mode: 0o600,
-  })
+  writeRelayPeersDoc({ ...doc, peers: filtered }, path)
   return true
+}
+
+// ── relay-pair:// URLs (federation v2: explicit pairing) ────────────────────
+
+/** The pairing URL payload: the issuing relay's own identity + the
+ *  one-time secret. The peer stores {url, name, pubkey} as the PIN and
+ *  presents `secret` in its relay_hello so the issuer auto-adds back. */
+export interface RelayPairUrl {
+  url: string
+  name: string
+  pubkey: string
+  secret?: string
+}
+
+export function encodeRelayPairUrl(p: RelayPairUrl): string {
+  return `relay-pair://${Buffer.from(JSON.stringify(p)).toString("base64")}`
+}
+
+/** Parse a relay-pair:// URL. Returns null on malformed URLs (bad base64,
+ *  non-JSON, or missing url/name/pubkey — the pin is mandatory, so a URL
+ *  without a pubkey is not a usable pairing URL). */
+export function decodeRelayPairUrl(raw: string): RelayPairUrl | null {
+  if (!raw.startsWith("relay-pair://")) return null
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(raw.slice("relay-pair://".length), "base64").toString("utf8"),
+    ) as Partial<RelayPairUrl>
+    if (
+      typeof parsed.url !== "string" ||
+      typeof parsed.name !== "string" ||
+      typeof parsed.pubkey !== "string"
+    ) {
+      return null
+    }
+    const secret =
+      typeof parsed.secret === "string" && parsed.secret.length > 0
+        ? parsed.secret
+        : undefined
+    return { url: parsed.url, name: parsed.name, pubkey: parsed.pubkey, secret }
+  } catch {
+    return null
+  }
 }
 
 // ── Relay keypair (identity for relay-to-relay peering) ───────────────────

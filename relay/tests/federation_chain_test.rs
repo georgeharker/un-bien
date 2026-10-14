@@ -71,12 +71,39 @@ fn pick_port() -> u16 {
         .port()
 }
 
-fn spawn_relay_proc(name: &str, port: u16, peers: &[(&str, String)]) -> RelayProc {
-    let dir = tempfile::tempdir().unwrap();
-    // Per-relay peer config (the CHAIN definition itself).
+/// Pre-generate the relay's identity keypair file in its (not-yet-spawned)
+/// state dir and return the pubkey to PIN on the other relays. Same format
+/// the relay's `relay_keypair.rs` reads (CLI-compatible: private_key is the
+/// 32-byte seed).
+fn pregen_keypair(dir: &std::path::Path) -> String {
+    let sk = SigningKey::generate(&mut rand::thread_rng());
+    let pk = B64.encode(sk.verifying_key().to_bytes());
+    std::fs::write(
+        dir.join("relay-keypair.json"),
+        json!({
+            "public_key": pk,
+            "private_key": B64.encode(sk.to_bytes()),
+        })
+        .to_string(),
+    )
+    .unwrap();
+    pk
+}
+
+/// A peer entry in the chain definition: (name, url, pinned pubkey b64).
+/// The PIN is the link gate (federation v2 §1) — without it the outbound
+/// loop refuses to dial.
+struct PeerPin {
+    name: String,
+    url: String,
+    pubkey: String,
+}
+
+fn spawn_relay_proc(name: &str, port: u16, dir: tempfile::TempDir, peers: &[PeerPin]) -> RelayProc {
+    // Per-relay peer config (the CHAIN definition itself, pinned).
     let list: Vec<Value> = peers
         .iter()
-        .map(|(n, url)| json!({"name": n, "url": url}))
+        .map(|p| json!({"name": p.name, "url": p.url, "pubkey": p.pubkey}))
         .collect();
     std::fs::write(
         dir.path().join("relay-peers.json"),
@@ -232,23 +259,50 @@ async fn app_machine_request_reply_stream_across_three_relay_chain() {
     let port_b = pick_port();
     let port_a = pick_port();
     let port_c = pick_port();
+    // Each subprocess relay gets its OWN identity keypair (pre-generated in
+    // its hermetic state dir) — the pubkey is what the other relays pin.
+    let dir_a = tempfile::tempdir().unwrap();
+    let pk_a = pregen_keypair(dir_a.path());
+    let dir_b = tempfile::tempdir().unwrap();
+    let pk_b = pregen_keypair(dir_b.path());
+    let dir_c = tempfile::tempdir().unwrap();
+    let pk_c = pregen_keypair(dir_c.path());
     let a = spawn_relay_proc(
         "relay-a",
         port_a,
-        &[("relay-b", format!("ws://127.0.0.1:{port_b}"))],
+        dir_a,
+        &[PeerPin {
+            name: "relay-b".into(),
+            url: format!("ws://127.0.0.1:{port_b}"),
+            pubkey: pk_b.clone(),
+        }],
     );
     let b = spawn_relay_proc(
         "relay-b",
         port_b,
+        dir_b,
         &[
-            ("relay-a", format!("ws://127.0.0.1:{port_a}")),
-            ("relay-c", format!("ws://127.0.0.1:{port_c}")),
+            PeerPin {
+                name: "relay-a".into(),
+                url: format!("ws://127.0.0.1:{port_a}"),
+                pubkey: pk_a.clone(),
+            },
+            PeerPin {
+                name: "relay-c".into(),
+                url: format!("ws://127.0.0.1:{port_c}"),
+                pubkey: pk_c.clone(),
+            },
         ],
     );
     let c = spawn_relay_proc(
         "relay-c",
         port_c,
-        &[("relay-b", format!("ws://127.0.0.1:{port_b}"))],
+        dir_c,
+        &[PeerPin {
+            name: "relay-b".into(),
+            url: format!("ws://127.0.0.1:{port_b}"),
+            pubkey: pk_b.clone(),
+        }],
     );
     let _ = (&a, &b, &c);
 
@@ -290,6 +344,7 @@ async fn app_machine_request_reply_stream_across_three_relay_chain() {
         "machine_pk": B64.encode(machine_sk.verifying_key().to_bytes()),
         "owners": [app_epk],
         "version": 1,
+        "issued_at": 1_700_000_000_000_u64,
     });
     let doc_bytes = serde_json::to_vec(&doc).unwrap();
     machine
@@ -354,15 +409,31 @@ async fn app_machine_request_reply_stream_across_three_relay_chain() {
 async fn chain_rig_smoke_direct_hop() {
     let port_b = pick_port();
     let port_a = pick_port();
+    // Per-relay identity keypairs, mutually pinned (federation v2: the pin
+    // is the link gate — the smoke hop dials both directions).
+    let dir_a = tempfile::tempdir().unwrap();
+    let pk_a = pregen_keypair(dir_a.path());
+    let dir_b = tempfile::tempdir().unwrap();
+    let pk_b = pregen_keypair(dir_b.path());
     let a = spawn_relay_proc(
         "relay-a",
         port_a,
-        &[("relay-b", format!("ws://127.0.0.1:{port_b}"))],
+        dir_a,
+        &[PeerPin {
+            name: "relay-b".into(),
+            url: format!("ws://127.0.0.1:{port_b}"),
+            pubkey: pk_b.clone(),
+        }],
     );
     let b = spawn_relay_proc(
         "relay-b",
         port_b,
-        &[("relay-a", format!("ws://127.0.0.1:{port_a}"))],
+        dir_b,
+        &[PeerPin {
+            name: "relay-a".into(),
+            url: format!("ws://127.0.0.1:{port_a}"),
+            pubkey: pk_a.clone(),
+        }],
     );
     let _ = (&a, &b);
 
@@ -380,6 +451,30 @@ async fn chain_rig_smoke_direct_hop() {
         ],
     )
     .await;
+
+    // The machine's MACHINE-SIGNED pairing_set (its owner set = the app) —
+    // the source relay's check-before-forward needs the dest machine's
+    // advertised owner set before it forwards app→machine traffic. The rig
+    // pushes REAL pairing state, as the production extension does on
+    // connect (same push the 3-relay spec below performs).
+    let doc = json!({
+        "machine_pk": B64.encode(machine_sk.verifying_key().to_bytes()),
+        "owners": [app_epk],
+        "version": 1,
+        "issued_at": 1_700_000_000_000_u64,
+    });
+    let doc_bytes = serde_json::to_vec(&doc).unwrap();
+    machine
+        .send(Message::text(
+            json!({
+                "type": "pairing_set",
+                "blob": B64.encode(&doc_bytes),
+                "sig": B64.encode(machine_sk.sign(&doc_bytes).to_bytes()),
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
 
     let payload = json!({"type": "ub", "ub": {"t": "session_sync", "session_id": "s1"}});
     let deadline = tokio::time::Instant::now() + Duration::from_secs(8);

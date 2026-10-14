@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::ws::Message;
 use tokio::sync::mpsc;
+use tracing::debug;
 
 use crate::metrics::FirehoseMetrics;
 use crate::presence::PresenceManager;
@@ -298,13 +299,10 @@ impl PeerRegistry {
         let lock = self.senders.lock().unwrap();
         let key = (dest_peer.to_string(), dest_room.to_string());
         let Some(v) = lock.get(&key) else {
-            eprintln!(
-                "[feddbg:REG] forward MISS key=({}.., {}) keys={:?}",
-                dest_peer,
-                dest_room,
-                lock.keys()
-                    .map(|(p, r)| (p.clone(), r.clone()))
-                    .collect::<Vec<_>>()
+            debug!(
+                dest = %dest_peer,
+                room = %dest_room,
+                "forward miss: no live connection at (peer, room)"
             );
             return false;
         };

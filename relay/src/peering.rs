@@ -1,13 +1,19 @@
 //! Relay-to-relay peering (federation).
 //!
-//! Phase 2: connect to peer relays + shared-owner verification. Each relay
-//! reads `relay-peers.json` (per-machine, managed by the CLI), connects
-//! outbound to each peer relay's `/relay-peer` endpoint, and exchanges
-//! `relay_hello` frames carrying the owner public-key hashes each relay
-//! knows (from `mesh_versions`). If the two relays share a common owner
-//! (hash intersection is non-empty), they federate — the connection stays
-//! open for Phase 3 (peer list exchange + cross-relay forwarding). If no
-//! common owner, they disconnect.
+//! Federation v2 (slice 1): the link gate is EXPLICIT PAIRING — a peer
+//! relay federates only when its Ed25519 public key is pinned in
+//! `relay-peers.json` (written by the pairing URL flow), or when it
+//! presents a valid single-use pairing secret held in the file's `pending`
+//! list (the one-pair auto-add, which pins exactly that presented key).
+//! The shared-owner hash intersection RETIRED as a gate: owner sets stay on
+//! the wire and are logged for observability, but pairing decides.
+//!
+//! Each relay reads `relay-peers.json` (per-machine, CLI-owned — see
+//! [`crate::peers::peers_config`]) fresh, connects outbound to each pinned
+//! peer relay's `/relay-peer` endpoint, and exchanges `relay_hello` frames
+//! carrying the owner public-key hashes each relay knows (from
+//! `mesh_versions`). After the gate both sides exchange `relay_peer_list`
+//! (rooms + machine pairing sets) and stay open for cross-relay forwarding.
 
 use std::collections::HashSet;
 
@@ -70,6 +76,11 @@ fn verify_relay_identity(pubkey: &str, nonce: &str, name: &str, url: &str, sig: 
     RelayKeypair::verify(pubkey, msg.as_bytes(), sig)
 }
 
+/// First 8 chars of a base64 key for logs (never log full keys).
+fn short_key(key: &str) -> String {
+    key.chars().take(8).collect()
+}
+
 use std::sync::Arc;
 
 use crate::AppState;
@@ -77,19 +88,14 @@ use crate::AppState;
 use crate::mesh::store::MeshStore;
 use crate::paths::relay_peers_path;
 
-/// A peer relay entry from `relay-peers.json`.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct RelayPeerConfig {
-    pub url: String,
-    pub name: String,
-    /// The peer relay's pinned Ed25519 public key (base64). If present, the
-    /// relay verifies the peer's identity on connect. If absent, only
-    /// shared-owner verification is used (backward compat).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pubkey: Option<String>,
-}
+// The peer/pairing config file (relay-peers.json) lives in
+// `crate::peers::peers_config` — shared by the inbound handler (which also
+// WRITES it: the pairing auto-add) and the outbound peering loop. Re-exported
+// here so existing `relay::peering::*` paths keep resolving.
+pub use crate::peers::peers_config::{
+    PendingRelayPair, RelayPeerConfig, read_peer_config, read_pending,
+};
 
-/// Read the peering config from `<state_root>/relay-peers.json`.
 /// Whether relay federation is ENABLED — the gate (not merely the absence
 /// of peers in relay-peers.json). Reads `federation.enabled` from
 /// relay-peers.json FRESH on every call: the CLI can flip it live
@@ -120,31 +126,6 @@ pub fn federation_enabled() -> bool {
             })
             .unwrap_or(false),
         Err(_) => false,
-    }
-}
-
-pub fn read_peer_config() -> Vec<RelayPeerConfig> {
-    let path = relay_peers_path();
-    match std::fs::read_to_string(&path) {
-        Ok(raw) => {
-            let parsed: serde_json::Value = match serde_json::from_str(&raw) {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!("relay-peers.json parse error: {e}");
-                    return Vec::new();
-                }
-            };
-            let empty = serde_json::Value::Array(vec![]);
-            let peers = parsed
-                .get("peers")
-                .and_then(|v| v.as_array())
-                .unwrap_or(empty.as_array().unwrap());
-            peers
-                .iter()
-                .filter_map(|p| serde_json::from_value(p.clone()).ok())
-                .collect()
-        }
-        Err(_) => Vec::new(),
     }
 }
 
@@ -195,6 +176,13 @@ pub struct RelayHello {
     /// proving possession of the private key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sig: Option<String>,
+    /// One-pair (federation v2 §2): a single-use pairing TOKEN (base64),
+    /// from a relay-pair:// URL. When it matches an outstanding pending
+    /// entry on the RECEIVING relay, the receiver auto-adds the presenter
+    /// (pinned to the presented key) and consumes the entry. Not a key —
+    /// the relay's private keys never leave their machine.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pair_secret: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -213,6 +201,15 @@ pub struct RelayHelloAck {
     pub nonce: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sig: Option<String>,
+    /// Wire symmetry with RelayHello (a relay answering a pair-secret hello
+    /// may echo the token; consumers ignore it when absent).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pair_secret: Option<String>,
+    /// Named decline reason on a `federate: false` ack (e.g. "unpinned_peer",
+    /// "pairing_secret_unknown") — the 403-style explicit refusal, so the
+    /// dialing relay's logs show WHY the handshake failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// Start the outbound peering tasks. Each peer relay gets a tokio task.
@@ -347,6 +344,7 @@ async fn peering_loop(
     peer: RelayPeerConfig,
 ) {
     let mut backoff = 1u64;
+    let mut warned_unpinned = false;
     loop {
         // Live gate: flipping federation off retires the peer's federated
         // sessions + idles; flipping back on reconnects — no restart.
@@ -356,7 +354,34 @@ async fn peering_loop(
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
             continue;
         }
-        match connect_and_verify(&mesh, &registry, &pairing, &federated, &peer).await {
+        // FRESH config every cycle: the CLI can pin the peer (or change its
+        // URL) after the loop was spawned — the fswatch spawner only starts
+        // loops for NEW names, it never refreshes a loop it already spawned.
+        let Some(current) = read_peer_config().into_iter().find(|p| p.name == peer.name) else {
+            // Removed from the config: retire its federated state and idle
+            // (the entry may come back; never dial a deconfigured peer).
+            federated.unregister_sender(&peer.name).await;
+            federated.clear_peer(&peer.name).await;
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            continue;
+        };
+        // STRICT PIN GATE (outbound, federation v2 §1): a configured peer
+        // WITHOUT a pinned pubkey is NOT dialed. One loud warn per peer
+        // (not per retry cycle — no spam); the 5s re-pickup below means a
+        // pin added later starts dialing without a restart.
+        if current.pubkey.is_none() {
+            if !warned_unpinned {
+                warned_unpinned = true;
+                warn!(
+                    peer = %current.name,
+                    url = %current.url,
+                    "configured peer has NO pinned pubkey — NOT dialing. Pair it: 'unbien relay pair' on the peer relay, then 'unbien relay peer add relay-pair://…' here"
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            continue;
+        }
+        match connect_and_verify(&mesh, &registry, &pairing, &federated, &current).await {
             Ok(()) => {
                 info!(peer = %peer.name, "federated peer disconnected, reconnecting");
                 backoff = 1;
@@ -370,7 +395,7 @@ async fn peering_loop(
     }
 }
 
-/// Connect outbound, exchange hellos, verify shared ownership.
+/// Connect outbound, exchange hellos, verify the explicit pairing.
 async fn connect_and_verify(
     mesh: &Arc<MeshStore>,
     registry: &Arc<PeerRegistry>,
@@ -378,6 +403,14 @@ async fn connect_and_verify(
     federated: &Arc<FederatedSessions>,
     peer: &RelayPeerConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // The pinned pubkey is the gate — peering_loop refuses to dial unpinned
+    // peers; this is a defensive double-check (a config race could hand us
+    // an entry without one).
+    let pinned = peer
+        .pubkey
+        .as_deref()
+        .ok_or("configured peer has no pinned pubkey — not dialing")?;
+
     // Convert http(s):// to ws(s):// — tokio_tungstenite requires ws/wss.
     let raw_url = format!("{}/relay-peer", peer.url.trim_end_matches('/'));
     let ws_url = raw_url
@@ -385,7 +418,10 @@ async fn connect_and_verify(
         .replacen("https://", "wss://", 1);
     let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url).await?;
 
-    // Send our relay_hello (with relay identity for pairing).
+    // Send our relay_hello (with relay identity for pairing). The pairing
+    // secret rides along when the CLI stored one from the pairing URL —
+    // the peer auto-adds us (pinned to the identity below) when it matches
+    // an outstanding pending entry.
     let ours: Vec<String> = trust_root_hashes(mesh, pairing).into_iter().collect();
     let keypair = crate::relay_keypair::load_or_generate(None);
     let nonce = gen_relay_nonce();
@@ -400,6 +436,7 @@ async fn connect_and_verify(
         relay_url: if url.is_empty() { None } else { Some(url) },
         nonce: Some(nonce),
         sig: Some(sig),
+        pair_secret: peer.pair_secret.clone(),
     };
     ws.send(tokio_tungstenite::tungstenite::Message::Text(
         serde_json::to_string(&hello)?.into(),
@@ -418,42 +455,58 @@ async fn connect_and_verify(
     let ack: RelayHelloAck = serde_json::from_str(&text)?;
 
     if !ack.federate {
-        info!(peer = %peer.name, "peer declined federation (no common owner)");
-        return Err("no common owner".into());
+        warn!(
+            peer = %peer.name,
+            reason = ack.reason.as_deref().unwrap_or("unspecified"),
+            "peer relay DECLINED federation"
+        );
+        return Err(format!(
+            "peer declined: {}",
+            ack.reason.as_deref().unwrap_or("unspecified reason")
+        )
+        .into());
     }
 
-    // Double-check the intersection ourselves.
-    let theirs: HashSet<String> = ack.owners.into_iter().collect();
-    let ours_set: HashSet<String> = ours.into_iter().collect();
-    if !has_common_owner(&ours_set, &theirs) {
-        info!(peer = %peer.name, "no common owner (double-check)");
-        return Err("no common owner (double-check)".into());
-    }
-
-    // Verify the peer's relay identity (optional layer — if the peer's
-    // relay_hello_ack includes identity fields). Same-owner (checked above)
-    // is the gate; this is additional identity verification. If a pubkey is
-    // pinned in the config (from the pairing URL), verify it matches. If not
-    // pinned, just verify the signature proves possession. Either way, this
-    // never refuses a same-owner peer — it only adds identity assurance.
-    if let (Some(peer_pubkey), Some(peer_nonce), Some(peer_sig)) =
-        (&ack.relay_pubkey, &ack.nonce, &ack.sig)
+    // Owner-set intersection: OBSERVABILITY ONLY (federation v2 §1) — the
+    // pinned pairing above is the gate; log the intersection, never decline
+    // on it. `owners` stays on the wire for logging + future use.
     {
-        if let Some(pinned) = &peer.pubkey {
-            if pinned != peer_pubkey {
-                info!(peer = %peer.name, pinned = %pinned, got = %peer_pubkey, "relay pubkey mismatch");
-                return Err("relay pubkey mismatch".into());
-            }
-        }
-        let peer_name = ack.relay_name.as_deref().unwrap_or("");
-        let peer_url = ack.relay_url.as_deref().unwrap_or("");
-        if !verify_relay_identity(peer_pubkey, peer_nonce, peer_name, peer_url, peer_sig) {
-            info!(peer = %peer.name, "relay identity signature invalid");
-            return Err("relay identity signature invalid".into());
-        }
+        let theirs: HashSet<String> = ack.owners.iter().cloned().collect();
+        let ours_set: HashSet<String> = ours.iter().cloned().collect();
+        let common_owner = has_common_owner(&ours_set, &theirs);
+        info!(
+            peer = %peer.name,
+            common_owner,
+            "owner-set intersection with peer (observability only — pairing is the gate)"
+        );
     }
 
-    info!(peer = %peer.name, "federated with peer relay (shared owner verified)");
+    // Identity is MANDATORY for a pinned peer: the ack must present the
+    // pinned key (exact match) + a signature proving possession of it.
+    let (peer_pubkey, peer_nonce, peer_sig) = match (&ack.relay_pubkey, &ack.nonce, &ack.sig) {
+        (Some(pk), Some(n), Some(s)) => (pk, n, s),
+        _ => {
+            warn!(peer = %peer.name, "pinned peer presented no relay identity, declining");
+            return Err("pinned peer presented no relay identity".into());
+        }
+    };
+    if peer_pubkey != pinned {
+        warn!(
+            peer = %peer.name,
+            pinned = %short_key(pinned),
+            got = %short_key(peer_pubkey),
+            "relay pubkey mismatch — declining"
+        );
+        return Err("relay pubkey mismatch".into());
+    }
+    let peer_name = ack.relay_name.as_deref().unwrap_or("");
+    let peer_url = ack.relay_url.as_deref().unwrap_or("");
+    if !verify_relay_identity(peer_pubkey, peer_nonce, peer_name, peer_url, peer_sig) {
+        warn!(peer = %peer.name, "relay identity signature invalid — declining");
+        return Err("relay identity signature invalid".into());
+    }
+
+    info!(peer = %peer.name, "federated with peer relay (explicitly paired: pinned key verified)");
 
     // Phase 3: exchange peer lists.
     let local_rooms = FederatedSessions::local_rooms_by_epk(registry);
@@ -741,6 +794,39 @@ pub async fn relay_peer_ws_handler(
     ws.on_upgrade(move |socket| handle_inbound_peer(state, socket))
 }
 
+/// Build + send a relay_hello_ack. Declines carry a NAMED reason (the
+/// 403-style explicit refusal, so the dialing relay's logs show WHY the
+/// handshake failed); the success ack has no reason.
+async fn send_hello_ack(
+    socket: &mut WebSocket,
+    federate: bool,
+    owners: Vec<String>,
+    own_name: &str,
+    reason: Option<&str>,
+) {
+    let keypair = crate::relay_keypair::load_or_generate(None);
+    let nonce = gen_relay_nonce();
+    let url = relay_own_url().unwrap_or_default();
+    let sig = sign_relay_identity(&keypair, &nonce, own_name, &url);
+    let ack = RelayHelloAck {
+        kind: "relay_hello_ack".into(),
+        federate,
+        owners,
+        relay_pubkey: Some(keypair.pubkey_b64()),
+        relay_name: Some(own_name.to_string()),
+        relay_url: if url.is_empty() { None } else { Some(url) },
+        nonce: Some(nonce),
+        sig: Some(sig),
+        pair_secret: None,
+        reason: reason.map(String::from),
+    };
+    let _ = socket
+        .send(Message::Text(
+            serde_json::to_string(&ack).unwrap_or_default(),
+        ))
+        .await;
+}
+
 async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
     // Receive relay_hello.
     let msg = match socket.recv().await {
@@ -758,72 +844,193 @@ async fn handle_inbound_peer(state: AppState, mut socket: WebSocket) {
         }
     };
 
-    // Symmetric identity verification (matches the outbound check): verify
-    // the connecting relay's signature +, if a peer with this name is
-    // configured with a pinned pubkey, that it matches.
-    if let (Some(peer_pubkey), Some(peer_nonce), Some(peer_sig)) =
-        (&hello.relay_pubkey, &hello.nonce, &hello.sig)
-    {
-        let peer_name = hello.relay_name.as_deref().unwrap_or("");
-        let peer_url_hello = hello.relay_url.as_deref().unwrap_or("");
-        if !verify_relay_identity(peer_pubkey, peer_nonce, peer_name, peer_url_hello, peer_sig) {
-            warn!("relay-peer: identity signature invalid, declining");
-            return;
-        }
-        // Pinning: a configured peer with this name must present the pinned pubkey.
-        if !peer_name.is_empty() {
-            let configured = read_peer_config().into_iter().find(|p| p.name == peer_name);
-            if let Some(cfg) = configured {
-                if let Some(pinned) = &cfg.pubkey {
-                    if pinned != peer_pubkey {
-                        warn!(peer = %peer_name, pinned = %pinned, got = %peer_pubkey, "relay-peer: pubkey mismatch, declining");
-                        return;
-                    }
-                }
-            }
-        }
-    }
-
-    // Check for a common owner.
-    let theirs: HashSet<String> = hello.owners.into_iter().collect();
     let ours: Vec<String> = trust_root_hashes(&state.mesh, &state.pairing)
         .into_iter()
         .collect();
-    let ours_set: HashSet<String> = ours.iter().cloned().collect();
-    let federate = has_common_owner(&ours_set, &theirs);
+    let own_name = state.federated.own_name();
+
+    // ── The link gate: EXPLICIT PAIRING (federation v2 §1–§2) ──
+    // The shared-owner hash intersection RETIRED as a gate: it is computed
+    // + logged below for observability, but PAIRING decides — either (a) a
+    // valid single-use pairing secret held in relay-peers.json `pending`
+    // (auto-add, pinned to the presented key), or (b) the strict pin gate:
+    // the presenter's key must already be pinned in peers[].
+    let federate = if let Some(pair_secret) = hello.pair_secret.as_deref() {
+        // (a) One-pair: identity verification is MANDATORY on this path —
+        // the auto-added entry pins the PRESENTED key, so the hello must
+        // prove possession of it first.
+        let (peer_pubkey, peer_nonce, peer_sig) =
+            match (&hello.relay_pubkey, &hello.nonce, &hello.sig) {
+                (Some(pk), Some(n), Some(s)) => (pk, n, s),
+                _ => {
+                    warn!("relay-peer: pairing hello missing identity fields, declining");
+                    send_hello_ack(
+                        &mut socket,
+                        false,
+                        ours,
+                        &own_name,
+                        Some("pairing_identity_missing"),
+                    )
+                    .await;
+                    return;
+                }
+            };
+        let peer_name = hello.relay_name.as_deref().unwrap_or("");
+        let peer_url = hello.relay_url.as_deref().unwrap_or("");
+        if !verify_relay_identity(peer_pubkey, peer_nonce, peer_name, peer_url, peer_sig) {
+            warn!(
+                peer = %peer_name,
+                "relay-peer: pairing hello identity signature INVALID, declining"
+            );
+            send_hello_ack(
+                &mut socket,
+                false,
+                ours,
+                &own_name,
+                Some("pairing_identity_invalid"),
+            )
+            .await;
+            return;
+        }
+        // The auto-added entry records the presenter's OWN advertised
+        // url/name — both required non-empty (a nameless/urlless entry can
+        // never be dialed back).
+        if peer_url.is_empty() || peer_name.is_empty() {
+            warn!(
+                peer = %peer_name,
+                "relay-peer: pairing hello missing relay_name/relay_url, declining"
+            );
+            send_hello_ack(
+                &mut socket,
+                false,
+                ours,
+                &own_name,
+                Some("pairing_missing_name_or_url"),
+            )
+            .await;
+            return;
+        }
+        match crate::peers::peers_config::consume_pending_and_add_peer(
+            pair_secret,
+            peer_url,
+            peer_name,
+            peer_pubkey,
+        ) {
+            Ok(true) => {
+                info!(
+                    peer = %peer_name,
+                    url = %peer_url,
+                    "PAIRING: valid pending secret — peer AUTO-ADDED (pinned) + pending entry consumed"
+                );
+                true
+            }
+            Ok(false) => {
+                warn!(
+                    peer = %peer_name,
+                    "relay-peer: pairing secret matches NO pending entry (wrong or already used), declining"
+                );
+                send_hello_ack(
+                    &mut socket,
+                    false,
+                    ours,
+                    &own_name,
+                    Some("pairing_secret_unknown"),
+                )
+                .await;
+                return;
+            }
+            Err(e) => {
+                warn!(
+                    peer = %peer_name,
+                    err = %e,
+                    "relay-peer: pairing auto-add FAILED (config write), declining"
+                );
+                send_hello_ack(
+                    &mut socket,
+                    false,
+                    ours,
+                    &own_name,
+                    Some("pairing_write_failed"),
+                )
+                .await;
+                return;
+            }
+        }
+    } else {
+        // (b) STRICT PIN GATE: the presenter's key must be PINNED in
+        // relay-peers.json. Identity signature verification is mandatory
+        // for configured peers.
+        let Some(peer_pubkey) = hello.relay_pubkey.as_deref() else {
+            warn!("relay-peer: unpinned presenter (no relay_pubkey in hello), declining");
+            send_hello_ack(&mut socket, false, ours, &own_name, Some("unpinned_peer")).await;
+            return;
+        };
+        let (peer_nonce, peer_sig) = match (hello.nonce.as_deref(), hello.sig.as_deref()) {
+            (Some(n), Some(s)) => (n, s),
+            _ => {
+                warn!(
+                    peer_pubkey = %short_key(peer_pubkey),
+                    "relay-peer: presenter missing identity signature, declining"
+                );
+                send_hello_ack(
+                    &mut socket,
+                    false,
+                    ours,
+                    &own_name,
+                    Some("identity_missing"),
+                )
+                .await;
+                return;
+            }
+        };
+        let peer_name = hello.relay_name.as_deref().unwrap_or("");
+        let peer_url = hello.relay_url.as_deref().unwrap_or("");
+        if !verify_relay_identity(peer_pubkey, peer_nonce, peer_name, peer_url, peer_sig) {
+            warn!(
+                peer = %peer_name,
+                "relay-peer: identity signature INVALID, declining"
+            );
+            send_hello_ack(
+                &mut socket,
+                false,
+                ours,
+                &own_name,
+                Some("identity_invalid"),
+            )
+            .await;
+            return;
+        }
+        let pinned = read_peer_config()
+            .iter()
+            .any(|p| p.pubkey.as_deref() == Some(peer_pubkey));
+        if !pinned {
+            warn!(
+                peer = %peer_name,
+                pubkey = %short_key(peer_pubkey),
+                "relay-peer: presenter pubkey NOT PINNED in relay-peers.json, declining"
+            );
+            send_hello_ack(&mut socket, false, ours, &own_name, Some("unpinned_peer")).await;
+            return;
+        }
+        true
+    };
+
+    // Owner-set intersection: OBSERVABILITY ONLY (federation v2 §1) — log
+    // it, never decide federation on it. `owners` stays on the wire.
+    {
+        let theirs: HashSet<String> = hello.owners.iter().cloned().collect();
+        let ours_set: HashSet<String> = ours.iter().cloned().collect();
+        let common_owner = has_common_owner(&ours_set, &theirs);
+        info!(
+            common_owner,
+            "owner-set intersection with inbound peer (observability only — pairing is the gate)"
+        );
+    }
 
     // Send relay_hello_ack (with relay identity for pairing).
-    let keypair = crate::relay_keypair::load_or_generate(None);
-    let nonce = gen_relay_nonce();
-    let name = state.federated.own_name();
-    let url = relay_own_url().unwrap_or_default();
-    let sig = sign_relay_identity(&keypair, &nonce, &name, &url);
-    let ack = RelayHelloAck {
-        kind: "relay_hello_ack".into(),
-        federate,
-        owners: ours,
-        relay_pubkey: Some(keypair.pubkey_b64()),
-        relay_name: Some(name),
-        relay_url: if url.is_empty() { None } else { Some(url) },
-        nonce: Some(nonce),
-        sig: Some(sig),
-    };
-    if socket
-        .send(Message::Text(
-            serde_json::to_string(&ack).unwrap_or_default(),
-        ))
-        .await
-        .is_err()
-    {
-        return;
-    }
+    send_hello_ack(&mut socket, federate, ours, &own_name, None).await;
 
-    if !federate {
-        info!("relay-peer: declined (no common owner)");
-        return;
-    }
-
-    info!("relay-peer: federated (shared owner verified)");
+    info!("relay-peer: federated (explicitly paired)");
 
     // Phase 3: receive the peer's relay_peer_list, store it, then send ours.
     let msg = match socket.recv().await {
@@ -1127,10 +1334,25 @@ mod tests {
             relay_url: None,
             nonce: None,
             sig: None,
+            pair_secret: None,
         };
         let json = serde_json::to_string(&hello).unwrap();
         assert!(json.contains("\"type\":\"relay_hello\""));
         assert!(json.contains("\"owners\""));
+        assert!(
+            !json.contains("pair_secret"),
+            "absent secret stays off the wire"
+        );
+
+        // The one-pair token rides the hello when present.
+        let paired = RelayHello {
+            pair_secret: Some("tok".into()),
+            ..hello
+        };
+        let json = serde_json::to_string(&paired).unwrap();
+        assert!(json.contains("\"pair_secret\":\"tok\""));
+        let back: RelayHello = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.pair_secret.as_deref(), Some("tok"));
 
         let ack: RelayHelloAck = serde_json::from_str(
             r#"{"type":"relay_hello_ack","federate":true,"owners":["hash1"]}"#,
@@ -1138,6 +1360,20 @@ mod tests {
         .unwrap();
         assert!(ack.federate);
         assert_eq!(ack.owners, vec!["hash1"]);
+        assert!(
+            ack.pair_secret.is_none(),
+            "ack consumer ignores absent secret"
+        );
+        assert!(ack.reason.is_none());
+
+        // A named decline: the reason must round-trip (the 403-style explicit
+        // refusal — the dialing relay's logs show WHY).
+        let decline: RelayHelloAck = serde_json::from_str(
+            r#"{"type":"relay_hello_ack","federate":false,"owners":[],"reason":"unpinned_peer"}"#,
+        )
+        .unwrap();
+        assert!(!decline.federate);
+        assert_eq!(decline.reason.as_deref(), Some("unpinned_peer"));
     }
 
     #[test]

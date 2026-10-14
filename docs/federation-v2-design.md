@@ -156,3 +156,28 @@ with the chain rig as acceptance.
    onward hop + ack relay, un-ignore the chain spec. Tests: the 3-relay rig.
 4. **Launch bug** (relay + rig): fix the rig to push pairing state; chase the
    B-pump frame mystery with the §3 gates in place.
+
+## As built — slice 1 decisions (2026-10-14)
+
+- Declines are NAMED: `relay_hello_ack` gains a `reason` field
+  (`unpinned_peer`, `pairing_secret_unknown`, `pairing_identity_missing`,
+  `identity_invalid`, …) so the dialing relay's logs show why — the 403-style
+  explicit-refusal spirit, on the wire.
+- Outbound: a pinned peer's ack MUST present identity (possession of the
+  pinned key) — unverifiable possession never passes.
+- Pin matching is by PUBKEY, not name (a renamed configured peer still
+  matches its pin).
+- Auto-add upserts by name — a re-pair under an existing name replaces the
+  entry (same semantics as CLI `peer add`).
+- The peering loop re-reads the config each cycle: pins/urls/removals apply
+  without restart (the fswatch spawner only spawns NEW names); a peer removed
+  from config idles rather than dies, so re-add works.
+- Legacy `peer add <url> <name>` REFUSES with a pointer to the pairing-URL
+  flow; a secret-less old-format pairing URL still pins (dual-direction
+  manual pairing stays possible).
+- The pending secret compares by SHA-256 of the b64 token; consumption and
+  auto-add are one atomic config write (temp + rename — one clean fswatch
+  event) that preserves every other field, including the legacy
+  `federation.enabled` flag.
+- Shared-owner intersection is computed and logged on every handshake —
+  observability only; pairing decides.

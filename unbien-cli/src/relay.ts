@@ -15,13 +15,18 @@ import {
   rememberRelay,
   forgetRelay,
   loadRelayPeers,
+  loadPendingRelayPairs,
   addRelayPeer,
+  addPendingRelayPair,
   removeRelayPeer,
   relayPubkeyB64,
+  encodeRelayPairUrl,
+  decodeRelayPairUrl,
   isFederationEnabled,
   setFederationEnabled,
 } from "./store.js"
 import { hostname as osHostname } from "node:os"
+import { randomBytes } from "node:crypto"
 
 const [verb, ...rest] = process.argv.slice(2)
 
@@ -39,9 +44,12 @@ function normalizeUrl(raw: string): string {
   return url.replace(/\/+$/, "")
 }
 
-/** Generate a relay pairing URL. Used by both 'unbien relay pair' (alias)
- *  + 'unbien relay peer pair'. Falls back to the first remembered relay's
- *  URL if UNBIEN_RELAY_URL isn't set in the shell env. */
+/** Mint a relay pairing URL (federation v2 one-pair): a random 32-byte
+ *  single-use secret + our identity, held as a pending entry in
+ *  relay-peers.json. The peer relay's `peer add` stores the pin + presents
+ *  the secret in its relay_hello — THIS relay auto-adds the peer back, so
+ *  one pairing action configures both directions. Used by 'unbien relay
+ *  pair' (alias) + 'unbien relay peer pair'. */
 function doPair(args: string[]): void {
   // URL priority: explicit arg > UNBIEN_RELAY_URL > UNBIEN_RELAY (convert
   // 0.0.0.0/localhost → hostname, http:// → ws://) > first remembered relay.
@@ -71,18 +79,41 @@ function doPair(args: string[]): void {
     )
     process.exit(1)
   }
+  const url = normalizeUrl(pairUrl)
   const pubkey = relayPubkeyB64()
-  const blob = Buffer.from(
-    JSON.stringify({ url: normalizeUrl(pairUrl), name: pairName, pubkey }),
-  ).toString("base64")
-  const pairUrlFull = `relay-pair://${blob}`
+  const secret = randomBytes(32).toString("base64")
+  // Hold the secret as a pending (single-use) entry — the relay consumes it
+  // when the peer presents it in relay_hello (auto-add back).
+  addPendingRelayPair({
+    secret,
+    name: pairName,
+    url,
+    at: new Date().toISOString(),
+  })
+  const pairUrlFull = encodeRelayPairUrl({ url, name: pairName, pubkey, secret })
   console.log(pairUrlFull)
   console.error(
     "Relay pairing URL (also on stdout — pipe to pbcopy/xclip):\n" +
       `  ${pairUrlFull}\n\n` +
       "Run on the peer relay:\n" +
-      `  unbien relay peer add ${pairUrlFull}`,
+      `  unbien relay peer add ${pairUrlFull}\n\n` +
+      "The secret is SINGLE-USE: the peer presents it, this relay auto-adds the\n" +
+      "peer back (mutually pinned) and consumes the pending entry.",
   )
+}
+
+/** One line of `peer list` output: pin status, never the secret. */
+function peerLine(p: {
+  name: string
+  url: string
+  pubkey?: string
+  pair_secret?: string
+}): string {
+  const pin = p.pubkey
+    ? `pinned ${p.pubkey.slice(0, 12)}…`
+    : "NO PIN — will not dial or accept"
+  const held = p.pair_secret ? "  [pairing secret held]" : ""
+  return `  ${p.name} → ${p.url}  (${pin})${held}`
 }
 
 switch (verb) {
@@ -154,19 +185,13 @@ switch (verb) {
     if (peers.length > 0) {
       console.error(
         "Federated peer relays:\n" +
-          peers
-            .map(
-              (p) =>
-                `  ${p.name} → ${p.url}` +
-                (p.pubkey ? `  (pubkey: ${p.pubkey.slice(0, 12)}...)` : ""),
-            )
-            .join("\n"),
+          peers.map((p) => peerLine(p)).join("\n"),
       )
     } else {
       console.error(
-        "No federated peer relays. Add one:\n" +
-          "  unbien relay peer add <url> <name>\n" +
-          "  unbien relay peer add relay-pair://<base64>",
+        "No federated peer relays. Pair one:\n" +
+          "  on the PEER relay:  unbien relay pair\n" +
+          "  then here:          unbien relay peer add relay-pair://<base64>",
       )
     }
     break
@@ -177,45 +202,38 @@ switch (verb) {
     switch (subVerb) {
       case "add": {
         const arg = peerRest[0]
-        // Accept a pairing URL (relay-pair://base64...) or the legacy
-        // <url> <name> form.
+        // The pairing URL flow is the ONLY form (federation v2: pinned
+        // pairing is mandatory — the pin comes from the URL).
         if (arg && arg.startsWith("relay-pair://")) {
-          try {
-            const blob = arg.slice("relay-pair://".length)
-            const parsed = JSON.parse(
-              Buffer.from(blob, "base64").toString("utf8"),
-            ) as { url: string; name: string; pubkey: string }
-            addRelayPeer({
-              url: normalizeUrl(parsed.url),
-              name: parsed.name,
-              pubkey: parsed.pubkey,
-            })
-            if (!isFederationEnabled()) setFederationEnabled(true)
-            console.error(
-              "[relay] peer added: " + parsed.name + " -> " +
-                normalizeUrl(parsed.url) + " (pubkey pinned)\n" +
-                "  The relay will connect within ~5s (no restart needed).",
-            )
-          } catch {
+          const parsed = decodeRelayPairUrl(arg)
+          if (!parsed) {
             console.error("[relay] invalid pairing URL")
             process.exit(1)
           }
-        } else {
-          const url = peerRest[0]
-          const name = peerRest[1]
-          if (!url || !name) {
-            console.error(
-              "usage: unbien relay peer add <url> <name>\n" +
-                "       unbien relay peer add relay-pair://<base64>",
-            )
-            process.exit(1)
-          }
-          addRelayPeer({ url: normalizeUrl(url), name })
+          addRelayPeer({
+            url: normalizeUrl(parsed.url),
+            name: parsed.name,
+            pubkey: parsed.pubkey,
+            pair_secret: parsed.secret,
+          })
           if (!isFederationEnabled()) setFederationEnabled(true)
           console.error(
-            "[relay] peer added: " + name + " -> " + normalizeUrl(url) +
-              "\n  The relay will connect within ~5s (no restart needed).",
+            "[relay] peer added: " + parsed.name + " -> " +
+              normalizeUrl(parsed.url) + " (pubkey pinned" +
+              (parsed.secret ? ", pairing secret held" : "") + ")\n" +
+              "  The relay will connect within ~5s (no restart needed)." +
+              (parsed.secret
+                ? "\n  The peer relay will auto-add us back when we present the secret."
+                : ""),
           )
+        } else {
+          // Legacy <url> <name> form: REFUSED — no pin, no pairing.
+          console.error(
+            "unbien relay peer add now requires a pairing URL — pinned pairing is mandatory.\n" +
+              "  Generate one on the PEER relay:   unbien relay pair\n" +
+              "  Then here:                        unbien relay peer add relay-pair://<base64>",
+          )
+          process.exit(1)
         }
         break
       }
@@ -260,21 +278,31 @@ switch (verb) {
       }
       case "list": {
         const peers = loadRelayPeers()
+        const pending = loadPendingRelayPairs()
         console.error(
           "[relay] federation " + (isFederationEnabled() ? "ENABLED" : "disabled (unbien relay peer federation on)") + "\n",
         )
         if (peers.length === 0) {
           console.error(
-            "No federated peer relays. Add one:\n" +
-              "  unbien relay peer add <url> <name>\n" +
+            "No federated peer relays. Pair one:\n" +
+              "  on the PEER relay:  unbien relay pair\n" +
+              "  then here:          unbien relay peer add relay-pair://<base64>\n" +
               "\n" +
-              "Peer relays federate via shared-owner verification.\n" +
-              "See docs/relay-peering-sketch.md.",
+              "Peer relays federate via explicit pairing (pinned pubkeys).\n" +
+              "See docs/federation-v2-design.md.",
           )
         } else {
           console.error(
             "Federated peer relays:\n" +
-              peers.map((p) => "  " + p.name + " -> " + p.url).join("\n"),
+              peers.map((p) => peerLine(p)).join("\n"),
+          )
+        }
+        if (pending.length > 0) {
+          console.error(
+            `\nPending pairing invitations: ${pending.length} (single-use; secrets not shown)\n` +
+              pending
+                .map((p) => `  ${p.name} → ${p.url}  (issued ${p.at})`)
+                .join("\n"),
           )
         }
         break
@@ -283,7 +311,6 @@ switch (verb) {
         console.error(
           "usage:\n" +
             "  unbien relay peer pair [url] [--name <name>]\n" +
-            "  unbien relay peer add <url> <name>\n" +
             "  unbien relay peer add relay-pair://<base64>\n" +
             "  unbien relay peer remove <name>\n" +
             "  unbien relay peer list",
@@ -317,13 +344,7 @@ switch (verb) {
     if (peers.length > 0) {
       console.error(
         "Federated peer relays:\n" +
-          peers
-            .map(
-              (p) =>
-                `  ${p.name} → ${p.url}` +
-                (p.pubkey ? `  (pubkey: ${p.pubkey.slice(0, 12)}...)` : ""),
-            )
-            .join("\n"),
+          peers.map((p) => peerLine(p)).join("\n"),
       )
     }
     break

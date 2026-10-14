@@ -124,6 +124,30 @@ function freePort(): Promise<number> {
 interface RelayHandle {
   port: number
   stateDir: string
+  /** The relay's pre-generated identity pubkey (base64) — pinned by the peer. */
+  pubkey: string
+}
+
+/** Pre-generate the relay's identity keypair in its (not-yet-spawned)
+ * state dir — same file format `relay_keypair.rs`/the CLI read (private_key
+ * = 32-byte seed) — so the OTHER relay can pin its pubkey BEFORE either
+ * starts (federation v2: the pin is the link gate, no shared-owner
+ * fallback). */
+function pregenRelayIdentity(stateDir: string): string {
+  const kp = generateEd25519Keypair()
+  const pubkey = Buffer.from(kp.publicKey).toString("base64")
+  writeFileSync(
+    join(stateDir, "relay-keypair.json"),
+    JSON.stringify(
+      {
+        public_key: pubkey,
+        private_key: Buffer.from(kp.secretKey).toString("base64"),
+      },
+      null,
+      2,
+    ),
+  )
+  return pubkey
 }
 
 /** Spawns the real relay binary with a fully hermetic state dir. */
@@ -131,7 +155,9 @@ async function spawnRelay(name: string, peers: unknown): Promise<RelayHandle> {
   const port = await freePort()
   const stateDir = mkdtempSync(join(tmpdir(), `unbien-fed-${name}-`))
   tempdirs.push(stateDir)
-  // relay-peers.json BEFORE start: start_peering reads it at boot.
+  // Identity keypair FIRST (so its pubkey can be pinned), then the peer
+  // config: start_peering reads it at boot.
+  const pubkey = pregenRelayIdentity(stateDir)
   writeFileSync(join(stateDir, "relay-peers.json"), JSON.stringify(peers))
   // Hermetic env: strip ambient UNBIEN_* overrides the vitest.setup doesn't
   // know about (direct DB-path overrides would bypass UNBIEN_STATE_DIR, and a
@@ -192,7 +218,7 @@ async function spawnRelay(name: string, peers: unknown): Promise<RelayHandle> {
     }
     await new Promise((r) => setTimeout(r, 100))
   }
-  return { port, stateDir }
+  return { port, stateDir, pubkey }
 }
 
 // ── Owner mesh blob publish (shared trust root) ──────────────────────────────
@@ -398,13 +424,35 @@ async function buildRig(): Promise<Rig> {
     federation: { enabled: true },
     peers: [],
   })
-  // Relay-a peers OUT to relay-b (the one-direction topology of the rig; the
-  // peering loop reconnects with backoff until the owner hashes intersect).
+  // Mutual PINNING (federation v2: the pin is the link gate — the shared
+  // owner blob alone no longer federates anything). Relay-a dials out to
+  // relay-b (pinned); relay-b's inbound gate pins relay-a's key so the
+  // dial is accepted. The fswatch loop picks the rewrite up without a
+  // restart.
   writeFileSync(
     join(relayA.stateDir, "relay-peers.json"),
     JSON.stringify({
       federation: { enabled: true },
-      peers: [{ name: "relay-b", url: `http://127.0.0.1:${relayB.port}` }],
+      peers: [
+        {
+          name: "relay-b",
+          url: `http://127.0.0.1:${relayB.port}`,
+          pubkey: relayB.pubkey,
+        },
+      ],
+    }),
+  )
+  writeFileSync(
+    join(relayB.stateDir, "relay-peers.json"),
+    JSON.stringify({
+      federation: { enabled: true },
+      peers: [
+        {
+          name: "relay-a",
+          url: `http://127.0.0.1:${relayA.port}`,
+          pubkey: relayA.pubkey,
+        },
+      ],
     }),
   )
 

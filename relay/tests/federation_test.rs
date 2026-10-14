@@ -8,76 +8,30 @@
 //! and its own temp relay-peers.json contents. The peering loop and the
 //! auth'd WS clients are real; only the mesh blob upload piggybacks on the
 //! /mesh HTTP endpoint.
+//!
+//! The STATE_LOCK guard is DELIBERATELY held across every await in a test —
+//! that is the serialization — so the pedantic await-holding-lock lint is
+//! off.
+#![allow(clippy::await_holding_lock)]
 
 mod common;
 
-use common::{WsStream, connect_and_auth_with_key};
-use std::sync::Arc;
+use common::{WsStream, connect_and_auth_with_key, spawn_relay_named};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use ed25519_dalek::{Signer, SigningKey};
 use futures_util::{SinkExt, StreamExt};
-use relay::{
-    AppState, FederatedSessions, FirehoseMetrics, MeshStore, PairingRegistry, PeerRegistry,
-    PresenceManager, RoomManager,
-};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
-struct Relay {
-    port: u16,
-    state: AppState,
-}
-
-pub type StateArcs = (
-    Arc<PeerRegistry>,
-    Arc<PresenceManager>,
-    Arc<RoomManager>,
-    Arc<MeshStore>,
-    Arc<FederatedSessions>,
-    Arc<PairingRegistry>,
-);
-
-/// Explicit peering identity: multiple in-process relays MUST have distinct
-/// own_names or hello/visited stamping self-collides (hostname is shared).
-async fn spawn_relay_named(name: &str) -> Relay {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let mesh = Arc::new(MeshStore::open_in_memory().unwrap());
-    let presence = Arc::new(PresenceManager::new());
-    let rooms = Arc::new(RoomManager::new());
-    let metrics = Arc::new(FirehoseMetrics::new());
-    let registry = Arc::new(PeerRegistry::new(
-        presence.clone(),
-        rooms.clone(),
-        metrics.clone(),
-    ));
-    let mesh_auth = Arc::new(relay::MeshAuthCache::new());
-    let state = AppState {
-        registry: registry.clone(),
-        presence: presence.clone(),
-        rooms: rooms.clone(),
-        pairing: Arc::new(PairingRegistry::new()),
-        mesh: mesh.clone(),
-        mesh_auth,
-        relay_name: name.to_string(),
-        federated: Arc::new(FederatedSessions::with_name(name)),
-        metrics: metrics.clone(),
-    };
-    let app = relay::build_router(state.clone());
-    tokio::spawn(async move {
-        let _ = axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .await;
-    });
-    tokio::time::sleep(Duration::from_millis(20)).await;
-    Relay { port, state }
-}
+/// UNBIEN_STATE_DIR is process-global and every test here both sets it and
+/// resolves the relay keypair + relay-peers.json through it — the tests in
+/// this file MUST NOT interleave (a flipped env mid-handshake would make a
+/// relay present a key the other side never pinned).
+static STATE_LOCK: Mutex<()> = Mutex::new(());
 
 fn owner_pk_hash(pk: &[u8]) -> String {
     let d = Sha256::digest(pk);
@@ -137,7 +91,11 @@ async fn publish_shared_owner(
     owner_pk_b64
 }
 
-fn state_dir_setup(peer_b_url: &str) {
+/// Hermetic state dir + pinned peer config (federation v2: the link gate is
+/// the PIN — the peering trust root is the relay identity keypair, not the
+/// shared owner). `pinned_pk` is the relay's own Ed25519 pubkey (in-process
+/// relays share the state dir, hence the keypair).
+fn state_dir_setup(peer_b_url: &str, pinned_pk: &str) {
     let dir = std::env::var("UNBIEN_STATE_DIR").unwrap();
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
@@ -145,7 +103,7 @@ fn state_dir_setup(peer_b_url: &str) {
         json!({
             "federation": {"enabled": true},
             "peers": [
-                {"name": "relay-b", "url": peer_b_url}
+                {"name": "relay-b", "url": peer_b_url, "pubkey": pinned_pk}
             ]
         })
         .to_string(),
@@ -205,6 +163,7 @@ fn inner_of(outer_wire: &str) -> Value {
 /// the route is learned in transit, from the request packet's provenance).
 #[tokio::test]
 async fn app_request_and_machine_reply_cross_two_relays() {
+    let _state = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _ = tracing_subscriber::fmt()
         .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()))
         .with_test_writer()
@@ -268,8 +227,12 @@ async fn app_request_and_machine_reply_cross_two_relays() {
 
     // Peering: A connects out to B (same mechanism as production: config file
     // + start_peering). Machine rooms must already exist on B for the
-    // handshake exchange to carry them.
-    state_dir_setup(&format!("http://127.0.0.1:{}", relay_b.port));
+    // handshake exchange to carry them. The pin is the STRICT GATE
+    // (federation v2 §1): both in-process relays share the state dir, so
+    // the identity keypair is shared — pre-create it so the pin is the key
+    // the handshake actually presents.
+    let pinned_pk = relay::relay_keypair::load_or_generate(None).pubkey_b64();
+    state_dir_setup(&format!("http://127.0.0.1:{}", relay_b.port), &pinned_pk);
     relay::peering::start_peering(
         relay_a.state.mesh.clone(),
         relay_a.state.registry.clone(),
@@ -361,6 +324,7 @@ async fn app_request_and_machine_reply_cross_two_relays() {
 ///    frame), machine receives nothing.
 #[tokio::test]
 async fn federated_pairing_exchange_and_source_refusal() {
+    let _state = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let state_dir = tempfile::tempdir().unwrap();
     unsafe {
         std::env::set_var("UNBIEN_STATE_DIR", state_dir.path());
@@ -406,8 +370,10 @@ async fn federated_pairing_exchange_and_source_refusal() {
     }
 
     // Peering: A connects out to B (handshake exchanges room lists AND the
-    // pairing snapshot).
-    state_dir_setup(&format!("http://127.0.0.1:{}", relay_b.port));
+    // pairing snapshot). The pin is the strict gate — pre-create the shared
+    // identity keypair so the pin matches what the handshake presents.
+    let pinned_pk = relay::relay_keypair::load_or_generate(None).pubkey_b64();
+    state_dir_setup(&format!("http://127.0.0.1:{}", relay_b.port), &pinned_pk);
     relay::peering::start_peering(
         relay_a.state.mesh.clone(),
         relay_a.state.registry.clone(),

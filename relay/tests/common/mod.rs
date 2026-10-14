@@ -66,6 +66,54 @@ pub async fn start_relay_state() -> (u16, Arc<relay::PairingRegistry>) {
     (port, pairing)
 }
 
+/// An in-process relay with an explicit peering identity (`relay_name` +
+/// `FederatedSessions::with_name`). Multiple in-process relays MUST have
+/// distinct own_names or hello/visited stamping self-collides (the hostname
+/// is shared). NOTE: `UNBIEN_STATE_DIR` is process-global — relays spawned in
+/// the same test share it (and therefore the relay identity keypair + the
+/// relay-peers.json file). Callers that set it must serialize (see the
+/// `STATE_LOCK` pattern in tests/federation_test.rs).
+pub struct TestRelay {
+    pub port: u16,
+    pub state: AppState,
+}
+
+pub async fn spawn_relay_named(name: &str) -> TestRelay {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mesh = Arc::new(MeshStore::open_in_memory().unwrap());
+    let presence = Arc::new(PresenceManager::new());
+    let rooms = Arc::new(RoomManager::new());
+    let metrics = Arc::new(FirehoseMetrics::new());
+    let registry = Arc::new(PeerRegistry::new(
+        presence.clone(),
+        rooms.clone(),
+        metrics.clone(),
+    ));
+    let mesh_auth = Arc::new(MeshAuthCache::new());
+    let state = AppState {
+        registry: registry.clone(),
+        presence: presence.clone(),
+        rooms: rooms.clone(),
+        pairing: Arc::new(relay::PairingRegistry::new()),
+        mesh: mesh.clone(),
+        mesh_auth,
+        relay_name: name.to_string(),
+        federated: Arc::new(relay::peering::FederatedSessions::with_name(name)),
+        metrics: metrics.clone(),
+    };
+    let app = relay::build_router(state.clone());
+    tokio::spawn(async move {
+        let _ = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await;
+    });
+    tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    TestRelay { port, state }
+}
+
 /// Connects using a caller-supplied key and room_id, completes the full auth handshake.
 /// Returns (ws_stream, peer_id_b64).
 pub async fn connect_and_auth_with_room(

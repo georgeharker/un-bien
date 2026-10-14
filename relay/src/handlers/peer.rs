@@ -9,7 +9,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use tokio::time::{self, Duration};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::AppState;
 use crate::auth::challenge::{
@@ -169,11 +169,6 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
     let room_meta_json = serde_json::to_value(&room_meta).unwrap_or_default();
-    eprintln!(
-        "[feddbg:PEER] registered epk={}.. relay={}",
-        &peer_id[..16],
-        state.relay_name
-    );
     let conn_id = registry.register(peer_id.clone(), room_meta, tx).await;
 
     // Phase 4: push the current federated_peer_list to this new connection
@@ -219,11 +214,6 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                             Message::Binary(_) => continue, // ignore binary
                         };
 
-                        eprintln!(
-                            "[feddbg:PUMP] conn={} got {} bytes",
-                            &peer_id[..peer_id.len().min(8)],
-                            text.len()
-                        );
                         // Parse as JSON to check for relay control frames.
                         let frame: serde_json::Value = match serde_json::from_str(&text) {
                             Ok(v) => v,
@@ -246,13 +236,14 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                             }
                         };
 
-                        // Frame dispatch trace (rig debug; remove with the debug work).
-                        let pre = if frame.get("peer").is_some() && frame.get("room").is_some() {
+                        // Frame dispatch trace (frame kind only — never
+                        // content).
+                        let frame_kind = if frame.get("peer").is_some() && frame.get("room").is_some() {
                             "envelope"
                         } else {
                             frame.get("type").and_then(|v| v.as_str()).unwrap_or("opaque")
                         };
-                        eprintln!("[feddbg:DISPATCH] {pre}");
+                        debug!(peer = %peer_short, kind = frame_kind, "frame dispatch");
                         // Frames with a top-level "type" are handled by the relay itself.
                         if let Some(t) = frame.get("type").and_then(|v| v.as_str()) {
                             let peers: Vec<String> = frame
@@ -692,13 +683,13 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                         !dest_owners
                                             .as_ref()
                                             .is_some_and(|o| o.contains(&peer_id));
-                                    eprintln!(
-                                        "[feddbg:SRC] dest={} owners={:?} sender={} untrusted={} excludes={}",
-                                        &dest_peer[..8],
-                                        dest_owners.as_ref().map(|o| o.len()),
-                                        &peer_id[..8],
+                                    debug!(
+                                        peer = %peer_short,
+                                        dest = %&dest_peer[..dest_peer.len().min(8)],
+                                        dest_owners_known = dest_owners.is_some(),
                                         sender_untrusted,
-                                        dest_excludes_sender
+                                        dest_excludes_sender,
+                                        "check-before-forward SRC gate"
                                     );
                                     if dest_excludes_sender && sender_untrusted {
                                         let refusal = serde_json::json!({
