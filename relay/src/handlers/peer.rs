@@ -675,12 +675,20 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                     //     machine-signed advertised set;
                                     //   - machine sender: sender owner set ∩
                                     //     dest owner set ≠ ∅.
+                                    // PAIRING FRAMES ARE EXEMPT (same exemption
+                                    // as the local content gate): pair_request /
+                                    // pair_ok bootstrap trust — without the
+                                    // exemption a device could never pair with a
+                                    // federated machine it isn't already in
+                                    // (chicken-and-egg). The MACHINE gates the
+                                    // pair_request itself (token check).
                                     // Routed unknown_peer refusal so the app
                                     // distinguishes not-paired from offline.
                                     // NO dest-side re-checks anywhere (9779b88).
+                                    let is_pair = crate::protocol::outer::is_pair_envelope(&env.ct);
                                     let dest_owners = federated.machine_owners(&dest_peer).await;
                                     let sender_owners = pairing.owners_of(&peer_id);
-                                    let gate_ok = match &dest_owners {
+                                    let gate_ok = is_pair || match &dest_owners {
                                         None => false,
                                         Some(dest_owners) => {
                                             dest_owners.contains(&peer_id)

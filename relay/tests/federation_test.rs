@@ -1002,3 +1002,278 @@ async fn owner_device_outer_send_in_set_vs_out_of_set() {
     })
     .await;
 }
+
+// ── Pairing bootstrap through federation (SRC-gate pair exemption) ────────
+
+/// A device NOT in the dest machine's owner set can still send PAIRING
+/// frames to a federated machine — the SRC gate exempts them (the same
+/// exemption the local content gate has): without it, a device could never
+/// pair with a federated machine it isn't already in (chicken-and-egg).
+/// The MACHINE gates the pair_request itself (token check). The exemption
+/// is NARROW: a non-pairing frame from the same sender is still refused.
+#[tokio::test]
+async fn pair_frames_exempt_from_src_gate() {
+    let _state = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let state_dir = tempfile::tempdir().unwrap();
+    unsafe {
+        std::env::set_var("UNBIEN_STATE_DIR", state_dir.path());
+    }
+    let relay_a = spawn_relay_named("relay-a").await;
+    let relay_b = spawn_relay_named("relay-b").await;
+    let owner = SigningKey::generate(&mut rand::thread_rng());
+
+    let machine_sk = SigningKey::generate(&mut rand::thread_rng());
+    let app_sk = SigningKey::generate(&mut rand::thread_rng());
+    let stranger_sk = SigningKey::generate(&mut rand::thread_rng());
+    let (mut machine, machine_epk) = connect_and_auth_with_key(relay_b.port, &machine_sk).await;
+    let (_app, app_epk) = connect_and_auth_with_key(relay_a.port, &app_sk).await;
+    let (mut stranger, _stranger_epk) = connect_and_auth_with_key(relay_a.port, &stranger_sk).await;
+
+    publish_shared_owner(
+        &owner,
+        &[machine_epk.clone(), app_epk.clone()],
+        &format!("http://127.0.0.1:{}", relay_a.port),
+        &format!("http://127.0.0.1:{}", relay_b.port),
+    )
+    .await;
+
+    // Machine declares its pairing on relay B: owners = [app] ONLY — the
+    // stranger is NOT in the set (the SRC gate would refuse it).
+    {
+        let mkey = machine_sk.verifying_key().to_bytes();
+        let owners = vec![app_epk.clone()];
+        let blob = json!({
+            "machine_pk": B64.encode(mkey),
+            "owners": owners,
+            "version": 1,
+            "issued_at": 1_700_000_000_000u64,
+        });
+        let blob_bytes = serde_json::to_vec(&blob).unwrap();
+        let sig = machine_sk.sign(&blob_bytes);
+        relay_b
+            .state
+            .pairing
+            .set_signed(
+                machine_epk.clone(),
+                vec![app_epk.clone()],
+                1,
+                &blob_bytes,
+                &sig.to_bytes(),
+            )
+            .expect("machine pairing set (v1)");
+    }
+
+    // Peering: A out to B, pinned (strict link gate).
+    let pinned_pk = relay::relay_keypair::load_or_generate(None).pubkey_b64();
+    state_dir_setup(&format!("http://127.0.0.1:{}", relay_b.port), &pinned_pk);
+    relay::peering::start_peering(
+        relay_a.state.mesh.clone(),
+        relay_a.state.registry.clone(),
+        relay_a.state.pairing.clone(),
+        relay_a.state.federated.clone(),
+    );
+
+    // Wait for the handshake exchange: A knows the machine's owner set.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            panic!("handshake exchange never completed");
+        }
+        if let Some(owners) = relay_a.state.federated.machine_owners(&machine_epk).await
+            && owners.contains(&app_epk)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // The stranger's PAIR_REQUEST reaches the machine through the SRC-gate
+    // exemption (the machine gates the token itself).
+    let pair_payload = json!({
+        "type": "pair_request",
+        "token": "pair-token",
+        "device_name": "laptop",
+    });
+    stranger
+        .send(Message::text(outer_frame(
+            &machine_epk,
+            "main",
+            &pair_payload,
+        )))
+        .await
+        .unwrap();
+    let got = next_text(&mut machine)
+        .await
+        .expect("pair_request must reach the machine (SRC-gate pair exemption)");
+    assert_eq!(inner_of(&got), pair_payload);
+
+    // The exemption is NARROW: the same stranger's non-pairing frame is
+    // still refused AT THE SOURCE.
+    stranger
+        .send(Message::text(outer_frame(
+            &machine_epk,
+            "main",
+            &json!({"type": "ub", "ub": {"t": "session_sync", "session_id": "bad"}}),
+        )))
+        .await
+        .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut err: Option<Value> = None;
+    while tokio::time::Instant::now() < deadline {
+        let Some(text) = next_any_text(&mut stranger).await else {
+            break;
+        };
+        let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        if v["type"] == "error" {
+            err = Some(v);
+            break;
+        }
+    }
+    let err = err.expect("stranger's non-pair frame must STILL be refused");
+    assert_eq!(err["code"], "unknown_peer");
+}
+
+// ── Incremental pairing propagation (relay_pairings_update) ────────────────
+
+/// A device's pairing_set pushed to relay A AFTER the peering handshake must
+/// reach B's federated gate view WITHOUT any re-handshake — the incremental
+/// `relay_pairings_update` push is the only carrier at that point. The live
+/// first-convo latency was exactly this path underperforming: replies were
+/// refused at B until a link flap re-ran the handshake snapshot. End-to-end:
+/// once propagated, the machine's reply to the device clears B's strict SRC
+/// gate.
+#[tokio::test]
+async fn pairing_set_push_propagates_incrementally() {
+    let _state = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let state_dir = tempfile::tempdir().unwrap();
+    unsafe {
+        std::env::set_var("UNBIEN_STATE_DIR", state_dir.path());
+    }
+    let relay_a = spawn_relay_named("relay-a").await;
+    let relay_b = spawn_relay_named("relay-b").await;
+    let owner = SigningKey::generate(&mut rand::thread_rng());
+
+    let machine_sk = SigningKey::generate(&mut rand::thread_rng());
+    let app_sk = SigningKey::generate(&mut rand::thread_rng());
+    let app_epk = B64.encode(app_sk.verifying_key().to_bytes());
+    let (mut machine, machine_epk) = connect_and_auth_with_key(relay_b.port, &machine_sk).await;
+
+    publish_shared_owner(
+        &owner,
+        &[machine_epk.clone(), app_epk.clone()],
+        &format!("http://127.0.0.1:{}", relay_a.port),
+        &format!("http://127.0.0.1:{}", relay_b.port),
+    )
+    .await;
+
+    // Machine declares its pairing on relay B BEFORE the handshake (rides
+    // the handshake snapshot): owners = [app].
+    {
+        let mkey = machine_sk.verifying_key().to_bytes();
+        let owners = vec![app_epk.clone()];
+        let blob = json!({
+            "machine_pk": B64.encode(mkey),
+            "owners": owners,
+            "version": 1,
+            "issued_at": 1_700_000_000_000u64,
+        });
+        let blob_bytes = serde_json::to_vec(&blob).unwrap();
+        let sig = machine_sk.sign(&blob_bytes);
+        relay_b
+            .state
+            .pairing
+            .set_signed(
+                machine_epk.clone(),
+                vec![app_epk.clone()],
+                1,
+                &blob_bytes,
+                &sig.to_bytes(),
+            )
+            .expect("machine pairing set (v1)");
+    }
+
+    // Peering handshake FIRST — the exchange completes before the app's
+    // push, so the INCREMENTAL push is the only carrier for the app's set.
+    let pinned_pk = relay::relay_keypair::load_or_generate(None).pubkey_b64();
+    state_dir_setup(&format!("http://127.0.0.1:{}", relay_b.port), &pinned_pk);
+    relay::peering::start_peering(
+        relay_a.state.mesh.clone(),
+        relay_a.state.registry.clone(),
+        relay_a.state.pairing.clone(),
+        relay_a.state.federated.clone(),
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            panic!("handshake exchange never completed");
+        }
+        if let Some(owners) = relay_a.state.federated.machine_owners(&machine_epk).await
+            && owners.contains(&app_epk)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // NOW the app connects to A and pushes its own pairing_set VIA THE WIRE
+    // (a real control frame, like the phone app / CLI do on connect).
+    let (mut app, app_epk_live) = connect_and_auth_with_key(relay_a.port, &app_sk).await;
+    assert_eq!(app_epk_live, app_epk, "epk derivation mismatch");
+    let app_blob = json!({
+        "machine_pk": B64.encode(app_sk.verifying_key().to_bytes()),
+        "owners": [app_epk.clone()],
+        "version": 2,
+        "issued_at": 1_700_000_000_001u64,
+    });
+    let app_blob_bytes = serde_json::to_vec(&app_blob).unwrap();
+    let app_sig = app_sk.sign(&app_blob_bytes);
+    app.send(Message::text(
+        json!({
+            "type": "pairing_set",
+            "blob": B64.encode(&app_blob_bytes),
+            "sig": B64.encode(app_sig.to_bytes()),
+        })
+        .to_string(),
+    ))
+    .await
+    .unwrap();
+
+    // THE ASSERT: B's federated view of the app's owner set arrives without
+    // any re-handshake. If this fails, only the handshake snapshot carries
+    // pairing state — the live first-convo latency, reproduced as a red test.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let learned = loop {
+        if tokio::time::Instant::now() >= deadline {
+            break false;
+        }
+        if let Some(owners) = relay_b.state.federated.machine_owners(&app_epk).await
+            && owners.contains(&app_epk)
+        {
+            break true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert!(
+        learned,
+        "incremental relay_pairings_update never reached relay B — the app's \
+         owner set is only carried by handshake snapshots (first-convo latency)"
+    );
+
+    // End-to-end: request (route learn) + reply through B's SRC gate, which
+    // now decides on the incrementally-propagated view.
+    let payload = json!({"type": "ub", "ub": {"t": "session_sync", "session_id": "s1"}});
+    app.send(Message::text(outer_frame(&machine_epk, "main", &payload)))
+        .await
+        .unwrap();
+    let got = next_text(&mut machine).await.expect("app request blocked");
+    assert_eq!(inner_of(&got), payload);
+    let reply = json!({"type": "ub", "ub": {"t": "hello_back"}});
+    machine
+        .send(Message::text(outer_frame(&app_epk, "main", &reply)))
+        .await
+        .unwrap();
+    let got = next_text(&mut app)
+        .await
+        .expect("machine reply blocked — B's SRC gate refused it");
+    assert_eq!(inner_of(&got), reply);
+}
