@@ -680,6 +680,14 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                         !dest_owners
                                             .as_ref()
                                             .is_some_and(|o| o.contains(&peer_id));
+                                    eprintln!(
+                                        "[feddbg:SRC] dest={} owners={:?} sender={} untrusted={} excludes={}",
+                                        &dest_peer[..8],
+                                        dest_owners.as_ref().map(|o| o.len()),
+                                        &peer_id[..8],
+                                        sender_untrusted,
+                                        dest_excludes_sender
+                                    );
                                     if dest_excludes_sender && sender_untrusted {
                                         let refusal = serde_json::json!({
                                             "type": "error",

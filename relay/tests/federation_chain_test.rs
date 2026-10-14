@@ -51,6 +51,15 @@ impl Drop for RelayProc {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        // Preserve the child's relay.log: the file layer writes there, and
+        // the TempDir would delete it on test teardown.
+        if let Ok(log) = std::fs::read(self._dir.path().join("relay.log")) {
+            let out = std::env::temp_dir().join(format!(
+                "unbien-rig-{}-{}.relay.log",
+                self._name, self._port
+            ));
+            let _ = std::fs::write(out, log);
+        }
     }
 }
 
@@ -75,6 +84,10 @@ fn spawn_relay_proc(name: &str, port: u16, peers: &[(&str, String)]) -> RelayPro
     )
     .unwrap();
 
+    println!(
+        "[rig] relay {name}: state dir {} (logs in relay.log)",
+        dir.path().display()
+    );
     let child = Command::new(env!("CARGO_BIN_EXE_unbien-relay"))
         .env("UNBIEN_STATE_DIR", dir.path())
         .env("UNBIEN_RELAY_NAME", name)
@@ -84,16 +97,16 @@ fn spawn_relay_proc(name: &str, port: u16, peers: &[(&str, String)]) -> RelayPro
         .env("XDG_STATE_HOME", dir.path().join("xdg-state"))
         .env("RUST_LOG", "relay=debug")
         .stdout({
-            let f = std::fs::File::create(std::env::temp_dir().join(format!(
-                "unbien-rig-{name}-{port}.out.log"
-            )))
+            let f = std::fs::File::create(
+                std::env::temp_dir().join(format!("unbien-rig-{name}-{port}.out.log")),
+            )
             .unwrap();
             Stdio::from(f)
         })
         .stderr({
-            let f = std::fs::File::create(std::env::temp_dir().join(format!(
-                "unbien-rig-{name}-{port}.err.log"
-            )))
+            let f = std::fs::File::create(
+                std::env::temp_dir().join(format!("unbien-rig-{name}-{port}.err.log")),
+            )
             .unwrap();
             Stdio::from(f)
         })
@@ -118,9 +131,7 @@ fn spawn_relay_proc(name: &str, port: u16, peers: &[(&str, String)]) -> RelayPro
     let mut child = child;
     let _ = child.kill();
     let _ = child.wait();
-    panic!(
-        "relay {name} never started listening (logs: /tmp/unbien-rig-{name}-{port}.*.log)"
-    );
+    panic!("relay {name} never started listening (logs: /tmp/unbien-rig-{name}-{port}.*.log)");
 }
 
 fn hex(bytes: &[u8]) -> String {
