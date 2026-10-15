@@ -28,6 +28,10 @@ import {
 import { PanelStore } from "./panels.js"
 import { pickSession } from "./picker.js"
 import { entriesToEnvelopes, reduce, type EnvelopeMessage } from "./reduce.js"
+import {
+  findFlaggedSession,
+  type SessionChoice,
+} from "./session-select.js"
 import { Shell } from "./tui.js"
 import {
   renderAgentsPanel,
@@ -89,14 +93,6 @@ function resolveTarget(): { invite: PairingInvite; relayUrl: string } | null {
     // pointed a pi at, not where this peer lives.
     relayUrl: explicitRelay ?? peer.relayUrl,
   }
-}
-
-/** A session choice enriched with relay provenance (which relay+peer it
- *  came from) so the unified picker can disambiguate machines on different
- *  relays that happen to share a session name. */
-interface SessionChoice extends RoomInfo {
-  relayUrl: string
-  relayLabel: string
 }
 
 /** Group peers by their relay URL — each group becomes one relay connection. */
@@ -525,11 +521,6 @@ function describeSession(room: RoomInfo, index: number): string {
   return `  ${index + 1}. ${label}${child}${remote}\n      ${room.cwd ?? "?"}  [${id}]`
 }
 
-/** `--session` selects by IDENTITY: the pi sessionId (prefix ok) or room id. */
-function matchesSessionId(room: RoomInfo, id: string): boolean {
-  return room.sessionId?.startsWith(id) === true || room.room_id === id
-}
-
 async function pickRoom(rooms: readonly RoomInfo[]): Promise<RoomInfo | null> {
   if (rooms.length === 1) return rooms[0] ?? null
   // A non-TTY stdin (piped input, CI) can't drive a highlight list.
@@ -652,23 +643,70 @@ if (flags.has("list")) {
 const wantedId = flags.get("session")
 const wantedName = flags.get("session-name")
 
-let chosen: (RoomInfo & Partial<SessionChoice>) | null
-if (wantedId) {
-  chosen = choices.find((r) => matchesSessionId(r, wantedId)) ?? null
-  if (!chosen) console.error(`[sessions] no session with id "${wantedId}"`)
-} else if (wantedName) {
-  // Names are user-set and NOT unique, so an ambiguous one must not silently
-  // pick a session — that would attach to an arbitrary agent.
-  const named = choices.filter(
-    (r) => r.name === wantedName && (!multiRelay || r.relayUrl === relayUrl),
+/** Re-gather the session snapshot from the live relay clients — the
+ *  bounded-poll path for an explicit --session/--session-name miss. Each
+ *  pass re-pulls rooms (rooms_check) and re-listens for the federated push
+ *  (~3s live window — the relay broadcasts federated_peer_list exactly when
+ *  a freshly-launched room lands, so a pending listener catches it).
+ *  `client` is the single-relay connection; `clientsByRelay` covers every
+ *  relay in the multi-relay path. Choice entries keep the exact picker
+ *  shape — the chosen room's relayUrl drives the client promotion below. */
+const regatherChoices = async (): Promise<SessionChoice[]> => {
+  const relayClients: [string, SessionClient][] =
+    multiRelay && clientsByRelay
+      ? [...clientsByRelay.entries()]
+      : [[relayUrl, client]]
+  const gathered: SessionChoice[] = []
+  await Promise.all(
+    relayClients.map(async ([url, relayClient]) => {
+      const label = relayLabelFor(url)
+      const [rooms, fedRooms] = await Promise.all([
+        relayClient.listRooms(),
+        relayClient.listFederatedSessions(),
+      ])
+      for (const room of rooms) {
+        gathered.push({ ...room, relayUrl: url, relayLabel: label })
+      }
+      for (const room of fedRooms) {
+        gathered.push({
+          ...room,
+          relayUrl: url,
+          relayLabel: room.peerRelay ?? label,
+        })
+      }
+      return undefined // explicit: Promise.all worker; array-callback-return wants a value
+    }),
   )
-  if (named.length > 1) {
+  return gathered
+}
+
+let chosen: (RoomInfo & Partial<SessionChoice>) | null
+if (wantedId || wantedName) {
+  // A freshly-launched room (the `unbien create-session` handoff spawns a
+  // FRESH `unbien connect <epk> --session <id>`) can still be
+  // mid-propagation, so a miss re-gathers with bounded patience before
+  // falling through to the not-found exit below. A genuinely wrong id/name
+  // still fails promptly with today's message.
+  const result = await findFlaggedSession({
+    choices,
+    multiRelay,
+    relayUrl,
+    wantedId,
+    wantedName,
+    regather: regatherChoices,
+  })
+  if (result.ambiguous) {
     console.error(`[sessions] "${wantedName}" is ambiguous — use --session:`)
-    named.forEach((room, i) => console.error(describeSession(room, i)))
+    result.ambiguous.forEach((room, i) =>
+      console.error(describeSession(room, i)),
+    )
     process.exit(1)
   }
-  chosen = named[0] ?? null
-  if (!chosen) console.error(`[sessions] no session named "${wantedName}"`)
+  chosen = result.chosen
+  if (!chosen) {
+    if (wantedId) console.error(`[sessions] no session with id "${wantedId}"`)
+    else console.error(`[sessions] no session named "${wantedName}"`)
+  }
 } else {
   chosen = await pickRoom(choices)
 }
