@@ -28,6 +28,7 @@ import {
   uninstallRelayService,
 } from "../daemon/relayService.js"
 import { installCliPackage } from "../daemon/cliInstall.js"
+import { installLauncherPackage } from "../daemon/launcherInstall.js"
 import {
   defaultAgentName,
   localConfigExists,
@@ -233,6 +234,18 @@ export async function _cmdInstallTarget(
       const launcher = installLauncherSections({ linkCli })
       ok = ok && launcher.ok
       summary.push(...launcher.sections)
+      // The launcher PACKAGE must be installed/updated too — the service
+      // above runs whatever package is on disk, and NOTHING else ever
+      // updated it (observed live: the daemon ran 0.20.54 across five ext
+      // releases because no install path touched the package). Mirrors the
+      // CLI install: dev channel when this extension is a dev build.
+      const lp = await installLauncherPackage((l) =>
+        ctx.ui.notify(`[launcher] ${l}`, "info"),
+      )
+      summary.push(
+        `[un-bien] launcher package installed/updated` +
+          `${lp.version ? ` (unbien-launcher ${lp.version})` : ""}.`,
+      )
       continue
     }
     ctx.ui.notify(`[un-bien] installing ${component}…`, "info")
