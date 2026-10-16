@@ -291,7 +291,7 @@ switch (verb) {
               "  then here:          unbien relay peer add relay-pair://<base64>\n" +
               "\n" +
               "Peer relays federate via explicit pairing (pinned pubkeys).\n" +
-              "See docs/federation-v2-design.md.",
+              "See docs/relay-peering.md (the federation operator doc).",
           )
         } else {
           console.error(

@@ -4,13 +4,15 @@ un-bien provides LLM-agnostic cross-session messaging for pi + un-bien.
 Any model running in pi can call the mesh tools to send messages to,
 list, and wait for replies from other pi sessions on the same machine
 (local UDS broker), across machines (via the relay, same-owner
-validated), or across relays (via relay federation, same-owner validated).
+validated), or across relays (via relay federation — explicit pinned
+pairing between relays, owner-set-validated sends).
 
 ## Setting up federated (cross-relay) peers
 
 Federation lets agents on different machines (each running its own
-relay) discover and message each other. Same-owner validated — both
-relays must know the same owner. It is **opt-in**:
+relay) discover and message each other. Relays federate via **explicit
+pairing** (pinned pubkeys) — see [Relay Peering](relay-peering.md) for
+the full prerequisites + wire protocol. It is **opt-in**:
 
 1. **Enable the gate on each relay** — the relay refuses the peering
    route entirely unless `federation.enabled` is true in the relay's
@@ -23,8 +25,11 @@ relays must know the same owner. It is **opt-in**:
    ```
 
 2. **Set the relay's reachable URL** — in the relay's plist/service env
-   (`UNBIEN_RELAY_URL`, e.g. `ws://cascade:3000` via Tailscale). The
-   relay's name is auto-computed from the hostname.
+   (`UNBIEN_RELAY_URL`, e.g. `ws://cascade.tailnet.ts.net:3000` via
+   Tailscale). Required for federated relays — a `0.0.0.0` bind makes
+   the reachable address underivable, and both the pairing auto-add and
+   the `relay_hello` dial-back advertisement use it. The relay's name is
+   auto-computed from the hostname.
 
 3. **Restart the relay once** after installing a new build:
 
@@ -33,20 +38,19 @@ relays must know the same owner. It is **opt-in**:
    ```
 
 4. **Pair the relays** — from one machine, issue a pairing URL; on the
-   other, consume it (adds the peer + pins its pubkey + enables the
-   gate):
+   other, consume it (stores the pin + secret, auto-enables the gate;
+   the issuer auto-adds the consumer back — one pairing action
+   configures both directions):
 
    ```sh
-   unbien relay peer pair                # on machine A → prints relay-pair://…
-   unbien relay peer add relay-pair://…  # on machine B
+   unbien relay pair                 # on machine A -> prints relay-pair://...
+   unbien relay peer add relay-pair://...  # on machine B
    ```
 
-   For same-iCloud-epk machines, plain addressing works too (shared
-   owner IS the pairing):
-
-   ```sh
-   unbien relay peer add ws://other-machine:3000 other-machine
-   ```
+   Dual-direction manual pairing (mint + consume on each side) also
+   works — the pairing URL always pins the peer's pubkey. The legacy
+   plain form (`unbien relay peer add <url> <name>`) is refused:
+   pinned pairing is mandatory.
 
    No restart needed — the relay watches `relay-peers.json` (fswatch)
    and connects within seconds. (Peers live in the state root's
@@ -54,7 +58,7 @@ relays must know the same owner. It is **opt-in**:
    `relay.json` holds the settings.)
 
 5. **Launch sessions remotely from the CLI** — `unbien create-session
-   droplet` (or `resume-session`) resolves federated machines from the
+droplet` (or `resume-session`) resolves federated machines from the
    peer list and launches through your local relay.
 
 6. **Verify** — with a pi session running on each machine (its
@@ -94,15 +98,15 @@ master opt-in;
 
 ## Tools
 
-| Tool                                                 | Description                                                                                                                                                                                                                                                                                      |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `agent_send({to, body, re?})`                        | Unicast send to a peer (by address from `list_peers`). Returns `{status, ok}` — `received` (delivered), `denied` (peer refused / cross-owner), `unknown_peer` (not on any reachable broker), `timeout` (registered but no ACK), `sent` (broadcast).                                              |
+| Tool                                                 | Description                                                                                                                                                                                                                                                                                            |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `agent_send({to, body, re?})`                        | Unicast send to a peer (by address from `list_peers`). Returns `{status, ok}` — `received` (delivered), `denied` (peer refused / cross-owner), `unknown_peer` (not on any reachable broker), `timeout` (registered but no ACK), `sent` (broadcast).                                                    |
 | `list_peers()`                                       | Returns the current peer inventory as addresses `<cwd>@<name>` (remote machines prefixed `<pc>`, cross-relay prefixed `<relayName>:`). Includes `self` (your own `whoami`). Excludes self from the `peers` array. Federated peers (on a peer relay) appear via the relay's `federated_peer_list` push. |
-| `whoami()`                                           | Returns your mesh identity: `{address, name, broker, socket}`.                                                                                                                                                                                                                                   |
-| `mesh_get_message({id})`                             | Fetch one inbound mesh message by id (recover a missed push). Returns `MeshMessage` or `null`.                                                                                                                                                                                                   |
-| `mesh_list_messages({from?, re?, sinceMs?, limit?})` | List inbound mesh messages (filtered by sender / correlation id / timestamp).                                                                                                                                                                                                                    |
-| `mesh_wait_message({from?, re?, timeout_ms?})`       | Block until a matching message arrives (or timeout). Returns `MeshMessage` or `null`. The `agent_request` replacement: `agent_send` with `re` → `mesh_wait_message` with the same `re`. `timeout_ms: 0` = poll (return immediately if a match is already stored).                                |
-| `agent_request({to, body, timeout_ms?})`             | **Deprecated** — prefer `agent_send` + `mesh_wait_message`. Still works (blocking request/reply).                                                                                                                                                                                                |
+| `whoami()`                                           | Returns your mesh identity: `{address, name, broker, socket}`.                                                                                                                                                                                                                                         |
+| `mesh_get_message({id})`                             | Fetch one inbound mesh message by id (recover a missed push). Returns `MeshMessage` or `null`.                                                                                                                                                                                                         |
+| `mesh_list_messages({from?, re?, sinceMs?, limit?})` | List inbound mesh messages (filtered by sender / correlation id / timestamp).                                                                                                                                                                                                                          |
+| `mesh_wait_message({from?, re?, timeout_ms?})`       | Block until a matching message arrives (or timeout). Returns `MeshMessage` or `null`. The `agent_request` replacement: `agent_send` with `re` → `mesh_wait_message` with the same `re`. `timeout_ms: 0` = poll (return immediately if a match is already stored).                                      |
+| `agent_request({to, body, timeout_ms?})`             | **Deprecated** — prefer `agent_send` + `mesh_wait_message`. Still works (blocking request/reply).                                                                                                                                                                                                      |
 
 ### MeshMessage type
 
@@ -186,10 +190,11 @@ No `/reload` needed.
 - **Cross-machine:** the relay refuses cross-owner sends
   (`transport_error: not_authorized`). Two users on the same machine
   with different keys meet on the relay → same-owner check → refused.
-- **Cross-relay:** same check — the sending relay validates same-owner
-  before forwarding cross-relay. The receiving relay trusts the sending
-  relay's check (federation requires shared-owner verification on
-  connect). Cross-owner → `not_authorized` → refused.
+- **Cross-relay:** the sending relay checks at the SOURCE — the
+  sender's machine-signed owner set must intersect the target's
+  advertised machine-signed owner set (either side unknown => refuse).
+  The link itself is explicit pairing (pinned relay pubkeys), not
+  shared-owner. Cross-owner → `not_authorized` → refused.
 - **Local:** same-machine = same epk = same owner (by construction).
   Two users with different HOMEs have different broker sockets → they
   don't share a local broker → they only meet on the relay (where

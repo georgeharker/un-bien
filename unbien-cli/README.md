@@ -98,22 +98,26 @@ cross-relay hop is invisible.
 ## `unbien relay`
 
 ```bash
-unbien relay peer pair [url] [--name <name>]   # print a pairing URL for THIS relay
-unbien relay peer add <url> <name>             # add a federated peer (plain)
-unbien relay peer add relay-pair://<b64>       # add + pin pubkey from a pairing URL
+unbien relay pair [url] [--name <name>]       # print a pairing URL for THIS relay (alias of peer pair)
+unbien relay peer pair [url] [--name <name>]  # same
+unbien relay peer add relay-pair://<b64>       # add + pin pubkey from a pairing URL (the only form)
 unbien relay peer remove <name>                # remove a peer
 unbien relay peer federation on|off|status     # the federation gate (default off)
-unbien relay peer list                         # peers + gate state
+unbien relay peer list                         # peers + gate state + pending invitations
 unbien relay list                              # local relay + remembered + peers (default)
 unbien relay add <url> [name]                  # remember a relay
 unbien relay remove <url|name>                 # forget a relay
 ```
 
 - `relay list` shows the local relay's identity (name, URL, pubkey) — pipe a
-  pairing URL from `unbien relay peer pair | pbcopy`.
+  pairing URL from `unbien relay pair | pbcopy`.
 - Federation is opt-in: `federation.enabled` in `~/.config/un-bien/relay.json`
-  (the relay refuses `/relay-peer` while off). `peer add` (either form)
-  auto-enables it.
+  (the relay refuses `/relay-peer` while off). `peer add` auto-enables it.
+- Pairing is the one-pair flow: mint on one relay, consume on the other —
+  the issuer auto-adds the consumer back, so one action pairs both
+  directions. The legacy plain form (`peer add <url> <name>`) is refused —
+  pinned pairing is mandatory. See the un-bien docs
+  (`docs/relay-peering.md`) for the full walkthrough.
 - Peers live in `~/.local/state/un-bien/relay-peers.json` (per-machine state);
   the gate in the config root (settings). No restart needed — the relay
   watches the file and connects within seconds.
