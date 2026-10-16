@@ -46,6 +46,11 @@ async function main(): Promise<void> {
     return
   }
   const handle = await startLauncher()
+  // Boot version banner: "which code is the process running" must be
+  // answerable from the first line of launcher.log — the package version
+  // can look current while the process predates an install (the deploy
+  // lesson of 2026-10-14: kickstart ordering was the whole bug).
+  launcherLog(`starting, code ${version()}`)
   // eslint-disable-next-line no-console
   console.log(
     `[un-bien launcher] listening on control room ${handle.roomId} ` +
