@@ -81,7 +81,7 @@ requirements where they matter.
 
 ## Extension (@geohar/un-bien)
 
-### dev cycle 0.20.25-dev → 0.20.60-dev (2026-10-15, pending stable cut)
+### 0.21.0 (2026-10-15; dev cycle 0.20.25-dev → 0.20.60-dev)
 
 - **Remote launches spawn through the user's login shell** (both layers:
   the tmux invocation and the pane command) — launchd-context daemons
@@ -304,7 +304,7 @@ current code.
 
 ## Relay (un-bien-relay)
 
-### dev cycle 0.7.35-dev → 0.7.40-dev (2026-10-15, pending stable cut)
+### 0.8.0 (2026-10-15; dev cycle 0.7.35-dev → 0.7.40-dev)
 
 - **Federation v2** — explicit pinned pairing replaces shared-owner hash
   intersection as the link gate (strict now: unpinned peers decline by
@@ -342,7 +342,7 @@ current code.
 
 ## CLI (@geohar/unbien-cli)
 
-### dev cycle 0.3.7-dev → 0.3.34-dev (2026-10-15, pending stable cut)
+### 0.4.0 (2026-10-15; dev cycle 0.3.7-dev → 0.3.34-dev)
 
 - **The one-pair flow** (`relay pair` → `peer add relay-pair://…`) with
   pending-invitation lifecycle (single-use, 24h TTL, re-mint =
