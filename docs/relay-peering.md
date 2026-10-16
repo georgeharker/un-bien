@@ -57,6 +57,15 @@ the channel from the extension build), then re-kicks both services.
 
 ### Set `UNBIEN_RELAY_URL` — required for federated relays
 
+**Exception — bind-derived advertisement (relay ≥0.8.2):** when
+`UNBIEN_RELAY_BIND` names a non-loopback host
+(`UNBIEN_RELAY_BIND=localhost,droplet.<tailnet>.ts.net`), the relay
+advertises `ws://<that-host>:<port>` automatically when
+`UNBIEN_RELAY_URL` is unset — the bind name and the advertised URL stay
+in sync by construction, so this prerequisite is satisfied by the bind
+itself. Bare-IP or loopback-only binds advertise nothing (set the URL
+explicitly for those).
+
 The relay's **externally-reachable** WebSocket URL. The relay typically
 binds `0.0.0.0` (all interfaces), which makes the reachable address
 underivable from the socket — so it must be told. The URL is

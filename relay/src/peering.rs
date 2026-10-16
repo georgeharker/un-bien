@@ -65,9 +65,50 @@ fn relay_own_name() -> String {
 /// The relay's own WebSocket URL (for the URL exchange in relay_hello).
 /// Reads `UNBIEN_RELAY_URL` env var; defaults to empty (not advertised).
 fn relay_own_url() -> Option<String> {
-    std::env::var("UNBIEN_RELAY_URL")
+    if let Ok(url) = std::env::var("UNBIEN_RELAY_URL") {
+        if !url.is_empty() {
+            return Some(url);
+        }
+    }
+    // BIND-DERIVED ADVERTISEMENT (the UNBIEN_RELAY_URL interplay): when the
+    // socket binds NAMED addresses (UNBIEN_RELAY_BIND=localhost,droplet.
+    // <tailnet>.ts.net), the named non-loopback entry IS this relay's
+    // externally reachable address — advertise it when no explicit URL is
+    // set. This closes the missing-URL failure class (the
+    // pairing_missing_name_or_url saga) for any deployment that binds by
+    // name: the advertisement can no longer be forgotten. Bare-IP binds
+    // advertise nothing (an IP literal is a poor durable advertisement).
+    let bind = std::env::var("UNBIEN_RELAY_BIND").ok()?;
+    let port = std::env::var("UNBIEN_RELAY_PORT")
         .ok()
-        .filter(|u| !u.is_empty())
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(3000);
+    bind_advertised_url(&bind, port)
+}
+
+/// The bind spec's named, non-loopback entry as a `ws://host:port` URL —
+/// the entry other relays and apps can dial. Exported for tests.
+pub fn bind_advertised_url(bind: &str, default_port: u16) -> Option<String> {
+    bind.split(',')
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+        .find(|entry| {
+            let e: &str = entry;
+            !e.parse::<std::net::IpAddr>().is_ok()
+                && !e.eq_ignore_ascii_case("localhost")
+                && e != "127.0.0.1"
+                && e != "::1"
+        })
+        .map(|entry| {
+            // Preserve an explicit host:port on the entry (a DNS name
+            // cannot contain ':'); bare names take the default port.
+            match entry.rsplit_once(':') {
+                Some((host, port)) if port.parse::<u16>().is_ok() && !host.is_empty() => {
+                    format!("ws://{host}:{port}")
+                }
+                _ => format!("ws://{entry}:{default_port}"),
+            }
+        })
 }
 
 /// Federation protocol version this relay speaks (federation v2 §4).
@@ -2811,4 +2852,39 @@ pub struct RelayPeerUpdate {
     pub action: String, // "add" | "remove"
     pub epk: String,
     pub room: serde_json::Value, // RoomMeta (add) or {"room_id": "..."} (remove)
+}
+
+#[cfg(test)]
+mod bind_url_tests {
+    use super::bind_advertised_url;
+
+    #[test]
+    fn derives_from_the_named_non_loopback_entry() {
+        assert_eq!(
+            bind_advertised_url("localhost,droplet.diplodocus-economy.ts.net", 3000),
+            Some("ws://droplet.diplodocus-economy.ts.net:3000".to_string())
+        );
+        // Order-independent: the named entry is found wherever it sits.
+        assert_eq!(
+            bind_advertised_url("droplet.diplodocus-economy.ts.net,localhost", 3000),
+            Some("ws://droplet.diplodocus-economy.ts.net:3000".to_string())
+        );
+    }
+
+    #[test]
+    fn explicit_entry_port_is_preserved() {
+        assert_eq!(
+            bind_advertised_url("127.0.0.1,host.example.com:3443", 3000),
+            Some("ws://host.example.com:3443".to_string())
+        );
+    }
+
+    #[test]
+    fn none_for_bare_ips_or_loopback_only() {
+        // A bare-IP or loopback-only bind advertises nothing: an IP literal
+        // is a poor durable advertisement, and loopback is not reachable.
+        assert_eq!(bind_advertised_url("0.0.0.0", 3000), None);
+        assert_eq!(bind_advertised_url("127.0.0.1,::1,localhost", 3000), None);
+        assert_eq!(bind_advertised_url("", 3000), None);
+    }
 }
