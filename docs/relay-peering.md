@@ -66,6 +66,34 @@ in sync by construction, so this prerequisite is satisfied by the bind
 itself. Bare-IP or loopback-only binds advertise nothing (set the URL
 explicitly for those).
 
+**The lockdown recipe (bind by name)** — the complete one-env-var form,
+loopback + tailnet only, advertisement included:
+
+```sh
+# The bind spec grammar is strictly host[:port] entries, comma-separated:
+# NAMES OR IPs — NO URL schemes. ws:// and http:// belong to URLs
+# (UNBIEN_RELAY / UNBIEN_RELAY_URL), never to the bind; a scheme in the
+# spec makes the host unresolvable and the relay DIES AT BOOT (loudly —
+# check relay.log's last line).
+export UNBIEN_RELAY_BIND="$(hostname).<tailnet>.ts.net:3000,localhost:3000"
+echo "$UNBIEN_RELAY_BIND"   # sanity: hostname must be the SHORT name —
+                           # cascade.<tailnet>:3000,localhost:3000
+                           # (an FQDN host makes a doubly-dotted mess; use the literal)
+unbien-admin install        # snapshots the env into the relay's plist
+                           # (the summary lists what was baked in)
+launchctl kickstart -k gui/$(id -u)/com.georgeharker.unbien.relay
+tail -4 ~/.local/state/un-bien/relay.log
+# expect:  relay listening on 127.0.0.1:3000
+#          relay listening on <tailnet-ip>:3000
+```
+
+The named entry (first non-loopback name in the spec) is the advertised
+URL automatically; `UNBIEN_RELAY_URL` stays unset. The extension's
+`http://localhost:3000` connect lands on the loopback listener. One
+caveat for launchd-started relays: names resolve AT BOOT — if Tailscale
+isn't up yet, the loud failure kills the start (KeepAlive retries
+recover; or bind the 100.x IP literal and set `UNBIEN_RELAY_URL`).
+
 The relay's **externally-reachable** WebSocket URL. The relay typically
 binds `0.0.0.0` (all interfaces), which makes the reachable address
 underivable from the socket — so it must be told. The URL is
