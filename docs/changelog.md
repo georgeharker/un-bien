@@ -81,6 +81,17 @@ requirements where they matter.
 
 ## Extension (@geohar/un-bien)
 
+### 0.21.2 (2026-10-16)
+
+- **Install summary lists the baked-in relay env** — every `UNBIEN_*`
+  variable the installer snapshots from the invoking shell into the
+  relay's service env, with a warning when neither `UNBIEN_RELAY_URL`
+  nor `UNBIEN_RELAY_BIND` is present (a relay that cannot advertise a
+  dialable address — previously only discovered at the next pairing
+  failure). The launcher daemon logs a boot version banner as the first
+  line of `launcher.log`, so "which code is the process running" is
+  answerable from the log.
+
 ### 0.21.0 (2026-10-15; dev cycle 0.20.25-dev → 0.20.60-dev)
 
 - **Remote launches spawn through the user's login shell** (both layers:
@@ -303,6 +314,19 @@ current code.
 | 0.1.9   | 0.20.5    | 2026-09-18 |
 
 ## Relay (un-bien-relay)
+
+### 0.8.3 (2026-10-16)
+
+- **`UNBIEN_RELAY_BIND` — named bind addresses**: comma-separated
+  `host[:port]` entries (names or IPs, never URL schemes), one listener
+  per address, sharing one router. The lockdown form
+  `UNBIEN_RELAY_BIND=localhost,machine.<tailnet>.ts.net` binds loopback +
+  tailnet only — the socket never opens on other interfaces. Unresolvable
+  entries fail loudly at boot.
+- **Bind-derived URL advertisement**: when the bind names a
+  non-loopback host, the relay advertises `ws://<host>:<port>` in
+  `relay_hello` automatically with `UNBIEN_RELAY_URL` unset — the
+  advertisement can no longer be forgotten or drift from the bind.
 
 ### 0.8.0 (2026-10-15; dev cycle 0.7.35-dev → 0.7.40-dev)
 
