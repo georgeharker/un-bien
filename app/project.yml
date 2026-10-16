@@ -186,6 +186,10 @@ targets:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) DEBUG UNBIEN_DIAGNOSTICS
 
 schemes:
+  UnBien-macOS:
+    build:
+      targets:
+        UnBien-macOS: all
   UnBien-iOS:
     build:
       targets:
