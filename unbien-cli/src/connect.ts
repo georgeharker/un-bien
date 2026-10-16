@@ -27,6 +27,7 @@ import {
 } from "./commands.js"
 import { PanelStore } from "./panels.js"
 import { pickSession } from "./picker.js"
+import { resolveRemoteMachine } from "./machine.js"
 import { entriesToEnvelopes, reduce, type EnvelopeMessage } from "./reduce.js"
 import {
   findFlaggedSession,
@@ -68,31 +69,56 @@ if (flags.has("list-themes")) {
 }
 
 /**
- * Either a fresh `unbien://pair?…` invite, or a machine we already paired with
- * — pairing is machine-level, so a remembered peer needs no token.
+ * Either a fresh `unbien://pair?…` invite, a machine we already paired with
+ * (pairing is machine-level, so a remembered peer needs no token), or — the
+ * FEDERATED fallback — a machine visible on this relay's federated list.
+ * Launches resolve federated machines that way (resolveRemoteMachine), but
+ * connect only knew stored peers, so a launch handoff on a machine the CLI
+ * never paired with failed with the first-run usage exit (observed live:
+ * launch works, connect-back never does). Stored peers stay authoritative —
+ * a pairing is only valid on the relay it was made on; the fallback only
+ * fires when no stored peer matches the target.
  */
-function resolveTarget(): { invite: PairingInvite; relayUrl: string } | null {
+async function resolveTarget(): Promise<
+  { invite: PairingInvite; relayUrl: string } | null
+> {
   const explicitRelay = flags.get("relay")
+  const ambientRelay = explicitRelay ?? process.env["UNBIEN_RELAY"]
   if (target?.startsWith("unbien://")) {
-    const relayUrl = explicitRelay ?? process.env["UNBIEN_RELAY"]
-    if (!relayUrl) return null
-    return { invite: parseInvite(target), relayUrl }
+    if (!ambientRelay) return null
+    return { invite: parseInvite(target), relayUrl: ambientRelay }
   }
 
   const peers = loadPeers()
   const peer = target
     ? peers.find((p) => p.epk.startsWith(target) || p.name === target)
     : peers[peers.length - 1]
-  if (!peer) return null
-
-  return {
-    // A remembered peer has no token; `room` is chosen after listing.
-    invite: { token: "", epk: peer.epk, roomId: "main" },
-    // A pairing is only valid on the relay it was made on, so the peer's own
-    // relay beats the ambient env var — which names whatever this shell last
-    // pointed a pi at, not where this peer lives.
-    relayUrl: explicitRelay ?? peer.relayUrl,
+  if (peer) {
+    return {
+      // A remembered peer has no token; `room` is chosen after listing.
+      invite: { token: "", epk: peer.epk, roomId: "main" },
+      // A pairing is only valid on the relay it was made on, so the peer's own
+      // relay beats the ambient env var — which names whatever this shell last
+      // pointed a pi at, not where this peer lives.
+      relayUrl: explicitRelay ?? peer.relayUrl,
+    }
   }
+
+  // FEDERATED FALLBACK: no stored peer matches — resolve via the federated
+  // room list on this relay (the same mechanism launches use). The resulting
+  // connection routes to the machine's epk THROUGH this relay; the
+  // machine-side pairing gate decides the attach (a listed device passes —
+  // the same peers.json its daemon checked for the launch).
+  if (target && ambientRelay) {
+    const remote = await resolveRemoteMachine(target, ambientRelay)
+    if (remote) {
+      return {
+        invite: { token: "", epk: remote.epk, roomId: "main" },
+        relayUrl: remote.relayUrl,
+      }
+    }
+  }
+  return null
 }
 
 /** Group peers by their relay URL — each group becomes one relay connection. */
@@ -185,7 +211,7 @@ async function listAllSessions(
   return { choices, clients }
 }
 
-const resolved = resolveTarget()
+const resolved = await resolveTarget()
 if (!resolved) {
   console.error(
     "usage:\n" +
