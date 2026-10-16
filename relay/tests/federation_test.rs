@@ -16,7 +16,10 @@
 
 mod common;
 
-use common::{WsStream, connect_and_auth_with_key, spawn_relay_named};
+use common::{
+    WsStream, connect_and_auth, connect_and_auth_with_key, connect_and_auth_with_room,
+    spawn_relay_named,
+};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -1276,4 +1279,151 @@ async fn pairing_set_push_propagates_incrementally() {
         .await
         .expect("machine reply blocked — B's SRC gate refused it");
     assert_eq!(inner_of(&got), reply);
+}
+
+// ── rooms_check for a federated peer: full parity with the app's read path ──
+
+/// Live regression (2026-10-15): a session launched AFTER the peering
+/// handshake reached cascade's federated `sessions` map — the app's
+/// federated_peer_list push served it — but `unbien connect --list`
+/// (rooms_check) showed ONLY the handshake-snapshot session. Root cause:
+/// the rooms_check federated branch sent ONE `rooms` FRAME PER ROOM and the
+/// CLI resolves a rooms_check on the FIRST matching frame (client.ts
+/// listRooms), so every room after the first was invisible. The fix groups
+/// the federated rooms per epk (shared grouping with federated_peer_list)
+/// into ONE frame. This test pins the invariant: every room in the
+/// federated state — including an INCREMENTAL relay_peer_update add —
+/// appears in BOTH the federated_peer_list broadcast and the rooms_check
+/// response for the epk, in one frame.
+#[tokio::test]
+async fn rooms_check_serves_incrementally_added_federated_room() {
+    let _state = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let state_dir = tempfile::tempdir().unwrap();
+    unsafe {
+        std::env::set_var("UNBIEN_STATE_DIR", state_dir.path());
+    }
+    let relay_a = spawn_relay_named("relay-a").await;
+    let relay_b = spawn_relay_named("relay-b").await;
+
+    // The machine on B with ONE room live BEFORE the handshake — this room
+    // rides the relay_peer_list snapshot exchange (like the pre-launch
+    // session Bbcc in the live incident).
+    let machine_sk = SigningKey::generate(&mut rand::thread_rng());
+    let (_machine_old, machine_epk) =
+        connect_and_auth_with_room(relay_b.port, &machine_sk, "snapshot-room").await;
+
+    // Peer A → B (pinned; A dials — the cascade→droplet topology).
+    let pinned_pk = relay::relay_keypair::load_or_generate(None).pubkey_b64();
+    state_dir_setup(&format!("http://127.0.0.1:{}", relay_b.port), &pinned_pk);
+    start_peering_on(&relay_a);
+
+    // Wait for the snapshot: A must know the handshake room.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let known: Vec<String> = relay_a
+            .state
+            .federated
+            .rooms_for_epk(&machine_epk)
+            .await
+            .into_iter()
+            .map(|(_, r)| r.room_id)
+            .collect();
+        if known.iter().any(|r| r == "snapshot-room") {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "relay A never learned the snapshot room"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // A SECOND session of the SAME machine, announced AFTER the handshake —
+    // this room rides the incremental relay_peer_update add (the XXYYZZ
+    // launch in the live incident).
+    let (_machine_new, _) =
+        connect_and_auth_with_room(relay_b.port, &machine_sk, "incremental-room").await;
+
+    // Wait for the incremental add to land in A's federated state (the app's
+    // read path — this is the fact the live app proved).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let known: Vec<String> = relay_a
+            .state
+            .federated
+            .rooms_for_epk(&machine_epk)
+            .await
+            .into_iter()
+            .map(|(_, r)| r.room_id)
+            .collect();
+        if known.iter().any(|r| r == "incremental-room") {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "incremental relay_peer_update add never reached relay A"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // PARITY HALF 1: the federated_peer_list broadcast serves BOTH rooms.
+    let fed_list: Value =
+        serde_json::from_str(&relay_a.state.federated.federated_peer_list_json().await).unwrap();
+    let entry = fed_list["peers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["epk"] == json!(machine_epk))
+        .expect("machine missing from federated_peer_list");
+    let fed_room_ids: Vec<String> = entry["rooms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["room_id"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        fed_room_ids.contains(&"snapshot-room".to_string())
+            && fed_room_ids.contains(&"incremental-room".to_string()),
+        "federated_peer_list must serve both rooms, got: {fed_room_ids:?}"
+    );
+
+    // PARITY HALF 2: rooms_check (an UNPAIRED app client on A — the exact
+    // path `unbien connect --list` drives) must answer with BOTH rooms, in
+    // ONE `rooms` frame — the CLI resolves on the FIRST matching frame and
+    // drops any follow-up.
+    let (mut app, _app_epk) = connect_and_auth(relay_a.port).await;
+    app.send(Message::text(
+        json!({"type": "rooms_check", "peers": [&machine_epk]}).to_string(),
+    ))
+    .await
+    .unwrap();
+    let frame = next_matching(&mut app, "federated rooms frame", |v| {
+        (v["type"] == "rooms" && v["peer"] == json!(machine_epk)).then(|| v.clone())
+    })
+    .await;
+    let room_ids: Vec<String> = frame["rooms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["room_id"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        room_ids.contains(&"snapshot-room".to_string())
+            && room_ids.contains(&"incremental-room".to_string()),
+        "rooms_check must serve BOTH the snapshot and the incrementally-added \
+         room in its response — got only: {room_ids:?}"
+    );
+    assert_eq!(
+        frame["peerRelay"],
+        json!("relay-b"),
+        "the federated rooms frame names the origin relay"
+    );
+
+    // One frame per epk: no SECOND rooms frame for the same peer follows
+    // (the pre-fix shape — one frame per room — failed here AND dropped the
+    // second room on the CLI's first-frame resolve).
+    assert_never_matches(&mut app, "a second rooms frame for the same epk", |v| {
+        v["type"] == "rooms" && v["peer"] == json!(machine_epk)
+    })
+    .await;
 }

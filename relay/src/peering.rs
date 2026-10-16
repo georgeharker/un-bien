@@ -1843,6 +1843,57 @@ pub fn default_relay_name() -> String {
     relay_own_name()
 }
 
+/// Whether a room is a launcher-daemon control room (the `is_daemon` cap
+/// marks it — the app filters such rooms from display; see
+/// [`group_sessions_by_epk`] for where that filter applies).
+fn room_is_daemon(room: &RoomMeta) -> bool {
+    room.extra
+        .get("caps")
+        .and_then(|c| c.as_array())
+        .map(|caps| caps.iter().any(|c| c.as_str() == Some("is_daemon")))
+        .unwrap_or(false)
+}
+
+/// Group the federated `sessions` map by machine epk — the ONE grouping BOTH
+/// federated read paths are built from (the `federated_peer_list` broadcast
+/// via [`FederatedSessions::federated_peer_list_json`] and the rooms_check
+/// response via [`FederatedSessions::rooms_for_epk_grouped`]), so the two can
+/// never diverge: every room stored for an epk is served by both. One
+/// `(peer_relay, rooms)` pair per epk: rooms deduped by room_id across
+/// relays (first occurrence wins — multi-homed machines) and `peer_relay` =
+/// the first origin relay encountered for the epk. `skip_daemon` drops
+/// `is_daemon`-capped control rooms: the app's discovery list keeps them out
+/// of display entirely, while the rooms_check response KEEPS them — the CLI
+/// finds a federated machine's control room by its caps through rooms_check
+/// (machine.ts connectControlRoom).
+fn group_sessions_by_epk(
+    sessions: &HashMap<(String, String), Vec<RoomMeta>>,
+    skip_daemon: bool,
+) -> HashMap<String, (String, Vec<RoomMeta>)> {
+    let mut by_epk: HashMap<String, (String, Vec<RoomMeta>, std::collections::HashSet<String>)> =
+        HashMap::new();
+    for ((relay, epk), rooms) in sessions.iter() {
+        let entry = by_epk
+            .entry(epk.clone())
+            .or_insert_with(|| (relay.clone(), Vec::new(), std::collections::HashSet::new()));
+        for room in rooms {
+            // Skip duplicate room_ids (same room from a different relay).
+            if entry.2.contains(&room.room_id) {
+                continue;
+            }
+            if skip_daemon && room_is_daemon(room) {
+                continue;
+            }
+            entry.2.insert(room.room_id.clone());
+            entry.1.push(room.clone());
+        }
+    }
+    by_epk
+        .into_iter()
+        .map(|(epk, (relay, rooms, _))| (epk, (relay, rooms)))
+        .collect()
+}
+
 impl FederatedSessions {
     pub fn new() -> Self {
         Self::with_name(&default_relay_name())
@@ -2205,6 +2256,22 @@ impl FederatedSessions {
             .collect()
     }
 
+    /// The `rooms` response payload for one federated epk (rooms_check):
+    /// the SAME grouped view of the `sessions` map the
+    /// [`federated_peer_list`](Self::federated_peer_list_json) broadcast
+    /// serves for that machine — one `(peer_relay, rooms)` pair, rooms
+    /// deduped by room_id across relays (see [`group_sessions_by_epk`]).
+    /// The two federated read paths CANNOT diverge: a room visible in the
+    /// app's federated list is always served by rooms_check for the same
+    /// epk, and in ONE frame. Daemon control rooms are KEPT (unlike the
+    /// app-side list): the CLI discovers a federated machine's control
+    /// room BY its `is_daemon` cap through this response
+    /// (machine.ts connectControlRoom). None ⇒ no federated rooms.
+    pub async fn rooms_for_epk_grouped(&self, epk: &str) -> Option<(String, Vec<RoomMeta>)> {
+        let sessions = self.sessions.lock().await;
+        group_sessions_by_epk(&sessions, false).remove(epk)
+    }
+
     /// Look up which peer relay handles a given epk (for forwarding).
     /// Returns the first relay name (backward compat — single route).
     pub async fn relay_for_epk(&self, epk: &str) -> Option<String> {
@@ -2237,52 +2304,21 @@ impl FederatedSessions {
     /// to all connected WS clients. Contains every federated peer's epk,
     /// relay_name, and room metadata so the extension can populate its
     /// `BrokerRemote.federatedPeers` map + include them in `list_peers`.
+    /// Serves the SHARED grouping ([`group_sessions_by_epk`]) the rooms_check
+    /// response is built from, with the app-side `is_daemon` filter.
     pub async fn federated_peer_list_json(&self) -> String {
         let sessions = self.sessions.lock().await;
-        // Group by epk: (relay_name, epk) → rooms → {epk, relay_name, rooms}
-        // Dedup rooms by room_id across relays (multi-homed pi case).
-        let mut by_epk: HashMap<
-            String,
-            (
-                String,
-                Vec<serde_json::Value>,
-                std::collections::HashSet<String>,
-            ),
-        > = HashMap::new();
-        for ((relay, epk), rooms) in sessions.iter() {
-            let entry = by_epk
-                .entry(epk.clone())
-                .or_insert_with(|| (relay.clone(), Vec::new(), std::collections::HashSet::new()));
-            for room in rooms {
-                // Skip duplicate room_ids (same room from a different relay).
-                if entry.2.contains(&room.room_id) {
-                    continue;
-                }
-                // Skip launcher daemon control rooms: the `is_daemon` cap marks
-                // them (the app filters them from display; here we keep them off
-                // discovery entirely so agents don't see "droplet:/Users/...@droplet").
-                let is_daemon = room
-                    .extra
-                    .get("caps")
-                    .and_then(|c| c.as_array())
-                    .map(|caps| caps.iter().any(|c| c.as_str() == Some("is_daemon")))
-                    .unwrap_or(false);
-                if is_daemon {
-                    continue;
-                }
-                entry.2.insert(room.room_id.clone());
-                if let Ok(val) = serde_json::to_value(room) {
-                    entry.1.push(val);
-                }
-            }
-        }
-        let peers: Vec<serde_json::Value> = by_epk
+        let grouped = group_sessions_by_epk(&sessions, true);
+        let peers: Vec<serde_json::Value> = grouped
             .into_iter()
-            .map(|(epk, (relay, rooms, _))| {
+            .map(|(epk, (relay, rooms))| {
                 serde_json::json!({
                     "epk": epk,
                     "relay_name": relay,
-                    "rooms": rooms,
+                    "rooms": rooms
+                        .iter()
+                        .filter_map(|r| serde_json::to_value(r).ok())
+                        .collect::<Vec<serde_json::Value>>(),
                 })
             })
             .collect();

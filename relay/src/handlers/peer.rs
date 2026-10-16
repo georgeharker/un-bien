@@ -426,29 +426,40 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                             continue;
                                         }
                                         // Not paired locally — check if it's a federated peer.
-                                        let fed_rooms = federated.rooms_for_epk(target_peer).await;
-                                        if !fed_rooms.is_empty() {
+                                        // ONE `rooms` frame per epk carrying ALL its federated
+                                        // rooms (grouped exactly like the federated_peer_list
+                                        // broadcast — rooms_for_epk_grouped shares the grouping
+                                        // code, so the two read paths cannot diverge). The CLI
+                                        // resolves a rooms_check on the FIRST matching `rooms`
+                                        // frame and drops the rest (client.ts listRooms), so a
+                                        // one-frame-per-room shape made every room after the
+                                        // first invisible: a session announced AFTER the
+                                        // handshake (incremental relay_peer_update) was in the
+                                        // federated state — the app's federated_peer_list push
+                                        // served it — yet `connect --list` never showed it.
+                                        // Daemon control rooms are INCLUDED: the CLI discovers
+                                        // a federated machine's control room by its caps here.
+                                        if let Some((peer_relay, fed_rooms)) =
+                                            federated.rooms_for_epk_grouped(target_peer).await
+                                        {
                                             // Federated — no pairing gate (shared-owner verified).
-                                            // peerRelay field for the future app indicator.
-                                            for (peer_relay, room) in &fed_rooms {
-                                                let resp = serde_json::json!({
-                                                    "type": "rooms",
-                                                    "peer": target_peer,
-                                                    "peerRelay": peer_relay,
-                                                    "rooms": [room],
-                                                })
-                                                .to_string();
-                                                let dedup_key = format!("{target_peer}:{peer_relay}");
-                                                if last_rooms_resp.get(&dedup_key) == Some(&resp) {
-                                                    metrics.inc_rooms_suppressed(1);
-                                                    continue;
-                                                }
-                                                last_rooms_resp.insert(dedup_key, resp.clone());
-                                                if sink.send(Message::Text(resp)).await.is_err() {
-                                                    break 'routing;
-                                                }
-                                                metrics.inc_rooms_emitted(1);
+                                            // peerRelay field for the app indicator.
+                                            let resp = serde_json::json!({
+                                                "type": "rooms",
+                                                "peer": target_peer,
+                                                "peerRelay": peer_relay,
+                                                "rooms": fed_rooms,
+                                            })
+                                            .to_string();
+                                            if last_rooms_resp.get(target_peer) == Some(&resp) {
+                                                metrics.inc_rooms_suppressed(1);
+                                                continue;
                                             }
+                                            last_rooms_resp.insert(target_peer.clone(), resp.clone());
+                                            if sink.send(Message::Text(resp)).await.is_err() {
+                                                break 'routing;
+                                            }
+                                            metrics.inc_rooms_emitted(1);
                                             continue;
                                         }
                                         // Neither paired nor federated — refuse.
