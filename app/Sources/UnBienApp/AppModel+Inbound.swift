@@ -782,13 +782,15 @@ extension AppModel {
     /// the wire round trip IS the lag, so a delta `get_entries` issued here
     /// always sees it. The entries fold through applyEntries' MATCH LOOP: live
     /// PENDING rows re-key to their durable entry ids (never twins). toolResult
-    /// settles skip it (cards are toolCallId-keyed, never pending).
+    /// settles skip it (cards are toolCallId-keyed, never pending). BEACON
+    /// DIVERGENCE: resumes from the FOLDED FRONTIER (beacon fallback) — the
+    /// frontier only advances over held content, so holes get re-served here.
     private func handleEntryIDSync(env: EnvelopeMessage, key: String,
                                    envelope: RoutedEnvelope, relayID: UUID) {
         guard env.rpc?["type"]?.stringValue == "message_end",
               let role = env.rpc?["message"]?["role"]?.stringValue,
               role == "user" || role == "assistant",
-              let since = envelopeReducers[key]?.leafId,
+              let since = foldedFrontier[key] ?? envelopeReducers[key]?.leafId,
               let session = sessions[key],
               let conn = connections[relayID] else { return }
         // Pull the just-settled tail's DURABLE ids as a gated delta WALK that
@@ -996,5 +998,3 @@ extension AppModel {
         }
     }
 }
-
-// probe
