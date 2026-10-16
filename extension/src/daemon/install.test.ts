@@ -34,6 +34,7 @@ import {
   unlinkCliBinaries,
   userLocalBinDir,
   vbsLauncherPath,
+  propagatedUnbienEnv,
 } from "./install.js"
 
 /**
@@ -490,5 +491,24 @@ describe("cliInstall channel detection", () => {
     // this returns true in dev trees and false in prod trees — either way
     // it must not throw (the install flow relies on it degrading gracefully).
     expect(typeof extIsDevChannel()).toBe("boolean")
+  })
+})
+
+describe("propagatedUnbienEnv (the install-time env snapshot)", () => {
+  it("captures the UNBIEN_* variables the service will run", () => {
+    const stash = process.env["UNBIEN_TEST_PROPAGATE"]
+    process.env["UNBIEN_TEST_PROPAGATE"] = "relay-bind-form"
+    try {
+      const env = propagatedUnbienEnv()
+      expect(env["UNBIEN_TEST_PROPAGATE"]).toBe("relay-bind-form")
+    } finally {
+      if (stash === undefined) delete process.env["UNBIEN_TEST_PROPAGATE"]
+      else process.env["UNBIEN_TEST_PROPAGATE"] = stash
+    }
+  })
+
+  it("ignores non-UNBIEN variables entirely", () => {
+    const env = propagatedUnbienEnv()
+    expect(Object.keys(env).every((k) => k.startsWith("UNBIEN_"))).toBe(true)
   })
 })

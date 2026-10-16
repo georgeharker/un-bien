@@ -17,6 +17,7 @@ import {
   LAUNCHER_SYSTEMD_UNIT,
   installService,
   uninstallService,
+  propagatedUnbienEnv,
   linkCliBinaries,
   unlinkCliBinaries,
 } from "../daemon/install.js"
@@ -268,6 +269,25 @@ export async function _cmdInstallTarget(
           // placeholder; the plain-ws posture is a documented design decision
           // (APPSTORE.md ATS notes: user-configured LAN/Tailnet endpoints).
           `  Port: ${r.port} — add the relay in the app (plain WebSocket, host:port; no TLS by design)`,
+          // ENV VISIBILITY: the service runs the UNBIEN_* snapshot from
+          // THIS install — surface what was baked in so a missing
+          // UNBIEN_RELAY_URL/UNBIEN_RELAY_BIND is caught HERE, not at the
+          // next pairing failure. The bind form advertises automatically
+          // (relay ≥0.8.2); either var alone satisfies federation.
+          (() => {
+            const env = propagatedUnbienEnv()
+            const keys = Object.keys(env).sort()
+            if (keys.length === 0)
+              return `  Env: none inherited — export UNBIEN_RELAY_URL (or UNBIEN_RELAY_BIND) in this shell and reinstall to advertise a dialable address`
+            const advertises =
+              env["UNBIEN_RELAY_URL"] || env["UNBIEN_RELAY_BIND"]
+            return (
+              `  Env (from this shell): ${keys.join(", ")}` +
+              (advertises
+                ? ""
+                : "  ⚠ no UNBIEN_RELAY_URL/UNBIEN_RELAY_BIND — the relay will not advertise a dialable address for federation")
+            )
+          })(),
         )
       } else if (component === "cli") {
         const r = await installCliPackage((l) =>

@@ -184,6 +184,21 @@ function xmlEscape(v: string): string {
     .replaceAll('"', "&quot;")
 }
 
+/** The `UNBIEN_*` variables the installer will bake into the service
+ *  env, as a plain map — for the install summary. VISIBILITY AT INSTALL
+ *  TIME: a missing UNBIEN_RELAY_URL/UNBIEN_RELAY_BIND is caught HERE, in
+ *  the operator's face, instead of at the next pairing failure (the
+ *  missing-URL saga: services run the env snapshot from install time, so
+ *  an install from a shell without the vars silently produced a relay
+ *  that could not advertise a dialable address). Exported for tests. */
+export function propagatedUnbienEnv(): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(process.env)
+      .filter(([k]) => k.startsWith("UNBIEN_"))
+      .map(([k, v]) => [k, String(v ?? "")]),
+  )
+}
+
 /** Every `UNBIEN_*` variable in the installing environment, as plist
  *  `<key>/<string>` pairs (indented to sit inside EnvironmentVariables). */
 export function renderUnbienEnvPlist(): string {

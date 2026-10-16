@@ -78,6 +78,16 @@ underivable from the socket — so it must be told. The URL is
 
 Canonical example (Tailscale MagicDNS FQDN):
 
+**The easy path — installer propagation:** `unbien-admin install`
+snapshots **every `UNBIEN_*` variable from the invoking shell** into
+the relay's service env (launchd plist or systemd unit) at install
+time, and the install summary lists exactly what it baked in (with a
+warning when neither `UNBIEN_RELAY_URL` nor `UNBIEN_RELAY_BIND` is
+present — a relay that cannot advertise a dialable address). So the
+usual flow is: `export` the vars in your shell (or `~/.zshrc`), run
+`unbien-admin install`, done — no plist editing. The manual edit
+below is the fallback for changing values without reinstalling:
+
 ```xml
 <!-- ~/Library/LaunchAgents/com.georgeharker.unbien.relay.plist,
      inside <EnvironmentVariables> -->
