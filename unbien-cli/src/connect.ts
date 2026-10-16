@@ -90,8 +90,16 @@ async function resolveTarget(): Promise<
   }
 
   const peers = loadPeers()
+  // HOSTNAME-tolerant: an FQDN target matches a stored peer on its first
+  // DNS label (peer names default to the pairing-time hostname).
+  const firstLabel = target?.includes(".") ? target.split(".")[0] : null
   const peer = target
-    ? peers.find((p) => p.epk.startsWith(target) || p.name === target)
+    ? peers.find(
+        (p) =>
+          p.epk.startsWith(target) ||
+          p.name === target ||
+          (firstLabel != null && p.name?.startsWith(firstLabel) === true),
+      )
     : peers[peers.length - 1]
   if (peer) {
     return {

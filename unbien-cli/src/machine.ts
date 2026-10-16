@@ -61,6 +61,16 @@ export async function resolveRemoteMachine(
   try {
     const rooms = await client.listFederatedSessions()
     const t = target.toLowerCase()
+    // HOSTNAME-tolerant matching: the relay/machine name defaults to the
+    // system hostname (short form). An FQDN target (droplet.tailnet.ts.net)
+    // matches on its first DNS label, so `unbien connect <hostname>` works
+    // in either form.
+    const firstLabel = t.includes(".") ? t.split(".")[0] : null
+    const matchesTarget = (name: string | undefined) => {
+      const n = name?.toLowerCase()
+      if (!n) return false
+      return n === t || n.startsWith(t) || (firstLabel != null && n.startsWith(firstLabel))
+    }
     // Group by (peerRelay + peer_epk): one RemoteMachineRef per machine.
     const byEpk = new Map<string, RemoteMachineRef>()
     for (const room of rooms) {
@@ -74,10 +84,7 @@ export async function resolveRemoteMachine(
       byEpk.set(room.peer_epk, ref)
     }
     const matches = [...byEpk.values()].filter(
-      (m) =>
-        m.name.toLowerCase() === t ||
-        m.name.toLowerCase().startsWith(t) ||
-        m.epk.startsWith(target),
+      (m) => matchesTarget(m.name) || m.epk.startsWith(target),
     )
     if (matches.length === 1) return matches[0] ?? null
     if (matches.length > 1) {
