@@ -96,25 +96,40 @@ async fn main() -> anyhow::Result<()> {
     );
     let app = relay::build_router(state);
 
-    let addr = format!("0.0.0.0:{port}");
-    let listener = TcpListener::bind(&addr)
-        .await
-        .with_context(|| format!("failed to bind {addr}"))?;
-
-    info!("relay listening on {addr} (WebSocket + /health + /mesh)");
-
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(async {
-        tokio::signal::ctrl_c()
+    // BIND ADDRESSES (UNBIEN_RELAY_BIND): comma-separated hostnames or IPs,
+    // each optionally host:port (default UNBIEN_RELAY_PORT). Default
+    // 0.0.0.0 = all interfaces, the historical behavior. The lockdown form:
+    // UNBIEN_RELAY_BIND=localhost,droplet.<tailnet>.ts.net — names resolve
+    // at startup (MagicDNS resolves to this machine's own tailnet
+    // address), so the socket never opens on any other interface. Each
+    // address gets its own listener + server task sharing one router.
+    let bind_spec = std::env::var("UNBIEN_RELAY_BIND").unwrap_or_else(|_| "0.0.0.0".to_string());
+    let addrs = relay::parse_bind_addrs(&bind_spec, port)?;
+    let mut servers = Vec::new();
+    for addr in addrs {
+        let listener = TcpListener::bind(addr)
             .await
-            .expect("failed to install ctrl_c handler");
-        info!("ctrl_c received, shutting down");
-    })
-    .await
-    .context("axum::serve failed")?;
+            .with_context(|| format!("failed to bind {addr}"))?;
+        info!("relay listening on {addr} (WebSocket + /health + /mesh)");
+        let service = app
+            .clone()
+            .into_make_service_with_connect_info::<SocketAddr>();
+        servers.push(tokio::spawn(async move {
+            if let Err(e) = axum::serve(listener, service)
+                .with_graceful_shutdown(async {
+                    let _ = tokio::signal::ctrl_c().await;
+                })
+                .await
+            {
+                tracing::error!("server on {addr} failed: {e}");
+                std::process::exit(1);
+            }
+        }));
+    }
+
+    for server in servers {
+        let _ = server.await;
+    }
 
     Ok(())
 }
