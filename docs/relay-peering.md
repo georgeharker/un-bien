@@ -3,8 +3,10 @@
 **Status:** implemented as federation v2 (relay 0.7.40-dev.20261015, the
 current dev line). The wire + CLI described here are the as-built v2:
 explicit pinned pairing (the one-pair secret flow), machine-signed owner
-sets, full transitive host knowledge, and directed hops.
-`docs/federation-v2-design.md` records the design rationale.
+sets, full transitive host knowledge, and directed hops. The design
+rationale is the last section of this document; the implementation
+history (slices, as-built decisions, sequencing) lives in the git log
+(relay 0.7.35 through 0.7.40).
 
 **Use case:** "ship work to another machine" — an agent on host A (relay
 A) can `agent_send` to an agent on host B (relay B), where A and B each
@@ -294,14 +296,14 @@ B -> A: {"type":"relay_hello_ack","federate":true,"owners":[...],
   loud warn per peer); inbound, an unpinned presenter is declined with a
   **named reason** on the ack:
 
-| `reason`                      | Meaning                                                                                                                                                      |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `unpinned_peer`               | Presenter's key is not pinned (and no valid pairing secret matched).                                                                                         |
+| `reason`                      | Meaning                                                                                                                                                     |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `unpinned_peer`               | Presenter's key is not pinned (and no valid pairing secret matched).                                                                                        |
 | `pairing_secret_unknown`      | (Legacy decline for a wrong/unknown secret — pre-0.7.38; a SPENT secret now falls through to the pin gate, so this fires only for a genuinely wrong token.) |
-| `pairing_identity_missing`    | Pairing hello without identity fields (pubkey/nonce/sig).                                                                                                    |
-| `pairing_identity_invalid`    | Pairing hello identity signature failed verification.                                                                                                        |
-| `identity_missing`            | Pinned-peer hello missing the identity signature.                                                                                                            |
-| `identity_invalid`            | Identity signature invalid.                                                                                                                                  |
+| `pairing_identity_missing`    | Pairing hello without identity fields (pubkey/nonce/sig).                                                                                                   |
+| `pairing_identity_invalid`    | Pairing hello identity signature failed verification.                                                                                                       |
+| `identity_missing`            | Pinned-peer hello missing the identity signature.                                                                                                           |
+| `identity_invalid`            | Identity signature invalid.                                                                                                                                 |
 | `pairing_missing_name_or_url` | Presenter had no relay_name (hard decline) — pre-0.7.39 this also fired for a missing URL; >= 0.7.39 a missing URL is a warn + URL inheritance instead.     |
 
 ### Advertisement: per-origin segments
@@ -420,7 +422,7 @@ source relay's log — the #1 live-debugging signal.
 | `relay-peers.json`   | `~/.local/state/un-bien/relay-peers.json`   | empty                    | Per-machine peering state: `peers` (pinned: url, name, pubkey, pair_secret?), `pending` (outstanding invitations). Managed by the CLI + the one-pair auto-add. |
 | `relay-keypair.json` | `~/.local/state/un-bien/relay-keypair.json` | auto-generated           | The relay's Ed25519 identity keypair.                                                                                                                          |
 | `UNBIEN_RELAY_NAME`  | env                                         | hostname                 | The relay's own name (handshake, advertisement origins, `federated_peer_list`).                                                                                |
-| `UNBIEN_RELAY_URL`   | env                                         | empty                    | The relay's own externally-reachable URL. **Required for federation** — advertised in `relay_hello` + recorded by the pairing auto-add.                       |
+| `UNBIEN_RELAY_URL`   | env                                         | empty                    | The relay's own externally-reachable URL. **Required for federation** — advertised in `relay_hello` + recorded by the pairing auto-add.                        |
 | `UNBIEN_RELAY_PORT`  | env                                         | 3000                     | The relay's listen port.                                                                                                                                       |
 | `UNBIEN_STATE_DIR`   | env                                         | `~/.local/state/un-bien` | State root (mesh.db, relay-peers.json, relay-keypair.json).                                                                                                    |
 
@@ -497,3 +499,51 @@ backoff (1s-60s). Tailscale (MagicDNS) is the canonical answer; otherwise
 one relay needs a public endpoint. Disconnecting one direction of a
 symmetric pair does not kill the other's sender — the two connections
 coexist per relay name.
+
+## Design rationale
+
+Why v2 replaced the original federation model (relay 0.7.5 through
+0.7.34-dev). The shipped protocol answers each of three posts the
+original model rested on, none of which matched the intent "all relay
+comms via an explicitly paired machine key, or a paired mesh + explicit
+pairing on that mesh, transitively":
+
+1. **Shared-owner hash intersection could not authenticate anything.**
+   Owner pubkey hashes are public, client-assertable material — any
+   authenticated key can push a self-consistent `pairing_set` naming
+   arbitrary owner pubkeys, injecting hashes into the relay's trust
+   roots. A pinned relay key is proof an operator ran `relay pair` on
+   that machine; an owner hash is proof of nothing. Hence: pinning is
+   the link gate, the owner binding moves to the machine-signed content
+   layer, and the `owners` handshake fields stay for observability only.
+   Cross-owner relay pairing is possible when the machines' owner sets
+   intersect — the model the mesh already speaks.
+
+2. **Federated sends must check the target, at the source.** The old
+   gate asked only "is the sender a valid local member" — nothing
+   decided whether the TARGET machine trusts the sender's owner. The
+   one-pair secret is a one-time token (not a key — the
+   relay-holds-no-private-keys invariant holds); dual-direction manual
+   pairing remains available.
+
+3. **Content gates are one rule over machine-signed sets, both planes,
+   decided at the source.** Sender-owner intersect target-owner,
+   non-empty, strict on unknown; no machine exemptions (a machine IS
+   its owner set). The deciding relay is always the SOURCE using
+   freshly exchanged sets — the dest never re-refuses on its own stale
+   view (the 9779b88 lesson).
+
+4. **Transitive knowledge, directed frames.** All hosts become
+   transitively known: metadata gossips (origin-tagged, never back to
+   the arrival link, self-origin filtered), frames route directed
+   (advertisement implies route; onward hops re-sign per hop and
+   return acks along the delivery path via id→backlink; `visited` is
+   the loop guard). A route miss is refused and logged loudly — never
+   fanned out: with a complete route table, directed forwarding has no
+   steady-state misses, so the flood fallback the design once floated
+   proved unnecessary.
+
+Kept from the original: per-hop forward signatures, the `visited` loop
+guard, the machine-signed pairing exchange (now load-bearing
+authorization data), the peer-doc protocol (observability), and the
+`federated_peer_list` discovery push.

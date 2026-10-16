@@ -6,6 +6,29 @@ requirements where they matter.
 
 ## App
 
+### 1.4 (build 8, 2026-10-15)
+
+- **Federated mesh (v2)** — sessions and machines on federated relays
+  appear with server chips and launch rows; remote launch/resume work
+  end-to-end; dead federated rooms are attach-gated and pruned instead of
+  spinning. Requires relay 0.7.40-dev+ and extension 0.20.60-dev+ for the
+  full flow (older combinations degrade to direct-relay behavior).
+- **A device now advertises its owner** — the app pushes a self-signed
+  `pairing_set` on connect, which the strict federated content gates
+  require for reply legs (transcript pages, launch acks) from remote
+  machines.
+- **Backfill overhaul** — the fetch cursor is now content-derived and
+  persisted (the folded frontier): replay resumes only over content the
+  app actually holds, foregrounding reconciles missed turns, a stale
+  cursor after pi's resume-time id rewrites forces a genuinely full walk
+  instead of looping, and the per-turn delta walk resumed from the folded
+  frontier (beacon divergence closed). Backfill pages and the app's WS
+  frame cap are sized to the relay's transport budget (32 MiB).
+- **Unreachable relays pause** instead of retry-metronoming — one attempt
+  per foreground, the state lives on Home's relay chip. Connection-death
+  and transport notices are silent by design; WS stream-end reasons
+  surface only where they change what the user should do.
+
 ### 1.3 (build 7, 2026-09-22)
 
 - **Fixed: owner key wiped on every restart (first reported issue #2)** —
@@ -57,6 +80,30 @@ requirements where they matter.
   themes, iOS + macOS.
 
 ## Extension (@geohar/un-bien)
+
+### dev cycle 0.20.25-dev → 0.20.60-dev (2026-10-15, pending stable cut)
+
+- **Remote launches spawn through the user's login shell** (both layers:
+  the tmux invocation and the pane command) — launchd-context daemons
+  otherwise run devoid of the user's environment (homebrew PATH, version
+  managers). Shell resolution never assumes: `launch.shell` → `$SHELL` →
+  the OS login shell (`dscl`/`getent`) → zsh; extra flags via
+  `launch.shell_args`; the pane command is one properly-quoted string
+  (injection-safe) behind tmux's `--`, and spawn failures — including
+  tmux's own stderr and nonzero exits — land in `launcher.log`.
+- **`unbien-admin install` now updates the launcher npm package** —
+  previously nothing ever did (the daemon ran stale code across five
+  ext releases while the package looked current), and every install
+  kickstarts both services.
+- **get_entries pages are ≤ budget by construction** (preflight: the
+  crossing entry begins the next page) — pages sized for the app's
+  transport frame cap instead of exceeding it (with the app's 32 MiB
+  receive cap, oversized pages became deliverable).
+- The daemon's launch peer-gate refuses are logged; the pairing
+  handshake tolerates a presenter without `UNBIEN_RELAY_URL` (URL
+  inheritance; name still required); SRC-gate refusals log at warn with
+  the gate's inputs; pairing frames are exempt from the federated
+  content gates (federated pairing bootstrap unblocked).
 
 ### 0.20.24 (2026-10-10)
 
@@ -257,6 +304,26 @@ current code.
 
 ## Relay (un-bien-relay)
 
+### dev cycle 0.7.35-dev → 0.7.40-dev (2026-10-15, pending stable cut)
+
+- **Federation v2** — explicit pinned pairing replaces shared-owner hash
+  intersection as the link gate (strict now: unpinned peers decline by
+  design); the one-pair flow mints a single-use 24h secret that
+  auto-adds the presenter (mutual config, one action); content gates are
+  one rule over machine-signed owner sets (sender-owner ∩ target-owner,
+  strict on unknown, no machine exemptions), decided at the source
+  relay; all hosts become transitively known (origin-tagged
+  advertisement segments with `fed_proto` negotiation, never back to the
+  arrival link), frames route directed with per-hop re-signing,
+  id→backlink acks, and the `visited` loop guard.
+- **Hardened live on device**: spent pairing secrets fall through to the
+  pin gate (links survive reconnects instead of working exactly once);
+  a presenter without `UNBIEN_RELAY_URL` federates with URL inheritance
+  (name still required); pending invitations expire in 24h with a
+  consume-time sweep; `rooms_check` serves federated rooms in ONE frame
+  per epk (the first-frame-resolve bug that hid every session after the
+  first); SRC-gate refusals log at warn; the ct ceiling is 16 MiB.
+
 ### 0.7.4 (2026-10-10)
 
 - **`unknown_peer` transport_error for offline remote** — the relay's
@@ -275,6 +342,20 @@ current code.
 
 ## CLI (@geohar/unbien-cli)
 
+### dev cycle 0.3.7-dev → 0.3.34-dev (2026-10-15, pending stable cut)
+
+- **The one-pair flow** (`relay pair` → `peer add relay-pair://…`) with
+  pending-invitation lifecycle (single-use, 24h TTL, re-mint =
+  revocation, expiry marking); the legacy `peer add <url> <name>` form
+  is refused (pinned pairing is mandatory).
+- **Federated resolution everywhere** — `connect` resolves machines
+  from the federated room list when no stored pairing peer matches
+  (launches always could), polls for a freshly-launched session
+  instead of losing the propagation race, accepts hostname targets
+  (short form and FQDN-on-first-label), and a CLI device pushes its
+  self-signed `pairing_set` on connect (required for federated reply
+  legs).
+
 ### 0.3.4
 
 - Current release; no changes in the recent wave.
@@ -284,6 +365,7 @@ current code.
 **Observed:** During app backfill (session_sync get_entries replay), the user sees the thinking block but not the model's text response. Both are visible in the TUI.
 
 **Suspected causes:**
+
 1. fitEntryForTransport truncation in rpc_inbound.ts cuts the text from the end of a large entry (2 MiB cap) while preserving the thinking at the beginning
 2. get_entries paging boundary splits thinking + text across pages — the app only requests the first page
 3. The app receives the full entry but only renders the thinking block (app display bug)
