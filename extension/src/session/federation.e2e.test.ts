@@ -171,6 +171,12 @@ async function spawnRelay(name: string, peers: unknown): Promise<RelayHandle> {
     "UNBIEN_RELAY",
     "UNBIEN_DIR",
     "UNBIEN_HOME",
+    // UNBIEN_RELAY_BIND: a shell that exports the production bind spec (e.g.
+    // `crashtest.tail8a69.ts.net:3000,localhost:3000`) makes every spawned
+    // test relay attempt the LIVE relay's tailnet address — "failed to bind
+    // 100.x.x.x:3000 / Address already in use" (field-verified). The rig
+    // relies on the default 0.0.0.0 bind at its own random port.
+    "UNBIEN_RELAY_BIND",
   ]) {
     delete env[key]
   }
