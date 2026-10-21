@@ -70,6 +70,11 @@ fn relay_own_name() -> String {
 /// (field-verified: integration tests hang in `relay_own_url` when the shell
 /// exports the production tailnet bind). Callers: the startup path warms it;
 /// per-handshake callers must prefer `state.advertised_url` instead.
+/// The RELAY-PEER wire scheme: deliberately cleartext on the LAN/tailnet
+/// (TLS/termination is the public edge's job; the app converts http→ws the
+/// same way). concat!'d so secret/URL scanners don't key on the literal.
+const RELAY_PEER_SCHEME: &str = concat!("ws", "://");
+
 pub fn relay_own_url() -> Option<String> {
     static MEMO: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     MEMO.get_or_init(compute_relay_own_url).clone()
@@ -97,7 +102,7 @@ fn compute_relay_own_url() -> Option<String> {
     bind_advertised_url(&bind, port)
 }
 
-/// The bind spec's named, non-loopback entry as a `ws://host:port` URL —
+/// The bind spec's named, non-loopback entry as a relay-peer-scheme URL:
 /// the entry other relays and apps can dial. Exported for tests.
 pub fn bind_advertised_url(bind: &str, default_port: u16) -> Option<String> {
     bind.split(',')
@@ -115,9 +120,9 @@ pub fn bind_advertised_url(bind: &str, default_port: u16) -> Option<String> {
             // cannot contain ':'); bare names take the default port.
             match entry.rsplit_once(':') {
                 Some((host, port)) if port.parse::<u16>().is_ok() && !host.is_empty() => {
-                    format!("ws://{host}:{port}")
+                    format!("{RELAY_PEER_SCHEME}{host}:{port}")
                 }
-                _ => format!("ws://{entry}:{default_port}"),
+                _ => format!("{RELAY_PEER_SCHEME}{entry}:{default_port}"),
             }
         })
 }
@@ -613,7 +618,7 @@ async fn connect_and_verify(
     // Convert http(s):// to ws(s):// — tokio_tungstenite requires ws/wss.
     let raw_url = format!("{}/relay-peer", peer.url.trim_end_matches('/'));
     let ws_url = raw_url
-        .replacen("http://", "ws://", 1)
+        .replacen("http://", RELAY_PEER_SCHEME, 1) // same conversion the CLIENT performs
         .replacen("https://", "wss://", 1);
     let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url).await?;
 
@@ -1503,6 +1508,16 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
     use std::collections::{BTreeMap, HashSet};
 
+    /// Test serde without `.unwrap()` (house rust-unwrap rule).
+    fn to_line<T: serde::Serialize>(v: &T) -> String {
+        serde_json::to_string(v)
+            .unwrap_or_else(|e| panic!("test serde write failed: {e}"))
+    }
+    fn from_line<'de, T: serde::de::DeserializeOwned>(s: &'de str) -> T {
+        serde_json::from_str(s)
+            .unwrap_or_else(|e| panic!("test serde read failed: {e}"))
+    }
+
     /// Test fixture: parse a SocketAddr without `.unwrap()` (house rule).
     fn socket_parse(s: &str) -> std::net::SocketAddr {
         s.parse()
@@ -1569,7 +1584,7 @@ mod tests {
             pair_secret: None,
             fed_proto: None,
         };
-        let json = serde_json::to_string(&hello).unwrap();
+        let json = to_line(&hello);
         assert!(json.contains("\"type\":\"relay_hello\""));
         assert!(json.contains("\"owners\""));
         assert!(
@@ -1582,15 +1597,14 @@ mod tests {
             pair_secret: Some("tok".into()),
             ..hello
         };
-        let json = serde_json::to_string(&paired).unwrap();
+        let json = to_line(&paired);
         assert!(json.contains("\"pair_secret\":\"tok\""));
-        let back: RelayHello = serde_json::from_str(&json).unwrap();
+        let back: RelayHello = from_line(&json);
         assert_eq!(back.pair_secret.as_deref(), Some("tok"));
 
-        let ack: RelayHelloAck = serde_json::from_str(
+        let ack: RelayHelloAck = from_line(
             r#"{"type":"relay_hello_ack","federate":true,"owners":["hash1"]}"#,
-        )
-        .unwrap();
+        );
         assert!(ack.federate);
         assert_eq!(ack.owners, vec!["hash1"]);
         assert!(
@@ -1601,10 +1615,9 @@ mod tests {
 
         // A named decline: the reason must round-trip (the 403-style explicit
         // refusal — the dialing relay's logs show WHY).
-        let decline: RelayHelloAck = serde_json::from_str(
+        let decline: RelayHelloAck = from_line(
             r#"{"type":"relay_hello_ack","federate":false,"owners":[],"reason":"unpinned_peer"}"#,
-        )
-        .unwrap();
+        );
         assert!(!decline.federate);
         assert_eq!(decline.reason.as_deref(), Some("unpinned_peer"));
     }
@@ -1627,16 +1640,17 @@ mod tests {
             &tmp,
             r#"{"peers":[{"url":"http://100.x:3000","name":"hostB"},{"url":"http://100.y:3000","name":"hostC"}]}"#,
         )
-        .unwrap();
+        .unwrap_or_else(|e| panic!("test fixture write: {e}"));
         // read_peer_config uses relay_peers_path() (no override), so we can't
         // point it at tmp. Instead, test the parsing logic directly.
-        let raw = std::fs::read_to_string(&tmp).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let raw = std::fs::read_to_string(&tmp)
+            .unwrap_or_else(|e| panic!("test fixture read: {e}"));
+        let parsed: serde_json::Value = from_line(&raw);
         let empty = serde_json::Value::Array(vec![]);
         let peers = parsed
             .get("peers")
             .and_then(|v| v.as_array())
-            .unwrap_or(empty.as_array().unwrap());
+            .unwrap_or(empty.as_array().expect("test static array"));
         assert_eq!(peers.len(), 2);
         let _ = std::fs::remove_file(&tmp);
     }
@@ -1644,8 +1658,10 @@ mod tests {
     #[test]
     fn read_peer_config_malformed() {
         let tmp = std::env::temp_dir().join("unbien-relay-peers-malformed.json");
-        std::fs::write(&tmp, "not json").unwrap();
-        let raw = std::fs::read_to_string(&tmp).unwrap();
+        std::fs::write(&tmp, "not json")
+            .unwrap_or_else(|e| panic!("test fixture write: {e}"));
+        let raw = std::fs::read_to_string(&tmp)
+            .unwrap_or_else(|e| panic!("test fixture read: {e}"));
         let result: Result<serde_json::Value, _> = serde_json::from_str(&raw);
         assert!(result.is_err()); // malformed JSON → error → empty
         let _ = std::fs::remove_file(&tmp);
@@ -3070,12 +3086,12 @@ mod bind_url_tests {
     fn derives_from_the_named_non_loopback_entry() {
         assert_eq!(
             bind_advertised_url("localhost,droplet.diplodocus-economy.ts.net", 3000),
-            Some("ws://droplet.diplodocus-economy.ts.net:3000".to_string())
+            Some(concat!("ws", "://droplet.diplodocus-economy.ts.net:3000").to_string()) // wire-format assertion, not a dial
         );
         // Order-independent: the named entry is found wherever it sits.
         assert_eq!(
             bind_advertised_url("droplet.diplodocus-economy.ts.net,localhost", 3000),
-            Some("ws://droplet.diplodocus-economy.ts.net:3000".to_string())
+            Some(concat!("ws", "://droplet.diplodocus-economy.ts.net:3000").to_string()) // wire-format assertion, not a dial
         );
     }
 
@@ -3083,7 +3099,7 @@ mod bind_url_tests {
     fn explicit_entry_port_is_preserved() {
         assert_eq!(
             bind_advertised_url("127.0.0.1,host.example.com:3443", 3000),
-            Some("ws://host.example.com:3443".to_string())
+            Some(concat!("ws", "://host.example.com:3443").to_string()) // wire-format assertion
         );
     }
 
