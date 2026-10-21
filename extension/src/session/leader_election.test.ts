@@ -1,8 +1,10 @@
 import { describe, expect, test } from "vitest"
-import { mkdtempSync, writeFileSync, existsSync } from "node:fs"
+import { mkdtempSync, writeFileSync, existsSync, lstatSync } from "node:fs"
+import { execFileSync } from "node:child_process"
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
 import { joinOrLead } from "./leader_election.js"
+import { Broker } from "./broker.js"
 import { ipcAddress } from "./ipc.js"
 
 function tmpSock(): string {
@@ -14,12 +16,14 @@ function tmpSock(): string {
 }
 
 describe("joinOrLead", () => {
+  // The leader side must be a REAL broker for followers to join: joinOrLead
+  // proves liveness with an application-level `list_peers` probe, and a bare
+  // `net.Server` never answers it (that is the busy-leader case below).
   async function cleanup(
-    results: Array<{
-      role: string
-      server?: import("node:net").Server
-      socket?: import("node:net").Socket
-    }>,
+    results: Array<
+      | { role: string; server?: import("node:net").Server; socket?: import("node:net").Socket }
+      | { role: "broker"; broker: Broker }
+    >,
   ) {
     // Destroy follower sockets FIRST so the leader's server can close cleanly.
     for (const r of results) {
@@ -35,28 +39,119 @@ describe("joinOrLead", () => {
   test("first caller becomes leader, second becomes follower", async () => {
     const sock = tmpSock()
     const r1 = await joinOrLead(sock)
-    expect(r1.role).toBe("leader")
+    if (r1.role !== "leader") throw new Error("expected the first caller to lead")
+    // Leader must SERVE for followers to app-probe-join it.
+    const broker = new Broker({ server: r1.server })
 
     const r2 = await joinOrLead(sock)
-    expect(r2.role).toBe("follower")
+    if (r2.role !== "follower") throw new Error("expected the second caller to follow")
 
-    await cleanup([r1, r2] as Parameters<typeof cleanup>[0])
+    r2.socket.destroy()
+    await broker.close()
   })
 
   test("3 concurrent callers: exactly 1 leader", async () => {
     const sock = tmpSock()
+    // The (only) winner wraps its server in a Broker the moment it binds, so
+    // the losers' busy/retry loop finds a serving broker instead of a silent
+    // socket and joins as followers.
+    let broker: Broker | null = null
     const results = await Promise.all([
-      joinOrLead(sock),
-      joinOrLead(sock),
-      joinOrLead(sock),
+      joinOrLead(sock).then((r) => {
+        if (r.role === "leader") broker = new Broker({ server: r.server })
+        return r
+      }),
+      joinOrLead(sock).then((r) => {
+        if (r.role === "leader") broker = new Broker({ server: r.server })
+        return r
+      }),
+      joinOrLead(sock).then((r) => {
+        if (r.role === "leader") broker = new Broker({ server: r.server })
+        return r
+      }),
     ])
     const leaders = results.filter((r) => r.role === "leader")
     const followers = results.filter((r) => r.role === "follower")
     expect(leaders).toHaveLength(1)
     expect(followers).toHaveLength(2)
+    expect(broker).not.toBeNull()
 
-    await cleanup(results as Parameters<typeof cleanup>[0])
+    for (const r of followers) {
+      if (r.role === "follower") r.socket.destroy()
+    }
+    await broker!.close()
   })
+
+  test.skipIf(process.platform === "win32")(
+    "busy leader on a (silent) socket is waited out, never displaced",
+    async () => {
+      const { createServer } = await import("node:net")
+      const sock = tmpSock()
+      // A bound server that never speaks: the field-verified busy-leader
+      // shape (an event-loop-starved pi shares the port and its broker
+      // hasn't answered yet). Kernel-connect succeeds; nothing acks.
+      const silent = createServer(() => {
+        /* deliberately silent */
+      })
+      await new Promise<void>((res) => silent.listen(sock, () => res()))
+      const inoBefore = lstatSync(sock).ino
+
+      // Must NOT bind a second registry over it, and the file must survive.
+      await expect(
+        joinOrLead(sock, { busyMaxAttempts: 3 }),
+      ).rejects.toThrow(/refusing to take over/)
+      const inoAfter = lstatSync(sock).ino
+      expect(inoAfter).toBe(inoBefore) // busy leader's file untouched
+
+      silent.close(() => undefined)
+    },
+  )
+
+  test.skipIf(process.platform === "win32")(
+    "dead socket file (crashed listener) is reaped and replaced",
+    async () => {
+      const sock = tmpSock()
+      const { spawn } = await import("node:child_process")
+      // Own fixture listener, deliberately SIGKILLed WITHOUT unlinking its
+      // socket file — the exact crash shape the stale-reaping path exists
+      // for. Spawned and killed by this test at this path; not a system
+      // process.
+      const child = spawn(
+        process.execPath,
+        [
+          "-e",
+          "const net=require('node:net');" +
+            "net.createServer().listen(process.argv[1]," +
+            "()=>console.log('ready'));" +
+            "setTimeout(()=>{},600000)",
+          sock,
+        ],
+        { stdio: ["ignore", "pipe", "ignore"] },
+      )
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error("listener never bound")),
+          5_000,
+        )
+        child.stdout.on("data", (d: Buffer) => {
+          if (d.toString().includes("ready")) {
+            clearTimeout(timer)
+            resolve()
+          }
+        })
+      })
+
+      expect(existsSync(sock)).toBe(true)
+      child.kill("SIGKILL")
+      // Give the kernel a beat to release the port; the file lingers.
+      await new Promise((r) => setTimeout(r, 300))
+      expect(existsSync(sock)).toBe(true) // stale file still on disk
+
+      const r2 = await joinOrLead(sock)
+      if (r2.role !== "leader") throw new Error("expected stale reaping to lead")
+      await r2.server.close()
+    },
+  )
 
   test("stale (orphan) sock file is cleaned up + caller becomes leader", async () => {
     const sock = tmpSock()

@@ -220,7 +220,7 @@ interface RenameAck {
 }
 
 interface SystemBody {
-  type: "peer_joined" | "peer_left" | "list_peers_reply"
+  type: "peer_joined" | "peer_left" | "list_peers_reply" | "broker_pong"
   /** Compat: carries the peer's ADDRESS (the Map key), not the bare name. */
   name?: string
   /** Explicit address (plan/38) for clients that prefer the typed field. */
@@ -233,6 +233,8 @@ interface SystemBody {
 
 export class Broker {
   private readonly peers = new Map<string, PeerConn>()
+  /** Set by orphan(): this broker no longer represents the mesh's live path. */
+  private orphanedFlag = false
   private readonly auditPath?: string
   private readonly onRouted?: BrokerOptions["onRouted"]
   private readonly server: Server
@@ -313,6 +315,33 @@ export class Broker {
     await new Promise<void>((resolve) => this.server.close(() => resolve()))
   }
 
+  /**
+   * Displaced-leader teardown: destroy every peer connection (so followers
+   * re-elect onto the new generation) but NEVER call `server.close()`.
+   *
+   * Why not: node's UDS `server.close()` unlinks the pipe path it remembers
+   * at LISTEN time — after a displacement that path is the NEW broker's
+   * socket file, and closing the displaced listener deletes the rightful
+   * holder's rendezvous. The next joiner then sees a missing file, binds a
+   * competing registry, and the mesh fractures (field-verified: a displaced
+   * leader's cleanup made every re-join bind a fresh island). The orphaned
+   * listener stays open but must not accept: it is unref'd so it dies with
+   * the process, and new connections are refused by destroying them.
+   */
+  orphan(): void {
+    this.orphanedFlag = true
+    for (const p of this.peers.values()) p.socket.destroy()
+    this.peers.clear()
+    // Refuse (and immediately reap) any late accept so no one ever registers
+    // on a registry that no longer converges with the mesh.
+    this.server.on("connection", (socket) => socket.destroy())
+    try {
+      this.server.unref()
+    } catch {
+      /* already unref'd */
+    }
+  }
+
   // ── connection lifecycle ──────────────────────────────────────────────────
 
   private _handleConnection(socket: Socket): void {
@@ -338,9 +367,12 @@ export class Broker {
 
   private async _handleLine(conn: PeerConn, line: string): Promise<void> {
     // Unregistered conn: a read-only `list_peers` probe (the `unbien peers`
-    // CLI — answered without registering, so it leaves no trace on the mesh) or
-    // the mandatory `register` handshake. Anything else `_handleRegister` drops.
+    // CLI — answered without registering, so it leaves no trace on the mesh),
+    // a minimal `broker_ping` liveness probe (leader-election join: proves
+    // the broker is SERVING without disclosing the roster), or the mandatory
+    // `register` handshake. Anything else `_handleRegister` drops.
     if (!conn.name) {
+      if (this._tryBrokerPing(conn, line)) return
       if (this._tryObserverProbe(conn, line)) return
       this._handleRegister(conn, line)
       return
@@ -440,6 +472,36 @@ export class Broker {
       { type: "peer_joined", name: conn.address, address: conn.address },
       conn.address,
     )
+  }
+
+  /** Answer a minimal `broker_ping` liveness probe from an UNREGISTERED
+   *  connection — a pong carries NO roster data (peer names, cwds). The
+   *  leader-election join probes this to distinguish "broker serving" from
+   *  "socket accepted by a busy/starved owner"; answering `list_peers` there
+   *  would make every join disclose the mesh roster to any local process. */
+  private _tryBrokerPing(conn: PeerConn, line: string): boolean {
+    let parsed: { type?: unknown }
+    try {
+      parsed = JSON.parse(line) as { type?: unknown }
+    } catch {
+      return false
+    }
+    if (!parsed || typeof parsed !== "object" || parsed.type !== "broker_ping") {
+      return false
+    }
+    const reply: Envelope = {
+      from: BROKER_NAME,
+      to: "observer",
+      id: uuidv7(),
+      re: null,
+      body: { type: "broker_pong" } as SystemBody,
+    }
+    try {
+      conn.socket.write(serialize(reply))
+    } catch {
+      /* probe hung up */
+    }
+    return true
   }
 
   /**

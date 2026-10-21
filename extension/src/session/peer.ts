@@ -1,4 +1,5 @@
 import type { Socket } from "node:net"
+import { lstatSync } from "node:fs"
 import { setTimeout as delay } from "node:timers/promises"
 import {
   type Envelope,
@@ -43,11 +44,20 @@ export interface SessionPeerOptions {
   auditPath?: string
   /** Per-request default timeout (ms). Override per call if needed. */
   defaultTimeoutMs?: number
+  /** How often a LEADER verifies it still owns `sockPath` (fs inode match).
+   *  Another process may unlink the file and re-bind its own broker (leader
+   *  election treats a busy leader as stale after losing a probe race) — a
+   *  displaced leader that never notices serves a phantom registry forever,
+   *  invisible to every later joiner. Default 3s; 0 disables. */
+  displacementWatchMs?: number
+  /** Forwarded to `joinOrLead` (test hooks / patient busy-wait tuning). */
+  electionLimits?: import("./leader_election.js").JoinLimits
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000
 const ACK_TIMEOUT_MS = 5_000
 const FAILOVER_RETRY_MS = 100
+const DEFAULT_DISPLACEMENT_WATCH_MS = 3_000
 
 export type AckStatus = "received" | "busy" | "denied" | "timeout" | "unknown_peer"
 
@@ -164,6 +174,12 @@ export class SessionPeer {
   private readonly handlers = new Set<MessageHandler>()
   private readonly reconnectHandlers = new Set<ReconnectHandler>()
   private leftFlag = false
+  /** Leader-only: inode of the socket file this broker bound. The inode is
+   *  the ownership proof — the file exists but a different inode means another
+   *  process rebound the path. */
+  private brokerBoundIno: number | null = null
+  private displacementTimer: ReturnType<typeof setInterval> | null = null
+  private displacedReelectInFlight: Promise<void> | null = null
 
   constructor(opts: SessionPeerOptions) {
     this.opts = opts
@@ -366,7 +382,10 @@ export class SessionPeer {
   // ── join / failover loop ──────────────────────────────────────────────────
 
   private async _joinOrLead(): Promise<string> {
-    const result: ElectionResult = await joinOrLead(this.opts.sockPath)
+    const result: ElectionResult = await joinOrLead(
+      this.opts.sockPath,
+      this.opts.electionLimits,
+    )
     if (result.role === "leader") {
       this.role = "leader"
       this.broker = new Broker({
@@ -377,7 +396,9 @@ export class SessionPeer {
       // can address it. We create a self-loopback socket via the broker's
       // internal API: easiest is to open a real client connection back to
       // our own server.
-      return this._registerAsClient()
+      const assigned = await this._registerAsClient()
+      this._startDisplacementWatch()
+      return assigned
     } else {
       this.role = "follower"
       this._wireSocket(result.socket)
@@ -394,6 +415,94 @@ export class SessionPeer {
     })
     this._wireSocket(sock)
     return this._registerOver(sock)
+  }
+
+  // ─── leader displacement watch ──────────────────────────────
+
+  /** A leader that lost its socket file (another process unlinked and re-bound
+   *  the path — the field-verified island shape) keeps serving its old registry
+   *  with NO close events anywhere: followers stay attached, later joiners go
+   *  to the new file. Re-electing is the only way the mesh converges, so the
+   *  leader verifies its inode periodically. */
+  private _startDisplacementWatch(): void {
+    this._stopDisplacementWatch()
+    const watchMs =
+      this.opts.displacementWatchMs ?? DEFAULT_DISPLACEMENT_WATCH_MS
+    if (watchMs <= 0) return
+    try {
+      this.brokerBoundIno = lstatSync(this.opts.sockPath).ino
+    } catch {
+      // ENOENT right after bind: someone already stole the file — re-elect
+      // on the first tick.
+      this.brokerBoundIno = null
+    }
+    this.displacementTimer = setInterval(() => {
+      void this._checkDisplacement()
+    }, watchMs)
+    // Never keep the host process alive just for the watch.
+    this.displacementTimer.unref?.()
+  }
+
+  private _stopDisplacementWatch(): void {
+    if (this.displacementTimer !== null) {
+      clearInterval(this.displacementTimer)
+      this.displacementTimer = null
+    }
+  }
+
+  private async _checkDisplacement(): Promise<void> {
+    if (
+      this.leftFlag ||
+      this.role !== "leader" ||
+      this.broker === null ||
+      this.displacedReelectInFlight !== null
+    ) {
+      return
+    }
+    let currentIno: number | undefined
+    try {
+      currentIno = lstatSync(this.opts.sockPath).ino
+    } catch {
+      /* ENOENT: file gone — treated as displaced */
+    }
+    const boundIno = this.brokerBoundIno ?? -1
+    if (currentIno !== undefined && currentIno === boundIno) return
+    // Displaced (rebound, or path vanished). Serialize: one re-election at a
+    // time; the interval keeps firing until the re-election resolves.
+    this.displacedReelectInFlight = (() =>
+      this._reelectAfterDisplacement().finally(() => {
+        this.displacedReelectInFlight = null
+      }))()
+    await this.displacedReelectInFlight
+  }
+
+  /** Tear the displaced broker + own connection down, then re-join. If the
+   *  thief is a real broker we become its follower; if it was a transient
+   *  bind we may lead again — either way exactly one registry survives. */
+  private async _reelectAfterDisplacement(): Promise<void> {
+    this._stopDisplacementWatch()
+    try {
+      await this._teardownConn()
+    } catch {
+      /* best effort */
+    }
+    this.role = "follower"
+    this.broker = null
+    await delay(FAILOVER_RETRY_MS)
+    if (this.leftFlag) return
+    try {
+      await this._joinOrLead()
+      for (const h of this.reconnectHandlers) {
+        try {
+          h()
+        } catch {
+          /* handler errors don't break peer */
+        }
+      }
+    } catch {
+      /* election failed; peer stuck disconnected until the socket-close
+         failover path can retry */
+    }
   }
 
   private _wireSocket(sock: Socket): void {
@@ -660,6 +769,8 @@ export class SessionPeer {
   }
 
   private async _teardownConn(): Promise<void> {
+    this._stopDisplacementWatch()
+    this.brokerBoundIno = null
     for (const [id, slot] of this.pending) {
       clearTimeout(slot.timer)
       this.pending.delete(id)
@@ -680,8 +791,25 @@ export class SessionPeer {
       this.socket = null
     }
     if (this.broker) {
+      // Ownership check: node's UDS server.close() unlinks the remembered
+      // pipe path unconditionally — after a displacement that path is the NEW
+      // broker's socket file, and closing would delete it (field-verified
+      // island shape). Close only when our inode still owns the file;
+      // otherwise orphan (followers re-elect, the listener dies unref'd).
+      let fileOwned = false
       try {
-        await this.broker.close()
+        fileOwned =
+          this.brokerBoundIno !== null &&
+          lstatSync(this.opts.sockPath).ino === this.brokerBoundIno
+      } catch {
+        /* ENOENT: file already gone — treat as owned-orphan */
+      }
+      try {
+        if (fileOwned) {
+          await this.broker.close()
+        } else {
+          this.broker.orphan()
+        }
       } catch {
         /* ignored */
       }
