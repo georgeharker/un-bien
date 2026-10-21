@@ -169,15 +169,75 @@ export function relayReportedVersion(binary: RelayBinary): string | null {
   }
 }
 
-/** Decision helper: does the installed relay need a (re)install to reach the
- *  target? Null/"unknown" never installs — an unversionable binary is left
- *  alone rather than churned blind. */
+/** Decision helper: does the installed relay need a (re)install to reach
+ *  the target? TRUE only when the target is strictly semver-GREATER — a
+ *  naive string compare made the dev channel DOWNGRADE machines below
+ *  their stable (installed 0.8.4, dev target 0.8.2-dev.20261015: the dev
+ *  ladder can legitimately sit BEHIND the stable cut that consumed it,
+ *  and `!==` read that as an update). Pre-releases sort below their
+ *  release (semver §11), so a stable install never rolls back to a
+ *  pre-release, and a pre-release still upgrades to its own release.
+ *  Null/"unknown" never installs — an unversionable binary is left alone
+ *  rather than churned blind. */
 export function relayNeedsUpdate(
   reported: string | null,
   target: string,
 ): boolean {
   if (!reported) return false
-  return reported !== target
+  return compareSemver(reported, target) < 0
+}
+
+/** Parse `v?MAJOR.MINOR.PATCH[-pre][+build]` into comparable parts.
+ *  Non-parseable input yields null (compareSemver falls back to string). */
+function parseSemver(
+  v: string,
+): { core: [number, number, number]; pre: string[] } | null {
+  const m = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(
+    v.trim(),
+  )
+  if (!m) return null
+  return {
+    core: [Number(m[1]), Number(m[2]), Number(m[3])],
+    pre: m[4] ? m[4].split(".") : [],
+  }
+}
+
+/** Compare two version strings: -1 / 0 / 1, semver §11 rules — core
+ *  numerically, then release > any pre-release, then pre-release
+ *  identifiers (numeric ones numerically, numeric < alphanumeric, fewer
+ *  < more when shared ones equal). Unparseable input falls back to string
+ *  compare so a decision is always made. */
+export function compareSemver(a: string, b: string): number {
+  const pa = parseSemver(a)
+  const pb = parseSemver(b)
+  if (!pa || !pb) return a === b ? 0 : a < b ? -1 : 1
+  for (let i = 0; i < 3; i++) {
+    if (pa.core[i] !== pb.core[i]) return pa.core[i] < pb.core[i] ? -1 : 1
+  }
+  if (pa.pre.length === 0 && pb.pre.length === 0) return 0
+  // Equal cores: the plain release outranks any pre-release.
+  if (pa.pre.length === 0) return 1
+  if (pb.pre.length === 0) return -1
+  const n = Math.min(pa.pre.length, pb.pre.length)
+  for (let i = 0; i < n; i++) {
+    const x = pa.pre[i]
+    const y = pb.pre[i]
+    const xNum = /^\d+$/.test(x)
+    const yNum = /^\d+$/.test(y)
+    if (xNum && yNum) {
+      const xi = Number(x)
+      const yi = Number(y)
+      if (xi !== yi) return xi < yi ? -1 : 1
+    } else if (xNum !== yNum) {
+      return xNum ? -1 : 1
+    } else if (x !== y) {
+      return x < y ? -1 : 1
+    }
+  }
+  if (pa.pre.length !== pb.pre.length) {
+    return pa.pre.length < pb.pre.length ? -1 : 1
+  }
+  return 0
 }
 
 /** Latest published version of the relay on the given channel, straight from
