@@ -52,6 +52,9 @@ pub async fn start_relay_state() -> (u16, Arc<relay::PairingRegistry>) {
         federated: Arc::new(relay::peering::FederatedSessions::new()),
         relay_name: relay::peering::default_relay_name(),
         metrics,
+        ws_port: Some(port),
+        advertised_url: String::new(),
+        endpoints: Arc::new(Vec::new()),
     };
     let app = build_router(state);
     tokio::spawn(async move {
@@ -101,6 +104,9 @@ pub async fn spawn_relay_named(name: &str) -> TestRelay {
         relay_name: name.to_string(),
         federated: Arc::new(relay::peering::FederatedSessions::with_name(name)),
         metrics: metrics.clone(),
+        ws_port: Some(port),
+        advertised_url: String::new(),
+        endpoints: Arc::new(Vec::new()),
     };
     let app = relay::build_router(state.clone());
     tokio::spawn(async move {
@@ -147,6 +153,11 @@ pub async fn connect_and_auth_with_room(
     .unwrap();
 
     tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
+    // P7: drop the identity_ack here — it is ALWAYS the first post-auth frame
+    // (the relay sends it before registration/routing), so a short drain
+    // can never consume data or control frames. Every test's readers then
+    // see the first DATa frame as they did pre-P7.
+    drop_handshake(&mut ws, 200).await;
 
     (ws, pubkey_b64)
 }
@@ -162,6 +173,38 @@ pub async fn connect_and_auth(port: u16) -> (WsStream, String) {
     connect_and_auth_with_key(port, &sk).await
 }
 
+/// Read the next frame, skipping AUTH-HANDSHAKE frames (P7: the relay sends a
+/// signed `identity_ack` right after auth, before any routing) and the
+/// relay's keepalive noise (non-text ping/pong frames). A type-less JSON
+/// frame is DATA (outer envelopes are {peer, room, ct}) and IS returned.
+pub async fn next_non_handshake(ws: &mut WsStream) -> serde_json::Value {
+    loop {
+        let msg = ws
+            .next()
+            .await
+            .unwrap_or_else(|| panic!("stream closed while awaiting a frame"))
+            .unwrap_or_else(|e| panic!("stream error while awaiting a frame: {e}"));
+        let text = match msg.to_text() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if text.trim().is_empty() {
+            continue;
+        }
+        let v: serde_json::Value = match serde_json::from_str(text) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if v["type"] == "identity_ack" {
+            continue;
+        }
+        return v;
+    }
+}
+
+/// Bounded version for DRAINS: after auth there is exactly one handshake
+/// frame to drop; an unbudgeted drain waits forever for a frame only later
+/// traffic can produce (the classic drain-before-send deadlock).
 /// Connect an app AND pair it into `machine_peer`'s allow-list in one step, so
 /// the fail-closed rooms/content gate (design 01M1ZE43) permits it. Accumulates
 /// (never clobbers an existing owner), and the in-process `set` is applied
@@ -181,4 +224,30 @@ pub async fn connect_app_paired(
     }
     pairing.set(machine_peer.to_string(), owners);
     (ws, peer)
+}
+
+/// Drop the post-auth handshake frame (identity_ack) within `ms` — never
+/// blocks: a missing ack just means nothing to drop.
+pub async fn drop_handshake(ws: &mut WsStream, ms: u64) {
+    let _ = tokio::time::timeout(std::time::Duration::from_millis(ms), async {
+        loop {
+            let Some(Ok(msg)) = ws.next().await else {
+                return; // closed/errored: nothing more to drop
+            };
+            let Ok(text) = msg.to_text() else {
+                continue; // ping/pong/close noise
+            };
+            if text.trim().is_empty() {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
+                continue;
+            };
+            if v["type"] == "identity_ack" {
+                return; // ack dropped — done
+            }
+            return; // a DATA frame or anything else: stop before consuming it
+        }
+    })
+    .await;
 }

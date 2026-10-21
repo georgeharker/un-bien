@@ -205,6 +205,22 @@ impl PairingRegistry {
         self.versions.lock().unwrap().get(machine).copied()
     }
 
+    /// True when `machine`'s stored signing pair is byte-identical to this
+    /// push — an identical re-push (every reconnect sends one) is a NO-OP:
+    /// no DB write, no version bump, no broadcast. Without this, each device
+    /// connect rewrote the pairing tables and flooded the relay log with
+    /// "stored" lines (~15k/day field-observed), and an epoch-seconds version
+    /// tie between two concurrent pushers could silently discard a push that
+    /// carried a REAL allow-list change.
+    pub fn is_same_signed(&self, machine: &str, blob: &[u8], sig: &[u8]) -> bool {
+        match self.blobs.lock().unwrap().get(machine) {
+            None => false,
+            Some((stored_blob, stored_sig)) => {
+                stored_blob.as_slice() == blob && stored_sig.as_slice() == sig
+            }
+        }
+    }
+
     /// Store a MACHINE-SIGNED allow-list (design 01M23MKVG). Monotonic: rejects
     /// `version <= current` (replay / rollback). Persists the owners (hot-path
     /// `pairing_allow`) AND the raw signed blob + version (`pairing_signed`), so
@@ -434,6 +450,35 @@ mod tests {
             verify_pairing_blob(&blob, &sig).is_err(),
             "signature must not match tampered bytes"
         );
+    }
+
+    /// Identical (blob, sig) re-pushes dedupe to a no-op: version floor and
+    /// allow-set untouched, so epoch-seconds ties between concurrent pushers
+    /// can no longer discard a push (they only occur when NOTHING changed).
+    #[test]
+    fn set_signed_dedupes_identical_push() {
+        let p = PairingRegistry::new();
+        p.set_signed("m".into(), vec![owner_epk(1)], 5, b"blob-a", b"sig-a")
+            .expect("first push stored");
+        assert_eq!(p.current_version("m"), Some(5));
+
+        assert!(
+            p.is_same_signed("m", b"blob-a", b"sig-a"),
+            "identical bytes detected"
+        );
+        assert!(
+            !p.is_same_signed("m", b"blob-b", b"sig-a"),
+            "changed blob → store"
+        );
+        assert!(!p.is_same_signed("other", b"blob-a", b"sig-a"));
+
+        // Same high version, same content: the monotonic guard would ACCEPT
+        // (5 < 6) but the dedupe check must run FIRST from the caller's
+        // perspective — the registry itself still enforces monotonicity on a
+        // real (non-identical) push.
+        p.set_signed("m".into(), vec![owner_epk(1)], 6, b"blob-a", b"sig-a")
+            .expect("monotonic accepts higher version");
+        assert_eq!(p.current_version("m"), Some(6));
     }
 
     #[test]

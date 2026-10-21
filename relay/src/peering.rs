@@ -64,7 +64,18 @@ fn relay_own_name() -> String {
 
 /// The relay's own WebSocket URL (for the URL exchange in relay_hello).
 /// Reads `UNBIEN_RELAY_URL` env var; defaults to empty (not advertised).
-fn relay_own_url() -> Option<String> {
+/// MEMOIZED (OnceLock): the bind-derived branch DNS-resolves the named entry
+/// ONCE per process. Every peer handshake used to re-run this — a stalled
+/// MagicDNS lookup there held up registration/routing for that connection
+/// (field-verified: integration tests hang in `relay_own_url` when the shell
+/// exports the production tailnet bind). Callers: the startup path warms it;
+/// per-handshake callers must prefer `state.advertised_url` instead.
+pub fn relay_own_url() -> Option<String> {
+    static MEMO: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    MEMO.get_or_init(compute_relay_own_url).clone()
+}
+
+fn compute_relay_own_url() -> Option<String> {
     if let Ok(url) = std::env::var("UNBIEN_RELAY_URL") {
         if !url.is_empty() {
             return Some(url);
@@ -126,7 +137,7 @@ const HOP_BACKLINK_TTL: Duration = Duration::from_secs(30);
 const HOP_BACKLINK_MAX: usize = 1024;
 
 /// Generate a random 32-byte nonce, base64-encoded.
-fn gen_relay_nonce() -> String {
+pub(crate) fn gen_relay_nonce() -> String {
     let mut nonce = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut nonce);
     B64.encode(nonce)
@@ -134,9 +145,119 @@ fn gen_relay_nonce() -> String {
 
 /// Sign the relay identity fields (nonce + pubkey + name + url) with the
 /// relay's keypair. Returns the base64 signature.
-fn sign_relay_identity(keypair: &RelayKeypair, nonce: &str, name: &str, url: &str) -> String {
+pub(crate) fn sign_relay_identity(
+    keypair: &RelayKeypair,
+    nonce: &str,
+    name: &str,
+    url: &str,
+) -> String {
     let msg = format!("{nonce}|{}|{name}|{url}", keypair.pubkey_b64());
     keypair.sign(msg.as_bytes())
+}
+
+/// Every address this relay serves, as dialable endpoint URLs (P6/P7: the
+/// client learns the full bind set in one `identity_ack` frame and can prefer
+/// a local bind over the tailnet name).
+///
+/// Sources (in order): `UNBIEN_RELAY_BIND` entries as WRITTEN (hostnames are
+/// dialable where DNS works; resolved entries carry what a client without
+/// that DNS can dial), plus each named host's resolved IP. Unusable entries
+/// (0.0.0.0 / [::] — not dialable as written) are dropped, not advertised.
+/// These are REACHABILITY metadata — unsigned, they never extend identity
+/// (identity is the pubkey: dialing a spoofed endpoint simply fails the pin).
+///
+/// Pure core (env-free — testable without env mutation, which edition 2024
+/// forbids; DNS-free — the startup-resolved `SocketAddr`s are PASSED IN, so
+/// the auth path never blocks on a lookup). Computed once at boot (DNS on
+/// the auth path = a stalled MagicDNS lookup stalls every peer handshake).
+///
+/// What gets advertised:
+///  - every dialable spec entry as written (wildcards dropped)
+///  - every resolved addr as an IP URL, EXCEPT unspecified binds, which
+///    instead advertise the LOOPBACK pair (a 0.0.0.0 bind always serves
+///    127.0.0.1/localhost — on-host clients then prefer local without the
+///    deployment setting a named bind at all)
+pub fn relay_bind_urls_for(
+    spec: &str,
+    port: u16,
+    resolved: &[std::net::SocketAddr],
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let push = |url: String, out: &mut Vec<String>| {
+        if !url.is_empty() && !out.contains(&url) && out.len() < 8 {
+            out.push(url);
+        }
+    };
+    for entry in specification_entries(spec, port) {
+        // Dialable-as-written: `http://<host>:<port>`.
+        push(
+            match &entry {
+                BindEntry::Host { host, port } => format!("http://{host}:{port}"),
+                BindEntry::IpLiteral(addr) => match addr.ip() {
+                    std::net::IpAddr::V6(v6) => format!("http://[{v6}]:{}", addr.port()),
+                    v4 => format!("http://{v4}:{}", addr.port()),
+                },
+                BindEntry::Wildcard => continue,
+            },
+            &mut out,
+        );
+    }
+    for addr in resolved {
+        match addr.ip() {
+            std::net::IpAddr::V4(v4) if v4.is_unspecified() => {
+                push(format!("http://127.0.0.1:{}", addr.port()), &mut out);
+                push(format!("http://localhost:{}", addr.port()), &mut out);
+            }
+            std::net::IpAddr::V6(v6) if v6.is_unspecified() => {
+                push(format!("http://[::1]:{}", addr.port()), &mut out);
+            }
+            ip => push(
+                match ip {
+                    std::net::IpAddr::V6(v6) => format!("http://[{v6}]:{}", addr.port()),
+                    v4 => format!("http://{v4}:{}", addr.port()),
+                },
+                &mut out,
+            ),
+        }
+    }
+    out
+}
+
+/// One spec entry, parsed ONCE (the relay's own bind parsing — the single
+/// source of truth for how entries look; no regex/port-splitting re-invented
+/// per call site).
+enum BindEntry {
+    Host { host: String, port: u16 },
+    IpLiteral(std::net::SocketAddr),
+    Wildcard,
+}
+
+fn specification_entries(spec: &str, default_port: u16) -> Vec<BindEntry> {
+    spec.split(',')
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+        .map(|entry| {
+            // IPv6 literal (bracketed or bare) first; otherwise host:port.
+            if let Ok(sock) = entry.parse::<std::net::SocketAddr>() {
+                return BindEntry::IpLiteral(sock);
+            }
+            let (host_part, port) = match entry.rsplit_once(':') {
+                Some((h, p)) if !p.is_empty() && p.parse::<u16>().is_ok() => {
+                    (h, p.parse::<u16>().unwrap_or(default_port))
+                }
+                _ => (entry, default_port),
+            };
+            let host = host_part.trim().trim_matches(['[', ']']);
+            if host == "0.0.0.0" || host == "::" || host.is_empty() {
+                BindEntry::Wildcard
+            } else {
+                BindEntry::Host {
+                    host: host.to_string(),
+                    port,
+                }
+            }
+        })
+        .collect()
 }
 
 /// Verify a peer's relay identity signature. Returns true if the signature
@@ -1381,6 +1502,58 @@ mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use std::collections::{BTreeMap, HashSet};
+
+    /// Test fixture: parse a SocketAddr without `.unwrap()` (house rule).
+    fn socket_parse(s: &str) -> std::net::SocketAddr {
+        s.parse()
+            .unwrap_or_else(|e| panic!("fixture addr {s} must parse: {e}"))
+    }
+
+    #[test]
+    fn relay_bind_urls_for_spec() {
+        // Named binds: dialable-as-written entries in spec order.
+        let eps = relay_bind_urls_for("localhost:3996,127.0.0.1:3996", 3996, &[]);
+        assert_eq!(eps, vec!["http://localhost:3996", "http://127.0.0.1:3996"]);
+
+        // Wildcard (0.0.0.0 default) bind: nothing dialable by name, so the
+        // LOOPBACK pair is advertised — on-host clients prefer local without
+        // the deployment setting a named bind at all.
+        let eps = relay_bind_urls_for(
+            "0.0.0.0",
+            3000,
+            &[socket_parse("0.0.0.0:3000")],
+        );
+        assert_eq!(
+            eps,
+            vec!["http://127.0.0.1:3000", "http://localhost:3000"]
+        );
+
+        // Named tailnet bind with a STARTUP-RESOLVED addr: name + IP, both
+        // dialable, deterministic (no DNS in the function itself).
+        let eps = relay_bind_urls_for(
+            "box.example.ts.net",
+            3000,
+            &[socket_parse("10.94.0.1:3000")],
+        );
+        assert_eq!(
+            eps,
+            vec![
+                "http://box.example.ts.net:3000",
+                "http://10.94.0.1:3000"
+            ]
+        );
+
+        // Literal IP: the entry IS the socket — dedupes with its resolution.
+        let eps = relay_bind_urls_for("10.1.2.3", 3000, &[socket_parse("10.1.2.3:3000")]);
+        assert_eq!(eps, vec!["http://10.1.2.3:3000"]);
+
+        // Per-entry port override wins over the default:
+        let eps = relay_bind_urls_for("localhost:4443,other:3000", 3000, &[]);
+        assert_eq!(
+            eps,
+            vec!["http://localhost:4443", "http://other:3000"]
+        );
+    }
 
     #[test]
     fn shared_owner_intersection() {

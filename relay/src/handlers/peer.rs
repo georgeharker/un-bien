@@ -89,6 +89,45 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
         return;
     }
 
+    // ── 3b. Prove THIS relay's identity (P7 device-pairing pin) ──────────────
+    // Signed over the challenge nonce, so an ack from another connection can
+    // never be replayed onto this one. Clients that pin a relay pubkey
+    // (TOFU at pair time) verify sig + pubkey on every reconnect and refuse
+    // a mismatch; older clients simply ignore the frame.
+    // BOTH the URL and the endpoint list come from STATE (startup-resolved,
+    // `advertised_url`/`endpoints`): this handshake NEVER DNS-resolves —
+    // field-verified: concurrent handshakes serialized behind a magicDNS
+    // stall = every peer (and its pairing) wedged behind the first dial.
+    let relay_url = state.advertised_url.clone();
+    let relay_kp = crate::relay_keypair::load_or_generate(None);
+    // Endpoint advertisement (P6): every address this relay serves, so the
+    // client can prefer a local bind next time. Unsigned metadata (see
+    // relay_bind_urls_for), resolved ONCE at startup (state.endpoints):
+    // the auth path NEVER DNS-resolves — a stalled MagicDNS lookup would
+    // block every peer handshake before registration/routing.
+    let ident_sig = crate::peering::sign_relay_identity(
+        &relay_kp,
+        &nonce_b64,
+        &state.relay_name,
+        &relay_url,
+    );
+    let identity_ack = serde_json::json!({
+        "type": "identity_ack",
+        "relay_pubkey": relay_kp.pubkey_b64(),
+        "relay_name": state.relay_name,
+        "relay_url": relay_url,
+        "endpoints": state.endpoints.as_ref(),
+        "nonce": nonce_b64,
+        "sig": ident_sig,
+    });
+    if sink
+        .send(Message::Text(identity_ack.to_string()))
+        .await
+        .is_err()
+    {
+        return;
+    }
+
     let peer_id = B64.encode(vk.to_bytes());
     let peer_short = peer_id[peer_id.len().saturating_sub(8)..].to_string();
 
@@ -170,6 +209,7 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
     let room_meta_json = serde_json::to_value(&room_meta).unwrap_or_default();
     let conn_id = registry.register(peer_id.clone(), room_meta, tx).await;
+
 
     // Phase 4: push the current federated_peer_list to this new connection
     // so a reconnecting extension gets the current federated peers immediately
@@ -335,6 +375,15 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                                             let set: std::collections::HashSet<
                                                                 String,
                                                             > = p.owners.iter().cloned().collect();
+                                                            // Identical re-push (every device connect
+                                                            // sends one): store NOTHING, broadcast NOTHING
+                                                            // — reconcile stays (idempotent).
+                                                            if pairing.is_same_signed(
+                                                                &peer_id, &blob, &sig,
+                                                            ) {
+                                                                tracing::debug!(machine = %peer_id, "pairing_set: identical to stored (deduped)");
+                                                                Some(set)
+                                                            } else {
                                                             match pairing.set_signed(
                                                                 peer_id.clone(),
                                                                 p.owners,
@@ -361,6 +410,7 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                                                     None
                                                                 }
                                                             }
+                                                            } // else-block: real change → store + broadcast
                                                         }
                                                         Ok(p) => {
                                                             tracing::warn!(signer = %p.machine_pk, conn = %peer_id, "pairing_set rejected: signer is not this connection (authority binding)");

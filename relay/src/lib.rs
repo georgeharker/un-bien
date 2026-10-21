@@ -55,6 +55,17 @@ pub struct AppState {
     pub metrics: Arc<FirehoseMetrics>,
     /// Federated sessions from peer relays (Phase 3).
     pub federated: Arc<crate::peering::FederatedSessions>,
+    /// The WS listener port (P7/P6: `identity_ack` endpoint advertisement).
+    /// Set by the binary; in-process test relays set their random port.
+    pub ws_port: Option<u16>,
+    /// STARTUP-RESOLVED endpoint advertisement (P6): dialable URLs served.
+    /// Computed ONCE at boot — DNS never runs on the auth path (a slow
+    /// MagicDNS lookup there stalls every peer handshake). Unsigned
+    /// REACHABILITY metadata: a spoofed endpoint fails the client's pin.
+    pub endpoints: Arc<Vec<String>>,
+    /// The relay's own advertised URL (relay_own_url(), DNS — resolved ONCE
+    /// at startup; `identity_ack` signs over it; empty = not advertised).
+    pub advertised_url: String,
 }
 
 // Allows mesh handlers to keep using `State<Arc<MeshStore>>` instead of

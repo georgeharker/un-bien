@@ -1,5 +1,8 @@
 mod common;
-use common::{connect_and_auth, start_relay, start_relay_state};
+use common::{
+    connect_and_auth, drop_handshake, next_non_handshake, start_relay,
+    start_relay_state,
+};
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
@@ -26,15 +29,12 @@ async fn two_peers_route_message() {
         .await
         .unwrap();
 
-    let received = tokio::time::timeout(tokio::time::Duration::from_secs(1), ws_b.next())
-        .await
-        .expect("timed out waiting for forwarded message")
-        .unwrap()
-        .unwrap();
-
-    // B receives: peer = sender (peer_a), ct unchanged
-    let received_json: serde_json::Value =
-        serde_json::from_str(received.to_text().unwrap()).unwrap();
+    let received_json = tokio::time::timeout(
+        tokio::time::Duration::from_secs(1),
+        next_non_handshake(&mut ws_b),
+    )
+    .await
+    .expect("timed out waiting for forwarded message");
     assert_eq!(
         received_json["peer"], peer_a,
         "relay must rewrite peer to sender id"
@@ -61,16 +61,18 @@ async fn dest_unknown_refused_to_sender() {
     // (signed-only wire protocol is covered by the pairing tests).
     let dest = "bm9uZXhpc3RlbnRwZWVy".to_string();
     pairing.set(peer_a.clone(), vec![dest.clone()]);
+    // Drain the auth handshake's identity_ack (P7) before expecting data.
+    drop_handshake(&mut ws_a, 2_000).await;
 
     let envelope = json!({"peer": dest, "ct": "aGVsbG8="}).to_string();
     ws_a.send(Message::text(envelope)).await.unwrap();
 
-    let refused = tokio::time::timeout(tokio::time::Duration::from_secs(1), ws_a.next())
-        .await
-        .expect("timed out waiting for the routed refusal")
-        .unwrap()
-        .unwrap();
-    let v: serde_json::Value = serde_json::from_str(refused.to_text().unwrap()).unwrap();
+    let v = tokio::time::timeout(
+        tokio::time::Duration::from_secs(1),
+        next_non_handshake(&mut ws_a),
+    )
+    .await
+    .expect("timed out waiting for the routed refusal");
     assert_eq!(v["type"], "error");
     assert_eq!(v["code"], "unknown_peer");
     assert_eq!(v["peer"], json!(dest), "the refusal names the dest");
@@ -99,12 +101,12 @@ async fn oversized_ct_refused_to_sender() {
         .await
         .unwrap();
 
-    let refused = tokio::time::timeout(tokio::time::Duration::from_secs(1), ws_a.next())
-        .await
-        .expect("timed out waiting for refusal")
-        .unwrap()
-        .unwrap();
-    let v: serde_json::Value = serde_json::from_str(refused.to_text().unwrap()).unwrap();
+    let v = tokio::time::timeout(
+        tokio::time::Duration::from_secs(1),
+        next_non_handshake(&mut ws_a),
+    )
+    .await
+    .expect("timed out waiting for refusal");
     assert_eq!(v["type"], "error");
     assert_eq!(v["code"], "payload_too_large");
 
@@ -112,12 +114,12 @@ async fn oversized_ct_refused_to_sender() {
     ws_a.send(Message::text("this is not json".to_string()))
         .await
         .unwrap();
-    let refused2 = tokio::time::timeout(tokio::time::Duration::from_secs(1), ws_a.next())
-        .await
-        .expect("timed out waiting for refusal 2")
-        .unwrap()
-        .unwrap();
-    let v2: serde_json::Value = serde_json::from_str(refused2.to_text().unwrap()).unwrap();
+    let v2 = tokio::time::timeout(
+        tokio::time::Duration::from_secs(1),
+        next_non_handshake(&mut ws_a),
+    )
+    .await
+    .expect("timed out waiting for refusal 2");
     assert_eq!(v2["code"], "invalid_envelope");
 }
 

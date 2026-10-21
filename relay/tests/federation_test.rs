@@ -906,7 +906,11 @@ async fn outer_unknown_dest_owner_set_refused_for_all_senders() {
     assert_eq!(err["peer"], json!(target_epk));
 
     assert_never_matches(&mut target, "strict-unknown outer frame", |v| {
-        v["type"] != "federated_peer_list" && v.get("type").map(|t| t != "error").unwrap_or(true)
+        // Handshake/control frames are permitted: federated_peer_list (control),
+        // routed refusals (error), and identity_ack (P7 post-auth handshake —
+        // every device connection receives one BEFORE any routing exists).
+        let t = v["type"].as_str().unwrap_or("");
+        t != "federated_peer_list" && t != "error" && t != "identity_ack"
     })
     .await;
 }

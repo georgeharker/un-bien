@@ -76,7 +76,26 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // BIND ADDRESSES (UNBIEN_RELAY_BIND): comma-separated hostnames or IPs,
+    // each optionally host:port (default UNBIEN_RELAY_PORT). Default
+    // 0.0.0.0 = all interfaces, the historical behavior. The lockdown form:
+    // UNBIEN_RELAY_BIND=localhost,droplet.<tailnet>.ts.net — names resolve
+    // at startup (MagicDNS resolves to this machine's own tailnet
+    // address), so the socket never opens on any other interface. Each
+    // address gets its own listener + server task sharing one router.
+    let bind_spec = std::env::var("UNBIEN_RELAY_BIND").unwrap_or_else(|_| "0.0.0.0".to_string());
+    // Resolving ONCE here drives BOTH the listeners and the endpoint
+    // advertisement — the auth path never re-resolves (a stalled MagicDNS
+    // lookup must not block peer handshakes).
+    let addrs = relay::parse_bind_addrs(&bind_spec, port)?;
+
     let federated = Arc::new(relay::peering::FederatedSessions::new());
+    // Endpoint advertisement computed ONCE: the spec as dialed + the resolved
+    // listener addresses (parse_bind_addrs did the DNS at startup already).
+    let endpoints = Arc::new(relay::peering::relay_bind_urls_for(&bind_spec, port, &addrs));
+    // The relay's own URL: DNS ONCE here (memoized inside) — never on the
+    // per-handshake path.
+    let advertised_url = relay::peering::relay_own_url().unwrap_or_default();
     let state = relay::AppState {
         registry,
         presence,
@@ -87,6 +106,9 @@ async fn main() -> anyhow::Result<()> {
         metrics,
         relay_name: relay::peering::default_relay_name(),
         federated: Arc::clone(&federated),
+        ws_port: Some(port),
+        endpoints,
+        advertised_url,
     };
     relay::peering::start_peering(
         std::sync::Arc::clone(&state.mesh),
@@ -96,15 +118,6 @@ async fn main() -> anyhow::Result<()> {
     );
     let app = relay::build_router(state);
 
-    // BIND ADDRESSES (UNBIEN_RELAY_BIND): comma-separated hostnames or IPs,
-    // each optionally host:port (default UNBIEN_RELAY_PORT). Default
-    // 0.0.0.0 = all interfaces, the historical behavior. The lockdown form:
-    // UNBIEN_RELAY_BIND=localhost,droplet.<tailnet>.ts.net — names resolve
-    // at startup (MagicDNS resolves to this machine's own tailnet
-    // address), so the socket never opens on any other interface. Each
-    // address gets its own listener + server task sharing one router.
-    let bind_spec = std::env::var("UNBIEN_RELAY_BIND").unwrap_or_else(|_| "0.0.0.0".to_string());
-    let addrs = relay::parse_bind_addrs(&bind_spec, port)?;
     let mut servers = Vec::new();
     for addr in addrs {
         let listener = TcpListener::bind(addr)

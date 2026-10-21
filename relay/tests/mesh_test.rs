@@ -35,6 +35,8 @@ async fn spawn_relay() -> (String, tempfile::TempDir) {
         metrics.clone(),
     ));
     let mesh_auth = Arc::new(MeshAuthCache::new());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
     let state = AppState {
         registry,
         presence,
@@ -45,10 +47,10 @@ async fn spawn_relay() -> (String, tempfile::TempDir) {
         federated: Arc::new(relay::peering::FederatedSessions::new()),
         relay_name: relay::peering::default_relay_name(),
         metrics,
+        ws_port: Some(port),
+        advertised_url: String::new(),
+        endpoints: Arc::new(Vec::new()),
     };
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
     let app = build_router(state);
     tokio::spawn(async move {
         let _ = axum::serve(
