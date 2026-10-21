@@ -13,7 +13,14 @@
 import { SessionClient } from "./client.js"
 import { loadOrCreateIdentity } from "./identity.js"
 import { parseInvite } from "./invite.js"
-import { rememberPeer, loadPeers, loadRelays } from "./store.js"
+import {
+  rememberPeer,
+  pickRelayEndpoint,
+  recordRelayIdentity,
+  relayPinFor,
+  loadPeers,
+  loadRelays,
+} from "./store.js"
 
 const args = process.argv.slice(2)
 let name = "unbien-cli"
@@ -64,15 +71,17 @@ if (!raw) {
 const invite = parseInvite(raw)
 // Relay URL: the URI itself doesn't carry it (rm= is the room, not the relay)
 // — same resolution as connect.ts: --relay flag, else UNBIEN_RELAY env.
-let relayUrl = relayFlag || process.env["UNBIEN_RELAY"] || ""
-if (!relayUrl) {
+let relayUrlSeed = relayFlag || process.env["UNBIEN_RELAY"] || ""
+let seedName: string | undefined
+if (!relayUrlSeed) {
   // FALL BACK to the relay registry: if exactly one relay is remembered,
   // use it; if multiple, list them and ask for --relay.
   const relays = loadRelays()
   if (relays.length === 1) {
-    relayUrl = relays[0]!.url
+    relayUrlSeed = relays[0]!.url
+    seedName = relays[0]!.name
     console.error(
-      `[pair] using remembered relay: ${relays[0]!.name} (${relayUrl})`,
+      `[pair] using remembered relay: ${seedName} (${relayUrlSeed})`,
     )
   } else if (relays.length > 1) {
     console.error(
@@ -90,21 +99,56 @@ if (!relayUrl) {
 }
 
 const keypair = loadOrCreateIdentity()
-const client = new SessionClient(relayUrl, keypair, invite)
+// P6 C: pair over the relay's BEST endpoint (same relay identity = same
+// pairing DB, so any verified endpoint works; local preferred on-host).
+// P7: verify the relay's identity when this relay is already pinned; record
+// it (TOFU) on first success — the pin is written at the moment the user
+// has just scanned a fresh invite over this very URL, the deliberate trust act.
+const relayUrl = await pickRelayEndpoint(relayUrlSeed)
+const relayPin = relayPinFor(relayUrl)
+const client = new SessionClient(relayUrl, keypair, invite, {
+  expectRelayPubkey: relayPin,
+})
 
 try {
   await client.connect()
-  client.pair(name)
+  // Fire-and-forget here is the field-verified pairing killer: the machine's
+  // pair_ok/pair_error reply targets the sender's room and a caller that
+  // closes immediately loses it — while the token is consumed regardless and
+  // the CLI happily remembered an unpaired machine. Await the verdict.
+  const verdict = await client.pairAwaited(name)
+  if (!verdict.ok) {
+    console.error(`[pair] machine did not accept the pairing: ${verdict.detail}`)
+    // The peer was NOT recorded on the machine — don't remember it locally.
+    client.close()
+    process.exit(1)
+  }
   rememberPeer({
     epk: invite.epk,
     relayUrl,
     name,
     pairedAt: new Date().toISOString(),
   })
+  // TOFU: record the relay pubkey the FIRST time we pair over this URL (the
+  // identity_ack already verified against `relayPin` when one existed — a
+  // mismatch exits above via relay_identity_error).
+  const ident = client.relayIdentity()
+  // TOFU + endpoint bookkeeping: record the identity (with the ack's
+  // advertised endpoints) the FIRST time we pair over this relay; with a
+  // pin already present this is a pure endpoint merge.
+  if (ident) {
+    recordRelayIdentity({
+      relayPubkey: ident.relayPubkey,
+      relayName: ident.relayName || "relay",
+      endpoint: relayUrl,
+      endpoints: ident.endpoints,
+    })
+  }
   console.error(
     `[paired] ${name} → machine ${invite.epk.slice(0, 8)}… (relay ${relayUrl})\n` +
-      "Run `unbien` (or `unbien connect`) to attach to sessions.",
+      "Attach with: `unbien connect` (default picker, or --session / --session-name).",
   )
+  // Drain briefly: the machine may still be pushing its allow-list update.
   client.close()
 } catch (err) {
   console.error(

@@ -14,6 +14,7 @@ import {
   loadRelays,
   rememberRelay,
   forgetRelay,
+  loadRelayIdentities,
   loadRelayPeers,
   loadPendingRelayPairs,
   isPendingLive,
@@ -182,6 +183,21 @@ switch (verb) {
       console.error(
         "Remembered relays:\n" +
           relays.map((r) => `  ${r.name} → ${r.url}`).join("\n") + "\n",
+      )
+    }
+    // P6/P7: the identity registry — pins keyed by the relay's pubkey, with
+    // every verified endpoint (the "local when possible" selector's source).
+    const identities = loadRelayIdentities()
+    if (identities.length > 0) {
+      console.error(
+        "Relay identities (pinned):\n" +
+          identities
+            .map(
+              (i) =>
+                `  ${i.name || "(unnamed)"} (${i.pubkey.slice(0, 12)}…)\n` +
+                i.endpoints.map((ep) => `    via ${ep}`).join("\n"),
+            )
+            .join("\n"),
       )
     }
     if (peers.length > 0) {

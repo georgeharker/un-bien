@@ -1,4 +1,13 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import {
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  closeSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import {
@@ -27,6 +36,80 @@ const STORE_PATH = join(
   "proxy-peers.json",
 )
 
+/** Version floor for this device's pairing_set pushes, persisted next to the
+ *  identity (same trust root). Epoch-seconds alone collide when two CLI
+ *  processes push in the same second — the relay's StaleVersion guard then
+ *  drops the second push, which can silently discard a REAL allow-list
+ *  change — so the mint is strictly monotonic across processes and restarts:
+ *  max(epochSeconds, floor + 1). Matches the machine-side
+ *  nextAllowListVersion semantics (extension/src/pairing/storage.ts). */
+const ALLOW_VERSION_PATH = join(
+  homedir(),
+  ".local",
+  "state",
+  "un-bien",
+  "proxy-allow-version",
+)
+const ALLOW_VERSION_LOCK = `${ALLOW_VERSION_PATH}.lock`
+
+/** Cross-process mint with an O_EXCL lockfile (the CLI is short-lived per
+ *  invocation, so a small bounded retry suffices; the relay's monotonic
+ *  check resolves any lost race benignly). */
+export function nextProxyAllowVersion(): number {
+  mkdirSync(dirname(ALLOW_VERSION_PATH), { recursive: true, mode: 0o700 })
+  let lockFd: number | null = null
+  try {
+    for (let i = 0; i < 20; i++) {
+      try {
+        lockFd = openSync(ALLOW_VERSION_LOCK, "wx")
+        break
+      } catch (e) {
+        const err = e as { code?: string }
+        if (err.code !== "EEXIST") break
+        // Reap a stale lock older than 3s (crashed holder).
+        try {
+          if (Date.now() - statSync(ALLOW_VERSION_LOCK).mtimeMs > 3_000) {
+            unlinkSync(ALLOW_VERSION_LOCK)
+            continue
+          }
+        } catch {
+          /* lock vanished */
+        }
+        sleepBusy(15)
+      }
+    }
+    let floor = 0
+    try {
+      floor = Number.parseInt(readFileSync(ALLOW_VERSION_PATH, "utf8"), 10) || 0
+    } catch {
+      /* first use */
+    }
+    const next = Math.max(Date.now(), floor + 1)
+    writeFileSync(ALLOW_VERSION_PATH, String(next), { mode: 0o600 })
+    return next
+  } finally {
+    if (lockFd !== null) {
+      try {
+        closeSync(lockFd)
+      } catch {
+        /* already closed */
+      }
+      try {
+        unlinkSync(ALLOW_VERSION_LOCK)
+      } catch {
+        /* racing releaser won */
+      }
+    }
+  }
+}
+
+function sleepBusy(ms: number): void {
+  const until = Date.now() + ms
+  while (Date.now() < until) {
+    /* bounded spin: CLI lifetimes are short, retry window is ≤300ms */
+  }
+}
+
 export function loadPeers(path = STORE_PATH): PairedPeer[] {
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as {
@@ -51,6 +134,17 @@ export interface RememberedRelay {
   url: string
   name: string
   addedAt: string
+  /** The relay's pinned Ed25519 pubkey (P7): recorded TOFU at the FIRST pair
+   *  over this relay (the moment the user has just scanned a fresh QR), then
+   *  verified on every later connection. Absent = no pin yet. */
+  pubkey?: string
+}
+
+/** The pinned relay pubkey identity that has verified over `relayUrl` —
+ *  routes through the identity registry (keyed by pubkey, endpoints known).
+ *  Unknown endpoint → undefined → caller TOFUs. */
+export function relayPinFor(relayUrl: string): string | undefined {
+  return identityForEndpoint(relayUrl)
 }
 
 const RELAYS_PATH = join(
@@ -92,6 +186,178 @@ export function forgetRelay(urlOrName: string, path = RELAYS_PATH): boolean {
     mode: 0o600,
   })
   return true
+}
+
+// ── Relay identity registry (P6 option A) ────────────────────────
+// Keyed by the RELAY'S pubkey (one relay = one identity, no matter how many
+// names it serves), with every endpoint it was verified or advertised over.
+// `pair` records the first identity (TOFU); later connects to any known
+// endpoint keep verifying against it and merge the ack's advertised
+// endpoints so the selector can prefer a local bind.
+export interface RelayIdentity {
+  pubkey: string
+  name: string
+  /** Dialable endpoints verified or advertised for this identity. */
+  endpoints: string[]
+  firstSeenAt: string
+}
+
+const IDENTITIES_PATH = join(
+  homedir(),
+  ".local",
+  "state",
+  "un-bien",
+  "relay-identities.json",
+)
+
+export function loadRelayIdentities(
+  path = IDENTITIES_PATH,
+): RelayIdentity[] {
+  let stored: RelayIdentity[] = []
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as {
+      identities?: RelayIdentity[]
+    }
+    stored = parsed.identities ?? []
+  } catch {
+    /* first use */
+  }
+  // ONE-TIME-IN-EFFECT migration: P7's per-URL pins (proxy-relays.json
+  // entries carrying a pubkey) fold in here, idempotently — same pubkey →
+  // merged endpoint set. The old file stays (source of `unbien relay` names).
+  for (const r of loadRelays()) {
+    if (!r.pubkey) continue
+    const match = stored.find((i) => i.pubkey === r.pubkey)
+    if (match) {
+      if (!match.endpoints.includes(r.url)) match.endpoints.push(r.url)
+    } else {
+      stored.push({
+        pubkey: r.pubkey,
+        name: r.name,
+        endpoints: [r.url],
+        firstSeenAt: r.addedAt,
+      })
+    }
+  }
+  if (stored.length > 0) persistRelayIdentities(stored, path)
+  return stored
+}
+
+function persistRelayIdentities(
+  identities: RelayIdentity[],
+  path: string,
+): void {
+  // Atomic write (temp + rename, 0600) — mirrors writeRelayPeersDoc so a
+  // concurrent process can never observe a half-written registry.
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  const tmp = `${path}.tmp-${process.pid}`
+  writeFileSync(tmp, JSON.stringify({ identities }, null, 2), { mode: 0o600 })
+  renameSync(tmp, path)
+}
+
+/** Merge a verified (or newly-TOFU'd) relay identity: dedupes endpoints,
+ *  keeps the first-seen name unless the stored one is empty. */
+export function recordRelayIdentity(
+  identity: {
+    relayPubkey: string
+    relayName?: string
+    endpoint: string
+    endpoints?: string[]
+  },
+  path = IDENTITIES_PATH,
+): void {
+  const identities = loadRelayIdentities(path)
+  const match = identities.find((i) => i.pubkey === identity.relayPubkey)
+  if (match) {
+    const eps = [identity.endpoint, ...(identity.endpoints ?? [])]
+    for (const ep of eps) {
+      if (ep && !match.endpoints.includes(ep)) match.endpoints.push(ep)
+    }
+    if (identity.relayName && match.name === "") match.name = identity.relayName
+  } else {
+    identities.push({
+      pubkey: identity.relayPubkey,
+      name: identity.relayName ?? "",
+      endpoints: [identity.endpoint, ...(identity.endpoints ?? [])].filter(
+        Boolean,
+      ),
+      firstSeenAt: new Date().toISOString(),
+    })
+  }
+  persistRelayIdentities(identities, path)
+}
+
+/** The pinned pubkey of any known identity verified over `url` (feed for
+ *  `expectRelayPubkey`). Unknown endpoint → undefined → caller TOFUs. */
+export function identityForEndpoint(relayUrl: string): string | undefined {
+  return loadRelayIdentities().find((i) =>
+    i.endpoints.includes(relayUrl),
+  )?.pubkey
+}
+
+/**
+ * Endpoint preference ranking (P6 option C, pure): loopback first, then
+ * dotless hostnames (LAN machine names), then private-range IPs, then
+ * tailnet/public names. Preserves relative order otherwise.
+ */
+export function rankEndpoints(urls: readonly string[]): string[] {
+  const rank = (url: string): number => {
+    let host: string
+    try {
+      host = new URL(url).hostname
+    } catch {
+      return 9
+    }
+    if (host === "127.0.0.1" || host === "localhost" || host === "::1") return 0
+    if (!host.includes(".")) return 1
+    if (
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+    ) {
+      return 2
+    }
+    if (host.endsWith(".ts.net")) return 4
+    return 5
+  }
+  const seen = new Set<string>()
+  const unique = urls.filter((u) => {
+    if (!u || seen.has(u)) return false
+    seen.add(u)
+    return true
+  })
+  return [...unique].sort((a, b) => rank(a) - rank(b))
+}
+
+/**
+ * Pick the best dialable endpoint for the relay at `seedUrl` (P6 "local when
+ * possible"): candidates = seed + this identity's known endpoints, ranked;
+ * each gets a quick /health probe (tight budget, shortest for loopback) —
+ * the FIRST healthy one wins. Falls back to the seed (today's behavior;
+ * errors deferred to the caller's connect path) when nothing checks out.
+ * Records nothing: endpoint bookkeeping happens at identity verification.
+ */
+export async function pickRelayEndpoint(
+  seedUrl: string,
+  timeoutMs = 3_000,
+): Promise<string> {
+  const identity = loadRelayIdentities().find((i) =>
+    i.endpoints.includes(seedUrl),
+  )
+  const candidates = rankEndpoints([seedUrl, ...(identity?.endpoints ?? [])])
+  for (const url of candidates) {
+    const isLoopback = /localhost|127\.0\.0\.1|::1/.test(url)
+    const budget = isLoopback ? 400 : timeoutMs
+    try {
+      const res = await fetch(`${url}/health`, {
+        signal: AbortSignal.timeout(budget),
+      })
+      if (res.ok) return url
+    } catch {
+      /* unreachable on this endpoint — try the next */
+    }
+  }
+  return seedUrl
 }
 
 // ── Relay peering config (relay-to-relay federation) ───────────────────────

@@ -6,10 +6,16 @@
  */
 import { createInterface } from "node:readline"
 import { createInterface as createPromptInterface } from "node:readline/promises"
-import { SessionClient, type RoomInfo } from "./client.js"
+import {
+  SessionClient,
+  explainRoomList,
+  roomsOrActionable,
+  type RelayRoomList,
+  type RoomInfo,
+} from "./client.js"
 import { applyTheme, availableThemes } from "./theme.js"
 import { loadOrCreateIdentity } from "./identity.js"
-import { parseInvite, type PairingInvite } from "./invite.js"
+import { type PairingInvite } from "./invite.js"
 import {
   answerResponse,
   cancelResponse,
@@ -42,8 +48,14 @@ import {
 } from "./panels.js"
 import { renderStreaming, renderThinking, renderTranscript } from "./render.js"
 import { loadSettings, saveSettings, settingsPath } from "./settings.js"
-import { loadPeers, rememberPeer, loadRelays } from "./store.js"
-import type { PairedPeer } from "./store.js"
+import {
+  loadPeers,
+  loadRelays,
+  pickRelayEndpoint,
+  recordRelayIdentity,
+  relayPinFor,
+  type PairedPeer,
+} from "./store.js"
 import type { Ed25519Keypair } from "@geohar/un-bien/client"
 
 function parseArgs(argv: readonly string[]) {
@@ -85,8 +97,17 @@ async function resolveTarget(): Promise<
   const explicitRelay = flags.get("relay")
   const ambientRelay = explicitRelay ?? process.env["UNBIEN_RELAY"]
   if (target?.startsWith("unbien://")) {
-    if (!ambientRelay) return null
-    return { invite: parseInvite(target), relayUrl: ambientRelay }
+    // One path per concern: invite URIs grant trust via `unbien pair`, which
+    // waits for the machine's verdict; connect only attaches to already-paired
+    // machines. A single command that both pairs and attaches read as two
+    // alternate first-run flows forever, so invites are refused here with a
+    // pointer, not silently paired.
+    console.error(
+      "[pair] `unbien connect` doesn't take invite URIs — pair first:\n" +
+        "  unbien pair '<unbien://pair?…>' [--relay <url>]\n" +
+        "then: `unbien connect` (future runs need no token).",
+    )
+    process.exit(1)
   }
 
   const peers = loadPeers()
@@ -193,8 +214,15 @@ async function listAllSessions(
           }
         }
         const label = relayLabelFor(relayUrl)
-        const rooms = await client.listRooms()
-        for (const room of rooms) {
+        // An honest skip: unknown_peer here means this device isn't in that
+        // machine's allow-list — hiding it behind an empty list sent callers
+        // hunting the wrong subsystem (field-verified).
+        const listing = await client.listRooms()
+        if (listing.status !== "ok") {
+          console.error(`[sessions] ${label}: ${explainRoomList(listing)}`)
+          return undefined
+        }
+        for (const room of listing.rooms) {
           choices.push({ ...room, relayUrl, relayLabel: label })
         }
       }
@@ -223,12 +251,12 @@ const resolved = await resolveTarget()
 if (!resolved) {
   console.error(
     "usage:\n" +
-      "  unbien connect '<unbien://pair?...>'   # first run: pair with a machine\n" +
-      "  unbien connect [<epk-prefix>] --list   # list that machine's sessions\n" +
-      "  unbien connect [<epk-prefix>] --session <id>        # pi session id\n" +
-      "  unbien connect [<epk-prefix>] --session-name <name>\n" +
-      "options: --relay <url> (default $UNBIEN_RELAY) --name <device>\n" +
-      "         --theme <name> (default: your pi theme setting) --list-themes",
+      "  pair first:  unbien pair '<unbien://pair?...>'   [--relay <url>] [--name <device>]\n" +
+      "  then attach: unbien connect [<machine>] [--list]  # default: session picker\n" +
+      "  unbien connect [<machine>] --session <id>       # pi session id\n" +
+      "  unbien connect [<machine>] --session-name <name>\n" +
+      "  unbien connect [<machine>] --relay <url> --theme <name> --list-themes\n" +
+      "  ($UNBIEN_RELAY names a default relay; invite URIs are for `pair` only)",
   )
   if (loadPeers().length === 0) {
     console.error("\nno paired machines yet — run `/unbien pair` in a session.")
@@ -312,8 +340,16 @@ const settings = loadSettings()
 const appliedTheme = await applyTheme(flags.get("theme") ?? settings.theme)
 if (appliedTheme.startsWith("dark (")) console.error(`[theme] ${appliedTheme}`)
 
-const { invite, relayUrl } = resolved
-let client = new SessionClient(relayUrl, loadOrCreateIdentity(), invite)
+const { invite } = resolved
+// P6 C: dial the relay by its BEST endpoint — localhost when we're on the
+// host, LAN next, tailnet/public last — health-probed; falls back to the
+// seed when nothing answers (connect errors stay the caller's business).
+const relayUrl = await pickRelayEndpoint(resolved.relayUrl)
+let client = new SessionClient(relayUrl, loadOrCreateIdentity(), invite, {
+  // Enforcement (any known identity verified over this endpoint) + TOFU on
+  // the first contact happens at the trust boundary below.
+  expectRelayPubkey: relayPinFor(relayUrl),
+})
 // Note: in the multi-relay path, the client's internals may be re-bound to
 // the chosen relay's connection after the session picker (see below).
 
@@ -534,6 +570,25 @@ function wireClient(c: SessionClient): void {
       )
       Shell.exitAfterDrain(1)
     }
+    if (frame.type === "relay_identity_error") {
+      const expected =
+        typeof frame.expectedRelayPubkey === "string"
+          ? frame.expectedRelayPubkey.slice(0, 12)
+          : "?"
+      const got =
+        typeof frame.gotRelayPubkey === "string"
+          ? frame.gotRelayPubkey.slice(0, 12)
+          : "unverified"
+      // P7: the pinned relay identity didn't verify — the relay at this URL
+      // is not the one this device paired with. The socket is already dead:
+      // don't blindly retry, don't fall through to an attach.
+      console.error(
+        `[relay] identity mismatch: pinned ${expected}…, got ${got}… — ` +
+          "not connecting. If you rebuilt/rotated the relay deliberately, " +
+          "clear the pin: unbien relay forget <url>, then re-pair.",
+      )
+      Shell.exitAfterDrain(1)
+    }
     if (frame.type === "error" && frame.code === "unknown_peer") {
       console.error("[not paired] run `/unbien pair` and pass the new invite.")
       Shell.exitAfterDrain(1)
@@ -589,61 +644,38 @@ async function pickRoom(rooms: readonly RoomInfo[]): Promise<RoomInfo | null> {
 
 try {
   await client.connect()
+  // P7/P6: identity + endpoint bookkeeping on every attach. With a pin
+  // present this is a pure endpoint merge (identities keep the ack's
+  // advertised endpoints so the next run can prefer a local bind); without
+  // one, this is the TOFU record.
+  const ident = client.relayIdentity()
+  if (ident) {
+    recordRelayIdentity({
+      relayPubkey: ident.relayPubkey,
+      relayName: ident.relayName || "relay",
+      endpoint: relayUrl,
+      endpoints: ident.endpoints,
+    })
+  }
 } catch (err) {
   console.error(`[relay] could not connect to ${relayUrl}: ${String(err)}`)
   process.exit(1)
 }
 
-// A token means this is a first pairing; a remembered machine skips straight
-// to routing, since the extension auto-attaches any peer it already trusts.
-// The verdict is AWAITED: a stale/expired token previously looked successful
-// (rememberPeer ran before the machine's pair_error landed), leaving a peers
-// entry the machine's allow-list never learned — frames silently undeliverable.
-if (invite.token) {
-  const deviceName = flags.get("name") ?? "unbien-cli"
-  const verdict = await new Promise<{ ok: boolean; detail?: string }>(
-    (resolve) => {
-      const onControl = (frame: Record<string, unknown>) => {
-        const t = String(frame.type ?? "")
-        if (t === "pair_ok") resolve({ ok: true })
-        else if (t === "pair_error")
-          resolve({
-            ok: false,
-            detail: String(frame.message ?? frame.code ?? "rejected"),
-          })
-      }
-      client.on("control", onControl)
-      client.pair(deviceName)
-      setTimeout(() => {
-        client.off("control", onControl)
-        resolve({
-          ok: false,
-          detail: "timed out — run /unbien pair for a fresh code and retry",
-        })
-      }, 10_000)
-    },
-  )
-  if (!verdict.ok) {
-    console.error(`[pair] machine did not accept the pairing: ${verdict.detail}`)
-    process.exit(1)
-  }
-  rememberPeer({
-    epk: invite.epk,
-    relayUrl,
-    name: deviceName,
-    pairedAt: new Date().toISOString(),
-  })
-  console.error(`[paired] ${deviceName} remembered — future runs need no token`)
-}
+// connect only attaches: invites never reach here (resolveTarget refuses
+// unbien:// targets before this point), so every invite is a remembered peer
+// with no token — routing straight to the session list.
 
 // MULTI-RELAY SESSION LISTING: fan out to every relay with paired peers,
 // aggregate rooms with provenance. Falls back to the single-relay path when
 // only one relay is in play (identical to the pre-multi-relay behavior).
 const relayGroups = peersByRelay(loadPeers())
-const multiRelay = !target?.startsWith("unbien://") && relayGroups.size > 1
+const multiRelay = relayGroups.size > 1
 
 let choices: SessionChoice[]
 let clientsByRelay: Map<string, SessionClient> | null = null
+/** Single-relay listing outcome — drives the diagnostic when zero rooms. */
+let singleRelaylisting: RelayRoomList | null = null
 
 if (multiRelay) {
   const result = await listAllSessions(loadOrCreateIdentity())
@@ -655,13 +687,23 @@ if (multiRelay) {
   // single-relay path reuses that connection. Calling it again would
   // register duplicate message handlers (every envelope processed twice:
   // the duplicate-transcript + relay-wedge bug).
-  const rooms = await client.listRooms()
+  const listing = await client.listRooms()
   const label = relayLabelFor(relayUrl)
+  const rooms = listing.status === "ok" ? listing.rooms : []
   choices = rooms.map((room) => ({ ...room, relayUrl, relayLabel: label }))
+  singleRelaylisting = listing
 }
 
 if (choices.length === 0) {
-  console.error("[sessions] none open — is a pi running on that machine?")
+  if (singleRelaylisting && singleRelaylisting.status === "unknown_peer") {
+    console.error(`[sessions] ${explainRoomList(singleRelaylisting)}`)
+  } else if (singleRelaylisting && singleRelaylisting.status === "refused") {
+    console.error(`[sessions] ${explainRoomList(singleRelaylisting)}`)
+  } else if (singleRelaylisting && singleRelaylisting.status === "timeout") {
+    console.error(`[sessions] ${explainRoomList(singleRelaylisting)}`)
+  } else {
+    console.error("[sessions] none open — is a pi running on that machine?")
+  }
   process.exit(1)
 }
 
@@ -694,10 +736,11 @@ const regatherChoices = async (): Promise<SessionChoice[]> => {
   await Promise.all(
     relayClients.map(async ([url, relayClient]) => {
       const label = relayLabelFor(url)
-      const [rooms, fedRooms] = await Promise.all([
+      const [listing, fedRooms] = await Promise.all([
         relayClient.listRooms(),
         relayClient.listFederatedSessions(),
       ])
+      const rooms = listing.status === "ok" ? listing.rooms : []
       for (const room of rooms) {
         gathered.push({ ...room, relayUrl: url, relayLabel: label })
       }
@@ -961,7 +1004,7 @@ async function submit(text: string): Promise<void> {
   // /connect (or /sessions): switch to a different session on this machine
   // without quitting. Lists rooms, picks one, clears local state, re-syncs.
   if (text === "/connect" || text === "/sessions") {
-    const rooms = await client.listRooms()
+    const rooms = roomsOrActionable(await client.listRooms())
     // Exclude the current room from the picker (it's where we already are)
     const others = rooms.filter((r) => r.room_id !== client.room)
     if (others.length === 0) {

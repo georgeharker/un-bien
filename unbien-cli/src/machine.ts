@@ -2,7 +2,8 @@ import { createHash } from "node:crypto"
 import { Buffer } from "node:buffer"
 import { loadPeers, type PairedPeer } from "./store.js"
 import { loadOrCreateIdentity } from "./identity.js"
-import { SessionClient, type RoomInfo } from "./client.js"
+import { SessionClient, roomsOrActionable, type RoomInfo } from "./client.js"
+import { pickRelayEndpoint, relayPinFor } from "./store.js"
 import { Shell } from "./tui.js"
 
 /**
@@ -205,7 +206,7 @@ export async function waitForRoom(
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     try {
-      const rooms = await client.listRooms()
+      const rooms = roomsOrActionable(await client.listRooms())
       const found = rooms.find(match)
       if (found) return found
     } catch {
@@ -241,13 +242,21 @@ export async function connectControlRoom(
   machine: PairedPeer,
   relayUrlOverride?: string,
 ): Promise<SessionClient> {
-  const relayUrl = relayUrlOverride ?? machine.relayUrl
+  // P6 C: prefer this relay identity's local/healthy endpoint before dialing.
+  const relayUrl = await pickRelayEndpoint(relayUrlOverride ?? machine.relayUrl)
   const label = machine.name ?? machine.epk.slice(0, 12)
-  const client = new SessionClient(relayUrl, loadOrCreateIdentity(), {
-    token: "",
-    epk: machine.epk,
-    roomId: controlRoomFor(machine.epk),
-  })
+  const client = new SessionClient(
+    relayUrl,
+    loadOrCreateIdentity(),
+    {
+      token: "",
+      epk: machine.epk,
+      roomId: controlRoomFor(machine.epk),
+    },
+    // P7: a pinned relay identity must verify on daemon-facing paths too —
+    // these clients reach the machine's control room (launch, resume).
+    { expectRelayPubkey: relayPinFor(relayUrl) },
+  )
   try {
     await client.connect({ roomId: controlRoomFor(machine.epk) })
   } catch {
@@ -256,11 +265,27 @@ export async function connectControlRoom(
     process.exit(1)
   }
 
+  // P7: surface a relay-identity mismatch the moment it lands (the ack is
+  // async, right after auth) — this path launches/execs on the machine.
+  client.once(
+    "control",
+    (frame: { type?: string; expectedRelayPubkey?: string; gotRelayPubkey?: string }) => {
+      if (frame.type !== "relay_identity_error") return
+      const expected = frame.expectedRelayPubkey?.slice(0, 12) ?? "?"
+      const got = frame.gotRelayPubkey?.slice(0, 12) ?? "unverified"
+      console.error(
+        `[relay] identity mismatch: pinned ${expected}…, got ${got}… — ` +
+          `not reaching ${label}. If rebuilt deliberately, clear the pin: ` +
+          "unbien relay forget <url>, then re-pair.",
+      )
+      process.exit(1)
+    },
+  )
   // DISCOVER the daemon's control room from its announce (caps include
   // is_daemon) instead of deriving it from the stored epk — derivation
   // silently targets the wrong room whenever the stored key and the
   // machine's live key disagree in form or vintage.
-  const rooms = await client.listRooms()
+  const rooms = roomsOrActionable(await client.listRooms())
   const daemonRoom = rooms.find((r) => (r.caps ?? []).includes("is_daemon"))
   if (daemonRoom) client.setRoom(daemonRoom.room_id)
 

@@ -29,12 +29,49 @@ npm install -g @geohar/unbien-cli
 | `unbien replay <file>`     | Render a captured envelope stream offline            |
 | `unbien --version`         | Print the version                                    |
 
+## Pairing vs connecting
+
+One command per concern: **`pair` grants trust, `connect` attaches.** Invite
+URIs are for `pair` only — `unbien connect` refuses an `unbien://` target with
+a pointer, so there is exactly one first-run flow:
+
+```bash
+unbien pair '<unbien://pair?...>'   # once, on a new device: registers it
+unbien connect                      # then attach: session picker
+```
+
+**The handshake is awaited.** `pair` sends `pair_request` and waits for the
+machine's `pair_ok` / `pair_error` verdict before remembering anything; on
+refusal or timeout, nothing is recorded locally and the CLI exits non-zero.
+Tokens are single-use and short-lived (a second consumer gets "consumed"), and
+re-running with a fresh token is safe and idempotent — the machine updates its
+existing entry instead of duplicating it.
+
+**Relay resolution and validity.** Invites carry no relay URL (`rm` is the
+pairing room), so pass `--relay <url>` or set `$UNBIEN_RELAY`. A pairing is
+only valid on the relay it was made on: a remembered peer carries its own
+relay URL at attach time — that beats the ambient env var, which names
+whatever the shell last pointed a pi at.
+
+**Multi-bound relays are one relay.** A relay listening on several addresses
+(`localhost`, tailnet name, LAN IP) has one Ed25519 identity and one pairing
+registry — pairing against any bound address is equivalent; only reachability
+differs per device. What the machine records is your device key, not the URL.
+
+**Reading failures honestly:**
+
+- `[pair] machine did not accept the pairing: …` — the machine refused or the
+  verdict timed out. Nothing was remembered; fix and retry.
+- `relay refused the listing (unknown_peer)` — this device is NOT in the
+  machine's signed allow-list. Pair.
+- `[sessions] none open` — listing is authorised but the machine reports no
+  live rooms. Different problem; check the pi sessions on that machine.
+
 ## `unbien connect`
 
 ```bash
 unbien                              # connect (default) — pick a session interactively
-unbien connect '<unbien://pair?t=…&epk=…>'   # first run: pair with a machine
-unbien connect --list              # list sessions on that machine
+unbien --list                       # list sessions on that machine
 unbien connect --session <id>      # attach by pi session id
 unbien connect --session-name <n>  # attach by name (must be unambiguous)
 unbien connect <peer-name>         # attach to a specific paired machine
@@ -67,9 +104,10 @@ unbien pair '<unbien://pair?t=…&epk=…&rm=…>'
 unbien pair --name my-laptop '<unbien://pair?…>'
 ```
 
-Standalone pairing — no full connect round-trip needed. Re-pair after a
-revoke, or pair a second machine. Run with no arguments to see remembered
-machines.
+Pair and exit — the only entry point for trust. See [Pairing vs
+connecting](#pairing-vs-connecting) for the awaited handshake, token
+single-use rules, and failure messages. Run with no arguments to see
+remembered machines.
 
 | Flag                | Description                                                   |
 | ------------------- | ------------------------------------------------------------- |

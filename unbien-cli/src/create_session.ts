@@ -1,5 +1,6 @@
 import { loadPeers } from "./store.js"
 import { connectControlRoom, launchAndWait, waitForRoom, handoffToConnect, requireMachineOrRemote } from "./machine.js"
+import { roomsOrActionable } from "./client.js"
 import { Shell } from "./tui.js"
 
 /**
@@ -48,7 +49,7 @@ export async function run(argv: string[]): Promise<void> {
   // Pre-launch room snapshot: the new session is the room that appears after
   // this point (pi mints a fresh id, so there is no id to match upfront).
   const beforeRooms = new Set(
-    (await client.listRooms()).map((r) => r.room_id),
+    roomsOrActionable(await client.listRooms()).map((r) => r.room_id),
   )
   const outcome = await launchAndWait(client, { cwd, name })
 
