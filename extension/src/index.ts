@@ -63,7 +63,10 @@ import { chainUiNotify, notifyOwners, setOwnerNotifyHook } from "./session/owner
 import { roomIdForSession } from "./rooms.js"
 import { registerAgentTools } from "./session/tools.js"
 import { MeshInbox, type MeshMessage } from "./session/mesh_inbox.js"
-import { formatPeerInventory } from "./session/peer_inventory.js"
+import {
+  formatPeerInventoryDetailed,
+  type RosterInfo,
+} from "./session/peer_inventory.js"
 import type { MeshNode } from "./session/mesh_node.js"
 import {
   ensureGlobalDirs,
@@ -2487,16 +2490,20 @@ function _isDirectRun(): boolean {
  * timeout, so the caller can print an "offline" message instead of an empty
  * roster.
  */
+export type RosterProbe =
+  | { status: "offline" }
+  | { status: "ok"; peers: string[]; detailed: RosterInfo[] }
+
 export async function probeListPeers(
   sockPath: string,
   timeoutMs = 2000,
-): Promise<string[] | null> {
+): Promise<RosterProbe> {
   const { createConnection } = await import("node:net")
-  return new Promise<string[] | null>((resolve) => {
+  return new Promise<RosterProbe>((resolve) => {
     const sock = createConnection({ path: sockPath })
     let buf = ""
     let settled = false
-    const done = (result: string[] | null): void => {
+    const done = (result: RosterProbe): void => {
       if (settled) return
       settled = true
       clearTimeout(timer)
@@ -2507,13 +2514,13 @@ export async function probeListPeers(
       }
       resolve(result)
     }
-    const timer = setTimeout(() => done(null), timeoutMs)
+    const timer = setTimeout(() => done({ status: "offline" }), timeoutMs)
     sock.setEncoding("utf8")
     sock.on("connect", () => {
       try {
         sock.write(JSON.stringify({ type: "list_peers" }) + "\n")
       } catch {
-        done(null)
+        done({ status: "offline" })
       }
     })
     sock.on("data", (chunk: string) => {
@@ -2523,7 +2530,7 @@ export async function probeListPeers(
       const line = buf.slice(0, nl)
       try {
         const env = JSON.parse(line) as {
-          body?: { type?: string; peers?: unknown }
+          body?: { type?: string; peers?: unknown; peers_detailed?: unknown }
         }
         const body = env.body
         if (
@@ -2531,16 +2538,35 @@ export async function probeListPeers(
           body.type === "list_peers_reply" &&
           Array.isArray(body.peers)
         ) {
-          done(body.peers.filter((p): p is string => typeof p === "string"))
+          const peers = body.peers.filter(
+            (p): p is string => typeof p === "string",
+          )
+          // Structured roster (cwd-aware) when the broker sends it; fall back
+          // to legacy bare names with no cwd group for older brokers.
+          const detailed: RosterInfo[] = Array.isArray(body.peers_detailed)
+            ? (body.peers_detailed as unknown[]).flatMap((d) => {
+                const e = d as { cwd?: unknown; name?: unknown; address?: unknown }
+                return typeof e?.address === "string" && typeof e?.name === "string"
+                  ? [
+                      {
+                        cwd: typeof e.cwd === "string" ? e.cwd : "",
+                        name: e.name,
+                        address: e.address,
+                      },
+                    ]
+                  : []
+              })
+            : peers.map((p) => ({ cwd: "", name: p, address: p }))
+          done({ status: "ok", peers, detailed })
           return
         }
       } catch {
         /* fall through */
       }
-      done(null) // a line arrived but it wasn't the reply we expected
+      done({ status: "offline" }) // a line arrived but it wasn't the reply we expected
     })
-    sock.on("error", () => done(null)) // ECONNREFUSED / ENOENT → mesh offline
-    sock.on("close", () => done(null))
+    sock.on("error", () => done({ status: "offline" })) // ECONNREFUSED / ENOENT → mesh offline
+    sock.on("close", () => done({ status: "offline" }))
   })
 }
 
@@ -2610,14 +2636,16 @@ if (_isDirectRun()) {
     // reads paired phones from peers.json), the mesh roster lives only in the
     // running broker's memory, so we probe the UDS broker. The probe never
     // registers as a peer — it leaves no trace on the mesh (see
-    // Broker._tryObserverProbe). Null = no broker reachable on this machine.
-    const peers = await probeListPeers(sessionSockPath(LOCAL_SESSION_NAME))
-    if (peers === null) {
+    // Broker._tryObserverProbe). offline = no broker reachable on this machine.
+    const probe = await probeListPeers(sessionSockPath(LOCAL_SESSION_NAME))
+    if (probe.status === "offline") {
       console.log(
         "[un-bien] Mesh offline — no agent is running on this machine.",
       )
     } else {
-      console.log(`[un-bien] peers:\n${formatPeerInventory(peers)}`)
+      console.log(
+        `[un-bien] peers:\n${formatPeerInventoryDetailed(probe.detailed)}`,
+      )
     }
   } else if (subcmd === "claude") {
     await _cmdClaudeCli(cliArgs)

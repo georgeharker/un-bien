@@ -24,6 +24,7 @@ import {
   localConfigExists,
 } from "../session/local_config.js"
 import { formatMeshAckResult } from "./mesh_result.js"
+import { formatPeerInventoryDetailed } from "../session/peer_inventory.js"
 import {
   sessionSockPath,
   sessionAuditPath,
@@ -166,20 +167,19 @@ function notReady() {
 mcp.registerTool(
   "list_peers",
   {
-    description: "List all agents currently in the mesh (local + remote PCs).",
+    description: "List all agents currently in the mesh (local + remote PCs), grouped by working directory.",
     inputSchema: {},
   },
   async () => {
     if (!meshReady) return notReady()
     try {
-      const peers = await mesh.listPeers()
+      // cwd-grouped roster: addresses stay verbatim (routing keys), grouped
+      // so cross-folder peers are readable at a glance.
+      const infos = await mesh.listPeersDetailed()
+      const text =
+        infos.length > 0 ? formatPeerInventoryDetailed(infos) : "(no peers)"
       return {
-        content: [
-          {
-            type: "text" as const,
-            text: peers.length > 0 ? peers.join("\n") : "(no peers)",
-          },
-        ],
+        content: [{ type: "text" as const, text }],
       }
     } catch (e) {
       return {

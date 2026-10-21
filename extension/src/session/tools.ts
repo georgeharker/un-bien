@@ -3,6 +3,10 @@ import { Type } from "typebox"
 import type { TransportErrorReason } from "./envelope.js"
 import type { AckResult, SessionPeer } from "./peer.js"
 import { LOCAL_SESSION_NAME, sessionSockPath } from "./global_config.js"
+import {
+  formatPeerInventoryDetailed,
+  type RosterInfo,
+} from "./peer_inventory.js"
 import { MeshInbox, type MeshMessage } from "./mesh_inbox.js"
 
 const NOT_IN_SESSION = "Not in a session. Run /unbien join first"
@@ -272,18 +276,51 @@ export function registerAgentTools(
           { type: "list_peers" },
           LIST_PEERS_TIMEOUT_MS,
         )
-        const body = reply.body as { peers?: unknown } | null
+        const body = reply.body as {
+          peers?: unknown
+          peers_detailed?: unknown
+        } | null
         const peerList = Array.isArray(body?.peers) ? body?.peers : null
         const peers = (peerList ?? []).filter(
           (p): p is string => typeof p === "string",
         )
+        // Structured roster (cwd-aware, plan/38) when the broker offers it;
+        // legacy peers that registered without a cwd fall into the "not
+        // reported" group. Addresses stay VERBATIM either way.
+        const detailed: RosterInfo[] = Array.isArray(body?.peers_detailed)
+          ? (body?.peers_detailed as unknown[]).flatMap((d) => {
+              const e = d as {
+                cwd?: unknown
+                name?: unknown
+                address?: unknown
+              }
+              return typeof e?.address === "string" &&
+                typeof e?.name === "string"
+                ? [
+                    {
+                      cwd: typeof e.cwd === "string" ? e.cwd : "",
+                      name: e.name,
+                      address: e.address,
+                    },
+                  ]
+                : []
+            })
+          : peers.map((p) => ({ cwd: "", name: p, address: p }))
         // Drop self from the list — the caller is the only one who can't
         // address itself anyway, so listing it is noise. Peers are ADDRESSES
         // (plan/38), so filter by address.
         const selfAddress = peer.address()
         const combined = [...peers, ...getRemoteRelayPeers()]
         const filtered = combined.filter((p) => p !== selfAddress)
-        const text = filtered.length === 0 ? "(no peers)" : filtered.join("\n")
+        const detailedFiltered = detailed.filter(
+          (d) => d.address !== selfAddress,
+        )
+        const text =
+          filtered.length === 0
+            ? "(no peers)"
+            : formatPeerInventoryDetailed(detailedFiltered, {
+                selfAddress,
+              })
         return {
           content: [{ type: "text", text }],
           details: {

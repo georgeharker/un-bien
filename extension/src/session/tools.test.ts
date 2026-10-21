@@ -422,7 +422,10 @@ describe("list_peers tool", () => {
     expect((result.details as { peers: string[] }).peers).toEqual(["backend", "casa:agent-1"])
     expect((result.details as { self?: { address: string; name: string; broker: string } }).self).toMatchObject({ address: "orq", name: "orq", broker: "local" })
     expect((result.content[0] as { type: "text"; text: string }).text).toBe(
-      "backend\ncasa:agent-1",
+      "  local — cwd not reported\n" +
+        "    backend\n" +
+        "  remote:casa — cwd not reported\n" +
+        "    casa:agent-1",
     )
   })
 

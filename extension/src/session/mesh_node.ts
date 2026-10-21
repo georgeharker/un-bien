@@ -1,4 +1,5 @@
 import { SessionPeer, type AckResult, type SessionPeerOptions } from "./peer.js"
+import { type RosterInfo } from "./peer_inventory.js"
 import type { Envelope } from "./envelope.js"
 import type { Broker } from "./broker.js"
 import type { BrokerRemote } from "./broker_remote.js"
@@ -766,6 +767,41 @@ export class MeshNode {
     )
     const body = reply.body as { peers?: string[] } | null
     return (body?.peers ?? []).filter((peer) => peer !== this.peer_.address())
+  }
+
+  /** Structured roster (peers_detailed): cwd-aware entries for cwd grouping.
+   *  Falls back to bare-name rows (no cwd group) for brokers predating
+   *  peers_detailed. Self is filtered, matching listPeers. */
+  async listPeersDetailed(timeoutMs = 2_000): Promise<RosterInfo[]> {
+    const reply = await this.peer_.request(
+      "broker",
+      { type: "list_peers" },
+      timeoutMs,
+    )
+    const body = reply.body as {
+      peers?: string[]
+      peers_detailed?: unknown
+    } | null
+    const selfAddress = this.peer_.address()
+    if (Array.isArray(body?.peers_detailed)) {
+      return (body!.peers_detailed as unknown[]).flatMap((d) => {
+        const e = d as { cwd?: unknown; name?: unknown; address?: unknown }
+        return typeof e?.address === "string" && typeof e?.name === "string"
+          ? e.address !== selfAddress
+            ? [
+                {
+                  cwd: typeof e.cwd === "string" ? e.cwd : "",
+                  name: e.name,
+                  address: e.address,
+                },
+              ]
+            : []
+          : []
+      })
+    }
+    return (body?.peers ?? [])
+      .filter((p): p is string => typeof p === "string" && p !== selfAddress)
+      .map((p) => ({ cwd: "", name: p, address: p }))
   }
 
   close(): Promise<void> {

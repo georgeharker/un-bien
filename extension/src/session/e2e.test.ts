@@ -1473,9 +1473,14 @@ describe("ACK protocol (plan/25 Wave 0)", () => {
     const orq = await makePeer(sock, "orq")
     const backend = await makePeer(sock, "backend")
 
-    const peers = await probeListPeers(sock)
-    expect(peers).not.toBeNull()
-    expect(peers!.sort()).toEqual(["backend", "orq"])
+    const probe = await probeListPeers(sock)
+    expect(probe.status).toBe("ok")
+    if (probe.status !== "ok") return // narrowing
+    expect([...probe.peers].sort()).toEqual(["backend", "orq"])
+    // makePeer registers legacy (no cwd) peers: roster stays complete, both
+    // land in the formatter's "not reported" group.
+    expect(probe.detailed).toHaveLength(2)
+    expect(probe.detailed.every((d) => d.cwd === "")).toBe(true)
 
     await orq.leave()
     await backend.leave()
@@ -1484,7 +1489,7 @@ describe("ACK protocol (plan/25 Wave 0)", () => {
   test("probeListPeers resolves null when no broker is listening", async () => {
     const sock = tmpSock() // fresh path, nothing bound to it
     const peers = await probeListPeers(sock, 500)
-    expect(peers).toBeNull()
+    expect(peers).toEqual({ status: "offline" })
   })
 })
 
