@@ -847,43 +847,9 @@ extension AppModel {
                 log.warning("relay error code=\(code ?? "?", privacy: .public) detail=\(detail ?? "", privacy: .public)")
             }
         case let .rooms(peer, rooms):
-            // Authoritative per-peer snapshot (rooms_check on subscribe): RECONCILE,
-            // don't just add. Drop any session for this (relay, peer) whose room
-            // isn't in the snapshot — it ended while we were disconnected/backgrounded
-            // (missed roomEnded); add-only left those as ghosts ("old chats in the
-            // mix"). Then upsert the live ones. Scoped to this peer, so other
-            // machines' sessions are untouched. See design 01M18AK9.
-            // Sessions are keyed by pi sessionId now, so match the snapshot on the
-            // LiveSession.roomID FIELD (routing) — NOT by parsing the key (which is
-            // the sessionId). Parsing the key would treat every sessionId as an
-            // unknown room and purge all live sessions.
-            let liveRoomIDs = Set(rooms.map(\.roomID))
-            // Observability: rooms in the snapshot we didn't already have live
-            // are room_announced pushes we missed — on first connect this is the
-            // initial load, on a manual refresh a non-zero count means a push
-            // was dropped.
-            let knownRoomIDs = Set(sessions.values
-                .filter { $0.relayID == relayID && $0.peerEPK == peer }
-                .map(\.roomID))
-            let recovered = liveRoomIDs.subtracting(knownRoomIDs).count
-            if recovered > 0 {
-                log.info("rooms_check recovered \(recovered, privacy: .public) not-live room(s) for peer \(String(peer.prefix(8)), privacy: .public) (initial load or missed room_announced)")
-            }
-            for (key, session) in sessions
-            where session.relayID == relayID && session.peerEPK == peer
-            && !liveRoomIDs.contains(session.roomID) {
-                sessions[key] = nil
-                forgetSession(key: key)
-            }
-            // DISK reconcile (design 01M1M4N8RZZANDX6NWY7FCSBT5, retention
-            /// append 3): trash orphaned entry-cache files for rooms that
-            /// ended while the app was dead — the in-memory purge above can't
-            /// see them (a dead room never materializes as a session, so
-            /// forgetSession never fires for it). No room set from a peer →
-            /// no signal → its files stay (never false-purge an offline peer).
-            Task { await entryCache.reconcile(relayID: relayID.uuidString, peer: peer,
-                                              liveRoomIDs: liveRoomIDs) }
-            for room in rooms { upsertSession(relayID: relayID, peer: peer, room: room) }
+            // Reconcile lives in AppModel+Relays.swift (handleRoomsSnapshot,
+            // carved for the line cap) next to the room-upsert funnel it feeds.
+            handleRoomsSnapshot(peer: peer, rooms: rooms, relayID: relayID)
         case let .roomAnnounced(peer, room):
             upsertSession(relayID: relayID, peer: peer, room: room)
         case let .federatedPeerList(peers):
@@ -925,6 +891,15 @@ extension AppModel {
             }
             // Prune machines this relay no longer federates (peer left the
             // mesh / peering torn down) — the list frame IS the topology.
+            // Their daemon presence + caps go with them: a stale launch
+            // affordance must not linger for a machine we can no longer reach.
+            let prunedFederated = federatedMachines.filter {
+                $0.relayID == relayID && !known.contains($0.id)
+            }
+            for fm in prunedFederated {
+                daemonPresence.removeValue(forKey: machineCapsKey(relayID: relayID, epk: fm.epk))
+                federatedMachineCaps.removeValue(forKey: fm.epk)
+            }
             federatedMachines.removeAll {
                 $0.relayID == relayID && !known.contains($0.id)
             }

@@ -240,6 +240,40 @@ extension AppModel {
         "\(relayID.uuidString):\(Base64.canonicalKey(epk) ?? epk)"
     }
 
+    /// Daemon presence PUSH: a control room arriving through the upsert
+    /// funnel (live room_announced, a rooms_check snapshot, or a federated
+    /// peer list) carries the daemon's caps + hostname in its room_meta —
+    /// record them so the idle-machine launch affordance settles WITHOUT the
+    /// presence_status poll (direct machines previously had to poll while
+    /// federated ones got caps pushed free). The poll stays as a refresher
+    /// and remains the only source of `backend`. Ghost control rooms
+    /// (empty caps — a stale registry entry, no live daemon) are no signal:
+    /// neither stored nor cleared.
+    func recordDaemonPresence(relayID: UUID, epk: String, room: RoomInfo) {
+        guard let caps = room.caps, !caps.isEmpty else { return }
+        let key = machineCapsKey(relayID: relayID, epk: epk)
+        let existing = daemonPresence[key]
+        // Fresh caps + hostname from the announce; backend only the pull
+        // knows — preserve it. No @Published churn when nothing changed.
+        let fresh = DaemonPresence(caps: Set(caps), hostname: room.name,
+                                   backend: existing?.backend)
+        if existing != fresh {
+            daemonPresence[key] = fresh
+        }
+    }
+
+    /// The rooms_check snapshot is the peer's FULL room set — topology
+    /// truth. A control room ABSENT from it means the daemon is down (its
+    /// socket dropped, the relay unregistered the room): retire the
+    /// machine's daemon presence so the launch affordance goes dark
+    /// instead of lingering stale (the poll's stale-entry problem, fixed
+    /// by the same push that feeds the fill).
+    func clearDaemonPresenceIfAbsent(relayID: UUID, epk: String, liveRoomIDs: Set<String>) {
+        guard let control = Base64.deriveControlRoom(epk: epk),
+              !liveRoomIDs.contains(control) else { return }
+        daemonPresence.removeValue(forKey: machineCapsKey(relayID: relayID, epk: epk))
+    }
+
     /// Daemon/machine caps for a paired machine, if we've pulled them.
     public func daemonPresence(for machine: PairedMachine) -> DaemonPresence? {
         daemonPresence[machineCapsKey(relayID: machine.relayID, epk: machine.epk)]
@@ -472,12 +506,66 @@ extension AppModel {
 // auto-open matcher (resume flow). State stays on AppModel; this extension
 // only routes it.
 extension AppModel {
+    /// Rooms-check snapshot reconcile (carved from AppModel+Inbound.swift —
+    /// line cap; lives with the room-upsert funnel it feeds). Authoritative
+    /// per-peer snapshot (rooms_check on subscribe): RECONCILE, don't just
+    /// add. Drop any session for this (relay, peer) whose room isn't in the
+    /// snapshot — it ended while we were disconnected/backgrounded (missed
+    /// roomEnded); add-only left those as ghosts ("old chats in the mix").
+    /// Then upsert the live ones. Scoped to this peer, so other machines'
+    /// sessions are untouched. See design 01M18AK9.
+    ///
+    /// Sessions are keyed by pi sessionId now, so match the snapshot on the
+    /// LiveSession.roomID FIELD (routing) — NOT by parsing the key (which is
+    /// the sessionId). Parsing the key would treat every sessionId as an
+    /// unknown room and purge all live sessions.
+    func handleRoomsSnapshot(peer: String, rooms: [RoomInfo], relayID: UUID) {
+        let liveRoomIDs = Set(rooms.map(\.roomID))
+        // Observability: rooms in the snapshot we didn't already have live
+        // are room_announced pushes we missed — on first connect this is the
+        // initial load, on a manual refresh a non-zero count means a push
+        // was dropped.
+        let knownRoomIDs = Set(sessions.values
+            .filter { $0.relayID == relayID && $0.peerEPK == peer }
+            .map(\.roomID))
+        let recovered = liveRoomIDs.subtracting(knownRoomIDs).count
+        if recovered > 0 {
+            log.info("rooms_check recovered \(recovered, privacy: .public) not-live room(s) for peer \(String(peer.prefix(8)), privacy: .public) (initial load or missed room_announced)")
+        }
+        for (key, session) in sessions
+        where session.relayID == relayID && session.peerEPK == peer
+        && !liveRoomIDs.contains(session.roomID) {
+            sessions[key] = nil
+            forgetSession(key: key)
+        }
+        // DISK reconcile (design 01M1M4N8RZZANDX6NWY7FCSBT5, retention
+        /// append 3): trash orphaned entry-cache files for rooms that
+        /// ended while the app was dead — the in-memory purge above can't
+        /// see them (a dead room never materializes as a session, so
+        /// forgetSession never fires for it). No room set from a peer →
+        /// no signal → its files stay (never false-purge an offline peer).
+        Task { await entryCache.reconcile(relayID: relayID.uuidString, peer: peer,
+                                          liveRoomIDs: liveRoomIDs) }
+        // DAEMON PRESENCE TOPOLOGY: the snapshot IS the peer's full room
+        // set, so it also decides daemon liveness — a control room missing
+        // from it retires the machine's daemon presence.
+        clearDaemonPresenceIfAbsent(relayID: relayID, epk: peer, liveRoomIDs: liveRoomIDs)
+        for room in rooms { upsertSession(relayID: relayID, peer: peer, room: room) }
+    }
+
     func upsertSession(relayID: UUID, peer: String, room: RoomInfo) {
         // The presence daemon's control room is not a chat session: it carries the
         // `is_daemon` cap, its roomId is the control-room derivation, and it has no
-        // pi sessionId (a real session's wire identity).
-        if room.caps?.contains("is_daemon") == true { return }
-        if let control = Base64.deriveControlRoom(epk: peer), room.roomID == control { return }
+        // pi sessionId (a real session's wire identity). It IS the machine's daemon
+        // presence PUSH, though — caps + hostname ride its room_meta, so harvest
+        // them into daemonPresence before bailing (design 01M1813Q's store, now fed
+        // by announce/snapshot instead of waiting on the presence_status poll;
+        // federated machines already had this via the peer-list room caps).
+        if room.caps?.contains("is_daemon") == true
+            || Base64.deriveControlRoom(epk: peer) == room.roomID {
+            recordDaemonPresence(relayID: relayID, epk: peer, room: room)
+            return
+        }
         guard let sessionID = room.sessionID else { return }
         var session = LiveSession(relayID: relayID, peerEPK: peer, roomID: room.roomID,
                                   sessionID: sessionID,
