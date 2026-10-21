@@ -371,8 +371,12 @@ async fn app_machine_request_reply_stream_across_three_relay_chain() {
     }
 
     // Leg 1: A must learn the machine's room THROUGH B (transit announcement).
+    // Budget 30s: two peering hops with handshake retries/backoff on a slow
+    // CI runner can outrun a 10s budget (observed flake: the same commit
+    // red on one runner, green on rerun) — the assertion is EVENTUAL
+    // learning, not latency.
     let mut learned = false;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     while tokio::time::Instant::now() < deadline {
         if let Some(txt) = next_any_text(&mut app).await {
             let v: Value = serde_json::from_str(&txt).unwrap_or(Value::Null);

@@ -6,6 +6,24 @@ requirements where they matter.
 
 ## App
 
+### 1.4.1 (build 9, 2026-10-21)
+
+- **Daemon caps arrive by push for direct machines** — the launcher's
+  control-room announce carries caps + hostname, harvested into the
+  daemon-presence store on arrival (announce, rooms_check snapshot, or
+  federated peer list); the launch "+" settles with zero presence_status
+  polls. The poll stays as a refresher and the only source of `backend`.
+- **Federated machine visibility (with relay ≥0.8.4)** — a federated
+  machine whose launcher is up but has no pi sessions now appears with
+  its launch row immediately (the relay's peer-list push carries control
+  rooms; previously invisible until a session opened).
+- **Snapshots never purge peer-list-owned rooms** — a machine paired on
+  one relay whose rooms live on the peer relay keeps its federated
+  sessions through connect/refresh (empty local snapshots are no signal;
+  the peer list owns those rooms' liveness) — the same doctrine retires
+  daemon presence only when a local snapshot genuinely lacks the control
+  room.
+
 ### 1.4 (build 8, 2026-10-15)
 
 - **Federated mesh (v2)** — sessions and machines on federated relays
@@ -314,6 +332,22 @@ current code.
 | 0.1.9   | 0.20.5    | 2026-09-18 |
 
 ## Relay (un-bien-relay)
+
+### 0.8.4 (2026-10-21)
+
+- **Federated machines visible with launcher only**: the
+  `federated_peer_list` push carries daemon control rooms (the same
+  shared grouping as rooms_check, no `is_daemon` filter) — a federated
+  machine whose launcher daemon is up but has no pi sessions appears to
+  the app with its machine row + launch caps immediately instead of
+  waiting for a session to open. The app filters control rooms from
+  session display itself; rooms_check (the CLI's control-room discovery
+  path) is unchanged.
+- Test rig no longer inherits ambient `UNBIEN_RELAY_BIND`/`URL` from the
+  developer shell (a real relay's exported env made rig relays die at
+  loud boot — "never started listening"); the transit-learning test's
+  10s deadline widened to 30s (slow CI runners legitimately outran it;
+  the assertion is eventual learning, not latency).
 
 ### 0.8.3 (2026-10-16)
 
