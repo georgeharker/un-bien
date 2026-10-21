@@ -92,7 +92,9 @@ async fn main() -> anyhow::Result<()> {
     let federated = Arc::new(relay::peering::FederatedSessions::new());
     // Endpoint advertisement computed ONCE: the spec as dialed + the resolved
     // listener addresses (parse_bind_addrs did the DNS at startup already).
-    let endpoints = Arc::new(relay::peering::relay_bind_urls_for(&bind_spec, port, &addrs));
+    let endpoints = Arc::new(relay::peering::relay_bind_urls_for(
+        &bind_spec, port, &addrs,
+    ));
     // The relay's own URL: DNS ONCE here (memoized inside) — never on the
     // per-handshake path.
     let advertised_url = relay::peering::relay_own_url().unwrap_or_default();

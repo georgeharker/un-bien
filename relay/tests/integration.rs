@@ -1,7 +1,6 @@
 mod common;
 use common::{
-    connect_and_auth, drop_handshake, next_non_handshake, start_relay,
-    start_relay_state,
+    connect_and_auth, drop_handshake, next_non_handshake, start_relay, start_relay_state,
 };
 
 use futures_util::{SinkExt, StreamExt};
@@ -110,7 +109,7 @@ async fn oversized_ct_refused_to_sender() {
     assert_eq!(v["type"], "error");
     assert_eq!(v["code"], "payload_too_large");
 
-    // Unparseable envelope → invalid_envelope, same refusal story.
+    // Unparsable envelope → invalid_envelope, same refusal story.
     ws_a.send(Message::text("this is not json".to_string()))
         .await
         .unwrap();

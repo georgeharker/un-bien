@@ -105,12 +105,8 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
     // relay_bind_urls_for), resolved ONCE at startup (state.endpoints):
     // the auth path NEVER DNS-resolves — a stalled MagicDNS lookup would
     // block every peer handshake before registration/routing.
-    let ident_sig = crate::peering::sign_relay_identity(
-        &relay_kp,
-        &nonce_b64,
-        &state.relay_name,
-        &relay_url,
-    );
+    let ident_sig =
+        crate::peering::sign_relay_identity(&relay_kp, &nonce_b64, &state.relay_name, &relay_url);
     let identity_ack = serde_json::json!({
         "type": "identity_ack",
         "relay_pubkey": relay_kp.pubkey_b64(),
@@ -209,7 +205,6 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
     let room_meta_json = serde_json::to_value(&room_meta).unwrap_or_default();
     let conn_id = registry.register(peer_id.clone(), room_meta, tx).await;
-
 
     // Phase 4: push the current federated_peer_list to this new connection
     // so a reconnecting extension gets the current federated peers immediately

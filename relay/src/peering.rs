@@ -1518,15 +1518,8 @@ mod tests {
         // Wildcard (0.0.0.0 default) bind: nothing dialable by name, so the
         // LOOPBACK pair is advertised — on-host clients prefer local without
         // the deployment setting a named bind at all.
-        let eps = relay_bind_urls_for(
-            "0.0.0.0",
-            3000,
-            &[socket_parse("0.0.0.0:3000")],
-        );
-        assert_eq!(
-            eps,
-            vec!["http://127.0.0.1:3000", "http://localhost:3000"]
-        );
+        let eps = relay_bind_urls_for("0.0.0.0", 3000, &[socket_parse("0.0.0.0:3000")]);
+        assert_eq!(eps, vec!["http://127.0.0.1:3000", "http://localhost:3000"]);
 
         // Named tailnet bind with a STARTUP-RESOLVED addr: name + IP, both
         // dialable, deterministic (no DNS in the function itself).
@@ -1537,10 +1530,7 @@ mod tests {
         );
         assert_eq!(
             eps,
-            vec![
-                "http://box.example.ts.net:3000",
-                "http://10.94.0.1:3000"
-            ]
+            vec!["http://box.example.ts.net:3000", "http://10.94.0.1:3000"]
         );
 
         // Literal IP: the entry IS the socket — dedupes with its resolution.
@@ -1549,10 +1539,7 @@ mod tests {
 
         // Per-entry port override wins over the default:
         let eps = relay_bind_urls_for("localhost:4443,other:3000", 3000, &[]);
-        assert_eq!(
-            eps,
-            vec!["http://localhost:4443", "http://other:3000"]
-        );
+        assert_eq!(eps, vec!["http://localhost:4443", "http://other:3000"]);
     }
 
     #[test]
