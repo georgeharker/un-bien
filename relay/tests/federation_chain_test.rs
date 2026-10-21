@@ -121,6 +121,13 @@ fn spawn_relay_proc(name: &str, port: u16, dir: tempfile::TempDir, peers: &[Peer
         // Scrub ambient heredity: everything state-ish lives in the rig dir.
         .env("XDG_CONFIG_HOME", dir.path().join("xdg-config"))
         .env("XDG_STATE_HOME", dir.path().join("xdg-state"))
+        // A developer shell with a REAL relay's env exported (e.g. a bad
+        // UNBIEN_RELAY_BIND from a device pass) must never reach the rig:
+        // the relay fails loud boot on an unresolvable bind and the test
+        // dies with "never started listening" — poisoned by ambient env,
+        // not by the code under test.
+        .env_remove("UNBIEN_RELAY_BIND")
+        .env_remove("UNBIEN_RELAY_URL")
         .env("RUST_LOG", "relay=debug")
         .stdout({
             let f = std::fs::File::create(

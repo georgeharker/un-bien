@@ -263,14 +263,23 @@ extension AppModel {
     }
 
     /// The rooms_check snapshot is the peer's FULL room set — topology
-    /// truth. A control room ABSENT from it means the daemon is down (its
-    /// socket dropped, the relay unregistered the room): retire the
-    /// machine's daemon presence so the launch affordance goes dark
-    /// instead of lingering stale (the poll's stale-entry problem, fixed
-    /// by the same push that feeds the fill).
+    /// truth — so a control room ABSENT from it means the daemon is down:
+    /// retire the machine's daemon presence so the launch affordance goes
+    /// dark instead of lingering stale. TWO no-signal guards keep the clear
+    /// honest for machines whose truth spans relays (the rooms_check LOCAL
+    /// branch serves only locally-attached rooms): an EMPTY snapshot is no
+    /// signal (a paired machine whose rooms — and daemon — live on a PEER
+    /// relay; never false-purge, the entry-cache reconcile's doctrine), and
+    /// a machine with federated visibility on this relay (a peer-list row)
+    /// has its liveness owned by the peer list — the control room may be
+    /// attached via the other relay, so the clear stays local-only.
     func clearDaemonPresenceIfAbsent(relayID: UUID, epk: String, liveRoomIDs: Set<String>) {
+        guard !liveRoomIDs.isEmpty else { return }
         guard let control = Base64.deriveControlRoom(epk: epk),
               !liveRoomIDs.contains(control) else { return }
+        guard !federatedMachines.contains(where: { $0.relayID == relayID && $0.epk == epk }) else {
+            return
+        }
         daemonPresence.removeValue(forKey: machineCapsKey(relayID: relayID, epk: epk))
     }
 
@@ -532,9 +541,22 @@ extension AppModel {
         if recovered > 0 {
             log.info("rooms_check recovered \(recovered, privacy: .public) not-live room(s) for peer \(String(peer.prefix(8)), privacy: .public) (initial load or missed room_announced)")
         }
+        // PEER-LIST-OWNED rooms are exempt from the purge: a machine paired
+        // on this relay whose rooms are attached ELSEWHERE (paired directly
+        // AND federated) gets a local-only snapshot here — the rooms_check
+        // local branch serves locally-attached rooms, so liveRoomIDs is
+        // not the whole truth for it, and the purge would drop every
+        // peer-list-fed session on every connect/refresh (an empty local
+        // snapshot purges them ALL). The federated peer list owns those
+        // rooms' liveness — its own prune retires them — the same doctrine
+        // the daemon-presence clear follows.
+        let fedLiveRooms: Set<String> =
+            federatedMachines.first(where: { $0.relayID == relayID && $0.epk == peer })
+                .flatMap { federatedLiveRooms[$0.id] } ?? []
         for (key, session) in sessions
         where session.relayID == relayID && session.peerEPK == peer
-        && !liveRoomIDs.contains(session.roomID) {
+        && !liveRoomIDs.contains(session.roomID)
+        && !fedLiveRooms.contains(session.roomID) {
             sessions[key] = nil
             forgetSession(key: key)
         }

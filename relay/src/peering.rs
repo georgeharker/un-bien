@@ -1380,7 +1380,7 @@ async fn handle_relay_forward(
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
-    use std::collections::HashSet;
+    use std::collections::{BTreeMap, HashSet};
 
     #[test]
     fn shared_owner_intersection() {
@@ -1565,6 +1565,45 @@ mod tests {
             B64.encode(&blob_bytes),
             B64.encode(sig.to_bytes()),
         )
+    }
+
+    #[tokio::test]
+    async fn peer_list_includes_daemon_only_machine() {
+        // A federated machine whose launcher daemon is up but has NO pi
+        // sessions must still appear in the federated_peer_list push — the
+        // app keys its machine row + launch caps off the control room, and
+        // the daemon-only room is the ONLY room there is. The push used to
+        // drop `is_daemon`-capped rooms, making the machine INVISIBLE to the
+        // app until a session opened (rooms_check always kept them — the
+        // CLI's control-room discovery rides that path).
+        let fed = FederatedSessions::with_name("relay-a");
+        let control = RoomMeta {
+            room_id: "control:droplet".to_string(),
+            name: Some("droplet".to_string()),
+            cwd: Some("/home/user".to_string()),
+            model: None,
+            thinking: None,
+            working: false,
+            started_at: 0,
+            extra: BTreeMap::from([(
+                "caps".to_string(),
+                serde_json::json!(["remote_launch", "is_daemon", "session_resume"]),
+            )]),
+        };
+        fed.add_room("relay-b", "droplet-epk", control).await;
+        let list: serde_json::Value =
+            serde_json::from_str(&fed.federated_peer_list_json().await).unwrap();
+        let peers = list["peers"].as_array().unwrap();
+        assert_eq!(peers.len(), 1, "daemon-only machine appears in the push");
+        assert_eq!(peers[0]["epk"], "droplet-epk");
+        let rooms = peers[0]["rooms"].as_array().unwrap();
+        assert_eq!(rooms.len(), 1, "the control room rides the push");
+        assert_eq!(rooms[0]["room_id"], "control:droplet");
+        // And the same grouping serves rooms_check — the two read paths
+        // cannot diverge (the shared grouping is the point).
+        let (relay, check_rooms) = fed.rooms_for_epk_grouped("droplet-epk").await.unwrap();
+        assert_eq!(relay, "relay-b");
+        assert_eq!(check_rooms.len(), 1);
     }
 
     #[tokio::test]
@@ -1903,10 +1942,13 @@ fn room_is_daemon(room: &RoomMeta) -> bool {
 /// `(peer_relay, rooms)` pair per epk: rooms deduped by room_id across
 /// relays (first occurrence wins — multi-homed machines) and `peer_relay` =
 /// the first origin relay encountered for the epk. `skip_daemon` drops
-/// `is_daemon`-capped control rooms: the app's discovery list keeps them out
-/// of display entirely, while the rooms_check response KEEPS them — the CLI
-/// finds a federated machine's control room by its caps through rooms_check
-/// (machine.ts connectControlRoom).
+/// `is_daemon`-capped control rooms; BOTH PRODUCTION CALLERS KEEP THEM — a
+/// federated machine whose launcher daemon is up but has no pi sessions
+/// must stay visible (the app keys its machine row + caps off the control
+/// room, filtering it from session display by the `is_daemon` cap; the CLI
+/// finds a federated machine's control room by its caps through rooms_check,
+/// machine.ts connectControlRoom) — the flag remains for callers that want
+/// session-only views.
 fn group_sessions_by_epk(
     sessions: &HashMap<(String, String), Vec<RoomMeta>>,
     skip_daemon: bool,
@@ -2346,10 +2388,16 @@ impl FederatedSessions {
     /// relay_name, and room metadata so the extension can populate its
     /// `BrokerRemote.federatedPeers` map + include them in `list_peers`.
     /// Serves the SHARED grouping ([`group_sessions_by_epk`]) the rooms_check
-    /// response is built from, with the app-side `is_daemon` filter.
+    /// response is built from. Daemon control rooms are INCLUDED: a
+    /// federated machine whose launcher daemon is up but has NO pi sessions
+    /// still appears in the list (the app's caps union + machine row key
+    /// off them, and its `is_daemon` filter keeps the control room itself
+    /// out of session display) — dropping them here made a daemon-only
+    /// machine INVISIBLE to the app until a session opened. The CLI's
+    /// control-room discovery rides rooms_check, which shares this grouping.
     pub async fn federated_peer_list_json(&self) -> String {
         let sessions = self.sessions.lock().await;
-        let grouped = group_sessions_by_epk(&sessions, true);
+        let grouped = group_sessions_by_epk(&sessions, false);
         let peers: Vec<serde_json::Value> = grouped
             .into_iter()
             .map(|(epk, (relay, rooms))| {
