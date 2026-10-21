@@ -1,0 +1,8 @@
+# Dummy fixtures — not credentials.
+# Ed25519Identity.swift: a doc-comment EXAMPLE key for format illustration.
+app/Sources/UnBienCore/Crypto/Ed25519Identity.swift:8:generic-api-key
+app/Sources/UnBienCore/Crypto/Ed25519Identity.swift:8:9:generic-api-key
+# pair_request.jsonl: recorded fake pairing fixture (token is test data from
+# a captured dev session with a placeholder device).
+app/Tests/UnBienCoreTests/Fixtures/pair_request.jsonl:1:generic-api-key
+app/Tests/UnBienCoreTests/Fixtures/pair_request.jsonl:1:1:generic-api-key
