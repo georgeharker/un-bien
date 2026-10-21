@@ -476,8 +476,14 @@ companion to the app:
 
 ```bash
 npm install -g @geohar/unbien-cli
-unbien            # bare `unbien` = connect: pick a session, chat, steer
+unbien pair '<unbien://pair?…>'   # once, on a new device: registers it with the machine
+unbien                            # bare `unbien` = connect: pick a session, chat, steer
 ```
+
+`pair` grants trust, `connect` attaches — invite URIs are for `pair` only. See
+the [pairing vs connecting guide](https://github.com/georgeharker/un-bien/blob/main/unbien-cli/README.md#pairing-vs-connecting)
+for the awaited handshake, the relay URL, re-pairing, and how to read
+failures.
 
 Multi-relay, `/connect` session switching, busy-aware submit (typing while
 busy steers, `/queue` waits for the turn to end). The full command surface —

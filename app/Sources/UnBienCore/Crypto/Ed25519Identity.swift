@@ -5,6 +5,7 @@ import Foundation
 /// reference impl's `@noble/ed25519` and the relay's `ed25519-dalek`
 /// (DESIGN §5, §10.1). Backed by CryptoKit `Curve25519.Signing`.
 public struct Ed25519Identity: Sendable {
+    // gitleaks:allow — a type declaration, not a key.
     public let privateKey: Curve25519.Signing.PrivateKey
 
     public init(privateKey: Curve25519.Signing.PrivateKey) {
