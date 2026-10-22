@@ -39,6 +39,18 @@ public enum InboundFrame: Equatable, Sendable {
                 throw DecodeError.invalidMessage("challenge missing 'nonce'")
             }
             return .challenge(nonce: nonce)
+        case "identity_ack":
+            // Lenient decode: missing fields surface at the VERIFIER
+            // (refused .malformed) rather than as a parse throw — the
+            // receive loop must survive frames from relays that shape the
+            // ack differently, and the trust decision is the verifier's.
+            return .identityAck(RelayIdentityAck(
+                relayPubkey: object["relay_pubkey"] as? String ?? "",
+                relayName: object["relay_name"] as? String ?? "",
+                relayUrl: object["relay_url"] as? String ?? "",
+                endpoints: (object["endpoints"] as? [String]) ?? [],
+                nonce: object["nonce"] as? String ?? "",
+                sig: object["sig"] as? String ?? ""))
         case "error":
             return .error(code: object["code"] as? String, message: object["message"] as? String,
                           peer: object["peer"] as? String)

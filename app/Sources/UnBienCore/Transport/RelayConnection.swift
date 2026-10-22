@@ -34,8 +34,17 @@ public actor RelayConnection {
         try await channel.ping(timeout: timeout)
     }
 
+    /// The challenge nonce THIS connection answered (P7): the relay's
+    /// `identity_ack` signs it, binding the proof to this socket — a replayed
+    /// ack from another connection fails `verifyRelayIdentityAck`. Set
+    /// during ``authenticate()``; nil before it or on relays predating the
+    /// challenge-response handshake.
+    public private(set) var challengeNonceB64: String?
+
     /// Run the handshake. Sends `hello`, awaits `challenge`, replies `auth`.
-    /// The relay starts routing silently after `auth` (no explicit ack).
+    /// The relay starts routing silently after `auth` (no explicit ack)
+    /// — except relays ≥0.8.6, which follow with `identity_ack` (P7,
+    /// verified in the event loop via `verifyRelayIdentityAck`).
     public func authenticate() async throws {
         let hello = RelayControlOut.hello(pubkey: identity.publicKeyBase64, roomID: appRoomID)
         try await channel.send(encode(hello))
@@ -50,6 +59,7 @@ public actor RelayConnection {
             guard let nonceBytes = Base64.decodeTolerant(nonce) else {
                 throw ConnectionError.unexpectedFrame(firstLine)
             }
+            challengeNonceB64 = nonce
             let sig = try identity.sign(nonceBytes)
             try await channel.send(encode(RelayControlOut.auth(sig: Base64.standard(sig))))
         case let .error(code, message, _):
@@ -100,6 +110,54 @@ public actor RelayConnection {
         } catch {
             connLog.error("pairing_set push failed (federated replies refused until reconnect): \(String(describing: error), privacy: .public)")
         }
+    }
+
+    /// Result of checking an `identity_ack` (P7 device-pairing pin) — the
+    /// Swift mirror of the extension's `RelayIdentityCheck`. `.refused`
+    /// names why: `wrong_nonce` (an ack replayed from another connection —
+    /// indistinguishable from a mismatched handshake), `malformed` (fields
+    /// absent or not the right shapes), `bad_sig` (the claimed key didn't
+    /// sign the claimed bytes), `pin_mismatch` (a VERIFIED relay that is not
+    /// the relay this app paired — the MITM / DNS-hijack case).
+    public enum RelayIdentityCheck: Equatable, Sendable {
+        case verified(RelayIdentity)
+        case refused(reason: String)
+    }
+
+    /// Pure check of the relay's post-auth `identity_ack`: proves the relay
+    /// controls `relay_pubkey` on THIS connection (nonce-bound) and that the
+    /// pubkey matches the pin recorded at first contact (TOFU). The
+    /// signature is over `nonce|relay_pubkey|relay_name|relay_url` exactly
+    /// as the relay builds it; `endpoints` ride unsigned (reachability
+    /// metadata — dialing a spoofed endpoint fails the pin, so trust never
+    /// depends on them). Mirrors the ext's `verifyRelayIdentityAck` — the
+    /// two must not diverge in message shape or refusal reasons.
+    public static func verifyRelayIdentityAck(
+        _ ack: RelayIdentityAck,
+        challengeNonce: String?,
+        pinnedKey: String?
+    ) -> RelayIdentityCheck {
+        // No challenge captured (pre-handshake frame, or a relay that never
+        // challenged) — an ack we cannot bind is an ack we cannot trust,
+        // and a NONCE mismatch with a valid signature is a replay across
+        // connections: both refuse.
+        guard let challenge = challengeNonce, ack.nonce == challenge else {
+            return .refused(reason: "wrong_nonce")
+        }
+        guard let pkRaw = Base64.decodeTolerant(ack.relayPubkey), pkRaw.count == 32,
+              let sig = Base64.decodeTolerant(ack.sig), !ack.sig.isEmpty else {
+            return .refused(reason: "malformed")
+        }
+        let message = "\(ack.nonce)|\(ack.relayPubkey)|\(ack.relayName)|\(ack.relayUrl)"
+        guard Ed25519.verify(signature: sig, message: Data(message.utf8), publicKeyRaw: pkRaw) else {
+            return .refused(reason: "bad_sig")
+        }
+        if let pinned = pinnedKey, pinned != ack.relayPubkey {
+            return .refused(reason: "pin_mismatch")
+        }
+        return .verified(RelayIdentity(
+            relayPubkey: ack.relayPubkey, relayName: ack.relayName,
+            relayUrl: ack.relayUrl, endpoints: ack.endpoints))
     }
 
     /// Build the signed pairing blob for `identity` — pure + testable.

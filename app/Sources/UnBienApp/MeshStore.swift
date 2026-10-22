@@ -59,6 +59,17 @@ public final class MeshStore: ObservableObject {
         persist()
     }
 
+    /// Record the relay's pinned identity key (P7 TOFU): set at the first
+    /// VERIFIED identity_ack, checked on every reconnect. No-op if the id
+    /// isn't found. Never overwrites an existing pin from this path — a pin
+    /// change is a re-pair event, not an automatic mutation.
+    public func pinRelayKey(id: UUID, key: String) {
+        guard let idx = config.relays.firstIndex(where: { $0.id == id }),
+              config.relays[idx].pinnedRelayKey == nil else { return }
+        config.relays[idx].pinnedRelayKey = key
+        persist()
+    }
+
     public func upsertMachine(_ machine: PairedMachine) {
         config.upsert(machine)
         persist()

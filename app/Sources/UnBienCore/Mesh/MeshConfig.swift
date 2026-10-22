@@ -6,11 +6,19 @@ public struct RelayConfig: Codable, Equatable, Sendable, Identifiable {
     public let id: UUID
     public var name: String
     public var url: String
+    /// The relay's pinned Ed25519 pubkey (P7 TOFU): recorded at first
+    /// VERIFIED `identity_ack`, checked on every reconnect — a relay that
+    /// answers with a different key is refused (pin_mismatch: the MITM /
+    /// DNS-hijack case). Nil = first contact not yet made (TOFU pending).
+    /// Optional so stored configs pre-dating P7 decode unchanged.
+    public var pinnedRelayKey: String?
 
-    public init(id: UUID = UUID(), name: String, url: String) {
+    public init(id: UUID = UUID(), name: String, url: String,
+                pinnedRelayKey: String? = nil) {
         self.id = id
         self.name = name
         self.url = url
+        self.pinnedRelayKey = pinnedRelayKey
     }
 
     /// Normalize the configured endpoint to a `ws(s)://` URL for the socket.

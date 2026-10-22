@@ -835,6 +835,13 @@ extension AppModel {
 
     private func handle(control event: RelayControlIn, relayID: UUID) {
         switch event {
+        case let .identityAck(ack):
+            // Async hop: reading the connection's captured challenge nonce
+            // crosses RelayConnection's actor isolation (the handler runs on
+            // the main actor). Policy lives in handleRelayIdentityAck.
+            Task { @MainActor in
+                await self.handleRelayIdentityAck(ack, relayID: relayID)
+            }
         case let .error(code, detail, peer):
             // Relay-origin refusal (e.g. a rooms_check unknown_peer for an unpaired
             // machine, design 01M1ZE43): attribute it to the machine so the UI can

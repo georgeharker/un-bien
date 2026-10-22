@@ -154,6 +154,13 @@ public struct PresenceState: Codable, Equatable, Sendable {
 /// Relay → app control events (auth challenge + presence/rooms fan-out).
 public enum RelayControlIn: Equatable, Sendable {
     case challenge(nonce: String)
+    /// The relay's post-auth identity proof (P7, relay ≥0.8.6): signature
+    /// over `nonce|relay_pubkey|relay_name|relay_url` where the nonce is
+    /// THIS connection's challenge — an ack replayed from another connection
+    /// fails verification. `endpoints` (P6) are unsigned reachability
+    /// metadata; the trust decision rides the signature + pinned key only.
+    /// Absent on relays predating the ack (lenient — no identity known).
+    case identityAck(RelayIdentityAck)
     /// `peer` is set when the relay ATTRIBUTES the error to a target machine
     /// (e.g. a rooms_check refusal for an unpaired peer, design 01M1ZE43);
     /// nil for an unattributed/auth-time rejection.
@@ -168,4 +175,44 @@ public enum RelayControlIn: Equatable, Sendable {
     case roomMetaUpdated(
         peer: String, roomID: String, model: String?, name: String?,
         parent: String?, parentSessionID: String?)
+}
+
+/// The relay's `identity_ack` frame as received (pre-verification): the
+/// claimed identity plus the nonce + signature binding it to THIS
+/// connection's challenge. Verification happens in
+/// ``RelayConnection/verifyRelayIdentityAck(_:challengeNonce:pinnedKey:)``.
+public struct RelayIdentityAck: Equatable, Sendable {
+    public let relayPubkey: String
+    public let relayName: String
+    public let relayUrl: String
+    public let endpoints: [String]
+    public let nonce: String
+    public let sig: String
+
+    public init(relayPubkey: String, relayName: String, relayUrl: String,
+                endpoints: [String], nonce: String, sig: String) {
+        self.relayPubkey = relayPubkey
+        self.relayName = relayName
+        self.relayUrl = relayUrl
+        self.endpoints = endpoints
+        self.nonce = nonce
+        self.sig = sig
+    }
+}
+
+/// A VERIFIED relay identity (P7): the ack's signature checked against the
+/// connection's challenge nonce, and — when a pin exists — the pinned key.
+public struct RelayIdentity: Equatable, Sendable {
+    public let relayPubkey: String
+    public let relayName: String
+    public let relayUrl: String
+    public let endpoints: [String]
+
+    public init(relayPubkey: String, relayName: String, relayUrl: String,
+                endpoints: [String]) {
+        self.relayPubkey = relayPubkey
+        self.relayName = relayName
+        self.relayUrl = relayUrl
+        self.endpoints = endpoints
+    }
 }

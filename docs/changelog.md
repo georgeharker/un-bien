@@ -6,8 +6,17 @@ requirements where they matter.
 
 ## App
 
-### 1.4.1 (build 9, 2026-10-21)
+### 1.5 (build 10, 2026-10-21)
 
+- **Relay identity verification (P7, with relay ≥0.8.6)** — the app now
+  verifies the relay's post-auth `identity_ack`: a nonce-bound Ed25519
+  signature proving WHICH relay answered this connection. First verified
+  contact pins the relay's pubkey (TOFU, stored per relay in the mesh
+  config); every reconnect re-verifies, and a mismatch — a verified relay
+  that is not the one you paired, the MITM/DNS-hijack case — REFUSES the
+  connection before any of its traffic is trusted. The app now matches the
+  extension and CLI: the trust plane is symmetric on every client. Relays
+  predating the ack are lenient (no identity known, nothing refused).
 - **Daemon caps arrive by push for direct machines** — the launcher's
   control-room announce carries caps + hostname, harvested into the
   daemon-presence store on arrival (announce, rooms_check snapshot, or
