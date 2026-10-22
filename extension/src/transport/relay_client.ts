@@ -216,7 +216,7 @@ export function verifyRelayIdentityAck(
   return { ok: true, relayPubkey, relayName, relayUrl, endpoints }
 }
 
-export class RelayClient extends EventEmitter {
+export class RelayClient extends EventEmitter<RelayClientEvents> {
   private ws: WebSocket | null = null
   /** Epoch ms of the last inbound frame (message / relay ping / pong). */
   private lastActivityAt = 0
