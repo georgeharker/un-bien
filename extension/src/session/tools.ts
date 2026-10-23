@@ -7,7 +7,7 @@ import {
   formatPeerInventoryDetailed,
   type RosterInfo,
 } from "./peer_inventory.js"
-import { MeshInbox, type MeshMessage } from "./mesh_inbox.js"
+import { MeshInbox, matchesFilter, type MeshMessage } from "./mesh_inbox.js"
 
 const NOT_IN_SESSION = "Not in a session. Run /unbien join first"
 const ACK_TIMEOUT_MS = 5_000
@@ -27,11 +27,20 @@ interface RequestInput {
 }
 
 type SendStatus =
-  "received" | "busy" | "denied" | "timeout" | "sent" | "refused" | "unknown_peer"
+  | "received"
+  | "busy"
+  | "denied"
+  | "timeout"
+  | "sent"
+  | "refused"
+  | "unknown_peer"
 
 interface SendDetails {
   status: SendStatus
   ok: boolean
+  /** The outbound envelope id — pass as `re` to mesh_wait_message to await
+   *  the reply. Set on unicast ACK delivery. */
+  id?: string
   error?: string
   target?: string
   reason?: TransportErrorReason
@@ -46,10 +55,13 @@ interface SendDetails {
  *                        For unicast targets the broker auto-replies with
  *                        `received | busy | denied`. For broadcast/multicast
  *                        the tool is fire-and-forget (status `sent`).
- *   - `agent_request`  — **deprecated**. Still works (send + block on reply
- *                        via `re` correlation) but the LLM should migrate
- *                        to the event-driven send+inbox pattern. Each call
- *                        emits a one-shot warning to stderr.
+ *   - `agent_request`  — send + block until the correlated reply lands in
+ *                        the inbox. Reliability comes from the inbox, not
+ *                        from `SessionPeer.request`: denial is reported
+ *                        before blocking, a late reply is kept (not
+ *                        dropped), the user can cancel mid-wait, and a
+ *                        peer's fresh request early-interrupts the wait
+ *                        (mutual-wait deadlock break).
  *
  * Reply pattern (new world): when you receive a message you want to answer,
  * send back another envelope with `re=<original-id>`. The original sender
@@ -63,7 +75,10 @@ export function registerAgentTools(
   getSessionPeer: () => SessionPeer | null,
   getInbox: () => MeshInbox,
   getRemoteRelayPeers: () => string[] = () => [],
-  getRemoteRelayPeersDetail: () => Map<string, { relayName: string; addresses: string[] }> = () => new Map(),
+  getRemoteRelayPeersDetail: () => Map<
+    string,
+    { relayName: string; addresses: string[] }
+  > = () => new Map(),
   getRelay: () => { send: (data: string) => void } | null = () => null,
 ): void {
   const SendParams = Type.Object({
@@ -160,21 +175,34 @@ export function registerAgentTools(
                 re: re ?? null,
               }
               try {
-                relay.send(JSON.stringify({
-                  type: "pi_envelope",
-                  to_pc: epk,
-                  envelope,
-                }))
+                relay.send(
+                  JSON.stringify({
+                    type: "pi_envelope",
+                    to_pc: epk,
+                    envelope,
+                  }),
+                )
                 const details: SendDetails = { status: "sent", ok: true }
                 return {
-                  content: [{ type: "text", text: `Sent to federated peer (${info.relayName}).` }],
+                  content: [
+                    {
+                      type: "text",
+                      text: `Sent to federated peer (${info.relayName}).`,
+                    },
+                  ],
                   details,
                 }
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err)
-                const details: SendDetails = { status: "timeout", ok: false, error: msg }
+                const details: SendDetails = {
+                  status: "timeout",
+                  ok: false,
+                  error: msg,
+                }
                 return {
-                  content: [{ type: "text", text: `Federated send failed: ${msg}` }],
+                  content: [
+                    { type: "text", text: `Federated send failed: ${msg}` },
+                  ],
                   details,
                 }
               }
@@ -213,6 +241,9 @@ export function registerAgentTools(
         const details: SendDetails = {
           status: ack.status,
           ok,
+          // correlate a later mesh_wait_message({re}) back to this send
+          // (received only — a failed send has nothing to wait on)
+          ...(ok ? { id: ack.id } : {}),
           ...(ack.target === undefined ? {} : { target: ack.target }),
           ...(ack.error === undefined ? {} : { error: ack.error }),
           ...(ack.reason === undefined ? {} : { reason: ack.reason }),
@@ -236,7 +267,12 @@ export function registerAgentTools(
 
   const ListPeersParams = Type.Object({})
   const WhoAmIParams = Type.Object({})
-  type WhoAmI = { address: string; name: string; broker: string; socket: string }
+  type WhoAmI = {
+    address: string
+    name: string
+    broker: string
+    socket: string
+  }
 
   pi.registerTool<typeof ListPeersParams, { peers: string[]; self?: WhoAmI }>({
     name: "list_peers",
@@ -266,7 +302,11 @@ export function registerAgentTools(
         // might update on the NEXT call if the response hasn't arrived yet.
         const relay = getRelay()
         if (relay) {
-          try { relay.send(JSON.stringify({ type: "get_federated_peer_list" })) } catch { /* best-effort */ }
+          try {
+            relay.send(JSON.stringify({ type: "get_federated_peer_list" }))
+          } catch {
+            /* best-effort */
+          }
         }
         // Internal use of the request/reply primitive is fine — broker
         // replies are synthesised in-process (`_handleBrokerMessage`)
@@ -369,7 +409,9 @@ export function registerAgentTools(
         socket,
       }
       return {
-        content: [{ type: "text", text: `${details.address} (broker "${broker}")` }],
+        content: [
+          { type: "text", text: `${details.address} (broker "${broker}")` },
+        ],
         details,
       }
     },
@@ -377,17 +419,21 @@ export function registerAgentTools(
 
   pi.registerTool<typeof RequestParams, unknown>({
     name: "agent_request",
-    label: "Agent Request (deprecated)",
+    label: "Agent Request",
     description:
-      "DEPRECATED — prefer `agent_send` + observing your inbox for the " +
-      "reply (correlated by `re=<your-send-id>`). This tool still works: " +
-      "it sends a message and synchronously blocks until the peer replies " +
-      "or the timeout fires. Default 30s. Will be removed in a future " +
-      "release; migrate to the event-driven pattern in the agent-network skill.",
+      "Send a message to one peer and block until their reply (a message " +
+      "with `re=<this send's id>`) lands in your inbox, the timeout " +
+      "(default 30s) fires, or the user cancels. Reliable: broker denial " +
+      "is reported before blocking, and a late reply is kept in the inbox " +
+      "(recover via mesh_list_messages with the same re) instead of being " +
+      "dropped. Mutual-wait deadlock-safe: if the peer sends you a fresh " +
+      "uncorrelated message (e.g. their own request) while you're blocked, " +
+      "the wait returns early so you can answer and unblock them, then " +
+      "re-issue this tool.",
     promptSnippet:
-      "agent_request({to, body, timeout_ms?}): DEPRECATED synchronous request/reply (blocks current turn). Prefer agent_send + inbox observation.",
+      "agent_request({to, body, timeout_ms?}): send + block for the correlated reply (cancellable, mutual-wait safe). If the reply can wait for next turn, prefer agent_send + inbox observation.",
     parameters: RequestParams,
-    execute: async (_toolCallId, params) => {
+    execute: async (_toolCallId, params, signal) => {
       const peer = getSessionPeer()
       if (!peer) {
         return {
@@ -403,26 +449,71 @@ export function registerAgentTools(
           details: { error: msg },
         }
       }
+      if (signal?.aborted) throw new Error("aborted")
       const timeout =
         typeof timeout_ms === "number" && timeout_ms > 0
           ? timeout_ms
           : LEGACY_REQUEST_TIMEOUT_MS
+      // 1. Broker-ACK'd delivery — a denial/timeout surfaces HERE instead of
+      // blocking on a reply that can never come.
+      let ack: AckResult
       try {
-        const reply = await peer.request(to, body, timeout)
-        const text =
-          typeof reply.body === "string"
-            ? reply.body
-            : JSON.stringify(reply.body)
-        return {
-          content: [{ type: "text", text }],
-          details: reply.body,
-        }
+        ack = await peer.sendWithAck(to, body, null, ACK_TIMEOUT_MS)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         return {
-          content: [{ type: "text", text: `Request failed: ${msg}` }],
+          content: [{ type: "text", text: `Failed to send: ${msg}` }],
           details: { error: msg },
         }
+      }
+      if (ack.status !== "received") {
+        return {
+          content: [{ type: "text", text: _formatAck(to, ack, null) }],
+          details: {
+            status: ack.status,
+            ok: false,
+            error: ack.error,
+            reason: ack.reason,
+          },
+        }
+      }
+      // 2. Wait for the correlated reply in the inbox. Cancellation resolves
+      // to null + signal.aborted (→ "aborted"); the peer's fresh request
+      // (re === null) early-interrupts the wait — the mutual-wait deadlock
+      // break, else both sides stall to their timeouts doing nothing.
+      const reply = await getInbox().wait({ re: ack.id }, timeout, {
+        signal,
+        interruptOnUnmatched: true,
+      })
+      if (!reply) {
+        if (signal?.aborted) throw new Error("aborted")
+        const msg =
+          `No reply within ${timeout}ms (send id ${ack.id}). If it arrives ` +
+          `later it stays in your inbox — check ` +
+          `mesh_list_messages({re: "${ack.id}"}) instead of resending blindly.`
+        return {
+          content: [{ type: "text", text: msg }],
+          details: { error: msg, sendId: ack.id },
+        }
+      }
+      if (reply.re !== ack.id) {
+        // early interrupt: this message did NOT match the filter
+        const msg =
+          `Early interrupt (not a filter match): ${reply.from} sent ` +
+          `${reply.id} (re=${reply.re}) while awaiting a reply to send ` +
+          `${ack.id} — possible mutual wait (they may be blocked waiting ` +
+          `on us). Handle this message (reply via agent_send), then ` +
+          `re-issue agent_request or mesh_wait_message({re: "${ack.id}"}).`
+        return {
+          content: [{ type: "text", text: msg }],
+          details: reply,
+        }
+      }
+      const text =
+        typeof reply.body === "string" ? reply.body : JSON.stringify(reply.body)
+      return {
+        content: [{ type: "text", text }],
+        details: reply.body,
       }
     },
   })
@@ -449,17 +540,32 @@ export function registerAgentTools(
       const { id } = params as { id: string }
       const msg = getInbox().get(id)
       return {
-        content: [{ type: "text", text: msg ? JSON.stringify(msg) : "(no such message)" }],
+        content: [
+          {
+            type: "text",
+            text: msg ? JSON.stringify(msg) : "(no such message)",
+          },
+        ],
         details: msg,
       }
     },
   })
 
   const ListMessagesParams = Type.Object({
-    from: Type.Optional(Type.String({ description: "Only messages from this sender address." })),
-    re: Type.Optional(Type.String({ description: "Only messages with this correlation id (re)." })),
-    sinceMs: Type.Optional(Type.Number({ description: "Only messages at-or-after this epoch ms." })),
-    limit: Type.Optional(Type.Number({ description: "Max messages to return (newest N)." })),
+    from: Type.Optional(
+      Type.String({ description: "Only messages from this sender address." }),
+    ),
+    re: Type.Optional(
+      Type.String({
+        description: "Only messages with this correlation id (re).",
+      }),
+    ),
+    sinceMs: Type.Optional(
+      Type.Number({ description: "Only messages at-or-after this epoch ms." }),
+    ),
+    limit: Type.Optional(
+      Type.Number({ description: "Max messages to return (newest N)." }),
+    ),
   })
   pi.registerTool<typeof ListMessagesParams, { messages: MeshMessage[] }>({
     name: "mesh_list_messages",
@@ -473,24 +579,48 @@ export function registerAgentTools(
     parameters: ListMessagesParams,
     execute: async (_toolCallId, params) => {
       const { from, re, sinceMs, limit } = params as {
-        from?: string; re?: string; sinceMs?: number; limit?: number
+        from?: string
+        re?: string
+        sinceMs?: number
+        limit?: number
       }
       const messages = getInbox().list(
         { from, re, sinceMs },
         typeof limit === "number" && limit > 0 ? limit : undefined,
       )
-      const text = messages.length === 0
-        ? "(no messages)"
-        : messages.map((m) => `${m.id}  from=${m.from}${m.re ? ` re=${m.re}` : ""}`).join("\n")
+      const text =
+        messages.length === 0
+          ? "(no messages)"
+          : messages
+              .map((m) => `${m.id}  from=${m.from}${m.re ? ` re=${m.re}` : ""}`)
+              .join("\n")
       return { content: [{ type: "text", text }], details: { messages } }
     },
   })
 
   const WaitMessageParams = Type.Object({
-    from: Type.Optional(Type.String({ description: "Wait for a message from this sender address." })),
-    re: Type.Optional(Type.String({ description: "Wait for a message with this correlation id (re) — the reply to your agent_send." })),
-    sinceMs: Type.Optional(Type.Number({ description: "Only consider messages at-or-after this epoch ms." })),
-    timeout_ms: Type.Optional(Type.Number({ description: "Max ms to wait (default 30000). 0 or non-positive = poll (return immediately if a match is already stored, else null)." })),
+    from: Type.Optional(
+      Type.String({
+        description: "Wait for a message from this sender address.",
+      }),
+    ),
+    re: Type.Optional(
+      Type.String({
+        description:
+          "Wait for a message with this correlation id (re) — the reply to your agent_send.",
+      }),
+    ),
+    sinceMs: Type.Optional(
+      Type.Number({
+        description: "Only consider messages at-or-after this epoch ms.",
+      }),
+    ),
+    timeout_ms: Type.Optional(
+      Type.Number({
+        description:
+          "Max ms to wait (default 30000). 0 or non-positive = poll (return immediately if a match is already stored, else null).",
+      }),
+    ),
   })
   pi.registerTool<typeof WaitMessageParams, MeshMessage | null>({
     name: "mesh_wait_message",
@@ -500,19 +630,57 @@ export function registerAgentTools(
       "return it; or return immediately if one is already stored. The " +
       "agent_request replacement: agent_send with `re`, then wait_message with " +
       "the same `re`. A reply that arrived before this call is returned at " +
-      "once (not re-awaited). Returns null on timeout.",
+      "once (not re-awaited). Returns null on timeout. User-cancellable, and " +
+      "mutual-wait safe: if the awaited peer sends a fresh uncorrelated " +
+      "message (or, with a from filter, anything from them) while you wait, " +
+      "it returns early flagged as an early interrupt — handle it and re-wait.",
     promptSnippet:
-      "mesh_wait_message({from?, re?, timeout_ms?}): blocks up to timeout (default 30s) for a matching MeshMessage; returns it or null. This is the reply-wait primitive.",
+      "mesh_wait_message({from?, re?, timeout_ms?}): blocks up to timeout (default 30s) for a matching MeshMessage; returns it or null. Cancellable + mutual-wait safe — the reply-wait primitive.",
     parameters: WaitMessageParams,
-    execute: async (_toolCallId, params) => {
+    execute: async (_toolCallId, params, signal) => {
       const { from, re, sinceMs, timeout_ms } = params as {
-        from?: string; re?: string; sinceMs?: number; timeout_ms?: number
+        from?: string
+        re?: string
+        sinceMs?: number
+        timeout_ms?: number
       }
+      if (signal?.aborted) throw new Error("aborted")
       const timeout =
         typeof timeout_ms === "number" && timeout_ms > 0 ? timeout_ms : 30_000
-      const msg = await getInbox().wait({ from, re, sinceMs }, timeout)
+      const filter = { from, re, sinceMs }
+      const msg = await getInbox().wait(filter, timeout, {
+        signal,
+        interruptOnUnmatched: true,
+      })
+      if (!msg) {
+        if (signal?.aborted) throw new Error("aborted")
+        return {
+          content: [{ type: "text", text: "(no message within timeout)" }],
+          details: null,
+        }
+      }
+      if (matchesFilter(msg, filter)) {
+        return {
+          content: [{ type: "text", text: JSON.stringify(msg) }],
+          details: msg,
+        }
+      }
+      // early interrupt: the message arrived but does not satisfy the filter
+      const expected =
+        [
+          from !== undefined && `from=${from}`,
+          re !== undefined && `re=${re}`,
+          sinceMs !== undefined && `sinceMs=${sinceMs}`,
+        ]
+          .filter(Boolean)
+          .join(", ") || "(no filter)"
+      const text =
+        `Early interrupt (NOT a filter match): ${msg.from} sent ` +
+        `${msg.id} (re=${msg.re}) — possible mutual wait: they may be ` +
+        `blocked waiting on us. Handle this message (reply via agent_send), ` +
+        `then re-issue mesh_wait_message. Filter was: ${expected}.`
       return {
-        content: [{ type: "text", text: msg ? JSON.stringify(msg) : "(no message within timeout)" }],
+        content: [{ type: "text", text }],
         details: msg,
       }
     },
