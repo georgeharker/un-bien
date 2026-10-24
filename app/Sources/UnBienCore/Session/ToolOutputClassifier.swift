@@ -23,6 +23,14 @@ public enum ToolOutputClassifier {
     private static let bashToolPattern = "^(bash|shell|zsh|sh|exec|command|run|terminal)"
     private static let readToolPattern = "(read|view|cat|open|file)"
 
+    /// Whether `tool` is bash-family — the same pattern the OUTPUT classifier
+    /// uses. PUBLIC: the app's tool-card INPUT face reuses it to render the
+    /// command arg as a shell snippet instead of raw args JSON, and the two
+    /// must never disagree about what a shell tool is.
+    public static func isBashFamily(_ tool: String) -> Bool {
+        matches(bashToolPattern, tool, caseInsensitive: true)
+    }
+
     // File extension → highlight.js language id. Unknown ext → nil (app auto-detects).
     private static let extLangMap: [String: String] = [
         "swift": "swift", "ts": "typescript", "tsx": "typescript",

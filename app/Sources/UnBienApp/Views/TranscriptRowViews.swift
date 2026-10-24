@@ -501,6 +501,24 @@ struct ToolCardView: View {
     /// The new text an edit/write applies, from persisted args (lang inferred
     /// from the path arg). Nonisolated-safe: pure card data.
     nonisolated static func content(for card: ToolCard) -> (text: String, lang: String?)? {
+        // Tool-specific INPUT faces — the call's identity as a snippet,
+        // replacing the raw-JSON args face:
+        // - codemode: the whole call IS a JavaScript snippet (args.code,
+        //         including its // @options header) — rendered as JS.
+        // - bash-family: the command as a shell snippet. In BACKFILLED
+        //         history this is all a collapsed card could ever hint at,
+        //         and raw {"command": …} JSON hid it; live and replay now
+        //         show the same face (output classification was already
+        //         uniform — design 01M177AF; the input face now is too).
+        if card.tool.lowercased().contains("codemode"),
+           let code = card.args["code"]?.stringValue, !code.isEmpty {
+            return (code, "javascript")
+        }
+        if ToolOutputClassifier.isBashFamily(card.tool),
+           let command = stringArg(card.args, ["command", "cmd", "script"]),
+           !command.isEmpty {
+            return (command, "shell")
+        }
         for key in ["content", "contents", "text", "new_string", "new_str", "newText"] {
             if let text = card.args[key]?.stringValue, !text.isEmpty {
                 return (text, contentLang(for: card))
@@ -627,6 +645,14 @@ struct ToolCardView: View {
             return true
         }
         if let hunks = card.hunks, !hunks.isEmpty { return true }
+        // codemode is rich BY IDENTITY (a JS snippet is small + is the whole
+        // call — worth the default expansion); bash-family is NOT — the
+        // command face renders on manual expand, and auto-expanding every
+        // shell call would flip the default for all existing history.
+        if card.tool.lowercased().contains("codemode"),
+           let code = card.args["code"]?.stringValue, !code.isEmpty {
+            return true
+        }
         for key in ["content", "contents", "text", "new_string", "new_str", "newText"] {
             if let value = card.args[key]?.stringValue, !value.isEmpty { return true }
         }
