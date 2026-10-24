@@ -280,11 +280,28 @@ public final class AttributedTextCache: @unchecked Sendable {
 
     // MARK: - Sync main-path highlight (MarkdownUI's synchronous protocol)
 
+    /// Normalize a highlight language for the engine: highlight.js registers
+    /// bash's aliases as sh/zsh — NOT "shell" — and an unknown language makes
+    /// Highlighter return nil (the caller's plain-text fallback). Map the
+    /// known alias gaps HERE — the single chokepoint every producer path
+    /// crosses (tool content faces, output code blocks, markdown fences) —
+    /// so a semantic label like "shell" highlights instead of silently
+    /// degrading. Applied BEFORE the cache key so "shell" and "bash"
+    /// share one entry.
+    nonisolated static func normalizeHighlightLanguage(_ lang: String?) -> String? {
+        guard let lang, !lang.isEmpty else { return lang }
+        switch lang.lowercased() {
+        case "shell", "zsh", "sh": return "bash"
+        default: return lang
+        }
+    }
+
     /// Highlighted `code`, from cache when available. Synchronous because
     /// swift-markdown-ui's `CodeSyntaxHighlighter` protocol can't await; shares
     /// the same NSCache as the async path (cache-covered after first render).
     public func highlighted(_ code: String, language: String?, style: String,
                             font: PlatformFont?) -> AttributedString? {
+        let language = Self.normalizeHighlightLanguage(language)
         let key = Self.codeKey(style: style, fontName: font?.fontName,
                                fontSize: font?.pointSize ?? 0, language: language, code: code)
         if let hit = peek(key) { return AttributedString(hit) }
@@ -346,6 +363,7 @@ public final class AttributedTextCache: @unchecked Sendable {
     /// producer running on `evalQueue` (i.e. inside `attributed`).
     func highlightNSAttr(_ code: String, language: String?, style: String,
                          fontName: String?, fontSize: CGFloat) -> NSAttributedString? {
+        let language = Self.normalizeHighlightLanguage(language)
         let fk = fontName.map { "\($0):\(fontSize)" } ?? "system"
         let engineKey = "\(style)\u{1}\(fk)"
         let engine: Highlighter

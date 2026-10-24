@@ -8,6 +8,31 @@ import XCTest
 /// and the card can never disagree — these tests pin the shared logic.
 final class ToolCardContentFaceTests: XCTestCase {
 
+    // MARK: - highlight language normalization (the shell-alias gap)
+
+    func testShellFamilyLanguagesNormalizeToBash() {
+        // highlight.js registers bash's aliases as sh/zsh — NOT "shell" —
+        // and an unknown language makes the engine return nil (plain-text
+        // fallback). The chokepoint maps the family before the engine+key.
+        for lang in ["shell", "sh", "zsh", "SHELL", "Zsh"] {
+            XCTAssertEqual(AttributedTextCache.normalizeHighlightLanguage(lang), "bash",
+                           "\(lang) must normalize to bash")
+        }
+        XCTAssertEqual(AttributedTextCache.normalizeHighlightLanguage("bash"), "bash")
+        XCTAssertEqual(AttributedTextCache.normalizeHighlightLanguage("swift"), "swift")
+        XCTAssertEqual(AttributedTextCache.normalizeHighlightLanguage(nil), nil)
+        XCTAssertEqual(AttributedTextCache.normalizeHighlightLanguage(""), "")
+    }
+
+    func testShellHighlightEndToEnd() {
+        // The live engine (highlight.js via JSContext): "shell" previously
+        // produced nil — the plain-text fallback the bash command face showed.
+        // After normalization the same call highlights.
+        let result = AttributedTextCache.shared.highlighted(
+            "cargo test --quiet", language: "shell", style: "xcode", font: nil)
+        XCTAssertNotNil(result, "shell must highlight via the bash alias mapping")
+    }
+
     private func card(tool: String, args: [String: JSONValue]) -> ToolCard {
         ToolCard(toolCallID: "t1", tool: tool, args: args)
     }
