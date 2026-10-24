@@ -80,6 +80,31 @@ final class ToolCardContentFaceTests: XCTestCase {
         XCTAssertFalse(ToolOutputClassifier.isBashFamily("codemode"))
         XCTAssertFalse(ToolOutputClassifier.isBashFamily("read"))
         XCTAssertFalse(ToolOutputClassifier.isBashFamily("edit"))
+        XCTAssertFalse(ToolOutputClassifier.isBashFamily("grep"))
+    }
+
+    // MARK: - search tools (pi's grep/find) → shell-shaped face
+
+    func testGrepToolComposesShellFaceFromPatternAndPath() {
+        let c = card(tool: "grep", args: ["pattern": .string("UNBIEN_RELAY_BIND"),
+                                          "path": .string("relay/src")])
+        let face = ToolCardView.content(for: c)
+        XCTAssertEqual(face?.text, "grep \"UNBIEN_RELAY_BIND\" relay/src")
+        XCTAssertEqual(face?.lang, "shell")
+        XCTAssertFalse(ToolCardView.isRich(c), "same default as bash-family — face on expand")
+    }
+
+    func testGrepToolFaceEscapesEmbeddedQuotes() {
+        let c = card(tool: "grep", args: ["pattern": .string("say \"hi\" now")])
+        XCTAssertEqual(ToolCardView.content(for: c)?.text,
+                       "grep \"say \\\"hi\\\" now\"")
+    }
+
+    func testFindToolFaceAndEmptyPatternIsRaw() {
+        let c = card(tool: "find", args: ["pattern": .string("*.swift"),
+                                         "path": .string("app")])
+        XCTAssertEqual(ToolCardView.content(for: c)?.text, "find \"*.swift\" app")
+        XCTAssertNil(ToolCardView.content(for: card(tool: "grep", args: [:])))
     }
 
     // MARK: - existing faces unchanged

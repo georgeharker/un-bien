@@ -519,6 +519,20 @@ struct ToolCardView: View {
            !command.isEmpty {
             return (command, "shell")
         }
+        // Search tools (pi's grep/find — NOT bash-family: their identity is
+        // a pattern, not a command): the search composed as a shell-shaped
+        // face so the transcript reads like the bash command face — a grep
+        // call rendered as raw args JSON read as "unhighlighted" next to
+        // bash's rm/head. Embedded quotes are escaped so the face stays
+        // honest shell.
+        if card.tool == "grep" || card.tool == "find" {
+            let pattern = (stringArg(card.args, ["pattern", "query"]) ?? "")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            guard !pattern.isEmpty else { return nil }
+            let path = stringArg(card.args, ["path", "glob"]) ?? ""
+            let text = "\(card.tool) \"\(pattern)\"\(path.isEmpty ? "" : " \(path)")"
+            return (text, "shell")
+        }
         for key in ["content", "contents", "text", "new_string", "new_str", "newText"] {
             if let text = card.args[key]?.stringValue, !text.isEmpty {
                 return (text, contentLang(for: card))
