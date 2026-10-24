@@ -278,16 +278,38 @@ public final class AttributedTextCache: @unchecked Sendable {
         }
     }
 
-    // MARK: - Sync main-path highlight (MarkdownUI's synchronous protocol)
+                // MARK: - Sync main-path highlight (MarkdownUI's synchronous protocol)
 
-    /// Normalize a highlight language for the engine: highlight.js registers
-    /// bash's aliases as sh/zsh — NOT "shell" — and an unknown language makes
-    /// Highlighter return nil (the caller's plain-text fallback). Map the
-    /// known alias gaps HERE — the single chokepoint every producer path
-    /// crosses (tool content faces, output code blocks, markdown fences) —
-    /// so a semantic label like "shell" highlights instead of silently
-    /// degrading. Applied BEFORE the cache key so "shell" and "bash"
-    /// share one entry.
+                /// Highlight.js's bash grammar colors its `built_in` keywords — coreutils
+                /// (rm, head, ls, cat…) but NOT the search/filter and tool-runner family
+                /// (grep, find, sed, awk, git, node…), so those command words render
+                /// unstyled while their coreutils siblings glow. Augmented once per
+                /// engine, BEFORE the first highlight in the language (highlight.js
+                /// compiles a grammar lazily on first use and consumes the raw scopes —
+                /// the ordering contract; engine creation is exactly that moment).
+                /// augmentLanguage is the FORK's seam (upstream PR #10) — flip the
+                /// package pin back when it merges.
+                nonisolated static func augmentEngine(_ engine: Highlighter) {
+                                // The curated set (2026-10-23): search/filter, VCS, build/run, macOS
+                                // system, network/files — observed-frequency from this project's own
+                                // transcripts. hljs keywords match word tokens ANYWHERE in the block
+                                // (upstream's accepted tradeoff — test/which/where are English words
+                                // in the stock list), so additions stay command-shaped words.
+                                _ = engine.augmentLanguage(
+                                                "bash",
+                                                addingKeywords: "grep rg find sed awk xargs git gh cargo swift swiftc "
+                                                                + "xcodebuild xcodegen npm npx pnpm node launchctl tmux "
+                                                                + "open defaults plutil xcrun curl jq")
+                }
+
+                /// Normalize a highlight language for the engine: highlight.js registers
+                /// bash's aliases as sh/zsh — NOT "shell" — and an unknown language makes
+                /// Highlighter return nil (the caller's plain-text fallback). Map the
+                /// known alias gaps HERE — the single chokepoint every producer path
+                /// crosses (tool content faces, output code blocks, markdown fences) —
+                /// so a semantic label like "shell" highlights instead of silently
+                /// degrading. Applied BEFORE the cache key so "shell" and "bash"
+                /// share one entry.
     nonisolated static func normalizeHighlightLanguage(_ lang: String?) -> String? {
         guard let lang, !lang.isEmpty else { return lang }
         switch lang.lowercased() {
@@ -326,6 +348,7 @@ public final class AttributedTextCache: @unchecked Sendable {
             engine = existing
         } else {
             guard let instance = Highlighter() else { return nil }
+            Self.augmentEngine(instance)
             _ = instance.setTheme(style)
             if let font { instance.theme.setCodeFont(font) }
             engines[engineKey] = instance
@@ -371,6 +394,7 @@ public final class AttributedTextCache: @unchecked Sendable {
             engine = existing
         } else {
             guard let instance = Highlighter() else { return nil }
+            Self.augmentEngine(instance)
             _ = instance.setTheme(style)
             if let fontName, let font = Self.platformFont(fontName, fontSize) {
                 instance.theme.setCodeFont(font)

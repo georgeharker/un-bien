@@ -6,7 +6,7 @@ requirements where they matter.
 
 ## App
 
-### 1.5 (build 10, 2026-10-21)
+### 1.5 (build 14, 2026-10-21 → 2026-10-23)
 
 - **Relay identity verification (P7, with relay ≥0.8.6)** — the app now
   verifies the relay's post-auth `identity_ack`: a nonce-bound Ed25519
@@ -32,6 +32,33 @@ requirements where they matter.
   the peer list owns those rooms' liveness) — the same doctrine retires
   daemon presence only when a local snapshot genuinely lacks the control
   room.
+
+- **Transcript rendering — tool calls as snippets instead of raw JSON**:
+  - **codemode renders as JavaScript** — the call's `code` arg (with its
+    `// @options` header) as a highlighted JS snippet, rich by identity.
+  - **bash commands render as shell** — the `command` arg as a highlighted
+    snippet (both live and backfilled history; the output side was always
+    uniform — design 01M177AF — it was the INPUT face that hid the call).
+  - **pi's grep/find tools render shell-shaped faces** (`grep "pattern" path`)
+    — they aren't bash-family calls, so they had no face at all.
+- **Highlight pipeline fixed twice**:
+  - **"shell" highlights at all** — highlight.js registers bash's aliases
+    as sh/zsh, NOT shell; unknown languages make the engine return nil
+    (plain-text fallback). Language normalization now lands at the engine
+    chokepoint — bash OUTPUT blocks had silently rendered unhighlighted
+    all along. ` ```shell ` fences heal too.
+  - **The missing builtins — the grep mystery**: highlight.js's bash
+    `built_in` list covers coreutils (rm, head, ls, cat…) but not the
+    search/filter and tool-runner family (grep, find, sed, awk, git, node…),
+    so those command words rendered unstyled while their siblings glowed.
+    The engine pools now augment the grammar at creation with the curated
+    set: `grep rg find sed awk xargs git gh cargo swift swiftc xcodebuild
+xcodegen npm npx pnpm node launchctl tmux open defaults plutil xcrun
+curl jq` — via **our HighlighterSwift fork's `augmentLanguage` seam
+    (upstream PR #10)**; flip the package pin back when it merges.
+    highlight.js compiles grammars lazily and consumes raw scopes on first
+    use, so augmentation happens at engine creation — the documented
+    ordering contract, pinned by tests on both sides.
 
 ### 1.4 (build 8, 2026-10-15)
 

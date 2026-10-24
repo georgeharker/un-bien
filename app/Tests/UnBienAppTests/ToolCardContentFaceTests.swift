@@ -1,6 +1,7 @@
 import XCTest
 @testable import UnBienApp
 @testable import UnBienCore
+import Highlighter
 
 /// Tool-card INPUT faces (codemode-as-JS + bash-command-as-shell): the call's
 /// identity renders as a highlighted snippet instead of raw args JSON. The
@@ -31,6 +32,26 @@ final class ToolCardContentFaceTests: XCTestCase {
         let result = AttributedTextCache.shared.highlighted(
             "cargo test --quiet", language: "shell", style: "xcode", font: nil)
         XCTAssertNotNil(result, "shell must highlight via the bash alias mapping")
+    }
+
+    func testBashEngineAugmentedForSearchTools() {
+        // The engine POOLS augment bash's built_in list at creation (fork
+        // seam, upstream PR #10): the shared cache's output for a grep
+        // command must differ from an UN-augmented engine's — the command
+        // word gains the built_in styling highlight.js's stock grammar omits.
+        let command = "grep \"pattern\" path"
+        let augmentedOutput = AttributedTextCache.shared.highlighted(
+            command, language: "shell", style: "xcode", font: nil)
+        guard let plainEngine = Highlighter() else { return XCTFail("engine") }
+        _ = plainEngine.setTheme("xcode")
+        let plainOutput = plainEngine.highlight(command, as: "bash")
+        XCTAssertNotNil(augmentedOutput)
+        XCTAssertNotNil(plainOutput)
+        // The cache returns AttributedString; the raw engine NSAttributedString —
+        // normalize so equality compares the ATTRIBUTES (the styling is the
+        // difference; the plain string is identical by design).
+        XCTAssertNotEqual(augmentedOutput!, AttributedString(plainOutput!),
+                          "the augmented engine styles the grep command word")
     }
 
     private func card(tool: String, args: [String: JSONValue]) -> ToolCard {
