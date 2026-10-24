@@ -74,6 +74,19 @@ final class ToolCardContentFaceTests: XCTestCase {
         XCTAssertTrue(ToolCardView.isRich(c))
     }
 
+    func testLegacyMcpscriptNameGetsTheJSFace() {
+        // The JS meta-tool's earlier pi name: older backfilled transcripts
+        // carry tool "mcpscript". Both names, both arg shapes (code, and
+        // the legacy script fallback), same rich-by-identity default.
+        let c = card(tool: "mcpscript", args: ["code": .string("return 1")])
+        XCTAssertEqual(ToolCardView.content(for: c)?.text, "return 1")
+        XCTAssertEqual(ToolCardView.content(for: c)?.lang, "javascript")
+        XCTAssertTrue(ToolCardView.isRich(c))
+        let legacyArg = card(tool: "mcpscript", args: ["script": .string("return 2")])
+        XCTAssertEqual(ToolCardView.content(for: legacyArg)?.text, "return 2")
+        XCTAssertTrue(ToolCardView.isRich(legacyArg))
+    }
+
     func testCodemodeWithoutCodeIsNotRich() {
         let c = card(tool: "codemode", args: [:])
         XCTAssertNil(ToolCardView.content(for: c))
