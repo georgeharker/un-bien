@@ -13,7 +13,10 @@
 
 set -euo pipefail
 
-IMAGE="jacobmoura7/remote-pi-relay"
+# Image name — override with UNBIEN_DOCKER_IMAGE (the legacy name was
+# jacobmoura7/remote-pi-relay from the pre-fork project; this image is
+# built from the un-bien relay and publishes under this project).
+IMAGE="${UNBIEN_DOCKER_IMAGE:-georgeharker/un-bien-relay}"
 PLATFORMS="linux/amd64,linux/arm64"
 BUILDER="multiarch"
 

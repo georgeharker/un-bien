@@ -23,18 +23,36 @@ RUN apt-get update && \
 
 COPY --from=builder /app/target/release/relay /usr/local/bin/relay
 
-# Persistent state — mesh_versions SQLite lives here.
-# Mount a host directory or a named volume at /data to keep it across container
-# restarts (e.g. `-v remote-pi-data:/data`). Without a mount, /data is ephemeral.
+# Persistent state — BOTH stores live here: the mesh-version SQLite
+# (UNBIEN_MESH_DB_PATH) and the pairing DB (UNBIEN_PAIRING_DB_PATH — the
+# pin/gate state; losing it means re-pairing every peer). Mount a host
+# directory or a named volume at /data to keep them across container
+# restarts. Without a mount, /data is ephemeral.
 RUN mkdir -p /data
 VOLUME ["/data"]
 
-ENV REMOTEPI_RELAY_PORT=3000
-ENV REMOTEPI_MESH_DB_PATH=/data/mesh.db
+ENV UNBIEN_RELAY_PORT=3000
+ENV UNBIEN_MESH_DB_PATH=/data/mesh.db
+ENV UNBIEN_PAIRING_DB_PATH=/data/pairing.db
 
 EXPOSE 3000
 
+# Federation (relay ≥0.8): set these at RUN time (docker run -e), not here:
+#   UNBIEN_RELAY_URL   — REQUIRED for a federated relay. The default bind
+#                        (0.0.0.0, all interfaces) advertises NOTHING via
+#                        the bind-derived mechanism (a bare-IP bind carries
+#                        no name to advertise), so a container that
+#                        federates must say its dialable URL explicitly:
+#                        e.g. ws://droplet.tailnet.ts.net:3000
+#   UNBIEN_RELAY_NAME  — the name peers see (e.g. "droplet"); defaults to
+#                        the hostname, which inside a container is noise.
+#   UNBIEN_RELAY_BIND  — leave unset: the 0.0.0.0 default is the right
+#                        in-container bind (the container binds all; the
+#                        host's networking constrains reachability). The
+#                        named-bind lockdown form applies to bare-metal
+#                        relays, not containers.
+
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD curl -sf http://localhost:${REMOTEPI_RELAY_PORT}/health
+  CMD curl -sf http://localhost:${UNBIEN_RELAY_PORT}/health
 
 CMD ["relay"]
