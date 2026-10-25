@@ -518,13 +518,25 @@ export class SessionPeer {
 
   private _registerOver(sock: Socket): Promise<string> {
     return new Promise<string>((resolve, reject) => {
-      // The first inbound line MUST be the register_ack. Buffer-aware.
-      const wait = setTimeout(
-        () => reject(new Error("register_ack timeout")),
-        5_000,
-      )
+      // `register_ack` is the ONLY line that settles this window. Anything else
+      // arriving here is a stray control frame — historically the join probe's
+      // roster reply landing after the pong and before our ack — and must not
+      // abort the join: nobody can address an envelope to a peer the broker
+      // hasn't registered yet, so there is nothing to lose by ignoring it. The
+      // timeout is the failure signal, and it reports the stray line so the
+      // cause stays diagnosable.
+      let stray: string | null = null
+      const wait = setTimeout(() => {
+        this._preAckListener = null
+        reject(
+          new Error(
+            stray === null
+              ? "register_ack timeout"
+              : `register_ack timeout (ignored: ${stray.slice(0, 200)})`,
+          ),
+        )
+      }, 5_000)
       const onceListener = (raw: unknown) => {
-        clearTimeout(wait)
         // plan/38: a new broker returns `address_assigned` (canonical key) +
         // `name_assigned` (clean leaf). Read both with cross-fallback so we work
         // against either a new broker OR a legacy one (only `name_assigned`,
@@ -548,15 +560,14 @@ export class SessionPeer {
           typeof name === "string" &&
           typeof address === "string"
         ) {
+          clearTimeout(wait)
           this.assignedName = name
           this.assignedAddress = address
           this._preAckListener = null
           resolve(name)
-        } else {
-          reject(
-            new Error(`expected register_ack, got: ${JSON.stringify(raw)}`),
-          )
+          return
         }
+        stray = JSON.stringify(raw)
       }
       this._preAckListener = onceListener
       const req =
@@ -573,6 +584,7 @@ export class SessionPeer {
         sock.write(req)
       } catch (e) {
         clearTimeout(wait)
+        this._preAckListener = null
         reject(e as Error)
       }
     })
