@@ -6,6 +6,18 @@ requirements where they matter.
 
 ## App
 
+### 1.5.1 (build 17, 2026-10-26)
+
+- **Backfill heals when walks die at the breaker** — the repeated-leaf
+  circuit breaker ended walks as bookkeeping-only: the session marked
+  backfilled, the spinner cleared, but the render was never re-derived,
+  so entries the walk had fetched (indexed, cached) stayed invisible
+  FOREVER — the missing-post-tool-prose failure, persisting across
+  relaunches on reconnect-rich paths. The breaker now folds an empty
+  terminal page carrying the spun leaf before ending — on-chain leaves
+  derive + heal; un-indexed leaves defer safely to the next fold. Every
+  walk exit now derives or defers, never silently ends.
+
 ### 1.5 (build 14, 2026-10-21 → 2026-10-23)
 
 - **Relay identity verification (P7, with relay ≥0.8.6)** — the app now
