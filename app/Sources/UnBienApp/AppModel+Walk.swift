@@ -70,21 +70,27 @@ extension AppModel {
                         // hadn't rendered stays invisible forever (the
                         // missing-post-tool-prose failure: fetched + indexed,
                         // never rendered). Fold an EMPTY terminal page carrying
-                        // the spun leaf — on-chain it derives + heals; a
-                        // not-yet-indexed leaf defers safely (defer-trunc holds
-                        // it for the next fold). The SAME guarantee the normal
-                        // empty terminal already gives, applied to the walk's
-                        // other exit.
+                        // the spun leaf — MONOTONICITY-GUARDED: the spun leaf
+                        // can sit in an OLD region (the loop was stuck there),
+                        // and deriving to it would REWIND the visible
+                        // transcript (the build-17 regression: messages
+                        // vanished until a force restart re-derived from the
+                        // cache leaf). Only a leaf at-or-ahead of the current
+                        // render derives; a behind-leaf ends the walk exactly
+                        // as the pre-fix breaker did — no heal, but never a
+                        // rewind.
                         var reducer = envelopeReducers[key] ?? EnvelopeReducer()
                         reducer.setHideReasoning(!showThinking)
-                        reducer.apply(EnvelopeMessage(rpc: .object([
-                            "type": .string("response"),
-                            "command": .string("get_entries"),
-                            "success": .bool(true),
-                            "data": .object(["entries": .array([]),
-                                             "leafId": .string(leaf)]),
-                        ])))
-                        commitFold(key, reducer)
+                        if reducer.session.isLeafAtOrAhead(ofRender: leaf) {
+                            reducer.apply(EnvelopeMessage(rpc: .object([
+                                "type": .string("response"),
+                                "command": .string("get_entries"),
+                                "success": .bool(true),
+                                "data": .object(["entries": .array([]),
+                                                 "leafId": .string(leaf)]),
+                            ])))
+                            commitFold(key, reducer)
+                        }
                         backfilledSessions.insert(key)
                         endWalk(key: key)
                     }

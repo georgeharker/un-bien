@@ -141,3 +141,26 @@ extension ReproPostToolTests {
         assertPostToolText(stateB.items, "leaf on the prose")
     }
 }
+
+extension ReproPostToolTests {
+    /// The breaker-derive MONOTONICITY guard (the build-17 regression): a
+    /// derive to a leaf BEHIND the current render rewinds the visible
+    /// transcript (messages vanish until a restart re-derives from the cache
+    /// leaf). isLeafAtOrAhead is the gate: only nil/equal/descendant leaves
+    /// (strictly-forward or first paint) may derive.
+    func testMonotonicDeriveGuard() {
+        var state = SessionState()
+        // Nothing rendered yet: any leaf is allowed (first paint).
+        XCTAssertTrue(state.isLeafAtOrAhead(ofRender: "ec"), "nil render accepts any leaf")
+        state.applyEntries(entries(cParentOfLast: "tr2"), leafId: "ec")
+        // Same leaf: allowed (re-derive of the same path is a no-change).
+        XCTAssertTrue(state.isLeafAtOrAhead(ofRender: "ec"))
+        // BEHIND (an ancestor of the rendered leaf): REFUSED — deriving
+        // rewinds the visible path (the build-17 regression case).
+        XCTAssertFalse(state.isLeafAtOrAhead(ofRender: "tr2"),
+                       "a behind-leaf must be refused (the rewind case)")
+        // Unrelated/sibling chain: refused.
+        XCTAssertFalse(state.isLeafAtOrAhead(ofRender: "eu"),
+                       "an off-chain leaf must be refused")
+    }
+}

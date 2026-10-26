@@ -727,6 +727,29 @@ public struct SessionState: Equatable, Sendable {
     /// the rows and replays from the retained entries — the old path's rows
     /// go, the new path renders (the user-visible correctness fix for TUI
     /// edit-resubmit / /tree).
+    /// Whether `candidate` is at-or-ahead of the CURRENT rendered leaf:
+    /// true when nothing is derived yet, when the candidate IS the current
+    /// leaf, or when the candidate's ancestry CONTAINS the current leaf (the
+    /// render's path is a prefix of the candidate's — deriving moves strictly
+    /// FORWARD). A candidate on an unrelated/sibling/OLDER chain is BEHIND:
+    /// deriving to it would REWIND the visible transcript (the breaker's
+    /// spun leaf can be exactly that — an old region the paging loop was
+    /// stuck in), so callers gate the derive on this. PUBLIC: the app-level
+    /// walk bookkeeping (the repeated-leaf breaker) checks it before folding
+    /// an empty-terminal derive.
+    public func isLeafAtOrAhead(ofRender candidate: String) -> Bool {
+        guard let current = activeLeafId else { return true }
+        guard current != candidate else { return true }
+        var cursor = candidate
+        var seen = Set<String>()
+        while !cursor.isEmpty, seen.insert(cursor).inserted,
+              let parent = entryParent[cursor] {
+            if cursor == current { return true }
+            cursor = parent
+        }
+        return cursor == current
+    }
+
     private mutating func derivePath(from leaf: String, authoritative: Bool) {
         var chain: [String] = []
         var seen = Set<String>()
