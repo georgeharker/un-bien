@@ -513,8 +513,7 @@ struct ToolCardView: View {
         //         and raw {"command": …} JSON hid it; live and replay now
         //         show the same face (output classification was already
         //         uniform — design 01M177AF; the input face now is too).
-        let isCodemodeFamily = card.tool.lowercased().contains("codemode")
-            || card.tool.lowercased().contains("mcpscript")
+        let isCodemodeFamily = ToolOutputClassifier.isCodemodeFamily(card.tool)
         if isCodemodeFamily,
            let code = stringArg(card.args, ["code", "script"]), !code.isEmpty {
             return (code, "javascript")
@@ -669,8 +668,7 @@ struct ToolCardView: View {
         // bash-family is NOT — the command face renders on manual expand,
         // and auto-expanding every shell call would flip the default for
         // all existing history.
-        let isCodemodeFamily = card.tool.lowercased().contains("codemode")
-            || card.tool.lowercased().contains("mcpscript")
+        let isCodemodeFamily = ToolOutputClassifier.isCodemodeFamily(card.tool)
         if isCodemodeFamily,
            let code = stringArg(card.args, ["code", "script"]), !code.isEmpty {
             return true

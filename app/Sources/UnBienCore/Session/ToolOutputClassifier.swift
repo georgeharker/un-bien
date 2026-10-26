@@ -22,6 +22,11 @@ public enum ToolOutputClassifier {
     // Tools whose STRING result is code-ish and worth syntax highlighting.
     private static let bashToolPattern = "^(bash|shell|zsh|sh|exec|command|run|terminal)"
     private static let readToolPattern = "(read|view|cat|open|file)"
+    // The JS meta-tool, both its names (the earlier mcpscript and codemode):
+    // its result (script stdout + the return value's JSON) is console-ish —
+    // a code block, auto-detected language (the output mixes prose logs and
+    // JSON; a forced language would mis-color one or the other).
+    private static let codemodeToolPattern = "^(codemode|mcpscript)"
 
     /// Whether `tool` is bash-family — the same pattern the OUTPUT classifier
     /// uses. PUBLIC: the app's tool-card INPUT face reuses it to render the
@@ -29,6 +34,13 @@ public enum ToolOutputClassifier {
     /// must never disagree about what a shell tool is.
     public static func isBashFamily(_ tool: String) -> Bool {
         matches(bashToolPattern, tool, caseInsensitive: true)
+    }
+
+    /// Whether `tool` is the JS meta-tool (codemode / legacy mcpscript) —
+    /// PUBLIC for the input face's name detection so the two can't diverge
+    /// (same rule as isBashFamily).
+    public static func isCodemodeFamily(_ tool: String) -> Bool {
+        matches(codemodeToolPattern, tool, caseInsensitive: true)
     }
 
     // File extension → highlight.js language id. Unknown ext → nil (app auto-detects).
@@ -119,13 +131,17 @@ public enum ToolOutputClassifier {
     }
 
     /// Classify code-ish output into a `code` block (plain text + optional
-    /// language the app highlights). Only bash-family (→ `shell`) and read-family
-    /// (→ language from the file extension) qualify. Stray ANSI is stripped;
-    /// unknown language is omitted so the highlighter auto-detects.
+    /// language the app highlights). Bash-family (→ `shell`), read-family
+    /// (→ language from the file extension), and the JS meta-tool
+    /// (codemode / legacy mcpscript → no language, auto-detected — its
+    /// result mixes console logs and the return value's JSON) qualify.
+    /// Stray ANSI is stripped; unknown language is omitted so the
+    /// highlighter auto-detects.
     private static func classifyCode(tool: String, text: String, args: JSONValue?) -> JSONValue? {
         let isBash = matches(bashToolPattern, tool, caseInsensitive: true)
         let isRead = matches(readToolPattern, tool, caseInsensitive: true)
-        if !isBash && !isRead { return nil }
+        let isCodemode = matches(codemodeToolPattern, tool, caseInsensitive: true)
+        if !isBash && !isRead && !isCodemode { return nil }
         let clean = stripAnsi(text)
         if clean.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
         var lang: String? = isBash ? "shell" : nil
