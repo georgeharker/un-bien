@@ -8,118 +8,53 @@ requirements where they matter.
 
 ### 1.5.3 (build 20, 2026-10-26)
 
-- **The missing-messages ROOT CAUSE: message identity no longer trusts
-  provider responseIds** — providers reuse them (ollama-cloud: 426 of 744
-  responseIds in one real session were shared across different messages,
-  the worst 8-way), and identify() treated the rid as globally unique —
-  every message sharing one became "the same message" to the live/replay
-  match loop, its birth eaten by a re-key onto whichever row claimed the
-  id first, invisible FOREVER through perfectly healthy walks, caches,
-  and derives. Which messages vanished was an accident of which ids
-  collided — hence "specific messages missing while later ones render,"
-  live and after backfill, across every earlier fix's verification.
-  Found by live device-log capture (the walks were healthy all along)
-  and reproduced against the real 3486-entry log; the fix is one hash:
-  identify = hash(role|timestamp|contentSignature), vendor-id-free —
-  the message's own fields disambiguate everything the rid ever did.
-  The real-log regression pin shows ~700 previously-eaten rows now birth
-  in that one session. (Uploaded as its own version because 1.5.2's
-  record had already accepted a build — ASC takes one train per version.)
+- **Fixed: messages could go missing forever.** Some replies never appeared
+  in the transcript — live or after reopening — while later messages
+  rendered around the gap. A message-identity collision (the app trusted
+  provider response ids, and providers reuse them) made the app mistake two
+  different messages for one and silently drop the second. History now
+  renders completely; reopening older conversations may visibly recover
+  messages that were missing.
+  *Technical: identity = hash(role|timestamp|content), vendor-id-free; the
+  real-log pin shows ~700 previously-eaten rows in one session.*
 
-### 1.5.2 (build 18→19, 2026-10-26)
+### 1.5.2 (build 18-19, 2026-10-26)
 
-- **Backfill heals when walks die at the breaker — monotonically** — the
-  repeated-leaf circuit breaker ended walks as bookkeeping-only: the
-  session marked backfilled, the spinner cleared, but the render was never
-  re-derived, so entries the walk had fetched (indexed, cached) stayed
-  invisible forever. The breaker now folds an empty terminal page carrying
-  the spun leaf, guarded to never derive to a leaf BEHIND the current
-  render (the build-17 form could rewind the visible transcript until a
-  restart re-derived from the cache leaf): at-or-ahead leaves derive +
-  heal, behind leaves end the walk as before. Every walk exit now heals,
-  defers, or declines — never rewinds.
-
-- **Backfill heals when walks die at the breaker — monotonically** — the
-  repeated-leaf circuit breaker ended walks as bookkeeping-only: the
-  session marked backfilled, the spinner cleared, but the render was never
-  re-derived, so entries the walk had fetched (indexed, cached) stayed
-  invisible forever — the missing-post-tool-prose failure, persisting
-  across relaunches on reconnect-rich paths. The breaker now folds an
-  empty terminal page carrying the spun leaf, guarded to never derive to a
-  leaf BEHIND the current render (the intermediate build-17 form could
-  rewind the visible transcript until a restart re-derived from the cache
-  leaf): at-or-ahead leaves derive + heal, behind leaves end the walk as
-  before. Every walk exit now heals, defers, or declines — never rewinds.
+- **History recovery is complete and safe.** When a history sync ends
+  abnormally (flaky connections can do it), previously some recovered
+  messages stayed invisible until a full app restart; now every sync
+  ending renders what it recovered — and can never scroll the visible
+  conversation backward.
+  *Technical: the repeated-leaf breaker folds a terminal derive guarded
+  monotonic (at-or-ahead only); every walk exit heals, defers, or declines.
+  Supersedes 1.5.1 (build 17), whose unguarded form could rewind the view
+  until a restart re-derived from cache.*
 
 ### 1.5.1 (build 17, 2026-10-26)
 
-- The breaker-derive fix as first shipped (superseded by 1.5.2's
-  monotonicity guard within the day; retained for the record since
-  build 17 was field-installed).
+- First ship of the breaker fix above (field-installed only; superseded
+  by 1.5.2's monotonicity guard the same day).
 
-- **Backfill heals when walks die at the breaker** — the repeated-leaf
-  circuit breaker ended walks as bookkeeping-only: the session marked
-  backfilled, the spinner cleared, but the render was never re-derived,
-  so entries the walk had fetched (indexed, cached) stayed invisible
-  FOREVER — the missing-post-tool-prose failure, persisting across
-  relaunches on reconnect-rich paths. The breaker now folds an empty
-  terminal page carrying the spun leaf before ending — on-chain leaves
-  derive + heal; un-indexed leaves defer safely to the next fold. Every
-  walk exit now derives or defers, never silently ends.
+### 1.5 (build 14, 2026-10-21 - 2026-10-23)
 
-### 1.5 (build 14, 2026-10-21 → 2026-10-23)
-
-- **Relay identity verification (P7, with relay ≥0.8.6)** — the app now
-  verifies the relay's post-auth `identity_ack`: a nonce-bound Ed25519
-  signature proving WHICH relay answered this connection. First verified
-  contact pins the relay's pubkey (TOFU, stored per relay in the mesh
-  config); every reconnect re-verifies, and a mismatch — a verified relay
-  that is not the one you paired, the MITM/DNS-hijack case — REFUSES the
-  connection before any of its traffic is trusted. The app now matches the
-  extension and CLI: the trust plane is symmetric on every client. Relays
-  predating the ack are lenient (no identity known, nothing refused).
-- **Daemon caps arrive by push for direct machines** — the launcher's
-  control-room announce carries caps + hostname, harvested into the
-  daemon-presence store on arrival (announce, rooms_check snapshot, or
-  federated peer list); the launch "+" settles with zero presence_status
-  polls. The poll stays as a refresher and the only source of `backend`.
-- **Federated machine visibility (with relay ≥0.8.4)** — a federated
-  machine whose launcher is up but has no pi sessions now appears with
-  its launch row immediately (the relay's peer-list push carries control
-  rooms; previously invisible until a session opened).
-- **Snapshots never purge peer-list-owned rooms** — a machine paired on
-  one relay whose rooms live on the peer relay keeps its federated
-  sessions through connect/refresh (empty local snapshots are no signal;
-  the peer list owns those rooms' liveness) — the same doctrine retires
-  daemon presence only when a local snapshot genuinely lacks the control
-  room.
-
-- **Transcript rendering — tool calls as snippets instead of raw JSON**:
-  - **codemode renders as JavaScript** — the call's `code` arg (with its
-    `// @options` header) as a highlighted JS snippet, rich by identity.
-  - **bash commands render as shell** — the `command` arg as a highlighted
-    snippet (both live and backfilled history; the output side was always
-    uniform — design 01M177AF — it was the INPUT face that hid the call).
-  - **pi's grep/find tools render shell-shaped faces** (`grep "pattern" path`)
-    — they aren't bash-family calls, so they had no face at all.
-- **Highlight pipeline fixed twice**:
-  - **"shell" highlights at all** — highlight.js registers bash's aliases
-    as sh/zsh, NOT shell; unknown languages make the engine return nil
-    (plain-text fallback). Language normalization now lands at the engine
-    chokepoint — bash OUTPUT blocks had silently rendered unhighlighted
-    all along. ` ```shell ` fences heal too.
-  - **The missing builtins — the grep mystery**: highlight.js's bash
-    `built_in` list covers coreutils (rm, head, ls, cat…) but not the
-    search/filter and tool-runner family (grep, find, sed, awk, git, node…),
-    so those command words rendered unstyled while their siblings glowed.
-    The engine pools now augment the grammar at creation with the curated
-    set: `grep rg find sed awk xargs git gh cargo swift swiftc xcodebuild
-xcodegen npm npx pnpm node launchctl tmux open defaults plutil xcrun
-curl jq` — via **our HighlighterSwift fork's `augmentLanguage` seam
-    (upstream PR #10)**; flip the package pin back when it merges.
-    highlight.js compiles grammars lazily and consumes raw scopes on first
-    use, so augmentation happens at engine creation — the documented
-    ordering contract, pinned by tests on both sides.
+- **Relay identity verification** — the app now proves which relay it's
+  talking to: the first connection pins the relay's cryptographic
+  identity, every reconnect re-verifies, and a wrong relay is refused
+  before any of its traffic is trusted. Matches the desktop clients; the
+  trust plane is symmetric everywhere.
+- **Machines show up when they're available, not when you refresh** — a
+  machine with its launcher daemon running appears with its launch
+  control immediately (previously invisible until a session opened), and
+  the control no longer waits on background polling.
+- **Federated relays federate machine visibility** — machines on a linked
+  relay appear across the mesh with their launch controls.
+- **The transcript shows what tool calls are** — script calls render as
+  JavaScript, shell commands as highlighted shell, search calls as their
+  query, and tool output as colored code blocks instead of raw JSON.
+  Applies to new and reopened history alike.
+- **Reopened conversations keep their linked-machine sessions** through
+  connect/refresh where they previously could vanish (empty snapshots no
+  longer purge content the peer relay owns).
 
 ### 1.4 (build 8, 2026-10-15)
 
