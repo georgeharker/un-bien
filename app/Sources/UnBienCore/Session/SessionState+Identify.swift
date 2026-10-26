@@ -5,17 +5,25 @@ import Foundation
 // its size budget.
 extension SessionState {
     /// A stable, message-INTRINSIC identity from the pi message's own fields —
-    /// identical on the live `message_end` and on a `session_sync` replay of the
-    /// same message, so re-sync dedups instead of duplicating (pi messages carry
-    /// no id; design 01M15FMQ). Prefers `responseId`; else a deterministic hash
-    /// of role+timestamp+model+content (content makes ts collisions negligible).
+    /// identical on the live `message_end` and on an entry replay of the same
+    /// message, so re-sync dedups instead of duplicating (pi messages carry no
+    /// id; design 01M15FMQ). hash(role|timestamp|contentSignature) — and
+    /// DELIBERATELY NOTHING FROM THE VENDOR: `responseId` was trusted here once
+    /// and providers reuse ids (one real ollama-cloud session had 426 of 744
+    /// responseIds shared across different messages, the worst 8-way) — every
+    /// message sharing a rid became "the same message" to the match loop, its
+    /// birth eaten by a re-key, invisible forever through healthy
+    /// walks/caches/derives (the missing-post-tool-prose mystery, live-caught
+    /// and reproduced against the real log). The message's own fields
+    /// disambiguate everything the rid ever did: same content at the same
+    /// timestamp IS the same message; different content or time is not. The
+    /// durable identity is pi's ENTRY id anyway — identify is only the
+    /// live-frame-to-entry bridge, trusted once per row.
     static func identify(_ message: JSONValue?) -> String {
-        if let rid = message?["responseId"]?.stringValue, !rid.isEmpty { return "r\(rid)" }
         let role = message?["role"]?.stringValue ?? "?"
         let ts = message?["timestamp"]?.intValue ?? 0
-        let model = message?["model"]?.stringValue ?? ""
         let sig = contentSignature(message?["content"])
-        return "m\(stableHash("\(role)|\(ts)|\(model)|\(sig)"))"
+        return "m\(stableHash("\(role)|\(ts)|\(sig)"))"
     }
 
     /// Canonical, order-preserving signature of a message `content` (array or a

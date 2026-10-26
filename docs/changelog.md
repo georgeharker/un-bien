@@ -6,7 +6,36 @@ requirements where they matter.
 
 ## App
 
-### 1.5.2 (build 18, 2026-10-26)
+### 1.5.2 (build 19, 2026-10-26)
+
+- **The missing-messages ROOT CAUSE: message identity no longer trusts
+  provider responseIds** — providers reuse them (ollama-cloud: 426 of 744
+  responseIds in one real session were shared across different messages,
+  the worst 8-way), and identify() treated the rid as globally unique —
+  every message sharing one became "the same message" to the live/replay
+  match loop, its birth eaten by a re-key onto whichever row claimed the
+  id first, invisible FOREVER through perfectly healthy walks, caches,
+  and derives. Which messages vanished was an accident of which ids
+  collided — hence "specific messages missing while later ones render,"
+  live and after backfill, across every earlier fix's verification.
+  Found by live device-log capture (the walks were healthy all along)
+  and reproduced against the real 3486-entry log; the fix is one hash:
+  identify = hash(role|timestamp|contentSignature), vendor-id-free —
+  the message's own fields disambiguate everything the rid ever did.
+  The real-log regression pin shows ~700 previously-eaten rows now birth
+  in that one session. (An earlier form kept the rid alongside the
+  intrinsic fields; dropping it entirely removes the vendor id-space
+  from the trust boundary — the robust answer to vendor id cycling.)
+- **Backfill heals when walks die at the breaker — monotonically** — the
+  repeated-leaf circuit breaker ended walks as bookkeeping-only: the
+  session marked backfilled, the spinner cleared, but the render was never
+  re-derived, so entries the walk had fetched (indexed, cached) stayed
+  invisible forever. The breaker now folds an empty terminal page carrying
+  the spun leaf, guarded to never derive to a leaf BEHIND the current
+  render (the build-17 form could rewind the visible transcript until a
+  restart re-derived from the cache leaf): at-or-ahead leaves derive +
+  heal, behind leaves end the walk as before. Every walk exit now heals,
+  defers, or declines — never rewinds.
 
 - **Backfill heals when walks die at the breaker — monotonically** — the
   repeated-leaf circuit breaker ended walks as bookkeeping-only: the

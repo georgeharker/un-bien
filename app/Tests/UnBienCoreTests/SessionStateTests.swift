@@ -51,7 +51,12 @@ final class SessionStateTests: XCTestCase {
                                                     "responseId": .string("resp_1"),
                                                     "content": .array([.object(["type": .string("text"),
                                                                                 "text": .string("hello")])])])]))
-        XCTAssertEqual(state.items[4].id, "assistant:rresp_1-a")
+        let settleMsg = JSONValue.object(["role": .string("assistant"), "timestamp": .number(2),
+                                          "responseId": .string("resp_1"),
+                                          "content": .array([.object(["type": .string("text"),
+                                                                      "text": .string("hello")])])])
+        XCTAssertEqual(state.items[4].id, "assistant:\(SessionState.identify(settleMsg))-a",
+                       "the live-settle fallback id = identify(message)-a (identify is vendor-id-free: role|ts|content)")
         XCTAssertNil(state.items[4].anchorID, "pending live settle must NOT anchor")
 
         // Settle the turn FIRST (Stage 0 mid-turn deferral: a beacon under an
