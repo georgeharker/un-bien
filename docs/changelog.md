@@ -6,7 +6,25 @@ requirements where they matter.
 
 ## App
 
+### 1.5.2 (build 18, 2026-10-26)
+
+- **Backfill heals when walks die at the breaker — monotonically** — the
+  repeated-leaf circuit breaker ended walks as bookkeeping-only: the
+  session marked backfilled, the spinner cleared, but the render was never
+  re-derived, so entries the walk had fetched (indexed, cached) stayed
+  invisible forever — the missing-post-tool-prose failure, persisting
+  across relaunches on reconnect-rich paths. The breaker now folds an
+  empty terminal page carrying the spun leaf, guarded to never derive to a
+  leaf BEHIND the current render (the intermediate build-17 form could
+  rewind the visible transcript until a restart re-derived from the cache
+  leaf): at-or-ahead leaves derive + heal, behind leaves end the walk as
+  before. Every walk exit now heals, defers, or declines — never rewinds.
+
 ### 1.5.1 (build 17, 2026-10-26)
+
+- The breaker-derive fix as first shipped (superseded by 1.5.2's
+  monotonicity guard within the day; retained for the record since
+  build 17 was field-installed).
 
 - **Backfill heals when walks die at the breaker** — the repeated-leaf
   circuit breaker ended walks as bookkeeping-only: the session marked
