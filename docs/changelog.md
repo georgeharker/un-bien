@@ -6,7 +6,7 @@ requirements where they matter.
 
 ## App
 
-### 1.5.2 (build 19, 2026-10-26)
+### 1.5.3 (build 20, 2026-10-26)
 
 - **The missing-messages ROOT CAUSE: message identity no longer trusts
   provider responseIds** — providers reuse them (ollama-cloud: 426 of 744
@@ -23,9 +23,11 @@ requirements where they matter.
   identify = hash(role|timestamp|contentSignature), vendor-id-free —
   the message's own fields disambiguate everything the rid ever did.
   The real-log regression pin shows ~700 previously-eaten rows now birth
-  in that one session. (An earlier form kept the rid alongside the
-  intrinsic fields; dropping it entirely removes the vendor id-space
-  from the trust boundary — the robust answer to vendor id cycling.)
+  in that one session. (Uploaded as its own version because 1.5.2's
+  record had already accepted a build — ASC takes one train per version.)
+
+### 1.5.2 (build 18→19, 2026-10-26)
+
 - **Backfill heals when walks die at the breaker — monotonically** — the
   repeated-leaf circuit breaker ended walks as bookkeeping-only: the
   session marked backfilled, the spinner cleared, but the render was never
