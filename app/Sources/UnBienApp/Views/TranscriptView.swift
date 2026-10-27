@@ -831,6 +831,13 @@ struct TranscriptView: View {
             // binding set is the phase-free command.
             shouldPin = true
             scrollAnchor = Self.bottomSentinelID
+        }, onScrollToEnd: {
+            // Double-tap on the bar's chrome = explicit read-the-newest
+            // intent: same policy as submit — cancel a pending restore,
+            // pin the bottom, bind the sentinel.
+            cancelPendingRestore()
+            shouldPin = true
+            scrollAnchor = Self.bottomSentinelID
         })
         .equatable()
     }

@@ -1,4 +1,4 @@
-# App Store release notes — 1.5 line (through 1.5.3, build 20)
+# App Store release notes — 1.5 line (through 1.5.4, build 21)
 
 What's New text, App Store "What's New" field / TestFlight build notes.
 Everything since 1.4 (build 8).
@@ -17,6 +17,7 @@ Everything since 1.4 (build 8).
 - The transcript renders tool calls as what they are: highlighted
   JavaScript for script calls, shell coloring for commands and output,
   tidy code blocks instead of raw JSON.
+- Double-tap the message bar to jump straight to the newest messages.
 
 ## One-liner (if a single field is preferred)
 

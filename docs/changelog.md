@@ -6,6 +6,16 @@ requirements where they matter.
 
 ## App
 
+### 1.5.4 (build 21, 2026-10-26)
+
+- **Double-tap the entry bar to jump to the newest messages.** The
+  double-tap lives on the bar's surface around the text field — never
+  inside it — so text selection keeps its own double-tap.
+  *Technical: the gesture rides a background layer (children win
+  hit-testing, so the editor is untouched); it applies the same
+  scroll policy as submitting — cancel a pending position restore,
+  pin the bottom, bind the sentinel.*
+
 ### 1.5.3 (build 20, 2026-10-26)
 
 - **Fixed: messages could go missing forever.** Some replies never appeared

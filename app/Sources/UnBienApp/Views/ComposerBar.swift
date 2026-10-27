@@ -89,6 +89,10 @@ struct ComposerBar<Chrome: ComposerChrome>: View, Equatable {
     let sessionID: String
     @ObservedObject var chrome: Chrome
     var onSent: () -> Void = {}
+    /// Double-tap on the bar's chrome (the padding/gutter surface AROUND the
+    /// text editor — never the editor itself, whose double-tap is the
+    /// system's word-selection): scrolls the transcript to the end.
+    var onScrollToEnd: (() -> Void)? = nil
     @Environment(\.appTheme) private var theme
     @Environment(\.typography) private var typography
     @State private var draft = ""
@@ -148,6 +152,21 @@ struct ComposerBar<Chrome: ComposerChrome>: View, Equatable {
             .disabled(trimmed.isEmpty || locked)
         }
         .padding(10)
+        // Double-tap-to-end on the bar's chrome surface only: the gesture
+        // lives on a BACKGROUND layer — hit-testing offers child views first,
+        // so the editor keeps its double-tap (word selection) and buttons
+        // keep their taps; only bare bar surface (padding, gutters) reaches
+        // this layer. A parent-view gesture would co-fire over the editor
+        // and select-jump simultaneously — hence the background trick.
+        .background(
+            Group {
+                if let onScrollToEnd {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture(count: 2, perform: onScrollToEnd)
+                }
+            }
+        )
         .background(theme.background)
     }
 
