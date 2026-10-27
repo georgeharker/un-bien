@@ -6,44 +6,27 @@ requirements where they matter.
 
 ## App
 
-### 1.5.4 (build 21, 2026-10-26)
-
-- **Double-tap the entry bar to jump to the newest messages.** The
-  double-tap lives on the bar's surface around the text field — never
-  inside it — so text selection keeps its own double-tap.
-  *Technical: the gesture rides a background layer (children win
-  hit-testing, so the editor is untouched); it applies the same
-  scroll policy as submitting — cancel a pending position restore,
-  pin the bottom, bind the sentinel.*
-
-### 1.5.3 (build 20, 2026-10-26)
+### 1.5.1 - 1.5.4 (build 21, 2026-10-26)
 
 - **Fixed: messages could go missing forever.** Some replies never appeared
-  in the transcript — live or after reopening — while later messages
-  rendered around the gap. A message-identity collision (the app trusted
-  provider response ids, and providers reuse them) made the app mistake two
-  different messages for one and silently drop the second. History now
-  renders completely; reopening older conversations may visibly recover
-  messages that were missing.
-  *Technical: identity = hash(role|timestamp|content), vendor-id-free; the
-  real-log pin shows ~700 previously-eaten rows in one session.*
-
-### 1.5.2 (build 18-19, 2026-10-26)
-
+  — live or after reopening — while later messages rendered around the
+  gap. A message-identity collision made the app mistake two different
+  messages for one and silently drop the second. History now renders
+  completely; older conversations may visibly recover messages that were
+  absent.
 - **History recovery is complete and safe.** When a history sync ends
-  abnormally (flaky connections can do it), previously some recovered
-  messages stayed invisible until a full app restart; now every sync
-  ending renders what it recovered — and can never scroll the visible
-  conversation backward.
-  *Technical: the repeated-leaf breaker folds a terminal derive guarded
-  monotonic (at-or-ahead only); every walk exit heals, defers, or declines.
-  Supersedes 1.5.1 (build 17), whose unguarded form could rewind the view
-  until a restart re-derived from cache.*
+  abnormally (flaky connections can do it), recovered messages now always
+  render — and the view can never scroll the conversation backward.
+- **Double-tap the message bar to jump to the newest messages.**
 
-### 1.5.1 (build 17, 2026-10-26)
-
-- First ship of the breaker fix above (field-installed only; superseded
-  by 1.5.2's monotonicity guard the same day).
+  *Technical: identity = hash(role|timestamp|content) — provider
+  responseIds proved non-unique (426 of 744 shared in one session) and
+  the live/replay match loop ate collided births; the repeated-leaf
+  breaker folds a terminal derive guarded monotonic (at-or-ahead only);
+  the double-tap gesture rides a background layer so the editor's
+  word-selection keeps its taps. Released as a rapid four-build train
+  (17-21) over one day as each layer of the missing-messages failure
+  was found, fixed, and field-verified.*
 
 ### 1.5 (build 14, 2026-10-21 - 2026-10-23)
 
