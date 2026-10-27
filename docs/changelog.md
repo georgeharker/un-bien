@@ -19,14 +19,14 @@ requirements where they matter.
   render — and the view can never scroll the conversation backward.
 - **Double-tap the message bar to jump to the newest messages.**
 
-  *Technical: identity = hash(role|timestamp|content) — provider
+  _Technical: identity = hash(role|timestamp|content) — provider
   responseIds proved non-unique (426 of 744 shared in one session) and
   the live/replay match loop ate collided births; the repeated-leaf
   breaker folds a terminal derive guarded monotonic (at-or-ahead only);
   the double-tap gesture rides a background layer so the editor's
   word-selection keeps its taps. Released as a rapid four-build train
   (17-21) over one day as each layer of the missing-messages failure
-  was found, fixed, and field-verified.*
+  was found, fixed, and field-verified._
 
 ### 1.5 (build 14, 2026-10-21 - 2026-10-23)
 
