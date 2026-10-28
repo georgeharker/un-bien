@@ -63,14 +63,31 @@ struct TranscriptRow: View, Equatable {
                 .font(.caption).foregroundStyle(theme.secondaryText)
                 .frame(maxWidth: .infinity)
         case let .notice(notice):
-            // A branch marker is INFORMATIONAL, not an error — green + branch
-            // glyph. Real notices (provider_error, …) keep the red warning.
-            Label(notice.message,
-                  systemImage: notice.code == "branch"
-                      ? "arrow.triangle.branch" : "exclamationmark.triangle.fill")
-                .font(.caption)
-                .foregroundStyle(notice.code == "branch" ? Color.green : theme.error)
+            // Notice classes: branch (green), custom/mesh announcements
+            // (INFO — theme text + full markdown: mesh announces carry
+            // formatting and are reading material, not warnings), and
+            // genuine errors (red warning). The branch marker was the first
+            // informational class; custom messages (extension/mesh
+            // announcements: name assignments, pair/join events, wake
+            // notes) are the second.
+            if notice.code == "custom" {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(theme.secondaryText)
+                        .padding(.top, 2)
+                    styledMarkdown(notice.message, theme: theme, typography: typography)
+                }
                 .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.horizontal, 8)
+            } else {
+                Label(notice.message,
+                      systemImage: notice.code == "branch"
+                          ? "arrow.triangle.branch" : "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(notice.code == "branch" ? Color.green : theme.error)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
         }
     }
 
