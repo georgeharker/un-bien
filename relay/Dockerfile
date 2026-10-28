@@ -21,7 +21,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates curl && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/target/release/relay /usr/local/bin/relay
+COPY --from=builder /app/target/release/unbien-relay /usr/local/bin/unbien-relay
 
 # Persistent state — BOTH stores live here: the mesh-version SQLite
 # (UNBIEN_MESH_DB_PATH) and the pairing DB (UNBIEN_PAIRING_DB_PATH — the
@@ -55,4 +55,4 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD curl -sf http://localhost:${UNBIEN_RELAY_PORT}/health
 
-CMD ["relay"]
+CMD ["unbien-relay"]
