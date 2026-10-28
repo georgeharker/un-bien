@@ -22,6 +22,23 @@ extension SessionState {
                               "result": .object(["summary": entry["summary"] ?? .string(""),
                                                  "tokensBefore": entry["tokensBefore"] ?? .number(0)]),
                               "entryId": entry["id"] ?? .null]))
+        case "custom_message":
+            // pi's dedicated entry type for custom-role messages — the shape
+            // DIFFERS from type:"message": content + display are TOP-LEVEL
+            // (no message object). Mesh agent messages ride this type
+            // (customType "un-bien:mesh-message", display:true); extension
+            // bookkeeping rides it with display:false (name-assigned,
+            // relay-state). Route through the SAME applyRPC funnel as the
+            // live path so the display check + deterministic-id notice
+            // birth are one code path.
+            let display = entry["display"]?.boolValue ?? true
+            guard display else { return }
+            applyRPC(.object(["type": .string("message_end"),
+                              "message": .object(["role": .string("custom"),
+                                                  "timestamp": .number(0),
+                                                  "display": .bool(display),
+                                                  "content": entry["content"] ?? .string("")]),
+                              "entryId": entry["id"] ?? .null]))
         case "message":
             guard let msg = entry["message"] else { return }
             switch msg["role"]?.stringValue {
