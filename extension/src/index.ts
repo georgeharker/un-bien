@@ -54,10 +54,21 @@ import {
   subagentRoomsEnabled,
   type SubagentRoomsController,
 } from "./subagent_rooms.js"
+import { createRpcEnvelope, type EnvelopeMessage } from "./session/rpc_envelope.js"
 import {
-  createRpcEnvelope,
-  type EnvelopeMessage,
-} from "./session/rpc_envelope.js"
+  PiOnEventSource,
+} from "./pi_binding/pi_on_event_source.js"
+import {
+  PiSessionControl,
+  PiSessionPort,
+  type PiSessionManagerView,
+} from "./pi_binding/session_port.js"
+import type {
+  AgentSessionPort,
+  SubmitContent,
+  SubmitDelivery,
+  SubmitResult,
+} from "./core/port.js"
 import { envLog } from "./session/debug_log.js"
 import { chainUiNotify, notifyOwners, setOwnerNotifyHook } from "./session/owner_notify.js"
 import { roomIdForSession } from "./rooms.js"
@@ -751,7 +762,10 @@ function _routeUnBienPlaneFrom(
   sender: PlainPeerChannel,
   env: EnvelopeMessage,
 ): void {
-  routeUnBienPlane(planeDeps, sender, env)
+  // routeUnBienPlane is async (session-control ops await); the channel
+  // dispatcher is sync, so the promise is fire-and-forget — errors are
+  // logged inside the router, never back into the transport loop.
+  void routeUnBienPlane(planeDeps, sender, env)
 }
 
 // ── Plane-router deps (accessors over module state — live at dispatch) ──────
@@ -764,7 +778,7 @@ const planeDeps: PlaneRouterDeps = {
   rootState: () => _rootState(),
   safeNotify: _safeNotify,
   liveCtx: () => _liveCtx(),
-  pi: () => _pi,
+  sessionControl: () => _piSessionControl(),
   // Getter: rpcDeps is declared later in the file; the dispatch reads it
   // live at call time.
   get rpcDeps() {
@@ -987,8 +1001,8 @@ function _releaseRootSession(pi: ExtensionAPI): void {
 // this module's state + helpers ONLY through this object (that module never
 // imports ../index.js — no circular imports). Same pattern as CommandDeps.
 const imageDeps: ImagePipelineDeps = {
-  get pi() {
-    return _pi
+  get session() {
+    return _piSessionPort()
   },
   rootState: _rootState,
   get myRoomMeta() {
@@ -1006,6 +1020,12 @@ const imageDeps: ImagePipelineDeps = {
 const rpcDeps: RpcHandlersDeps = {
   get pi() {
     return _pi
+  },
+  get session() {
+    return _piSessionPort()
+  },
+  get sessionControl() {
+    return _piSessionControl()
   },
   rootState: _rootState,
   get lastEventCtx() {
@@ -1547,7 +1567,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     )
     _rpcEnvelope?.dispose()
     _rpcEnvelope = createRpcEnvelope(
-      pi,
+      new PiOnEventSource(pi),
       (env) => _broadcastEnvelope(relayDeps, env),
       {
         enrichArgs: (tool, args) => {
@@ -1929,7 +1949,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         )
       if (!_rpcEnvelope)
         _rpcEnvelope = createRpcEnvelope(
-          pi,
+          new PiOnEventSource(pi),
           (env) => _broadcastEnvelope(relayDeps, env),
           {
             enrichArgs: (tool, args) => {
@@ -2195,38 +2215,58 @@ export default extension
  * that requires a fix in the Pi runtime (no extension-level error event
  * exists for it). See `.orchestration/results/mesh-liveness-stale-peer.md`.
  */
-type SendUserMessageOptions = NonNullable<
-  Parameters<ExtensionAPI["sendUserMessage"]>[1]
->
+type WakeAgentResult = SubmitResult
 
-type WakeAgentResult = { ok: true } | { ok: false; detail: string }
+// ── Pi binding port adapters (live over the root session) ────────────────────
+//
+// The seams' port-typed members resolve through these helpers, so every read
+// sees the CURRENT session — the adapters are built per call from accessor
+// closures over module state, never captured, so a session replacement can't
+// strand a stale port.
+
+/** Live AgentSessionPort over the root session's pi + base ctx + sessionManager. */
+function _piSessionPort(): AgentSessionPort | null {
+  if (!_pi) return null
+  return new PiSessionPort({
+    getPi: () => _pi,
+    getBaseCtx: () => _rootState().baseCtx,
+    // SAFETY: ExtensionContext["sessionManager"] types a wider surface than
+    // the port reads; the runtime object carries getEntries/getLeafId (the
+    // native get_entries rpc path has used them since paging landed).
+    getSessionManager: () =>
+      _rootState().sessionManager as PiSessionManagerView | null,
+  })
+}
+
+/** Live SessionControlPort over the root session's pi. */
+function _piSessionControl(): PiSessionControl | null {
+  return _pi ? new PiSessionControl(() => _pi) : null
+}
 
 function _wakeAgent(
-  content: Parameters<ExtensionAPI["sendUserMessage"]>[0],
+  content: SubmitContent,
   label: string,
-  steeringBehavior?: SendUserMessageOptions["deliverAs"],
+  steeringBehavior?: SubmitDelivery,
 ): WakeAgentResult {
-  if (!_pi) {
+  const port = _piSessionPort()
+  if (!port) {
     const detail = "agent session not bound yet"
     console.error(`[un-bien] ${label}: ${detail} — message dropped`)
     return { ok: false, detail }
   }
-  try {
-    // expandPromptTemplates: true — TUI PARITY for app-sent text. pi's
-    // sendUserMessage defaults it to FALSE, so a "/"-prefixed message typed
-    // in the PHONE composer reached the MODEL as literal text (observed:
-    // "ignoring the two /unbien pair statements prior in the chat") instead
-    // of dispatching as a command like the same text typed in the TUI. pi's
-    // prompt() dispatches extension commands FIRST — even mid-stream — so
-    // steering a running turn with a command now behaves identically too.
-    const options = {
-      ...(steeringBehavior ? { deliverAs: steeringBehavior } : {}),
-      expandPromptTemplates: true,
-    }
-    _pi.sendUserMessage(content, options)
-    return { ok: true }
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err)
+  // expandPromptTemplates: true — TUI PARITY for app-sent text. pi's
+  // sendUserMessage defaults it to FALSE, so a "/"-prefixed message typed
+  // in the PHONE composer reached the MODEL as literal text (observed:
+  // "ignoring the two /unbien pair statements prior in the chat") instead
+  // of dispatching as a command like the same text typed in the TUI. pi's
+  // prompt() dispatches extension commands FIRST — even mid-stream — so
+  // steering a running turn with a command now behaves identically too.
+  const result = port.submit(content, {
+    ...(steeringBehavior ? { deliverAs: steeringBehavior } : {}),
+    expandPromptTemplates: true,
+  })
+  if (!result.ok) {
+    const detail = result.detail
     console.error(
       `[un-bien] ${label}: agent rejected incoming message: ${detail}`,
     )
@@ -2236,6 +2276,7 @@ function _wakeAgent(
     )
     return { ok: false, detail }
   }
+  return result
 }
 
 /**

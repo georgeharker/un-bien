@@ -22,6 +22,12 @@ import { join } from "node:path"
 import { chmodSync, readFileSync, writeFileSync } from "node:fs"
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { Box, Container, Image, Text } from "@earendil-works/pi-tui"
+import type {
+  AgentSessionPort,
+  SubmitContent,
+  SubmitDelivery,
+  SubmitResult,
+} from "../core/port.js"
 import type { ClientMessage } from "../protocol/types.js"
 import type { PlainPeerChannel } from "../transport/peer_channel.js"
 import {
@@ -67,21 +73,26 @@ type SendUserMessageOptions = NonNullable<
  * The seam between index.ts (composition root) and this pipeline.
  *
  * Same shape as `CommandDeps`: accessor closures / function references only,
- * members added exactly as the moved code requires them.
+ * members added exactly as the moved code requires them. The pipeline is
+ * harness-neutral: it reaches the session only through AgentSessionPort
+ * (appendEntry for TUI previews, submit via the binding's wakeAgent wrapper).
+ * The TUI RENDERER registration (_registerReceivedImageRenderer) is pi-only
+ * and lives in this module only for cohesion — the pipeline itself never
+ * touches it.
  */
 export interface ImagePipelineDeps {
-  /** The ROOT session's ExtensionAPI (previews are TUI-only, best-effort). */
-  readonly pi: ExtensionAPI | null
+  /** The ROOT session port (previews are display-side, best-effort). */
+  readonly session: AgentSessionPort | null
   /** The ROOT session's state record (turnId drives preview deferral + seeding). */
   rootState(): { turnId: string | null }
   /** Room meta projection — `working` drives preview deferral. */
   readonly myRoomMeta: { working?: boolean } | null
   /** SDK handoff primitive from index.ts (content blocks + steering verb). */
   wakeAgent(
-    content: Parameters<ExtensionAPI["sendUserMessage"]>[0],
+    content: SubmitContent,
     label: string,
-    steeringBehavior?: SendUserMessageOptions["deliverAs"],
-  ): { ok: true } | { ok: false; detail: string }
+    steeringBehavior?: SubmitDelivery,
+  ): SubmitResult
 }
 
 /** Previews parked while a turn is active; flushed on agent_end / stop. */
@@ -91,9 +102,9 @@ export function _sendReceivedImagePreviewNow(
   deps: ImagePipelineDeps,
   details: ReceivedImageDetails,
 ): void {
-  if (!deps.pi) return
+  if (!deps.session) return
   try {
-    deps.pi.sendMessage<ReceivedImageDetails>({
+    deps.session.appendEntry({
       customType: UNBIEN_RECEIVED_IMAGE_TYPE,
       content: "",
       display: true,
@@ -331,9 +342,7 @@ export function _isReceivedImageContextMessage(message: unknown): boolean {
   )
 }
 
-export function _contentFromUserMessage(
-  msg: ClientUserMessage,
-): Parameters<ExtensionAPI["sendUserMessage"]>[0] {
+export function _contentFromUserMessage(msg: ClientUserMessage): SubmitContent {
   return msg.images && msg.images.length > 0
     ? [
         ...msg.images.map((img) => ({

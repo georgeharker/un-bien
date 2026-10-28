@@ -29,8 +29,8 @@
 // replay those and assert our output matches. Update BOTH this file and the
 // fixtures together when bumping the pinned pi version.
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { envLog } from "./debug_log.js"
+import type { EventSource } from "../core/event_source.js"
 
 /**
  * One mesh-envelope wrapper message (docs/rpc-envelope.md). `type` is the
@@ -343,32 +343,24 @@ export function envelopeForEvent(
 }
 
 /**
- * Register the live-plane `pi.on()` handlers; each fires `broadcast` with the
- * rpc-envelope frame. Returns a handle whose `dispose()` stops broadcasting
- * (pi.on has no unregister, so we gate on a disposed flag).
+ * Register the live-plane event handlers against ANY EventSource (the pi
+ * binding passes a PiOnEventSource wrapping `pi.on`; the durable host passes
+ * its WatchEventsSource); each delivery fires `broadcast` with the
+ * rpc-envelope frame. The frames out are IDENTICAL for every binding — the
+ * builders below are the wire contract. Returns a handle whose `dispose()`
+ * stops broadcasting (no binding offers unregister, so we gate on a disposed
+ * flag).
  */
 export function createRpcEnvelope(
-  pi: ExtensionAPI,
+  events: EventSource,
   broadcast: (env: EnvelopeMessage) => void,
   opts?: {
     enrichArgs?: (tool: string, args: unknown) => { hunks: unknown[] } | null
   },
 ): { dispose(): void } {
   let disposed = false
-  // SAFETY: pi.on's public typing is a narrower event-name union; the live
-  // plane subscribes by string name, which is valid at runtime for every
-  // RPC_EVENT_NAMES entry (they are real AgentSessionEvent names).
-  // BIND the receiver: some hosts implement ExtensionAPI as class methods
-  // whose `this` carries per-extension state (oh-my-pi's
-  // ConcreteExtensionAPI.on reads this.extension.handlers) — a detached
-  // `on(...)` is a TypeError there even though pi's own implementation
-  // tolerates it.
-  const on = pi.on.bind(pi) as unknown as (
-    event: string,
-    handler: (payload: unknown) => void,
-  ) => void
   for (const name of RPC_EVENT_NAMES) {
-    on(name, (payload: unknown) => {
+    events.on(name, (payload: unknown) => {
       if (disposed) return
       const p = (payload ?? {}) as Payload
       let env = envelopeForEvent(name, p)

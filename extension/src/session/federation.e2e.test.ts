@@ -354,7 +354,7 @@ function makePlaneDeps(displayName: string): PlaneRouterDeps {
     rootState: () => ({ sessionManager: null }),
     safeNotify: () => {},
     liveCtx: () => null,
-    pi: () => null,
+    sessionControl: () => null,
     // SAFETY: routeUnBienPlane never reads rpcDeps (routing.ts: only
     // routeRpcCommand does), and this rig only dispatches ub frames.
     rpcDeps: null as unknown as RpcHandlersDeps,

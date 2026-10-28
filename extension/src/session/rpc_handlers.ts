@@ -25,8 +25,14 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import type {
   ExtensionAPI,
   ExtensionContext,
-  SessionEntry,
 } from "@earendil-works/pi-coding-agent"
+import type {
+  AgentSessionPort,
+  SessionControlPort,
+  SubmitContent,
+  SubmitDelivery,
+  SubmitResult,
+} from "../core/port.js"
 import { ensureModelRegistry } from "../actions/registry.js"
 import {
   wireFromModel,
@@ -54,24 +60,14 @@ type SendUserMessageOptions = NonNullable<
 >
 
 /** Mirror of index.ts's `_wakeAgent` result shape. */
-type WakeAgentResult = { ok: true } | { ok: false; detail: string }
+type WakeAgentResult = SubmitResult
 
 // Minimal structural views of pi SDK internals the handlers reach for but the
 // public ExtensionAPI type does not surface. Each names exactly the member(s)
 // known to exist on the concrete AgentSession at runtime. (Mirrors of
 // index.ts's locals.)
-interface PiStreamingInternals {
-  isStreaming?: boolean
-}
 interface PiQueueControl {
   clearQueue(): { steering: string[]; followUp: string[] }
-}
-
-/** The root session's sessionManager as the get_entries handler needs it. */
-interface RpcSessionManager {
-  getSessionId(): string
-  getEntries(): SessionEntry[]
-  getLeafId(): string | null
 }
 
 /**
@@ -80,19 +76,29 @@ interface RpcSessionManager {
  * Same shape as `CommandDeps` / `RelayLifecycleDeps`: accessor closures /
  * function references only, members added exactly as the moved code requires
  * them.
+ *
+ * Harness split: `session` (AgentSessionPort) + `sessionControl` carry every
+ * port-covered verb, so a non-pi binding (the durable host) can serve the
+ * whole rpc command dispatch; `pi` and `lastEventCtx` remain for the pi-only
+ * verbs (model registry, slash-command registry, thinking-level plumbing) —
+ * null on other bindings, where those commands answer with an error.
  */
 export interface RpcHandlersDeps {
   // ── Read-only state ──────────────────────────────────────────────────────
 
-  /** The ROOT session's ExtensionAPI (never a subagent child's). */
+  /** The ROOT session's ExtensionAPI (never a subagent child's). Null on
+   *  non-pi bindings. */
   readonly pi: ExtensionAPI | null
-  /** The ROOT session's state record (turn seeding + get_entries reads). */
+  /** The ROOT session, port-typed — submit/streaming/getEntries/compact. */
+  readonly session: AgentSessionPort | null
+  /** Branching/replacement ops (new/fork/navigate/shutdown). */
+  readonly sessionControl: SessionControlPort | null
+  /** The ROOT session's state record (turn seeding). */
   rootState(): {
     turnId: string | null
-    sessionManager?: RpcSessionManager | null
   }
-  /** Freshest session_start ctx (model registry / compact) — always the
-   *  current session's base ctx, re-captured on every session_start. */
+  /** Freshest session_start ctx (model registry) — always the current
+   *  session's base ctx, re-captured on every session_start. */
   readonly lastEventCtx: Pick<
     ExtensionContext,
     "compact" | "abort" | "ui"
@@ -104,9 +110,9 @@ export interface RpcHandlersDeps {
 
   /** SDK handoff primitive (prompt/steer/followUp delivery). */
   wakeAgent(
-    content: Parameters<ExtensionAPI["sendUserMessage"]>[0],
+    content: SubmitContent,
     label: string,
-    steeringBehavior?: SendUserMessageOptions["deliverAs"],
+    steeringBehavior?: SubmitDelivery,
   ): WakeAgentResult
   /** Abort the current turn (freshest ctx first). */
   abortCurrentTurn(): boolean
@@ -172,11 +178,10 @@ export function createRpcHandlers(
       // NOT force steer over a followUp anymore. `shouldSteer` below is now only
       // BOOKKEEPING (turn-seeding + image-preview defer), not the delivery verb.
       const requestedSteer = opts.streamingBehavior === "steer"
-      // Authoritative busy signal from pi's OWN state (AgentSession.isStreaming),
-      // correct across subagent lifecycles (turnId/working stick busy after a
-      // subagent run).
-      const streaming =
-        (deps.pi as PiStreamingInternals | null)?.isStreaming === true
+      // Authoritative busy signal from the session port (pi's own
+      // AgentSession.isStreaming under it), correct across subagent
+      // lifecycles (turnId/working stick busy after a subagent run).
+      const streaming = deps.session?.streaming === true
       const shouldSteer = requestedSteer || streaming
       const msg: ClientUserMessage = {
         type: "user_message",
@@ -274,29 +279,28 @@ export function createRpcHandlers(
     },
     getState: async () => {
       // Native pi get_state snapshot. THE field the app reconciles against is
-      // isStreaming (busy) — pi's authoritative AgentSession.isStreaming, the
-      // same signal the prompt handler reads. The rest mirror the app's
+      // isStreaming (busy) — the session port's authoritative streaming flag,
+      // the same signal the prompt handler reads. The rest mirror the app's
       // SessionSnapshot so applyState hydrates model/thinking/session too.
-      if (!deps.pi) throw new Error("agent session not bound")
-      const streaming =
-        (deps.pi as PiStreamingInternals | null)?.isStreaming === true
+      // Non-pi bindings report their own port state; the model fields come
+      // from the pi-only registry and are omitted when absent.
+      if (!deps.session) throw new Error("agent session not bound")
+      const streaming = deps.session.streaming
       const actionCtx = deps.lastEventCtx as ActionCtx | null
       const model = actionCtx?.getModel?.()
-      const sm = deps.rootState().sessionManager
       let thinkingLevel: string | undefined
       try {
-        thinkingLevel = deps.pi.getThinkingLevel()
+        thinkingLevel = deps.pi?.getThinkingLevel()
       } catch {
         /* older SDK / no level — omit */
       }
+      const sessionId = deps.session.sessionId
       return {
         isStreaming: streaming,
         ...(model ? { model: { id: model.id, provider: model.provider } } : {}),
         ...(thinkingLevel ? { thinkingLevel } : {}),
-        ...(sm ? { sessionId: sm.getSessionId() } : {}),
-        ...(sm && typeof sm.getEntries === "function"
-          ? { messageCount: sm.getEntries().length }
-          : {}),
+        ...(sessionId ? { sessionId } : {}),
+        messageCount: deps.session.getEntries().entries.length,
       }
     },
     getAvailableModels: async () => {
@@ -308,27 +312,24 @@ export function createRpcHandlers(
       return { models, current: current ? wireFromModel(current) : undefined }
     },
     compact: async (customInstructions) => {
-      const actionCtx = deps.lastEventCtx as ActionCtx | null
-      if (!actionCtx?.compact)
+      if (!deps.session)
         throw new Error("compact unavailable (no active session ctx)")
-      actionCtx.compact(customInstructions ? { customInstructions } : undefined)
+      deps.session.compact(
+        customInstructions ? { customInstructions } : undefined,
+      )
       return {}
     },
     newSession: async () => {
-      // ctx.newSession lives ONLY on the command ctx — the rpc dispatch ctx is
-      // the base ExtensionContext, which lacks it (the old
-      // `lastEventCtx ?? lastCtx` stash NEVER worked: lastEventCtx is a base
-      // session_start ctx with no newSession, so the `??` always short-circuited
-      // to it and threw). Self-dispatch the registered `/unbien new` command;
-      // pi runs it with a real command ctx. The session clock restamp is no
-      // longer needed here — the resulting session_start → relay start restamps
-      // _sessionStartedAt naturally. The app drops the old conversation on the
-      // new hello (changed sessionId).
-      if (!deps.pi) throw new Error("agent session not bound")
-      deps.pi.sendUserMessage("/unbien new", {
-        deliverAs: "followUp",
-        expandPromptTemplates: true,
-      })
+      // Branching ops live on the session-control port. On pi they exist ONLY
+      // on the command ctx (the rpc dispatch ctx is the base ExtensionContext,
+      // which lacks them), so the pi control impl self-dispatches the
+      // registered `/unbien new` command via sendUserMessage; pi runs it with
+      // a real command ctx. The session clock restamp is no longer needed
+      // here — the resulting session_start → relay start restamps
+      // _sessionStartedAt naturally. The app drops the old conversation on
+      // the new hello (changed sessionId).
+      if (!deps.sessionControl) throw new Error("agent session not bound")
+      await deps.sessionControl.newSession()
       return { dispatched: true }
     },
     clearQueue: async () => {
@@ -347,11 +348,11 @@ export function createRpcHandlers(
       // the app loops `since: leafId` until an empty page. The extension does
       // NOT replay these — see the app's SessionState.applyEntries (design
       // 01M15FMQ).
-      const sm = deps.rootState().sessionManager
+      const session = deps.session
       // Unbound → ERROR (pi always has a session here; a silent empty page on
       // the fork side reads as "no history" — make the failure visible).
-      if (!sm) throw new Error("get_entries unavailable (no session bound)")
-      const all = sm.getEntries()
+      if (!session) throw new Error("get_entries unavailable (no session bound)")
+      const { entries: all, leafId } = session.getEntries()
       // pi-faithful `since` semantics (rpc-mode.js): unknown id → error, not a
       // silent restart from the beginning.
       if (
@@ -359,7 +360,7 @@ export function createRpcHandlers(
         all.findIndex((e) => e.id === since) === -1
       )
         throw new Error(`Entry not found: ${since}`)
-      return pageEntries(all, since, sm.getLeafId())
+      return pageEntries(all, since, leafId)
     },
   }
 }

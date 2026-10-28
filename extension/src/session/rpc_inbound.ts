@@ -11,7 +11,7 @@
 // compact / bash follow (they need the fuller ctx.sessionManager).
 
 import { notifyOwners } from "./owner_notify.js"
-import type { SessionEntry } from "@earendil-works/pi-coding-agent"
+import type { PortEntry } from "../core/port.js"
 import type { EnvelopeMessage } from "./rpc_envelope.js"
 
 /** Native pi `get_entries` result — the shape is PI-FAITHFUL by decision
@@ -19,9 +19,11 @@ import type { EnvelopeMessage } from "./rpc_envelope.js"
  *  extra fields. One budget-bounded PAGE of the entry log per reply; the app
  *  keeps refetching with `since: leafId` until an empty page (pi's own
  *  since-cursor semantics — works against any faithful peer). See design:
- *  get_entries backfill paging. */
+ *  get_entries backfill paging. Entries are the port's neutral entry shape
+ *  (pi SessionEntry JSON) — any binding serving get_entries maps its stored
+ *  entries to that wire shape. */
 export interface GetEntriesResult {
-  entries: SessionEntry[]
+  entries: PortEntry[]
   leafId: string | null
 }
 
@@ -83,25 +85,25 @@ function truncateStringsDeep(value: JsonTree, cap: number): JsonTree {
 /** Fit one entry for transport: unchanged when small enough; string-truncated
  *  (shrinking per-string caps across passes) when oversized; ultimate fallback
  *  is a minimal content-elided stub so the walk ALWAYS crosses this entry. */
-export function fitEntryForTransport(entry: SessionEntry): SessionEntry {
+export function fitEntryForTransport(entry: PortEntry): PortEntry {
   if (JSON.stringify(entry).length <= MAX_ENTRY_JSON_BYTES) return entry
   for (const cap of [64 * 1024, 8 * 1024, 256]) {
-    // SAFETY: SessionEntry serializes to a JSON tree; the cast only moves it
+    // SAFETY: an entry serializes to a JSON tree; the cast only moves it
     // into the walker's domain type.
     const fitted = truncateStringsDeep(entry as unknown as JsonTree, cap)
     // SAFETY: the deep walk only replaces string LEAVES (same keys, same
-    // structure), so the result keeps SessionEntry's shape — TS can't prove
+    // structure), so the result keeps the entry's shape — TS can't prove
     // that through the JsonTree round-trip.
-    const candidate = fitted as unknown as SessionEntry
+    const candidate = fitted as unknown as PortEntry
     if (JSON.stringify(candidate).length <= MAX_ENTRY_JSON_BYTES)
       return candidate
   }
-  // SAFETY: hand-built to the message-entry shape; the cast papers over the
-  // pi union's narrower content typing.
+  // Hand-built to the message-entry shape; the cast papers over the
+  // wire union's narrower content typing.
   return {
     type: "message",
     id: entry.id,
-    parentId: entry.parentId,
+    parentId: null,
     message: {
       role: "assistant",
       content: [
@@ -111,7 +113,7 @@ export function fitEntryForTransport(entry: SessionEntry): SessionEntry {
         },
       ],
     },
-  } as unknown as SessionEntry
+  } as PortEntry
 }
 
 /** Slice the entry log into one budget-bounded page starting AFTER `since`
@@ -123,7 +125,7 @@ export function fitEntryForTransport(entry: SessionEntry): SessionEntry {
  *  leaf cursor, returned when the page completes the log; a partial page
  *  returns its last INCLUDED entry's id as the resume cursor. */
 export function pageEntries(
-  all: SessionEntry[],
+  all: PortEntry[],
   since: string | undefined,
   leafId: string | null,
   budgetBytes: number = GET_ENTRIES_PAGE_BUDGET_BYTES,
@@ -137,7 +139,7 @@ export function pageEntries(
       : 0
   const remaining = all.slice(start)
   if (remaining.length === 0) return { entries: [], leafId }
-  const page: SessionEntry[] = []
+  const page: PortEntry[] = []
   let used = 0
   for (const e of remaining) {
     // Transport-fit FIRST: an oversized entry must never ride raw (it would be

@@ -2,6 +2,7 @@ import { envLog } from "./session/debug_log.js"
 import { dispatchRpcCommand } from "./session/rpc_inbound.js"
 import { createRpcHandlers, type RpcHandlersDeps } from "./session/rpc_handlers.js"
 import type { EnvelopeMessage } from "./session/rpc_envelope.js"
+import type { SessionControlPort } from "./core/port.js"
 import type { PlainPeerChannel } from "./transport/peer_channel.js"
 import { takeForkLink } from "./commands/fork_link.js"
 import {
@@ -16,7 +17,6 @@ import {
 } from "./session/local_config.js"
 import { loadConfig } from "./config.js"
 import type { ExtensionUiResponseWire } from "./protocol/types.js"
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 
 /**
  * Plane routers (carved from index.ts, build slice 4 of the decomposition):
@@ -47,7 +47,8 @@ export interface PlaneRouterDeps {
   rootState: () => RootSessionView
   safeNotify: (message: string, level: "info" | "warning" | "error") => void
   liveCtx: () => unknown
-  pi: () => ExtensionAPI | null
+  /** Branching/replacement ops (fork/branch/new/terminate), port-typed. */
+  sessionControl: () => SessionControlPort | null
 }
 
 /**
@@ -95,11 +96,11 @@ export function routeRpcCommand(
  * pi rpc frames on the rpc plane; only the request + `session_sync_end`
  * terminator are un-plane frames.
  */
-export function routeUnBienPlane(
+export async function routeUnBienPlane(
   deps: PlaneRouterDeps,
   sender: PlainPeerChannel,
   env: EnvelopeMessage,
-): void {
+): Promise<void> {
   const frame = env.ub
   if (!frame || typeof frame !== "object") return
   const type = (frame as Record<string, unknown>).type
@@ -190,35 +191,11 @@ export function routeUnBienPlane(
     )
     deps.safeNotify("Terminated from the app", "warning")
     try {
-      // ctx.shutdown() IS the /quit equivalent — pi's own source lists
-      // "extension shutdown()" alongside Ctrl+D / /quit (interactive-mode.js
-      // 3229: same graceful this.shutdown(): drain input, ui.stop() restores
-      // cooked mode + cursor, extension disposal, resume hint, exit). It sits
-      // DIRECTLY on the event ctx (ExtensionContext.shutdown — there is no
-      // ctx.actions sub-object; the first two attempts failed exactly there).
-      //
-      // MID-TURN DEFERRAL: the interactive handler fires immediately only when
-      // idle; otherwise it sets `shutdownRequested` and waits for
-      // `agent_settled` — which never arrives when nothing is running. So
-      // abort() FIRST: aborting a running turn forces the settle that
-      // re-checks the flag; on an idle session abort is a no-op and the
-      // idle fast-path fires directly.
-      //
-      // NO process.exit fallback, ever: a raw exit leaves the TTY in raw
-      // mode (keypresses echo escape codes until `stty sane`). No live ctx =>
-      // log loudly and stay up; the user quits on the machine.
-      const ctx = deps.liveCtx() as {
-        abort?: () => void
-        shutdown?: () => void
-      } | null
-      if (ctx?.shutdown) {
-        ctx.abort?.()
-        ctx.shutdown()
-      } else {
-        envLog(
-          "terminate(ub): no live ctx — refusing raw exit (would leave the terminal in raw mode); staying up",
-        )
-      }
+      // The graceful-host-shutdown dance (abort a running turn so the
+      // deferred shutdown flag re-checks, then ctx.shutdown()) lives on the
+      // session-control port; the pi implementation documents the raw-exit
+      // refusal that keeps the TTY sane.
+      await deps.sessionControl()?.shutdown()
     } catch (err) {
       envLog(
         `terminate(ub) error: ${err instanceof Error ? err.message : String(err)}`,
@@ -300,22 +277,19 @@ export function routeUnBienPlane(
     if (type === "session_fork") {
       // Thread the request id (reqId) so the new session can echo it back as
       // forked_from_req on its first sync — the app's auto-nav correlation.
-      // Order: `<entryId> <reqId> [pos]` (see _cmdFork's parse).
-      const reqId = typeof f.id === "string" ? f.id : ""
-      const posArg =
-        f.position === "at" || f.position === "before" ? ` ${f.position}` : ""
-      const reqArg = reqId ? ` ${reqId}` : ""
-      envLog(`session_fork(ub): entry=${entryId.slice(0, 8)}${posArg}`)
-      deps.pi()?.sendUserMessage(`/unbien fork ${entryId}${reqArg}${posArg}`, {
-        deliverAs: "followUp",
-        expandPromptTemplates: true,
+      const reqId = typeof f.id === "string" ? f.id : undefined
+      const position =
+        f.position === "at" || f.position === "before" ? f.position : undefined
+      envLog(
+        `session_fork(ub): entry=${entryId.slice(0, 8)}${position ? ` pos=${position}` : ""}`,
+      )
+      await deps.sessionControl()?.fork(entryId, {
+        ...(position ? { position } : {}),
+        ...(reqId ? { requestId: reqId } : {}),
       })
     } else {
       envLog(`session_navigate(ub): entry=${entryId.slice(0, 8)}`)
-      deps.pi()?.sendUserMessage(`/unbien branch ${entryId}`, {
-        deliverAs: "followUp",
-        expandPromptTemplates: true,
-      })
+      await deps.sessionControl()?.navigateTree(entryId)
     }
     return
   }
