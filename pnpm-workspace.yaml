@@ -2,6 +2,7 @@ packages:
   - extension
   - launcher
   - unbien-cli
+  - unbien-durable
 
 # Native deps whose install build scripts pnpm (v10+) blocks by default. These
 # are trusted first-party build tools, allowed to run. Moved here from

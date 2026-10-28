@@ -1,0 +1,47 @@
+{
+  "name": "@geohar/unbien-durable",
+  "version": "0.1.0",
+  "description": "Durable host binding for un-bien: a pi-durable Harness agent on the un-bien mesh + relay, serving the un-bien mobile app. Core ports (AgentSessionPort, EventSource, ToolRegistrar) and the mesh/relay transport come from @geohar/un-bien.",
+  "type": "module",
+  "main": "./dist/host.js",
+  "types": "./dist/host.d.ts",
+  "bin": {
+    "unbien-durable": "./dist/host.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "dev": "tsx src/host.ts",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "^1.4.0",
+    "@earendil-works/pi-ai": "^1.4.0",
+    "@earendil-works/pi-coding-agent": "^1.4.0",
+    "@earendil-works/pi-durable": "^1.4.0",
+    "@geohar/un-bien": "workspace:*",
+    "typebox": "1.3.27"
+  },
+  "devDependencies": {
+    "@types/node": "^25.8.0",
+    "tsx": "^4.22.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/georgeharker/un-bien.git",
+    "directory": "unbien-durable"
+  }
+}
