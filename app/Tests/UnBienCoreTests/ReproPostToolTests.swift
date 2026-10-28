@@ -164,3 +164,45 @@ extension ReproPostToolTests {
                        "an off-chain leaf must be refused")
     }
 }
+
+extension ReproPostToolTests {
+    /// Mesh agent messages ride custom-role ENTRIES (display:true). The live
+    /// message_end path always birthed them, but birthEntry's role switch
+    /// fell role:"custom" to `default: break` — after any relaunch, mesh
+    /// messages were absent entirely (live-only rows). The replay path now
+    /// births them through the same applyRPC funnel, and the notice id is a
+    /// DETERMINISTIC content hash so a live birth and its replay dedup via
+    /// the appendedIDs guard.
+    func testCustomNoticeBirthsOnEntryReplay() {
+        var state = SessionState()
+        let custom = JSONValue.object([
+            "type": .string("message"), "id": .string("cm1"), "parentId": .string(""),
+            "message": .object(["role": .string("custom"), "timestamp": .number(1),
+                                "display": .bool(true),
+                                "content": .string("**mesh ping** from a peer agent")]),
+        ])
+        state.applyEntries([custom], leafId: "cm1")
+        guard case let .notice(notice)? = state.items.first else {
+            return XCTFail("custom message must birth a notice on entry replay")
+        }
+        XCTAssertEqual(notice.code, "custom")
+        XCTAssertTrue(notice.message.contains("mesh ping"),
+                      "the notice carries the message text (markdown intact)")
+        // display:false bookkeeping stays filtered on replay, as on live.
+        let hidden = JSONValue.object([
+            "type": .string("message"), "id": .string("cm2"), "parentId": .string(""),
+            "message": .object(["role": .string("custom"), "timestamp": .number(2),
+                                "display": .bool(false),
+                                "content": .string("mesh name: tmp.XXXX")]),
+        ])
+        state.applyEntries([hidden], leafId: "cm2")
+        XCTAssertFalse(state.items.contains { item in
+            if case let .notice(n) = item { return n.message.contains("mesh name") } else { return false }
+        }, "display:false custom entries stay filtered")
+        // Replay the SAME custom entry again (idempotent identify guard:
+        // the dedup is by the deterministic notice id in appendedIDs).
+        state.applyEntries([custom], leafId: "cm1")
+        let count = state.items.filter { if case .notice = $0 { return true } else { return false } }.count
+        XCTAssertEqual(count, 1, "same-id replay must not duplicate the notice")
+    }
+}
