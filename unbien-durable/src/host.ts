@@ -34,7 +34,7 @@ import {
   createRegistry,
   Harness,
 } from "@earendil-works/pi-durable"
-import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node"
+import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node"
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node"
 import { loadConfig } from "@geohar/un-bien/dist/config.js"
 import {
@@ -82,7 +82,7 @@ function parseArgs(argv: string[]): HostOptions {
     "un-bien",
     "durable",
   )
-  const dbPath = resolve(args.get("db") ?? join(stateDir, "session.sqlite"))
+  const dbPath = resolve(args.get("db") ?? join(stateDir, "session"))
   return { cwd, name, relayUrl, dbPath, model: args.get("model") }
 }
 
@@ -138,8 +138,10 @@ async function main(): Promise<void> {
   })
   registry.install(unBien)
 
-  // The Harness over SQLite — durable conversations, stable ids, resume.
-  const storage = await openNodeSqliteStorage(opts.dbPath)
+  // JSONL storage: a directory of append-only .jsonl files — durable
+  // conversations, stable ids, resume. Inspectable and git-friendly, with no
+  // native sqlite binding (portable to Bun / Cloudflare later).
+  const storage = await openNodeJsonlStorage(opts.dbPath, BACKGROUND_CONTEXT)
   let shuttingDown = false
   const harness = await Harness.open(
     storage,
