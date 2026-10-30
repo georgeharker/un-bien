@@ -164,3 +164,54 @@ extension ReproPostToolTests {
                        "an off-chain leaf must be refused")
     }
 }
+
+extension ReproPostToolTests {
+    /// Mesh agent messages ride custom-role ENTRIES (display:true). The live
+    /// message_end path always birthed them, but birthEntry's role switch
+    /// fell role:"custom" to `default: break` — after any relaunch, mesh
+    /// messages were absent entirely (live-only rows). The replay path now
+    /// births them through the same applyRPC funnel, and the notice id is a
+    /// DETERMINISTIC content hash so a live birth and its replay dedup via
+    /// the appendedIDs guard.
+    func testCustomNoticeBirthsOnEntryReplay() {
+        // THE REAL SHAPE (from the actual session log): mesh custom messages
+        // ride TYPE custom_message with TOP-LEVEL content + display — no
+        // message object. An earlier version of this test used a fabricated
+        // type:"message"+role:"custom" shape pi never writes and passed
+        // against fiction; the live-rendered ping then vanished on relaunch
+        // because the real type fell to birthEntry's outer default:break.
+        var state = SessionState()
+        let ping = JSONValue.object([
+            "type": .string("custom_message"),
+            "customType": .string("un-bien:mesh-message"),
+            "content": .string("**mesh ping** from a peer agent — toucan test token"),
+            "display": .bool(true),
+            "id": .string("cm1"), "parentId": .string(""),
+            "timestamp": .string("2026-10-28T03:00:00Z"),
+        ])
+        state.applyEntries([ping], leafId: "cm1")
+        guard case let .notice(notice)? = state.items.first else {
+            return XCTFail("custom_message must birth a notice on entry replay (top-level content/display)")
+        }
+        XCTAssertEqual(notice.code, "custom")
+        XCTAssertTrue(notice.message.contains("mesh ping"),
+                      "the notice carries the top-level content (markdown intact)")
+        // display:false bookkeeping (name-assigned, relay-state) stays filtered.
+        let hidden = JSONValue.object([
+            "type": .string("custom_message"),
+            "customType": .string("un-bien:name-assigned"),
+            "content": .string("Mesh name: tmp.XXXX"),
+            "display": .bool(false),
+            "id": .string("cm2"), "parentId": .string("cm1"),
+            "timestamp": .string("2026-10-28T03:00:01Z"),
+        ])
+        state.applyEntries([hidden], leafId: "cm2")
+        XCTAssertFalse(state.items.contains { item in
+            if case let .notice(n) = item { return n.message.contains("mesh name") } else { return false }
+        }, "display:false custom_message entries stay filtered")
+        // Replay the SAME entry (idempotent: deterministic content-hash id).
+        state.applyEntries([ping], leafId: "cm1")
+        let count = state.items.filter { if case .notice = $0 { return true } else { return false } }.count
+        XCTAssertEqual(count, 1, "same-id replay must not duplicate the notice")
+    }
+}

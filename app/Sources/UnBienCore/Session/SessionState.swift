@@ -77,7 +77,7 @@ public struct SessionState: Equatable, Sendable {
     /// (toolCallId-keyed) never register. A fetch that never lands leaves
     /// pendings here for the next successful delta/backfill — the matcher
     /// assumes ordering, not promptness.
-    private var identifyIndex: [String: String] = [:]
+    var identifyIndex: [String: String] = [:]
     /// PENDING row ids (live-settled, awaiting their entry id). With the open
     /// streaming rows they define the LIVE TAIL — every tail row is NEWER than
     /// every unfolded entry (a pending's entry settles after everything before
@@ -641,14 +641,19 @@ public struct SessionState: Equatable, Sendable {
             // un-bien's own bookkeeping (mesh name assignment, relay state,
             // extension auto-update) rides custom-role messages flagged
             // display:false ON THE WIRE precisely so clients don't surface
-            // them — honor it. They used to render as noise notice rows in
-            // live sessions AND the fixture-replayed demo ("Mesh name:
-            // tmp.XXXXXX" et al). Absent/true still renders (other
-            // extensions' display-intended custom messages).
+            // them — honor it. Absent/true still renders (mesh agent
+            // messages ride display:true custom entries: the info-block
+            // notice class). The id is DETERMINISTIC (content hash) so a
+            // live birth and its later ENTRY replay dedup via the
+            // appendedIDs guard — the same collision-based dedup as the
+            // error notices, so a relaunch doesn't duplicate mesh
+            // messages already rendered live.
             if message?["display"]?.boolValue == false { return false }
             noticeSeq += 1
-            return append(.notice(NoticeItem(id: SyntheticID.notice("custom", seq: noticeSeq), code: "custom",
-                                             message: message?["content"]?.joinedText() ?? "")))
+            let text = message?["content"]?.joinedText() ?? ""
+            return append(.notice(NoticeItem(
+                id: "cust\(Self.stableHash(text))",
+                code: "custom", message: text)))
         default:
             return false  // toolResult is rendered via tool_execution_*, not as a row
         }
@@ -884,64 +889,6 @@ public struct SessionState: Equatable, Sendable {
         }
     }
 
-    /// Birth ONE entry's rows — the pre-Stage-0 fold body, verbatim: compaction
-    /// markers, user/assistant messages (identify match → in-place re-key;
-    /// miss → durable birth + tool-card reconstruction), toolResults.
-    private mutating func birthEntry(_ entry: JSONValue) {
-        switch entry["type"]?.stringValue {
-        case "compaction":
-            // Entry-born markers key on the entry id (dedup — a replayed
-            // live marker used to duplicate the row).
-            applyRPC(.object(["type": .string("compaction_end"),
-                              "result": .object(["summary": entry["summary"] ?? .string(""),
-                                                 "tokensBefore": entry["tokensBefore"] ?? .number(0)]),
-                              "entryId": entry["id"] ?? .null]))
-        case "message":
-            guard let msg = entry["message"] else { return }
-            switch msg["role"]?.stringValue {
-            case "user", "assistant":
-                let entryID = entry["id"]?.stringValue
-                let key = Self.identify(msg)
-                if let existingRowID = identifyIndex[key], let entryID {
-                    // MATCH: this entry IS an already-born row (a live
-                    // pending or a prior entry birth) — re-key it to the
-                    // durable id. Never append: the content is already on
-                    // screen. (A batched delta re-keys several at once; a
-                    // same-id re-key no-ops via the appendedIDs guard.)
-                    if let newRowID = rekeyRow(rowID: existingRowID, toEntryID: entryID) {
-                        identifyIndex[key] = newRowID
-                    }
-                } else {
-                    // Fresh birth FROM the entry (backfill / no live row):
-                    // born durable + anchorable. The id-less fallback is
-                    // defensive only — pi entries always carry ids.
-                    applyRPC(.object(["type": .string("message_end"), "message": msg,
-                                      "entryId": entry["id"] ?? .null]))
-                    // Reconstruct tool cards from the assistant's toolCall blocks
-                    // (the live stream opens them via separate tool_execution_start
-                    // frames; here they ride the message content).
-                    if msg["role"]?.stringValue == "assistant", let content = msg["content"]?.arrayValue {
-                        for block in content where block["type"]?.stringValue == "toolCall" {
-                            applyRPC(.object(["type": .string("tool_execution_start"),
-                                              "toolCallId": block["id"] ?? .string(""),
-                                              "toolName": block["name"] ?? .string(""),
-                                              "args": block["arguments"] ?? .object([:]),
-                                              "fromEntry": .bool(true)]))
-                        }
-                    }
-                }
-            case "toolResult":
-                applyRPC(.object(["type": .string("tool_execution_end"),
-                                  "toolCallId": msg["toolCallId"] ?? .string(""),
-                                  "result": msg["content"] ?? .null,
-                                  "isError": msg["isError"] ?? .bool(false)]))
-            default:
-                break
-            }
-        default:
-            break  // model_change / thinking_level_change / label / ... : not transcript rows
-        }
-    }
 
     private mutating func updateToolCard(toolCallID: String, partial: JSONValue?) {
         guard let index = toolIndex[toolCallID], case var .tool(card) = items[index] else { return }
@@ -978,7 +925,7 @@ public struct SessionState: Equatable, Sendable {
     /// anchors, the bounds registry, and future replays all key on the durable
     /// id. The view sees remove-husk + insert-husk: a near row re-measures via
     /// its probe; a far row falls back until revisited. No bump — no new content.
-    private mutating func rekeyRow(rowID: String, toEntryID entryID: String) -> String? {
+    mutating func rekeyRow(rowID: String, toEntryID entryID: String) -> String? {
         guard let index = rowIndex[rowID] else { return nil }
         switch items[index] {
         case let .user(old):
