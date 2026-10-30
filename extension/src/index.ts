@@ -2747,8 +2747,26 @@ if (_isDirectRun()) {
 
 // ── Public API re-exports (the CLI + headless hosts) ─────────────────────
 // The unbien-cli's `pair-token` command (machine-side pairing invite
-// generator) composes the QR machinery the same way the extension does.
-// Re-export through the barrel so the CLI consumes the public API —
-// not raw dist subpaths (blocked by the exports map by design).
-export { QRSession, buildQRUri, renderQRAscii } from "./pairing/qr.js"
-export { getOrCreateEd25519Keypair } from "./pairing/storage.js"
+// generator) composes the QR machinery the same way the extension does, and
+// its `--wait` mode is a self-contained pairing endpoint — the machine-side
+// handshake (token validation, peers.json persist, signed allow-list push)
+// without a running session. Re-export through the barrel so the CLI
+// consumes the public API — not raw dist subpaths (blocked by the exports
+// map by design).
+export {
+  QRSession,
+  buildQRUri,
+  renderQRAscii,
+  TOKEN_TTL_MS,
+  clampPairTtlMs,
+} from "./pairing/qr.js"
+export {
+  addPeer,
+  getOrCreateEd25519Keypair,
+  listPeers,
+  nextAllowListVersion,
+  pairingAllowList,
+  type PeerRecord,
+} from "./pairing/storage.js"
+export { buildSignedAllowList } from "./pairing/signed_allow_list.js"
+export { resolveRelayUrl, toWebSocketUrl } from "./config.js"
