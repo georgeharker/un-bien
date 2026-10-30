@@ -7,6 +7,7 @@ const COMMANDS = new Map([
   ["resume-session", () => import("./resume_session.js")],
   ["replay", () => import("./replay.js")],
   ["pair", () => import("./pair.js")],
+  ["pair-token", () => import("./pair_token.js")],
   ["relay", () => import("./relay.js")],
 ])
 
@@ -45,6 +46,7 @@ if (!load) {
       "            resume a stored session (picker: name/summary, recency)\n" +
       "  replay    render a captured envelope stream from a file\n" +
       "  pair      pair with a machine (paste its unbien:// invite)\n" +
+"  pair-token  generate a pairing invite (QR + URI) for this machine\n" +
       "  relay     manage remembered relays (add / remove / list)\n\n" +
       "run `unbien <command>` with no arguments for its options.",
   )
