@@ -1,0 +1,18 @@
+# Build-context filter for the workspace images (unbien-durable/Dockerfile.durable
+# and any image built from the repo root). The host's node_modules (workspace
+# symlinks + platform-native binaries), build output, and non-workspace trees
+# must not ride along — the image installs its own dependencies for its own
+# platform, and a host dist/ would shadow the in-image build.
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+.git
+.gitignore
+app
+relay
+docs
+scripts
+.quarto.yml
+*.md
+!README.md
+.DS_Store

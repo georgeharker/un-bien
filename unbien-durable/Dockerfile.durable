@@ -1,0 +1,83 @@
+# syntax=docker/dockerfile:1
+
+# unbien-durable — the durable host in a container: a pi-durable Harness
+# agent (stable conversation ids, JSONL state) serving the un-bien app
+# over the relay, on a box with no pi session or TUI at all.
+#
+# The image also installs unbien-cli, so the machine-presence surface is
+# complete inside the container:
+#
+#   docker exec <ctr> unbien pair-token          print a pairing QR
+#   docker exec -it <ctr> unbien pair-token --wait
+#                                                ...and validate the scan
+#                                                itself (the CLI is then
+#                                                the machine's pairing
+#                                                endpoint; the durable
+#                                                host's bridge validates
+#                                                scans once it runs)
+#
+# Pairing identity is FILE-BACKED by design in a container (no platform
+# keyring), so /data must persist: identity.json lives there via
+# UNBIEN_STATE_DIR, and a machine that loses the volume is a NEW machine
+# (deliberate — the identity is the pairing anchor). UNBIEN_IDENTITY_SEED
+# may pin the machine seed instead (the same seed as other deployments of
+# this machine → the same epk everywhere).
+#
+# Build from the REPO ROOT (the workspace is the build context):
+#   docker build -f unbien-durable/Dockerfile.durable -t unbien-durable .
+#
+# Run:
+#   docker run -d --name unbien-durable \
+#     -e RELAY_URL=https://your-relay:8081 \
+#     -v unbien-data:/data unbien-durable
+#
+# RELAY_URL is the relay the host joins (passed as --relay; the host also
+# accepts --name/--cwd/--model — see its parseArgs). No HTTP health
+# endpoint: liveness is observable in the relay room list (the app shows
+# the machine's room while the host is up).
+
+FROM node:22-slim
+
+# ca-certificates for https:// relay URLs. pnpm arrives via corepack
+# (version pinned by the repo's packageManager field). Do NOT pass
+# --ignore-scripts: the workspace's allowBuilds list (esbuild, koffi, …)
+# is the sanctioned native-build surface.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    corepack enable
+
+# Manifests first (workspace resolution needs every package.json), then
+# the dependency install — a source edit invalidates only the layers
+# after it. The build context is filtered by the repo's .dockerignore
+# (no node_modules / dist / .git rides along).
+WORKDIR /app
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY extension/package.json extension/package.json
+COPY unbien-cli/package.json unbien-cli/package.json
+COPY unbien-durable/package.json unbien-durable/package.json
+COPY launcher/package.json launcher/package.json
+RUN pnpm install --frozen-lockfile
+
+# The workspace sources: the durable host + the extension + the CLI all
+# build from the same tree (workspace:* links).
+COPY extension/ extension/
+COPY unbien-cli/ unbien-cli/
+COPY unbien-durable/ unbien-durable/
+COPY launcher/ launcher/
+RUN pnpm -r build
+
+# Machine-presence surface on PATH: `unbien` (the CLI) and
+# `unbien-durable` (the host).
+RUN ln -s /app/unbien-cli/dist/main.js /usr/local/bin/unbien && \
+    ln -s /app/unbien-durable/dist/host.js /usr/local/bin/unbien-durable
+
+# Identity + durable conversations live in the mounted volume; a fresh
+# container over the same volume is the SAME machine (same epk, same
+# conversation ids — the point of durable).
+ENV UNBIEN_STATE_DIR=/data
+VOLUME ["/data"]
+
+WORKDIR /workspace
+ENTRYPOINT ["sh", "-c", "exec unbien-durable --relay ${RELAY_URL:-http://127.0.0.1:8081} $0 $@"]
+CMD []

@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * The un-bien durable host: a small always-on agent program that opens a
  * pi-durable Harness over SQLite storage, installs the un-bien durable
