@@ -17,7 +17,7 @@ function tmpSock(): string {
 
 describe("joinOrLead", () => {
   // The leader side must be a REAL broker for followers to join: joinOrLead
-  // proves liveness with an application-level `list_peers` probe, and a bare
+  // proves liveness with an application-level `broker_ping` probe, and a bare
   // `net.Server` never answers it (that is the busy-leader case below).
   async function cleanup(
     results: Array<
@@ -48,6 +48,51 @@ describe("joinOrLead", () => {
 
     r2.socket.destroy()
     await broker.close()
+  })
+
+  test("the liveness probe asks ONE question — nothing is left in flight on the register socket", async () => {
+    // The probed socket is handed to the follower `register`. A second probe
+    // line would get a second answer (the whole roster) that can land between
+    // the pong and the register_ack and abort the join — see the register
+    // window test in e2e.test.ts.
+    const { createServer } = await import("node:net")
+    const sock = tmpSock()
+    const lines: string[] = []
+    const fake = createServer((socket) => {
+      socket.setEncoding("utf8")
+      let buf = ""
+      socket.on("data", (chunk: string) => {
+        buf += chunk
+        let nl: number
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl)
+          buf = buf.slice(nl + 1)
+          if (!line) continue
+          lines.push(line)
+          if ((JSON.parse(line) as { type?: unknown }).type === "broker_ping") {
+            socket.write(
+              JSON.stringify({
+                from: "broker",
+                to: "observer",
+                id: "pong-id",
+                re: null,
+                body: { type: "broker_pong" },
+              }) + "\n",
+            )
+          }
+        }
+      })
+    })
+    await new Promise<void>((res) => fake.listen(sock, () => res()))
+
+    const r = await joinOrLead(sock)
+    if (r.role !== "follower") throw new Error("expected a follower join")
+    // Give any second (buggy) probe line time to reach the fake broker.
+    await new Promise((res) => setTimeout(res, 100))
+    expect(lines).toEqual([JSON.stringify({ type: "broker_ping" })])
+
+    r.socket.destroy()
+    await new Promise<void>((res) => fake.close(() => res()))
   })
 
   test("3 concurrent callers: exactly 1 leader", async () => {

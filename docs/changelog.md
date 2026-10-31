@@ -116,6 +116,23 @@ requirements where they matter.
 
 ## Extension (@geohar/un-bien)
 
+### 0.22.1 (2026-10-25)
+
+- **Joining the mesh no longer aborts on a stray control frame** — the join
+  probe used to ask the broker TWO questions on the socket that then carries
+  the follower `register` (`broker_ping` plus a legacy `list_peers` fallback).
+  The broker answers both, so the whole roster was in flight during the
+  register window; whenever the two replies arrived in separate reads the
+  roster one hit the pre-ack listener first and the join died with
+  `join failed: Error: expected register_ack, got: {…list_peers_reply…}`. The
+  probe now asks once (the fallback could never help: a pre-ping broker
+  destroys the connection on an unknown first line), stops reading the socket
+  it hands over, and the register window itself only settles on a well-formed
+  `register_ack` — a stray frame is ignored and reported in the timeout
+  message instead of failing the join. A leaked pre-ack listener (it swallowed
+  every later inbound line of that peer) is also cleared on timeout and
+  write failure.
+
 ### 0.21.2 (2026-10-16)
 
 - **Install summary lists the baked-in relay env** — every `UNBIEN_*`

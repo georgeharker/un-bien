@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync } from "node:fs"
 import { setTimeout as wait } from "node:timers/promises"
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
-import { createConnection } from "node:net"
+import { createConnection, createServer } from "node:net"
 import { ipcAddress } from "./ipc.js"
 import { SessionPeer } from "./peer.js"
 import { envelope, type Envelope } from "./envelope.js"
@@ -1494,6 +1494,69 @@ describe("ACK protocol (plan/25 Wave 0)", () => {
 })
 
 // ── plan/38: address encoder + name migration (pure) ─────────────────────────
+
+describe("register handshake (stray control frames)", () => {
+  test("a control frame between the join probe and the register_ack does not abort the join", async () => {
+    // Field bug: the join probe used to ask TWO questions on the socket that
+    // then carries the follower `register` (broker_ping + the legacy
+    // list_peers fallback). The broker answers both, so the roster reply could
+    // land AFTER the pong and BEFORE the register_ack — the register window
+    // saw a non-ack line and failed the whole join with
+    // "expected register_ack, got: {…list_peers_reply…}".
+    // This fake broker recreates that exact ordering.
+    const sock = uniqueSock()
+    const pong = JSON.stringify({
+      from: "broker",
+      to: "observer",
+      id: "pong-id",
+      re: null,
+      body: { type: "broker_pong" },
+    })
+    const strayRoster = JSON.stringify({
+      from: "broker",
+      to: "observer",
+      id: "roster-id",
+      re: null,
+      body: {
+        type: "list_peers_reply",
+        peers: ["someone"],
+        peers_detailed: [],
+      },
+    })
+    const ack = JSON.stringify({
+      type: "register_ack",
+      name_assigned: "/tmp/a@a",
+      address_assigned: "/tmp/a@a",
+    })
+
+    const server = createServer((socket) => {
+      socket.setEncoding("utf8")
+      let buf = ""
+      socket.on("data", (chunk: string) => {
+        buf += chunk
+        let nl: number
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl)
+          buf = buf.slice(nl + 1)
+          if (!line) continue
+          const msg = JSON.parse(line) as { type?: unknown }
+          if (msg.type === "broker_ping") {
+            socket.write(pong + "\n")
+          } else if (msg.type === "register") {
+            socket.write(strayRoster + "\n") // the racy leftover, pre-ack
+            setTimeout(() => socket.write(ack + "\n"), 50)
+          }
+        }
+      })
+    })
+    await new Promise<void>((res) => server.listen(sock, () => res()))
+
+    const peer = new SessionPeer({ sockPath: sock, name: "a", cwd: "/tmp/a" })
+    await expect(peer.start()).resolves.toBe("/tmp/a@a")
+    await peer.leave()
+    await new Promise<void>((res) => server.close(() => res()))
+  })
+})
 
 describe("plan/38 — address encoder + name migration (pure)", () => {
   test("composeAddress renders [<pc>:]<cwd>@<nome>; cwd-less → name", () => {
