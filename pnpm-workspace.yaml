@@ -12,3 +12,9 @@ allowBuilds:
   esbuild: true
   koffi: true
   protobufjs: true
+supportedArchitectures:
+  os:
+    - darwin
+    - linux
+  cpu:
+    - arm64
