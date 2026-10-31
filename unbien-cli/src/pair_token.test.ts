@@ -32,8 +32,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
-import type { KeyStoreBackend } from "@geohar/un-bien/dist/pairing/storage.js"
-import { parsePairTokenArgs, handlePairRequest } from "./pair_token.js"
+import type { KeyStoreBackend } from "@geohar/un-bien"
+import { parsePairTokenArgs, handlePairRequest, DEFAULT_WAIT_TIMEOUT_MS } from "./pair_token.js"
 import { loadOrCreateIdentity } from "./identity.js"
 import { parseInvite } from "./invite.js"
 
@@ -51,7 +51,7 @@ delete process.env.UNBIEN_IDENTITY_SEED
 delete process.env.UNBIEN_RELAY
 
 const unbien = await import("@geohar/un-bien")
-const storage = await import("@geohar/un-bien/dist/pairing/storage.js")
+const storage = await import("@geohar/un-bien")
 
 /** A keyring that is permanently locked: every read/write throws, so the
  *  resolver takes the file-identity fallback without touching the OS. */
@@ -74,7 +74,7 @@ class LockedKeyring implements KeyStoreBackend {
 async function freshStorage(stateDir: string) {
   process.env.UNBIEN_STATE_DIR = stateDir
   vi.resetModules()
-  const mod = await import("@geohar/un-bien/dist/pairing/storage.js")
+  const mod = await import("@geohar/un-bien")
   mod._setKeyStoreBackendForTest(new LockedKeyring())
   mod._setKeyringExpectedForTest(false)
   mod._setKeyringRetryForTest(1, 0)
@@ -244,12 +244,12 @@ describe("pair-token identity — the MACHINE key, not the CLI owner key", () =>
 // ── (e) CLI arg parsing ────────────────────────────────────────────────────
 
 describe("parsePairTokenArgs", () => {
-  test("defaults: name durable, room main, no wait, 120s timeout", () => {
+  test("defaults: name durable, room main, 120s timeout", () => {
     const opts = parsePairTokenArgs([])
     expect(opts.sessionName).toBe("durable")
     expect(opts.roomId).toBe("main")
     expect(opts.stateDir).toBe("")
-    expect(opts.wait).toBe(false)
+    expect(opts.timeoutMs).toBe(DEFAULT_WAIT_TIMEOUT_MS)
     expect(opts.timeoutMs).toBe(120_000)
     expect(opts.relayUrl).toBe("")
     expect(opts.help).toBe(false)
@@ -281,7 +281,7 @@ describe("parsePairTokenArgs", () => {
       "--relay",
       "http://10.0.0.5:8081",
     ])
-    expect(opts.wait).toBe(true)
+    // --wait removed: waiting is the only mode; --timeout is the only window flag.
     expect(opts.timeoutMs).toBe(45_000)
     expect(opts.relayUrl).toBe("http://10.0.0.5:8081")
   })

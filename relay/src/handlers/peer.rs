@@ -370,6 +370,35 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                                             let set: std::collections::HashSet<
                                                                 String,
                                                             > = p.owners.iter().cloned().collect();
+                                                            // LOCAL BRIDGE (2026-10-31 production
+                                                            // gap): the pairing exchange
+                                                            // (broadcast below, on real changes) is
+                                                            // the only thing that ever fed the
+                                                            // federated owner-set view — a
+                                                            // LOCALLY-paired machine was invisible
+                                                            // to the §3 SRC gate, so any local
+                                                            // delivery miss (stale room id,
+                                                            // reconnect window) fell into the
+                                                            // federated fallback and was refused
+                                                            // unknown_peer ("not paired") with
+                                                            // dest_owners_known=false. Bridging
+                                                            // EVERY verified push — deduped
+                                                            // included, which is the post-restart
+                                                            // re-push path — gives the gate the
+                                                            // same machine-signed truth the local
+                                                            // gates hold. Monotonic (a replay or a
+                                                            // peering-learned NEWER version never
+                                                            // regresses); own-origin (never
+                                                            // re-advertised, never purged by a
+                                                            // peering link death).
+                                                            federated
+                                                                .learn_local_machine_pairing(
+                                                                    &peer_id,
+                                                                    version,
+                                                                    blob_b64,
+                                                                    sig_b64,
+                                                                )
+                                                                .await;
                                                             // Identical re-push (every device connect
                                                             // sends one): store NOTHING, broadcast NOTHING
                                                             // — reconcile stays (idempotent).

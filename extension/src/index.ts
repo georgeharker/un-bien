@@ -2747,6 +2747,7 @@ if (_isDirectRun()) {
 
 // ── Public API re-exports (the CLI + headless hosts) ─────────────────────
 // The unbien-cli's `pair-token` command (machine-side pairing invite
+<<<<<<< HEAD
 // generator) composes the QR machinery the same way the extension does, and
 // its `--wait` mode is a self-contained pairing endpoint — the machine-side
 // handshake (token validation, peers.json persist, signed allow-list push)
@@ -2770,3 +2771,24 @@ export {
 } from "./pairing/storage.js"
 export { buildSignedAllowList } from "./pairing/signed_allow_list.js"
 export { resolveRelayUrl, toWebSocketUrl } from "./config.js"
+=======
+// generator) composes the QR machinery the same way the extension does.
+// Re-export through the barrel so the CLI consumes the public API —
+// not raw dist subpaths (blocked by the exports map by design).
+export { QRSession, buildQRUri, renderQRAscii } from "./pairing/qr.js"
+export { getOrCreateEd25519Keypair } from "./pairing/storage.js"
+
+// ── Pair-token --wait mode: the CLI as a standalone pairing endpoint ─────
+// The machine-side handshake (pair_request validation, peer persistence,
+// allow-list re-push, pair_ok) needs the same building blocks the
+// extension's relay_lifecycle handler uses. Exported through the barrel
+// so the CLI consumes the public API — the same reasoning as the QR
+// re-exports above (dist subpaths are blocked by the exports map).
+export { buildSignedAllowList } from "./pairing/signed_allow_list.js"
+export { resolveRelayUrl, toWebSocketUrl } from "./config.js"
+export { clampPairTtlMs } from "./pairing/qr.js"
+export { listPeers, addPeer, nextAllowListVersion, pairingAllowList } from "./pairing/storage.js"
+export { TOKEN_TTL_MS } from "./pairing/qr.js"
+export type { KeyStoreBackend } from "./pairing/storage.js"
+export { _setKeyStoreBackendForTest, _setKeyringExpectedForTest, _setKeyringRetryForTest } from "./pairing/storage.js"
+>>>>>>> main

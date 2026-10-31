@@ -14,11 +14,11 @@
  * the app's pair_request routes to the right room.
  *
  * Two modes:
- *   default (print-and-exit): mint + print the invite and exit. The
+ *   ALWAYS waits (the qrSession is per-process — a print-and-exit token
  *     extension bridge (or the durable host's bridge) is the live
  *     validator: it receives the app's pair_request against its own
  *     QRSession and answers pair_ok.
- *   --wait: a self-contained pairing endpoint for a box with NO running
+ *   The CLI itself IS the pairing endpoint (minter + validator):
  *     session — the CLI connects to the relay as the machine's room
  *     holder, listens for the app's pair_request, validates the token,
  *     persists the peer, re-pushes the signed allow-list, replies
@@ -31,13 +31,13 @@
  *
  * Usage:
  *   unbien pair-token [--name <session-name>] [--room <room-id>]
- *                     [--state-dir <dir>] [--wait] [--timeout <seconds>]
+ *                     [--state-dir <dir>] [--timeout <seconds>]
  *                     [--relay <url>]
  *
  * Output: QR ASCII to stderr (for a terminal), plain unbien://pair URI
  * to stdout (for copy-paste / piping). The token rotates (60s TTL per
- * issueToken in print-and-exit mode); in --wait mode the token lives
- * for the whole wait window (clamped to the safe pairing bounds).
+ * the token lives for the whole wait window (clamped to the safe
+ * pairing bounds) so a scan at any point in it is valid.
  */
 import { hostname as osHostname } from "node:os"
 import type { QRSession } from "@geohar/un-bien"
@@ -52,7 +52,7 @@ import type {
 // barrel (and its transitive storage import) is first evaluated. The
 // dynamic imports below run after arg parsing.
 
-/** Default --wait window: two minutes to fetch a phone and scan. */
+/** Default wait window: two minutes to fetch a phone and scan. */
 export const DEFAULT_WAIT_TIMEOUT_MS = 120_000
 
 export interface PairTokenOptions {
@@ -62,9 +62,7 @@ export interface PairTokenOptions {
   roomId: string
   /** --state-dir: where identity.json lives ("" = ambient state dir). */
   stateDir: string
-  /** --wait: serve the machine-side handshake instead of exiting. */
-  wait: boolean
-  /** --wait window in ms (token TTL is stretched to cover it). */
+  /** Wait window in ms (token TTL is stretched to cover it). */
   timeoutMs: number
   /** --relay: explicit relay URL ("" = config / env resolution). */
   relayUrl: string
@@ -76,7 +74,6 @@ export function parsePairTokenArgs(argv: string[]): PairTokenOptions {
   let sessionName = "durable"
   let roomId = "main"
   let stateDir = ""
-  let wait = false
   let timeoutMs = DEFAULT_WAIT_TIMEOUT_MS
   let relayUrl = ""
   let help = false
@@ -88,8 +85,6 @@ export function parsePairTokenArgs(argv: string[]): PairTokenOptions {
       roomId = argv[++i] ?? roomId
     } else if (arg === "--state-dir" || arg === "-s") {
       stateDir = argv[++i] ?? ""
-    } else if (arg === "--wait" || arg === "-w") {
-      wait = true
     } else if (arg === "--timeout") {
       const seconds = Number(argv[++i])
       timeoutMs = Number.isFinite(seconds) && seconds > 0
@@ -101,13 +96,13 @@ export function parsePairTokenArgs(argv: string[]): PairTokenOptions {
       help = true
     }
   }
-  return { sessionName, roomId, stateDir, wait, timeoutMs, relayUrl, help }
+  return { sessionName, roomId, stateDir, timeoutMs, relayUrl, help }
 }
 
 function printHelp(): void {
   console.log(
     "usage: unbien pair-token [--name <session-name>] [--room <room-id>]\n" +
-      "                         [--state-dir <dir>] [--wait] [--timeout <seconds>]\n" +
+      "                         [--state-dir <dir>] [--timeout <seconds>]\n" +
       "                         [--relay <url>]\n" +
       "\n" +
       "  Generates a pairing invite (QR + unbien://pair URI) for THIS machine.\n" +
@@ -119,20 +114,16 @@ function printHelp(): void {
       "                     the app routes pair_request to this room.\n" +
       "  --state-dir, -s    where identity.json lives (default: $UNBIEN_STATE_DIR\n" +
       "                     or ~/.local/state/un-bien).\n" +
-      "  --wait, -w         stay connected and VALIDATE the pairing yourself: the\n" +
-      "                     CLI joins the relay room, answers the app's\n" +
-      "                     pair_request with pair_ok, and exits. For a box with\n" +
-      "                     no pi session/extension running (the CLI is then the\n" +
-      "                     machine's only pairing endpoint). The default (no\n" +
-      "                     flag) prints the invite and exits — a running session\n" +
-      "                     or the durable host's bridge is the validator then.\n" +
-      "  --timeout <secs>   --wait window (default: 120, clamped to the safe\n" +
+      "  --timeout <secs>   wait window (default: 120, clamped to the safe\n" +
       "                     pairing bounds 10s–600s). The token lives for the\n" +
       "                     whole window, so a scan at any point in it works.\n" +
-      "  --relay <url>      relay URL for --wait (default: UNBIEN_RELAY env or the\n" +
-      "                     configured relay).\n" +
+      "  --relay <url>      relay URL to listen on (default: UNBIEN_RELAY env or\n" +
+      "                     the configured relay).\n" +
       "\n" +
-      "  In print-and-exit mode the token rotates (60s TTL) — re-run to re-mint.\n" +
+      "  The CLI ALWAYS listens (minter + validator): it connects to the\n" +
+      "  relay, joins the machine's room, and answers the app's pair_request\n" +
+      "  with pair_ok. A running session/extension on the same room will\n" +
+      "  conflict — stop it first, or use it as the validator instead.\n" +
       "  Works for any headless machine, not just the durable host.\n",
   )
 }
@@ -303,12 +294,11 @@ async function runPairTokenCommand(argv: string[]): Promise<number> {
   const unbien = await import("@geohar/un-bien")
   const kp = await unbien.getOrCreateEd25519Keypair()
 
-  // Print-and-exit mints the default 60s token; --wait stretches the token
-  // over the whole window (clamped to the safe pairing bounds) so a scan at
-  // any point in it is valid.
+  // The token lives for the whole wait window (clamped to the safe
+  // pairing bounds) so a scan at any point in it is valid.
   const qrSession = new unbien.QRSession()
-  const { token, expiresAt } = qrSession.issueToken(
-    opts.wait ? unbien.clampPairTtlMs(opts.timeoutMs) : undefined,
+  const { token } = qrSession.issueToken(
+    unbien.clampPairTtlMs(opts.timeoutMs),
   )
   const uri = unbien.buildQRUri(
     token,
@@ -322,14 +312,6 @@ async function runPairTokenCommand(argv: string[]): Promise<number> {
     `\n${unbien.renderQRAscii(uri)}\n\nScan with the app, or paste this URI:\n\n`,
   )
   console.log(uri)
-
-  if (!opts.wait) {
-    process.stderr.write(
-      `\nValid until ${new Date(expiresAt).toLocaleTimeString()} — the CLI is not listening; ` +
-        `a running session (or the durable host's bridge) validates the scan.\n`,
-    )
-    return 0
-  }
 
   return runPairTokenWait(unbien, opts, kp, qrSession)
 }

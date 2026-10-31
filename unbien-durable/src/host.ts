@@ -30,6 +30,7 @@ import { groqProvider } from "@earendil-works/pi-ai/providers/groq"
 import { deepseekProvider } from "@earendil-works/pi-ai/providers/deepseek"
 import { mistralProvider } from "@earendil-works/pi-ai/providers/mistral"
 import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter"
+import { ollamaCloudProvider } from "./ollama_cloud.js"
 import { CodingTools } from "@earendil-works/pi-durable/tools"
 import {
   createRegistry,
@@ -113,6 +114,11 @@ async function main(): Promise<void> {
     deepseekProvider(),
     mistralProvider(),
     openrouterProvider(),
+    // Ollama Cloud: composed host-side (pi-durable has no pi-extension
+    // interface, so the pi-ollama-cloud extension can't run here — see
+    // ollama_cloud.ts). Auth via OLLAMA_API_KEY; without it the provider
+    // registers inert (pi-ai skips credential-less providers at use time).
+    ollamaCloudProvider(),
   ])
     models.setProvider(provider)
 
