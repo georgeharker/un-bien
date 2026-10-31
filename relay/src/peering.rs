@@ -1510,12 +1510,10 @@ mod tests {
 
     /// Test serde without `.unwrap()` (house rust-unwrap rule).
     fn to_line<T: serde::Serialize>(v: &T) -> String {
-        serde_json::to_string(v)
-            .unwrap_or_else(|e| panic!("test serde write failed: {e}"))
+        serde_json::to_string(v).unwrap_or_else(|e| panic!("test serde write failed: {e}"))
     }
-    fn from_line<'de, T: serde::de::DeserializeOwned>(s: &'de str) -> T {
-        serde_json::from_str(s)
-            .unwrap_or_else(|e| panic!("test serde read failed: {e}"))
+    fn from_line<T: serde::de::DeserializeOwned>(s: &str) -> T {
+        serde_json::from_str(s).unwrap_or_else(|e| panic!("test serde read failed: {e}"))
     }
 
     /// Test fixture: parse a SocketAddr without `.unwrap()` (house rule).
@@ -1602,9 +1600,8 @@ mod tests {
         let back: RelayHello = from_line(&json);
         assert_eq!(back.pair_secret.as_deref(), Some("tok"));
 
-        let ack: RelayHelloAck = from_line(
-            r#"{"type":"relay_hello_ack","federate":true,"owners":["hash1"]}"#,
-        );
+        let ack: RelayHelloAck =
+            from_line(r#"{"type":"relay_hello_ack","federate":true,"owners":["hash1"]}"#);
         assert!(ack.federate);
         assert_eq!(ack.owners, vec!["hash1"]);
         assert!(
@@ -1643,8 +1640,8 @@ mod tests {
         .unwrap_or_else(|e| panic!("test fixture write: {e}"));
         // read_peer_config uses relay_peers_path() (no override), so we can't
         // point it at tmp. Instead, test the parsing logic directly.
-        let raw = std::fs::read_to_string(&tmp)
-            .unwrap_or_else(|e| panic!("test fixture read: {e}"));
+        let raw =
+            std::fs::read_to_string(&tmp).unwrap_or_else(|e| panic!("test fixture read: {e}"));
         let parsed: serde_json::Value = from_line(&raw);
         let empty = serde_json::Value::Array(vec![]);
         let peers = parsed
@@ -1658,10 +1655,9 @@ mod tests {
     #[test]
     fn read_peer_config_malformed() {
         let tmp = std::env::temp_dir().join("unbien-relay-peers-malformed.json");
-        std::fs::write(&tmp, "not json")
-            .unwrap_or_else(|e| panic!("test fixture write: {e}"));
-        let raw = std::fs::read_to_string(&tmp)
-            .unwrap_or_else(|e| panic!("test fixture read: {e}"));
+        std::fs::write(&tmp, "not json").unwrap_or_else(|e| panic!("test fixture write: {e}"));
+        let raw =
+            std::fs::read_to_string(&tmp).unwrap_or_else(|e| panic!("test fixture read: {e}"));
         let result: Result<serde_json::Value, _> = serde_json::from_str(&raw);
         assert!(result.is_err()); // malformed JSON → error → empty
         let _ = std::fs::remove_file(&tmp);
@@ -2000,6 +1996,147 @@ mod tests {
         assert!(
             fed.relays_for_epk("machine-epk").await.is_empty(),
             "last link gone"
+        );
+    }
+
+    /// The 2026-10-31 production gap, at the data layer: a locally-pushed
+    /// pairing_set must reach the SAME view the peering exchange feeds —
+    /// the §3 SRC gate reads ONLY `machine_owners`. Before the bridge, a
+    /// locally-paired machine read dest_owners_known=false and a paired
+    /// sender was refused unknown_peer ("not paired") on any local
+    /// delivery miss (stale room id / reconnect window).
+    #[tokio::test]
+    async fn local_pairing_bridge_feeds_the_src_gate_view() {
+        use ed25519_dalek::SigningKey;
+        let fed = FederatedSessions::with_name("relay-a");
+        let machine = SigningKey::generate(&mut rand::thread_rng());
+        let owner = B64.encode([7u8; 32]);
+        let (machine_pk, blob, sig) =
+            signed_pairing_blob(&machine, std::slice::from_ref(&owner), 5);
+        fed.learn_local_machine_pairing(&machine_pk, 5, &blob, &sig)
+            .await;
+        assert_eq!(
+            fed.machine_owners(&machine_pk).await,
+            Some(std::collections::HashSet::from([owner.clone()])),
+            "locally-bridged owner set is visible to the §3 gate"
+        );
+
+        // A peering-learned OLDER version (multi-homed machine, stale
+        // advertisement) must not clobber the local truth.
+        let stale_owner = B64.encode([8u8; 32]);
+        let (_, older_blob, older_sig) = signed_pairing_blob(&machine, &[stale_owner], 4);
+        fed.learn_machine_pairings(
+            "link-bc",
+            "relay-b",
+            vec![(machine_pk.clone(), 4, older_blob, older_sig)],
+        )
+        .await;
+        assert_eq!(
+            fed.machine_owners(&machine_pk).await,
+            Some(std::collections::HashSet::from([owner.clone()])),
+            "monotonic floor shared: the older federated push loses"
+        );
+
+        // A NEWER machine-signed push from a peered relay still wins — the
+        // bridge must not freeze the view at the local version.
+        let newer_owner = B64.encode([9u8; 32]);
+        let (_, newer_blob, newer_sig) =
+            signed_pairing_blob(&machine, std::slice::from_ref(&newer_owner), 6);
+        fed.learn_machine_pairings(
+            "link-bc",
+            "relay-b",
+            vec![(machine_pk.clone(), 6, newer_blob, newer_sig)],
+        )
+        .await;
+        assert_eq!(
+            fed.machine_owners(&machine_pk).await,
+            Some(std::collections::HashSet::from([newer_owner])),
+            "newer machine-signed push wins from either side"
+        );
+
+        // The NEWEST truth is peering-learned here, so its death purges it
+        // (conservative, by design) — but a subsequent LOCAL bridge survives
+        // every peering link death: source=origin=own_name is purge-safe.
+        fed.clear_peer("link-bc").await;
+        assert!(
+            fed.machine_owners(&machine_pk).await.is_none(),
+            "the peering-learned entry purges with its link"
+        );
+        let (_, blob7, sig7) = signed_pairing_blob(&machine, &[owner], 7);
+        fed.learn_local_machine_pairing(&machine_pk, 7, &blob7, &sig7)
+            .await;
+        fed.clear_peer("link-bc").await;
+        fed.clear_peer("link-cd").await;
+        assert!(
+            fed.machine_owners(&machine_pk).await.is_some(),
+            "a locally-bridged pairing survives peering link deaths"
+        );
+    }
+
+    /// The bridge must not pollute the federation ADVERTISEMENT: local
+    /// pairings ride the SELF segment (from the pairing store, unchanged)
+    /// and the transit segment builder self-filters origin == own_name —
+    /// a bridged entry must never boomerang back through a peer relay.
+    #[tokio::test]
+    async fn local_pairing_bridge_is_not_double_advertised() {
+        use ed25519_dalek::SigningKey;
+        let fed = FederatedSessions::with_name("relay-a");
+        let machine = SigningKey::generate(&mut rand::thread_rng());
+        let (machine_pk, blob, sig) = signed_pairing_blob(&machine, &[B64.encode([7u8; 32])], 1);
+        fed.learn_local_machine_pairing(&machine_pk, 1, &blob, &sig)
+            .await;
+
+        let registry = empty_registry();
+        let pairing = PairingRegistry::new();
+        let segments = fed
+            .advertisement_segments(&registry, &pairing, "link-ab", "relay-b")
+            .await;
+        assert_eq!(
+            segments.len(),
+            1,
+            "own-origin pairings never become transit segments"
+        );
+        assert!(
+            segments[0].machine_pairings.is_empty(),
+            "the self segment carries the PAIRING STORE, not the bridged view"
+        );
+    }
+
+    /// Startup seeding: pairing_signed is DURABLE, the federated view is
+    /// in-memory — after a relay restart the §3 gate must know every
+    /// locally-paired machine from the first message, before any machine
+    /// has reconnected and re-pushed.
+    #[tokio::test]
+    async fn seed_local_pairings_seeds_from_the_durable_store() {
+        use ed25519_dalek::SigningKey;
+        let fed = FederatedSessions::with_name("relay-a");
+        let pairing = PairingRegistry::new();
+        let machine = SigningKey::generate(&mut rand::thread_rng());
+        let machine_pk = B64.encode(machine.verifying_key().to_bytes());
+        let owner = B64.encode([3u8; 32]);
+        let blob = serde_json::to_vec(&serde_json::json!({
+            "machine_pk": machine_pk,
+            "owners": [owner],
+            "version": 9,
+            "issued_at": 1,
+        }))
+        .unwrap();
+        let sig = machine.sign(&blob);
+        pairing
+            .set_signed(
+                machine_pk.clone(),
+                vec![owner.clone()],
+                9,
+                &blob,
+                &sig.to_bytes(),
+            )
+            .unwrap();
+
+        fed.seed_local_pairings(&pairing).await;
+        assert_eq!(
+            fed.machine_owners(&machine_pk).await,
+            Some(std::collections::HashSet::from([owner])),
+            "the durable store seeds the §3 gate's view at startup"
         );
     }
 }
@@ -2375,6 +2512,71 @@ impl FederatedSessions {
         )
         .await;
     }
+
+    /// Bridge a LOCALLY-pushed, locally-verified pairing_set into the
+    /// federated owner-set view — the §3 SRC gate's ONLY data source via
+    /// [`FederatedSessions::machine_owners`]. Production gap (field report
+    /// 2026-10-31, relay 0.8.6): `machine_pairings` was populated ONLY by
+    /// the peering exchange, so a locally-connected machine's owner set —
+    /// pushed over its own WS and stored in pairing_signed/pairing_allow —
+    /// was invisible to the gate. Whenever a same-relay message missed local
+    /// delivery (`registry.forward` miss: stale room id in the app,
+    /// reconnect window) it fell into the federated fallback, where the gate
+    /// read `dest_owners_known=false` and REFUSED a paired sender with
+    /// unknown_peer — the app rendered that as "not paired".
+    ///
+    /// `source = origin = own_name` keeps the entry inside the federation
+    /// invariants by construction:
+    ///   - PURGE-SAFE: the self-origin filter in `handle_peer_frame` means
+    ///     `own_name` can never enter the `via` map, so it can never land in
+    ///     `clear_peer`'s `purged_origins`; `own_name` is never a peering
+    ///     link either — peering link deaths never purge local pairings.
+    ///   - ADVERTISEMENT-CLEAN: `advertisement_segments` self-filters
+    ///     `origin == own_name` out of transit segments (the SELF segment
+    ///     already carries local pairings from the pairing STORE) — no
+    ///     double advertisement, no loop-back.
+    ///   - MONOTONIC floor shared with the peering learn path: a newer
+    ///     machine-signed push wins from either side; a replay never does.
+    pub async fn learn_local_machine_pairing(
+        &self,
+        machine: &str,
+        version: u64,
+        blob_b64: &str,
+        sig_b64: &str,
+    ) {
+        let own = self.own_name();
+        self.learn_machine_pairings(
+            &own,
+            &own,
+            vec![(
+                machine.to_string(),
+                version,
+                blob_b64.to_string(),
+                sig_b64.to_string(),
+            )],
+        )
+        .await;
+    }
+
+    /// Seed the federated owner-set view from the DURABLE pairing store
+    /// (wired at relay startup in main.rs): the §3 gate's data must not
+    /// depend on every machine having re-pushed pairing_set since the last
+    /// restart — pairing_signed survives restarts BY DESIGN, so its view
+    /// does too. Every entry rides the same verify + monotonic path as a
+    /// live push ([`Self::learn_local_machine_pairing`]); an empty or
+    /// unbacked store seeds nothing.
+    pub async fn seed_local_pairings(&self, pairing: &PairingRegistry) {
+        for (machine, version, blob, sig) in pairing.signed_blobs() {
+            self.learn_local_machine_pairing(
+                &machine,
+                version,
+                &B64.encode(&blob),
+                &B64.encode(&sig),
+            )
+            .await;
+        }
+    }
+
     /// The dest machine's advertised owner set, for the source-side
     /// check-before-forward gate (federation v2 §3). None ⇒ not exchanged
     /// yet ⇒ the deciding source relay REFUSES (strict — no optimistic

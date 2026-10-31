@@ -90,6 +90,13 @@ async fn main() -> anyhow::Result<()> {
     let addrs = relay::parse_bind_addrs(&bind_spec, port)?;
 
     let federated = Arc::new(relay::peering::FederatedSessions::new());
+    // §3 gate completeness: seed the federated owner-set view from the
+    // DURABLE pairing store, so the SRC gate knows every locally-paired
+    // machine from the first message after a restart — not only after each
+    // machine's first pairing_set re-push (the 2026-10-31 "not paired"
+    // gap: any local delivery miss took the federated fallback, where a
+    // locally-paired-but-unbridged machine read dest_owners_known=false).
+    federated.seed_local_pairings(&pairing).await;
     // Endpoint advertisement computed ONCE: the spec as dialed + the resolved
     // listener addresses (parse_bind_addrs did the DNS at startup already).
     let endpoints = Arc::new(relay::peering::relay_bind_urls_for(
