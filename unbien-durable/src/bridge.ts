@@ -88,6 +88,9 @@ export interface DurableBridgeOptions {
   relayUrl: string
   /** Display name for room_meta + pair_ok. */
   displayName: string
+  /** Machine name the app records (defaults to os.hostname()). Distinct for
+   *  the durable host so the app lists it as its own machine, not the Mac. */
+  machineName?: string
   /** The conversations' working directory. */
   cwd: string
   /** Host log surface (notify + async failures). */
@@ -502,7 +505,7 @@ export class DurableBridge {
       session_started_at: this.sessionStartedAt,
       room_id: roomId,
       harness: { name: "pi-durable host", version: "0.1.0" },
-      hostname: hostname(),
+      hostname: this.opts.machineName ?? hostname(),
       protocol_version: 1,
       capabilities: sessionCapabilities(),
     })

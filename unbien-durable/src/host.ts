@@ -56,6 +56,7 @@ import { DurableBridge } from "./bridge.js"
 interface HostOptions {
   cwd: string
   name: string
+  machineName?: string
   relayUrl: string
   dbPath: string
   model: string | undefined // "provider/modelId"
@@ -78,13 +79,14 @@ function parseArgs(argv: string[]): HostOptions {
     loadConfig().relay ??
     "http://127.0.0.1:8081"
   const name = args.get("name") ?? "durable"
+  const machineName = args.get("machine-name")
   const stateDir = join(
     process.env["XDG_STATE_HOME"] ?? join(homedir(), ".local", "state"),
     "un-bien",
     "durable",
   )
   const dbPath = resolve(args.get("db") ?? join(stateDir, "session"))
-  return { cwd, name, relayUrl, dbPath, model: args.get("model") }
+  return { cwd, name, machineName, relayUrl, dbPath, model: args.get("model") }
 }
 
 function log(message: string, level: "info" | "warning" | "error" = "info"): void {
@@ -204,6 +206,7 @@ async function main(): Promise<void> {
     context: BACKGROUND_CONTEXT,
     relayUrl: opts.relayUrl,
     displayName: opts.name,
+    machineName: opts.machineName,
     cwd: opts.cwd,
     log: (message, level) => log(message, level ?? "info"),
     shutdownHost: shutdown,
