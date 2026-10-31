@@ -46,7 +46,12 @@ import {
   PlainPeerChannel,
 } from "@geohar/un-bien/dist/transport/peer_channel.js"
 import { _findKnownPeer } from "@geohar/un-bien/dist/pairing/peer_trust.js"
-import { qrSession } from "@geohar/un-bien/dist/pairing/qr.js"
+import {
+  buildQRUri,
+  qrSession,
+  renderQRAscii,
+  TOKEN_TTL_MS,
+} from "@geohar/un-bien/dist/pairing/qr.js"
 import {
   addPeer,
   getOrCreateEd25519Keypair,
@@ -93,6 +98,13 @@ export interface DurableBridgeOptions {
   machineName?: string
   /** The conversations' working directory. */
   cwd: string
+  /** Pairing QR rotation cadence in ms (default: the 60s token TTL, so the
+   *  invite renews exactly as the previous token expires). Tests shrink it
+   *  to observe rotation in real time. */
+  pairingRotationMs?: number
+  /** Relay client factory — tests inject a fake; production gets the real
+   *  RelayClient. */
+  createRelay?: (wsUrl: string, keypair: Ed25519Keypair) => RelayClient
   /** Host log surface (notify + async failures). */
   log(message: string, level?: NotifyLevel): void
   /** Graceful host shutdown (terminate frame) — close bridge + harness. */
@@ -115,6 +127,8 @@ export class DurableBridge {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectAttempt = 0
   private stopped = false
+  private pairingRotationActive = false
+  private pairingRotationTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(private readonly opts: DurableBridgeOptions) {}
 
@@ -170,6 +184,8 @@ export class DurableBridge {
   /** Full teardown (host shutdown / retarget). */
   async stop(): Promise<void> {
     this.stopped = true
+    this.stopPairingRotation()
+    qrSession.clear()
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
@@ -280,7 +296,7 @@ export class DurableBridge {
   private async connectRelay(): Promise<void> {
     if (!this.keypair) return
     const roomId = roomIdForSession(String(this.conversation.id))
-    const relay = new RelayClient(
+    const relay = (this.opts.createRelay ?? defaultCreateRelay)(
       toWebSocketUrl(this.opts.relayUrl),
       this.keypair,
     )
@@ -311,6 +327,7 @@ export class DurableBridge {
     })
     this.pushPairingAllowList(relay)
     this.installAutoListener(relay)
+    this.armPairingRotation()
     this.opts.log(
       `[un-bien-durable] relay connected — room ${roomId} (conversation ${String(this.conversation.id)})`,
       "info",
@@ -486,10 +503,79 @@ export class DurableBridge {
       return
     }
     if (this.relay !== relay) return
+    this.stopPairingRotation()
+    this.opts.log(
+      `[un-bien-durable] paired with ${inner.device_name} — pairing QR rotation stopped`,
+      "info",
+    )
     this.pushPairingAllowList(relay)
     if (!this.activePeers.has(appPeerId))
       this.attachOwner(relay, appPeerId, inner.device_name)
     this.emitPairOk(relay, appPeerId, inner, roomId)
+  }
+
+  // ── Pairing QR rotation ─────────────────────────────────────────────────────
+
+  /**
+   * The startup pairing invite: while the machine has no paired peers, the
+   * bridge ITSELF mints the rotating QR on the same qrSession the
+   * pair_request handler consumes from — one process issues AND validates
+   * the token, so a scan can never hit "token was not issued by this host"
+   * (the failure mode of minting in a separate CLI process). Armed on every
+   * successful relay connect (startup + reconnects); the first tick reads
+   * peers.json and retires silently when a peer already exists, so a
+   * revoked-then-restarted host re-arms on its next start().
+   */
+  private armPairingRotation(): void {
+    if (this.pairingRotationActive || this.stopped) return
+    this.pairingRotationActive = true
+    void this.rotatePairingQR()
+  }
+
+  /** One rotation step: retire when peers exist, otherwise mint + log a
+   *  fresh invite and schedule the next tick. */
+  private async rotatePairingQR(): Promise<void> {
+    if (this.stopped || !this.pairingRotationActive) return
+    // A peer landing in peers.json by any path (this bridge's handshake, a
+    // CLI pair-token --wait, a copied file) retires the invite.
+    if ((await listPeers()).length > 0) {
+      this.stopPairingRotation()
+      return
+    }
+    const kp = this.keypair
+    if (!kp) {
+      this.stopPairingRotation()
+      return
+    }
+    // The QR's rm/n must match what emitPairOk answers with: this
+    // conversation's room and the configured display name. Re-derived per
+    // tick so a retarget mid-rotation re-keys the invite to the new room.
+    const roomId = roomIdForSession(String(this.conversation.id))
+    const { token, expiresAt } = qrSession.issueToken()
+    const uri = buildQRUri(token, kp.publicKey, this.opts.displayName, roomId)
+    this.opts.log(
+      `[un-bien-durable] machine unpaired — scan this QR with the un-bien app:\n\n` +
+        `${renderQRAscii(uri)}\n` +
+        `Or paste this URI into the app's pair flow:\n\n${uri}\n\n` +
+        `The invite renews at ${new Date(expiresAt).toLocaleTimeString()} — rotation continues until a device pairs.`,
+      "info",
+    )
+    this.pairingRotationTimer = setTimeout(() => {
+      this.pairingRotationTimer = null
+      void this.rotatePairingQR()
+    }, this.opts.pairingRotationMs ?? TOKEN_TTL_MS)
+  }
+
+  /** Cancel the rotation (a peer paired / teardown). No qrSession.clear()
+   *  here: the outstanding token either was just consumed by the pairing
+   *  handshake or dies with the process — consumption is same-process by
+   *  design. */
+  private stopPairingRotation(): void {
+    this.pairingRotationActive = false
+    if (this.pairingRotationTimer !== null) {
+      clearTimeout(this.pairingRotationTimer)
+      this.pairingRotationTimer = null
+    }
   }
 
   private emitPairOk(
@@ -689,6 +775,14 @@ export class DurableBridge {
       if (timer) clearTimeout(timer)
     }
   }
+}
+
+// The production relay factory (tests inject their own via opts.createRelay).
+function defaultCreateRelay(
+  wsUrl: string,
+  keypair: Ed25519Keypair,
+): RelayClient {
+  return new RelayClient(wsUrl, keypair)
 }
 
 // The watchEvents stream is THE durable event plane; the bridge is its
