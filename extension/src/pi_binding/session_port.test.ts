@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest"
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent"
 import { PiSessionControl, PiSessionPort } from "./session_port.js"
+import { RPC_EVENT_NAMES } from "../session/rpc_envelope.js"
 
 /** The ctx receiver's structural shape shutdown() reads. */
 type CtxStub = Pick<ExtensionContext, "abort">
@@ -129,5 +130,67 @@ describe("PiSessionPort streaming (receiver pin)", () => {
     const port = streamingPort(() => null)
 
     expect(port.streaming).toBe(false)
+  })
+})
+
+describe("PiSessionPort.subscribeEvents (dispose gate)", () => {
+  /**
+   * A fake pi whose `on` registers callbacks the test can fire. It counts
+   * every dispatch INTO a registered callback, so the test can prove the
+   * gate lives INSIDE the callback (pi keeps dispatching after dispose) —
+   * not in pi.on (pi would have to unregister, which it can't).
+   */
+  function fakeEventPi() {
+    const registered = new Map<
+      string,
+      Array<(payload: unknown) => void>
+    >()
+    const dispatches: Array<{ event: string; payload: unknown }> = []
+    const pi = {
+      on(event: string, cb: (payload: unknown) => void) {
+        const list = registered.get(event) ?? []
+        list.push(cb)
+        registered.set(event, list)
+      },
+      fire(event: string, payload: unknown) {
+        for (const cb of registered.get(event) ?? []) {
+          dispatches.push({ event, payload })
+          cb(payload)
+        }
+      },
+      dispatchCount: () => dispatches.length,
+    }
+    return pi
+  }
+
+  it("the disposer gates INSIDE the registered callback — pi keeps receiving events", () => {
+    const pi = fakeEventPi()
+    const port = new PiSessionPort({
+      getPi: () => pi as unknown as ExtensionAPI,
+      getBaseCtx: () => null,
+      getSessionManager: () => null,
+    })
+    const handler = vi.fn()
+    const event = RPC_EVENT_NAMES[0]
+
+    const dispose = port.subscribeEvents(handler)
+
+    // Before dispose: the event reaches the handler.
+    pi.fire(event, { n: 1 })
+    expect(handler).toHaveBeenCalledTimes(1)
+    expect(handler).toHaveBeenCalledWith(event, { n: 1 })
+
+    const dispatchesBeforeDispose = pi.dispatchCount()
+    dispose()
+
+    // After dispose: the handler is gated, but pi STILL dispatches into the
+    // registered callback — pi.on has no unregister; the gate is the closure
+    // flag inside the callback.
+    pi.fire(event, { n: 2 })
+    expect(handler).toHaveBeenCalledTimes(1)
+    expect(pi.dispatchCount()).toBe(dispatchesBeforeDispose + 1)
+
+    // And a second dispose is harmless.
+    expect(() => dispose()).not.toThrow()
   })
 })
