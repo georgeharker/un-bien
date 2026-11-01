@@ -52,6 +52,7 @@ import {
 import { createUnBienDurableExtension } from "./extension.js"
 import { HeadlessPiLaunch } from "./pi_launch.js"
 import { DurableBridge } from "./bridge.js"
+import { wireMeshInbox } from "./mesh_delivery.js"
 
 // ── CLI ────────────────────────────────────────────────────────────────────
 
@@ -145,6 +146,11 @@ async function main(): Promise<void> {
     name: opts.name,
     cwd: opts.cwd,
   })
+  // Feed the inbox BEFORE the join: inbound agent-to-agent envelopes are
+  // stored for the model's pull/wait surface (launch_pi_task's correlated
+  // reply waits, the mesh_* tools), so nothing delivered between connect
+  // and the first tool call is lost.
+  wireMeshInbox(meshNode, inbox)
   const relayPeers: string[] = []
   const relayPeersDetail = new Map<
     string,
