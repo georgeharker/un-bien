@@ -79,5 +79,11 @@ ENV UNBIEN_STATE_DIR=/data
 VOLUME ["/data"]
 
 WORKDIR /workspace
-ENTRYPOINT ["sh", "-c", "exec unbien-durable --relay ${RELAY_URL:-http://127.0.0.1:8081} $0 $@"]
+# $0 inside `sh -c` is the shell name ("sh"), so the old `… $0 $@` form
+# injected the LITERAL string "sh" into argv as a positional argument —
+# the host's parseArgs rejected it with a usage error. The name operand
+# ("unbien-durable") after the script soaks up $0; "exec … \"$@\"" passes
+# ONLY the CMD args through: with the default empty CMD the invocation is
+# exactly `unbien-durable --relay <url>` — zero extra positionals.
+ENTRYPOINT ["sh", "-c", "exec unbien-durable --relay ${RELAY_URL:-http://127.0.0.1:8081} \"$@\"", "unbien-durable"]
 CMD []
