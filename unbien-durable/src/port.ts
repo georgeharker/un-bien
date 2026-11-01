@@ -205,17 +205,24 @@ export class DurableSessionPort implements AgentSessionPort {
     // The port reports whether an abort was REQUESTED (the port surface is
     // synchronous; durable's abort resolves once the conversation is idle).
     if (!this.opts.busy()) return false
-    void this.conversation.abort(this.opts.context)
+    // Fire-and-forget per the port contract — but not unguarded: a store
+    // failure must log, not surface as an unhandled rejection.
+    void this.conversation.abort(this.opts.context).catch((err: unknown) => {
+      const detail = err instanceof Error ? err.message : String(err)
+      this.opts.log(`abort failed: ${detail}`, "warning")
+    })
     return true
   }
 
   compact(opts?: { customInstructions?: string }): void {
     // Manual compaction always works on durable; it runs as a task and the
     // bridge forwards its completion via the compaction events.
-    void this.conversation.compact(
-      opts?.customInstructions,
-      this.opts.context,
-    )
+    void this.conversation
+      .compact(opts?.customInstructions, this.opts.context)
+      .catch((err: unknown) => {
+        const detail = err instanceof Error ? err.message : String(err)
+        this.opts.log(`compact failed: ${detail}`, "warning")
+      })
   }
 
   notify(message: string, level: NotifyLevel = "info"): void {

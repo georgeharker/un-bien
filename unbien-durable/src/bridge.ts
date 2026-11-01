@@ -336,7 +336,14 @@ export class DurableBridge {
     this.reconnectAttempt += 1
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
-      void this.connectRelay()
+      // Fire-and-forget (a timer callback can't await): connectRelay's own
+      // try covers relay.connect(), this catch covers anything else thrown
+      // on the path (the relay factory, room-id derivation) — escaping as an
+      // unhandled rejection would take the host down.
+      void this.connectRelay().catch((err: unknown) => {
+        const detail = err instanceof Error ? err.message : String(err)
+        this.opts.log(`relay reconnect failed: ${detail}`, "error")
+      })
     }, delay)
   }
 
@@ -525,7 +532,19 @@ export class DurableBridge {
     // don't want — pairing happens via the un-bien CLI instead.
     if (this.opts.pairingQr === false) return
     this.pairingRotationActive = true
-    void this.rotatePairingQR()
+    this.tickPairingRotation()
+  }
+
+  /** Fire-and-forget one rotation step: a rejection (listPeers on a wedged
+   *  broker socket, …) logs + retires the rotation instead of escaping as
+   *  an unhandled rejection — the rotation re-arms on the next successful
+   *  relay connect. */
+  private tickPairingRotation(): void {
+    void this.rotatePairingQR().catch((err: unknown) => {
+      const detail = err instanceof Error ? err.message : String(err)
+      this.opts.log(`pairing QR rotation failed: ${detail}`, "warning")
+      this.stopPairingRotation()
+    })
   }
 
   /** One rotation step: retire when peers exist, otherwise mint + log a
@@ -558,7 +577,7 @@ export class DurableBridge {
     )
     this.pairingRotationTimer = setTimeout(() => {
       this.pairingRotationTimer = null
-      void this.rotatePairingQR()
+      this.tickPairingRotation()
     }, this.opts.pairingRotationMs ?? TOKEN_TTL_MS)
   }
 
@@ -784,7 +803,14 @@ export class DurableBridge {
     }
     if (type === "terminate") {
       this.opts.log("terminate(ub): graceful host shutdown requested", "warning")
-      await this.opts.shutdownHost()
+      // routeUnBienPlane runs fire-and-forget from the channel loop — a
+      // failed shutdown must log here, not escape as an unhandled rejection.
+      try {
+        await this.opts.shutdownHost()
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err)
+        this.opts.log(`terminate(ub) shutdown failed: ${detail}`, "error")
+      }
       return
     }
   }

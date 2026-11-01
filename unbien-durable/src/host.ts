@@ -117,6 +117,21 @@ async function main(): Promise<void> {
   ensureGlobalDirs()
   mkdirSync(dirname(opts.dbPath), { recursive: true })
 
+  // Fire-and-forget async must never kill the host: several paths hand a
+  // promise to the void (the pairing QR rotation, relay reconnects,
+  // conversation abort/compact) and their per-site .catch() calls cover the
+  // EXPECTED failures — this process-level net catches the rest (an
+  // unexpected throw mid-path). Logs and continues; Node's default handler
+  // would exit the process, taking the always-on host down with a stray
+  // rejection.
+  process.on("unhandledRejection", (reason: unknown) => {
+    const detail =
+      reason instanceof Error
+        ? reason.stack ?? reason.message
+        : String(reason)
+    log(`unhandled rejection: ${detail}`, "error")
+  })
+
   // Models: pi-ai's provider registry reads the same env keys pi reads
   // (ANTHROPIC_API_KEY, OPENAI_API_KEY, …). A provider without credentials
   // simply has no configured models in the catalog.
