@@ -171,13 +171,18 @@ export class PiSessionPort implements AgentSessionPort {
       event: string,
       cb: (payload: unknown) => void,
     ) => void
-    for (const name of RPC_EVENT_NAMES) on(name, (payload) => handler(name, payload))
-    // pi.on has no unregister: the disposer is a gate (pi's event dispatch
-    // keeps calling in, but the callback stops forwarding).
+    // pi.on has no unregister: the disposer is a gate, checked INSIDE the
+    // registered callback — pi's event dispatch keeps calling in, but the
+    // callback stops forwarding. (The gate has to live in the callback's
+    // closure, not just the disposer, or it never gates anything.)
     let disposed = false
+    for (const name of RPC_EVENT_NAMES)
+      on(name, (payload) => {
+        if (disposed) return
+        handler(name, payload)
+      })
     return () => {
       disposed = true
-      void disposed
     }
   }
 }
