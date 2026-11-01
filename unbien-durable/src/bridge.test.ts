@@ -95,7 +95,10 @@ class FakeRelay {
  *  attachOwner reads this.port.sessionId; the full attach() needs a live
  *  pi-durable harness, out of scope for the pairing surface. The seam sets
  *  exactly those two privates. */
-function makeBridge(opts?: { rotationMs?: number }): {
+function makeBridge(opts?: {
+  rotationMs?: number
+  pairingQr?: boolean
+}): {
   bridge: InstanceType<typeof DurableBridge>
   relay: FakeRelay
   logs: string[]
@@ -117,6 +120,7 @@ function makeBridge(opts?: { rotationMs?: number }): {
   }
   if (opts?.rotationMs !== undefined)
     options.pairingRotationMs = opts.rotationMs
+  if (opts?.pairingQr !== undefined) options.pairingQr = opts.pairingQr
   const bridge = new DurableBridge(options)
   const seam = bridge as unknown as {
     conversation: Conversation
@@ -260,6 +264,36 @@ describe("DurableBridge pair-on-startup QR", () => {
     await bridge.start()
     await flush(90)
     expect(pairingUris(logs)).toEqual([])
+    await bridge.stop()
+  })
+
+  it("start() with pairingQr:false never mints — no QR, no tokens issued", async () => {
+    // The host's --no-pairing-qr / UNBIEN_NO_PAIRING_QR suppression: no
+    // auto-minted invite while unpaired, and qrSession issued nothing a
+    // later scan could consume.
+    const { bridge, relay, logs } = makeBridge({ rotationMs: 25, pairingQr: false })
+    await bridge.start()
+    await flush(90)
+    expect(pairingUris(logs)).toEqual([])
+
+    // Even a pair_request with a guessable/forged token is refused.
+    const peer = appPeerId()
+    relay.deliver(
+      outerFrame(peer, {
+        type: "pair_request",
+        id: "pr-suppressed",
+        token: "forged",
+        device_name: "Sneaky Phone",
+      }),
+    )
+    await flush()
+    const pairOk = relay.sent
+      .map(parseSent)
+      .find((f) => f.peer === peer && f.inner["type"] === "pair_ok")
+    expect(pairOk).toBeUndefined()
+    expect((await storage.listPeers()).map((p) => p.remote_epk)).not.toContain(
+      peer,
+    )
     await bridge.stop()
   })
 

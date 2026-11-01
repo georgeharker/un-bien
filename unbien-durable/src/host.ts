@@ -12,11 +12,14 @@
  *
  * Usage:
  *   unbien-durable [--cwd <dir>] [--name <agent-name>] [--relay <url>]
- *                   [--db <path>] [--model <provider/model>]
+ *                   [--db <path>] [--model <provider/model>] [--no-pairing-qr]
  *
  * Env: provider API keys are read by pi-ai's provider registry exactly as
  * pi reads them (ANTHROPIC_API_KEY, OPENAI_API_KEY, …). The model defaults
  * from the pi-ai catalog's first configured provider/model.
+ * UNBIEN_NO_PAIRING_QR suppresses the auto-minted rotating pairing QR (same
+ * as --no-pairing-qr): the invite mints with no user gesture, which headless
+ * hosts pair via the un-bien CLI instead.
  */
 import { join, dirname, resolve } from "node:path"
 import { mkdirSync } from "node:fs"
@@ -61,18 +64,31 @@ interface HostOptions {
   relayUrl: string
   dbPath: string
   model: string | undefined // "provider/modelId"
+  /** Suppress the auto-minted rotating pairing QR (CLI flag --no-pairing-qr
+   *  or env UNBIEN_NO_PAIRING_QR). Pairing then happens via the un-bien CLI. */
+  noPairingQr: boolean
 }
 
 function parseArgs(argv: string[]): HostOptions {
   const args = new Map<string, string>()
-  for (let i = 0; i < argv.length; i += 2) {
-    const key = argv[i]
+  let noPairingQr =
+    process.env["UNBIEN_NO_PAIRING_QR"] !== undefined &&
+    process.env["UNBIEN_NO_PAIRING_QR"] !== "0" &&
+    process.env["UNBIEN_NO_PAIRING_QR"] !== "false"
+  for (let i = 0; i < argv.length; ) {
+    const key = argv[i] as string
+    if (key === "--no-pairing-qr") {
+      noPairingQr = true
+      i += 1
+      continue
+    }
     const value = argv[i + 1]
     if (!key.startsWith("--") || value === undefined) {
-      process.stderr.write(`Usage: unbien-durable [--cwd <dir>] [--name <agent-name>] [--relay <url>] [--db <path>] [--model <provider/model>]\n`)
+      process.stderr.write(`Usage: unbien-durable [--cwd <dir>] [--name <agent-name>] [--relay <url>] [--db <path>] [--model <provider/model>] [--no-pairing-qr]\n`)
       process.exit(2)
     }
     args.set(key.slice(2), value)
+    i += 2
   }
   const cwd = resolve(args.get("cwd") ?? process.cwd())
   const relayUrl =
@@ -87,7 +103,7 @@ function parseArgs(argv: string[]): HostOptions {
     "durable",
   )
   const dbPath = resolve(args.get("db") ?? join(stateDir, "session"))
-  return { cwd, name, machineName, relayUrl, dbPath, model: args.get("model") }
+  return { cwd, name, machineName, relayUrl, dbPath, model: args.get("model"), noPairingQr }
 }
 
 function log(message: string, level: "info" | "warning" | "error" = "info"): void {
@@ -214,12 +230,17 @@ async function main(): Promise<void> {
     displayName: opts.name,
     machineName: opts.machineName,
     cwd: opts.cwd,
+    pairingQr: !opts.noPairingQr,
     log: (message, level) => log(message, level ?? "info"),
     shutdownHost: shutdown,
   })
   bridgeRef = bridge
   await bridge.attach(root)
   await bridge.start()
+  if (opts.noPairingQr)
+    log(
+      "pairing QR suppressed — pair this machine via the un-bien CLI, or restart without --no-pairing-qr / UNBIEN_NO_PAIRING_QR",
+    )
 
   // Join the local UDS agent mesh (the model's agent_send/launch_pi_task
   // surface). A broker absence is tolerated: the mesh reconnects via

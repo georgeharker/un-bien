@@ -102,6 +102,10 @@ export interface DurableBridgeOptions {
    *  invite renews exactly as the previous token expires). Tests shrink it
    *  to observe rotation in real time. */
   pairingRotationMs?: number
+  /** Suppress the auto-minted rotating pairing QR (no user gesture minted
+   *  it — headless hosts pair via the CLI instead). Default: false, the
+   *  rotation mints as before. */
+  pairingQr?: boolean
   /** Relay client factory — tests inject a fake; production gets the real
    *  RelayClient. */
   createRelay?: (wsUrl: string, keypair: Ed25519Keypair) => RelayClient
@@ -528,6 +532,10 @@ export class DurableBridge {
    */
   private armPairingRotation(): void {
     if (this.pairingRotationActive || this.stopped) return
+    // Suppressed by the host (--no-pairing-qr / UNBIEN_NO_PAIRING_QR): the
+    // auto-minted invite mints with no user gesture, which headless hosts
+    // don't want — pairing happens via the un-bien CLI instead.
+    if (this.opts.pairingQr === false) return
     this.pairingRotationActive = true
     void this.rotatePairingQR()
   }
