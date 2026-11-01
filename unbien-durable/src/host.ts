@@ -41,16 +41,14 @@ import {
 } from "@earendil-works/pi-durable"
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node"
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node"
-import { loadConfig } from "@geohar/un-bien/dist/config.js"
-import {
-  MeshNode,
-} from "@geohar/un-bien/dist/session/mesh_node.js"
-import { MeshInbox } from "@geohar/un-bien/dist/session/mesh_inbox.js"
+import { loadConfig } from "@geohar/un-bien/durable"
+import { MeshNode } from "@geohar/un-bien/durable"
+import { MeshInbox } from "@geohar/un-bien/durable"
 import {
   LOCAL_SESSION_NAME,
   ensureGlobalDirs,
   sessionSockPath,
-} from "@geohar/un-bien/dist/session/global_config.js"
+} from "@geohar/un-bien/durable"
 import { createUnBienDurableExtension } from "./extension.js"
 import { HeadlessPiLaunch } from "./pi_launch.js"
 import { DurableBridge } from "./bridge.js"

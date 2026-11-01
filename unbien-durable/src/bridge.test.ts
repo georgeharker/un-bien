@@ -18,9 +18,11 @@ import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import type { Context } from "@earendil-works/chord"
 import type { Conversation, Harness } from "@earendil-works/pi-durable"
-import type { Ed25519Keypair } from "@geohar/un-bien/dist/pairing/crypto.js"
-import type { KeyStoreBackend } from "@geohar/un-bien/dist/pairing/storage.js"
-import type { RelayClient } from "@geohar/un-bien/dist/transport/relay_client.js"
+import type {
+  Ed25519Keypair,
+  KeyStoreBackend,
+  RelayClient,
+} from "@geohar/un-bien/durable"
 // Type-only: erased at runtime, so it does not trigger the bridge's
 // transitive storage import before the env is pinned below.
 import type { DurableBridgeOptions } from "./bridge.js"
@@ -39,9 +41,11 @@ delete process.env.UNBIEN_IDENTITY_SEED
 delete process.env.UNBIEN_RELAY
 
 const { DurableBridge } = await import("./bridge.js")
-const storage = await import("@geohar/un-bien/dist/pairing/storage.js")
-const crypto = await import("@geohar/un-bien/dist/pairing/crypto.js")
-const { roomIdForSession } = await import("@geohar/un-bien/dist/rooms.js")
+const storage = await import("@geohar/un-bien/durable")
+const {
+  generateEd25519Keypair,
+  roomIdForSession,
+} = storage
 
 /** A keyring that is permanently locked: every read/write throws, so the
  *  resolver takes the file-identity fallback without touching the OS. */
@@ -176,7 +180,7 @@ function parseSent(
 
 /** A fresh app identity (the scanning phone's Ed25519 handle). */
 function appPeerId(): string {
-  return Buffer.from(crypto.generateEd25519Keypair().publicKey).toString(
+  return Buffer.from(generateEd25519Keypair().publicKey).toString(
     "base64",
   )
 }

@@ -17,7 +17,10 @@
       "types": "./dist/core/index.d.ts",
       "default": "./dist/core/index.js"
     },
-    "./dist/*": "./dist/*",
+    "./durable": {
+      "types": "./dist/durable.d.ts",
+      "default": "./dist/durable.js"
+    },
     "./launcher": {
       "types": "./dist/bin/launcher.d.ts",
       "default": "./dist/bin/launcher.js"

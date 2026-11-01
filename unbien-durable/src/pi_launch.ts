@@ -34,7 +34,7 @@ import {
 import {
   LOCAL_SESSION_NAME,
   sessionSockPath,
-} from "@geohar/un-bien/dist/session/global_config.js"
+} from "@geohar/un-bien/durable"
 
 /** Default readiness deadline: the launched session's auto-init does a cwd
  *  lock + config read + UDS broker join before the name is visible. */

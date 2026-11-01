@@ -14,7 +14,7 @@ import type {
 import type { EntryRecord } from "@earendil-works/pi-durable"
 import type { EventSource } from "@geohar/un-bien/core"
 import { defineMeshTools } from "@geohar/un-bien/core"
-import { MeshInbox } from "@geohar/un-bien/dist/session/mesh_inbox.js"
+import { MeshInbox } from "@geohar/un-bien/durable"
 import { DurableTranscriptMirror } from "./port.js"
 import { WatchEventsSource } from "./event_source.js"
 import { DurableToolRegistrar } from "./registrar.js"

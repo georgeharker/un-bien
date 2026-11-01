@@ -19,10 +19,12 @@ import {
   defineMeshTools,
   type HeadlessLaunchPort,
 } from "@geohar/un-bien/core"
-import type { RelayClient } from "@geohar/un-bien/dist/transport/relay_client.js"
-import type { MeshInbox } from "@geohar/un-bien/dist/session/mesh_inbox.js"
-import type { MeshNode } from "@geohar/un-bien/dist/session/mesh_node.js"
-import type { SessionPeer } from "@geohar/un-bien/dist/session/peer.js"
+import type {
+  MeshInbox,
+  MeshNode,
+  RelayClient,
+  SessionPeer,
+} from "@geohar/un-bien/durable"
 import { DurableToolRegistrar } from "./registrar.js"
 import { createLaunchWaitQuitTool } from "./launch_wait_quit.js"
 

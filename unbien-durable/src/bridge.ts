@@ -26,46 +26,34 @@ import type { Context, JsonValue } from "@earendil-works/chord"
 import type { Conversation, Harness } from "@earendil-works/pi-durable"
 import { defineEntry as defineEntryFn, watchEvents } from "@earendil-works/pi-durable"
 import {
+  TOKEN_TTL_MS,
+  PlainPeerChannel,
+  RelayClient,
+  _findKnownPeer,
+  addPeer,
+  buildQRUri,
+  buildSignedAllowList,
   createRpcEnvelope,
+  createRpcHandlers,
+  dispatchRpcCommand,
+  getOrCreateEd25519Keypair,
   helloEnvelope,
   isEnvelopeFrame,
-  type EnvelopeMessage,
-} from "@geohar/un-bien/dist/session/rpc_envelope.js"
-import {
-  dispatchRpcCommand,
-} from "@geohar/un-bien/dist/session/rpc_inbound.js"
-import {
-  createRpcHandlers,
-  type RpcHandlersDeps,
-} from "@geohar/un-bien/dist/session/rpc_handlers.js"
-import { sessionCapabilities } from "@geohar/un-bien/dist/session/capabilities.js"
-import { roomIdForSession } from "@geohar/un-bien/dist/rooms.js"
-import { toWebSocketUrl } from "@geohar/un-bien/dist/config.js"
-import { RelayClient } from "@geohar/un-bien/dist/transport/relay_client.js"
-import {
-  PlainPeerChannel,
-} from "@geohar/un-bien/dist/transport/peer_channel.js"
-import { _findKnownPeer } from "@geohar/un-bien/dist/pairing/peer_trust.js"
-import {
-  buildQRUri,
-  qrSession,
-  renderQRAscii,
-  TOKEN_TTL_MS,
-} from "@geohar/un-bien/dist/pairing/qr.js"
-import {
-  addPeer,
-  getOrCreateEd25519Keypair,
   listPeers,
   nextAllowListVersion,
   pairingAllowList,
-} from "@geohar/un-bien/dist/pairing/storage.js"
-import { buildSignedAllowList } from "@geohar/un-bien/dist/pairing/signed_allow_list.js"
-import type {
-  ClientMessage,
-  PairErrorCode,
-  ServerMessage,
-} from "@geohar/un-bien/dist/protocol/types.js"
-import type { Ed25519Keypair } from "@geohar/un-bien/dist/pairing/crypto.js"
+  qrSession,
+  renderQRAscii,
+  roomIdForSession,
+  sessionCapabilities,
+  toWebSocketUrl,
+  type ClientMessage,
+  type Ed25519Keypair,
+  type EnvelopeMessage,
+  type PairErrorCode,
+  type RpcHandlersDeps,
+  type ServerMessage,
+} from "@geohar/un-bien/durable"
 import type { NotifyLevel } from "@geohar/un-bien/core"
 import {
   DurableSessionControl,

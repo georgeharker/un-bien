@@ -25,8 +25,7 @@ import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable"
 import type {
   HeadlessLaunchPort,
 } from "@geohar/un-bien/core"
-import type { MeshInbox } from "@geohar/un-bien/dist/session/mesh_inbox.js"
-import type { MeshNode } from "@geohar/un-bien/dist/session/mesh_node.js"
+import type { MeshInbox, MeshNode } from "@geohar/un-bien/durable"
 
 /** How long to wait for the peer's correlated reply (default 5 min — the
  *  launched agent runs a full multi-turn task with tools). */
