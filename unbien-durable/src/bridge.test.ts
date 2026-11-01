@@ -15,7 +15,7 @@
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { Context } from "@earendil-works/chord"
 import type { Conversation, Harness } from "@earendil-works/pi-durable"
 import type {
@@ -424,5 +424,168 @@ describe("DurableBridge pair-on-startup QR", () => {
     expect(uris).toHaveLength(1)
     expect(tokenOf(uris[0]!)).not.toBe(tokenOf(uri))
     await second.bridge.stop()
+  })
+})
+
+describe("DurableBridge ub-plane session_fork / session_navigate", () => {
+  /** Pair a peer through the real handshake (active owner channel),
+   *  optionally injecting a session-control double via the test seam. */
+  async function pairedBridge(opts?: {
+    control?: { fork: unknown; navigateTree: unknown }
+  }): Promise<{
+    bridge: InstanceType<typeof DurableBridge>
+    relay: FakeRelay
+    logs: string[]
+    peer: string
+  }> {
+    const made = makeBridge()
+    if (opts?.control !== undefined) {
+      const seam = made.bridge as unknown as { control: unknown }
+      seam.control = opts.control
+    }
+    await made.bridge.start()
+    await flush()
+    const uri = pairingUris(made.logs)[0]!
+    const peer = appPeerId()
+    made.relay.deliver(
+      outerFrame(peer, {
+        type: "pair_request",
+        id: "pr-1",
+        token: tokenOf(uri),
+        device_name: "Pixel Test",
+      }),
+    )
+    await flush()
+    return { ...made, peer }
+  }
+
+  /** The app's wire shape (RelayConnection.mapToWire): the ClientMessage is
+   *  a ub-plane ENVELOPE — `{type:"ub", ub:{…}}` — routed by the owner
+   *  channel to the bridge's ub dispatcher. */
+  function ubEnvelope(
+    peer: string,
+    ub: Record<string, unknown>,
+  ): string {
+    return outerFrame(peer, { type: "ub", ts: 1, protocolVersion: 1, ub })
+  }
+
+  /** The ub error frames the bridge replied, off the sent wire. */
+  function ubErrors(relay: FakeRelay): Array<Record<string, unknown>> {
+    return relay.sent
+      .map(parseSent)
+      .map((f) => f.inner)
+      .filter(
+        (i) =>
+          i["type"] === "ub" &&
+          (i["ub"] as Record<string, unknown> | undefined)?.["type"] === "error",
+      )
+      .map((i) => i["ub"] as Record<string, unknown>)
+  }
+
+  it("session_fork with no conversation attached replies a correlated ub error", async () => {
+    // The makeBridge seam leaves `control` unset (no attach() ran) — the
+    // pre-fix behavior was a SILENT drop; the app's fork tile never came.
+    const { bridge, relay, peer } = await pairedBridge()
+    relay.deliver(
+      ubEnvelope(peer, {
+        type: "session_fork",
+        id: "req-1",
+        entry_id: "5",
+        position: "at",
+      }),
+    )
+    await flush()
+    const [err] = ubErrors(relay)
+    expect(err).toBeDefined()
+    expect(err!["in_reply_to"]).toBe("req-1")
+    expect(String(err!["message"])).toContain("No conversation attached")
+    await bridge.stop()
+  })
+
+  it("session_fork wires through to the session control's fork", async () => {
+    const fork = vi.fn(async () => {})
+    const { bridge, relay, peer } = await pairedBridge({
+      control: { fork, navigateTree: async () => {} },
+    })
+    relay.deliver(
+      ubEnvelope(peer, {
+        type: "session_fork",
+        id: "req-2",
+        entry_id: "11",
+        position: "at",
+      }),
+    )
+    await flush()
+    expect(fork).toHaveBeenCalledWith("11", {
+      position: "at",
+      requestId: "req-2",
+    })
+    expect(ubErrors(relay)).toEqual([])
+    await bridge.stop()
+  })
+
+  it("a failed fork replies an error frame, not a silent drop", async () => {
+    const fork = vi.fn(async () => {
+      throw new Error("Entry not found: 999")
+    })
+    const { bridge, relay, peer } = await pairedBridge({
+      control: { fork, navigateTree: async () => {} },
+    })
+    relay.deliver(
+      ubEnvelope(peer, {
+        type: "session_fork",
+        id: "req-3",
+        entry_id: "999",
+        position: "at",
+      }),
+    )
+    await flush()
+    const [err] = ubErrors(relay)
+    expect(err).toBeDefined()
+    expect(err!["in_reply_to"]).toBe("req-3")
+    expect(String(err!["message"])).toContain("Entry not found: 999")
+    await bridge.stop()
+  })
+
+  it("session_navigate wires through to navigateTree", async () => {
+    const navigateTree = vi.fn(async () => {})
+    const { bridge, relay, peer } = await pairedBridge({
+      control: { fork: async () => {}, navigateTree },
+    })
+    relay.deliver(
+      ubEnvelope(peer, {
+        type: "session_navigate",
+        id: "req-4",
+        entry_id: "7",
+      }),
+    )
+    await flush()
+    expect(navigateTree).toHaveBeenCalledWith("7")
+    expect(ubErrors(relay)).toEqual([])
+    await bridge.stop()
+  })
+
+  it("the navigateTree refusal (not implemented on durable) replies an error frame", async () => {
+    const navigateTree = vi.fn(async () => {
+      throw new Error("navigateTree is not implemented")
+    })
+    const { bridge, relay, peer } = await pairedBridge({
+      control: { fork: async () => {}, navigateTree },
+    })
+    relay.deliver(
+      ubEnvelope(peer, {
+        type: "session_navigate",
+        id: "req-5",
+        entry_id: "8",
+      }),
+    )
+    await flush()
+    expect(ubErrors(relay).map((e) => e["in_reply_to"])).toEqual([
+      "req-5",
+    ])
+    expect(String(ubErrors(relay)[0]!["message"])).toContain(
+      "navigateTree is not implemented",
+    )
+    await bridge.stop()
   })
 })

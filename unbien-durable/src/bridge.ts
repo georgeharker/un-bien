@@ -593,6 +593,29 @@ export class DurableBridge {
     })
   }
 
+  /** un-plane error reply, correlated to the request id when present.
+   *  Same best-effort wire as sendEnvelope — a relay hiccup mid-reply must
+   *  not throw into the fire-and-forget ub dispatch. */
+  private sendUbError(
+    sender: PlainPeerChannel,
+    inReplyTo: string | undefined,
+    message: string,
+  ): void {
+    try {
+      sender.sendEnvelope({
+        type: "ub",
+        ub: {
+          type: "error",
+          ...(inReplyTo !== undefined ? { in_reply_to: inReplyTo } : {}),
+          code: "internal_error",
+          message,
+        },
+      })
+    } catch {
+      /* best-effort */
+    }
+  }
+
   private sendInner(
     relay: RelayClient,
     appPeerId: string,
@@ -680,7 +703,8 @@ export class DurableBridge {
       })
   }
 
-  /** un-bien plane: session_sync (minimal ack) + terminate. */
+  /** un-bien plane: session_sync (minimal ack) + session_fork/
+ *  session_navigate + terminate. */
   private async routeUnBienPlane(
     sender: PlainPeerChannel,
     env: EnvelopeMessage,
@@ -701,6 +725,61 @@ export class DurableBridge {
           session_name: this.opts.displayName,
         },
       } as EnvelopeMessage)
+      return
+    }
+    if (type === "session_fork" || type === "session_navigate") {
+      // app->host: fork a NEW conversation / branch in place from a transcript
+      // entry. The durable analog of the pi extension's routing.ts handlers:
+      // the DurableSessionControl implements both verbs directly (no command
+      // ctx to self-dispatch through — durable tools ARE the surface).
+      const f = frame as Record<string, unknown>
+      const entryId = typeof f.entry_id === "string" ? f.entry_id : ""
+      const reqId = typeof f.id === "string" ? f.id : undefined
+      const replyError = (message: string): void => {
+        this.sendUbError(sender, reqId, message)
+      }
+      if (!entryId) {
+        this.opts.log(
+          `${String(type)}(ub): missing entry_id — ignored`,
+          "warning",
+        )
+        replyError("session_fork/session_navigate requires an entry_id")
+        return
+      }
+      const control = this.control
+      if (!control) {
+        // No conversation attached (the bridge never attach()ed) — the app
+        // must learn the verb didn't land instead of waiting for a tile that
+        // never appears.
+        const message = `No conversation attached — ${String(type)} unavailable`
+        this.opts.log(`${String(type)}(ub): ${message}`, "warning")
+        replyError(message)
+        return
+      }
+      if (type === "session_fork") {
+        const position =
+          f.position === "at" || f.position === "before" ? f.position : undefined
+        try {
+          // The request id threads through so the retargeted bridge's first
+          // session_sync can echo forked_from_req (the app's auto-nav).
+          await control.fork(entryId, {
+            ...(position ? { position } : {}),
+            ...(reqId ? { requestId: reqId } : {}),
+          })
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : String(err)
+          this.opts.log(`session_fork(ub) error: ${detail}`, "warning")
+          replyError(`session_fork failed: ${detail}`)
+        }
+        return
+      }
+      try {
+        await control.navigateTree(entryId)
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err)
+        this.opts.log(`session_navigate(ub) error: ${detail}`, "warning")
+        replyError(`session_navigate failed: ${detail}`)
+      }
       return
     }
     if (type === "terminate") {

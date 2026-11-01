@@ -153,6 +153,17 @@ export type UbFrame =
       room_id: string
     }
   | {
+      // ext->app: verb-level error reply for an app->ext ub request the
+      // extension/host REFUSED or failed (e.g. a durable host's session_fork
+      // with no conversation attached). Correlated via in_reply_to; the app
+      // reads it where it parks request continuations (session lists today)
+      // and ignores it elsewhere.
+      type: "error"
+      in_reply_to?: string
+      code?: string
+      message: string
+    }
+  | {
       // ext->app: session-info PULL response — a session's own state, answered
       // from the extension's tracked data (subagent lifecycle status for now).
       type: "session_info"
