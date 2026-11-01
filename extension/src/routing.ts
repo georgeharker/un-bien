@@ -285,22 +285,27 @@ export async function routeUnBienPlane(
       )
       // routeUnBienPlane is dispatched fire-and-forget from the sync channel
       // loop (void routeUnBienPlane in index.ts) — a rejection here would be
-      // an unhandled promise rejection. Catch at the await and envLog it.
+      // an unhandled promise rejection. Catch at the await and console.error
+      // it — envLog is a no-op without the debug.envelope pref, which would
+      // make a failed fork invisible in the daemon stderr (same pattern as
+      // the rpc plane's dispatch-failure catch).
       try {
         await deps.sessionControl()?.fork(entryId, {
           ...(position ? { position } : {}),
           ...(reqId ? { requestId: reqId } : {}),
         })
       } catch (err) {
-        envLog(`session_fork(ub) error: ${String(err)}`)
+        console.error(`[un-bien] session_fork(ub) error: ${String(err)}`)
       }
     } else {
       envLog(`session_navigate(ub): entry=${entryId.slice(0, 8)}`)
       // Same fire-and-forget dispatch — catch here, not in the channel loop.
+      // console.error (not envLog): a failed navigate must be visible in the
+      // daemon stderr without a debug pref, same as fork above.
       try {
         await deps.sessionControl()?.navigateTree(entryId)
       } catch (err) {
-        envLog(`session_navigate(ub) error: ${String(err)}`)
+        console.error(`[un-bien] session_navigate(ub) error: ${String(err)}`)
       }
     }
     return
