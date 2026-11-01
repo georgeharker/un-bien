@@ -99,11 +99,13 @@ export function fitEntryForTransport(entry: PortEntry): PortEntry {
       return candidate
   }
   // Hand-built to the message-entry shape; the cast papers over the
-  // wire union's narrower content typing.
+  // wire union's narrower content typing. parentId survives the elision
+  // (PortEntry is minimally typed, so the read rides a cast) — dropping it
+  // to null broke the app's tree structure for the elided entry.
   return {
     type: "message",
     id: entry.id,
-    parentId: null,
+    parentId: (entry as { parentId?: string | null }).parentId ?? null,
     message: {
       role: "assistant",
       content: [
