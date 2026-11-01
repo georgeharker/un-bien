@@ -764,7 +764,17 @@ function _routeUnBienPlaneFrom(
 ): void {
   // routeUnBienPlane is async (session-control ops await); the channel
   // dispatcher is sync, so the promise is fire-and-forget — errors are
-  // logged inside the router, never back into the transport loop.
+  // logged inside the router (every await is try/caught), never back into
+  // the transport loop.
+  //
+  // ORDERING GUARANTEE: routeUnBienPlane's sync PREFIX (frame parse + the
+  // session_sync replay enqueue) runs to its first await INSIDE this sync
+  // dispatch, so inbound frames still enter the router in arrival order —
+  // the void only defers the async TAIL. And because control returns here
+  // immediately, the sync dispatcher loop never blocks on a slow op (the
+  // aborted alternative — awaiting the router in the loop — would stall
+  // every channel on a single fork). Synchronous control + fire-and-forget
+  // tail is exactly the contract the router's internal try/catches close.
   void routeUnBienPlane(planeDeps, sender, env)
 }
 
