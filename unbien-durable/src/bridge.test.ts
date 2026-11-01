@@ -102,6 +102,7 @@ class FakeRelay {
 function makeBridge(opts?: {
   rotationMs?: number
   pairingQr?: boolean
+  shutdownHost?: () => Promise<void>
 }): {
   bridge: InstanceType<typeof DurableBridge>
   relay: FakeRelay
@@ -118,7 +119,7 @@ function makeBridge(opts?: {
     log: (message) => {
       logs.push(message)
     },
-    shutdownHost: async () => {},
+    shutdownHost: opts?.shutdownHost ?? (async () => {}),
     createRelay: (_wsUrl: string, _keypair: Ed25519Keypair) =>
       relay as unknown as RelayClient,
   }
@@ -432,13 +433,16 @@ describe("DurableBridge ub-plane session_fork / session_navigate", () => {
    *  optionally injecting a session-control double via the test seam. */
   async function pairedBridge(opts?: {
     control?: { fork: unknown; navigateTree: unknown }
+    shutdownHost?: () => Promise<void>
   }): Promise<{
     bridge: InstanceType<typeof DurableBridge>
     relay: FakeRelay
     logs: string[]
     peer: string
   }> {
-    const made = makeBridge()
+    const made = makeBridge(
+      opts?.shutdownHost ? { shutdownHost: opts.shutdownHost } : undefined,
+    )
     if (opts?.control !== undefined) {
       const seam = made.bridge as unknown as { control: unknown }
       seam.control = opts.control
@@ -587,5 +591,72 @@ describe("DurableBridge ub-plane session_fork / session_navigate", () => {
       "navigateTree is not implemented",
     )
     await bridge.stop()
+  })
+})
+
+describe("DurableBridge terminate(ub)", () => {
+  /** The app's terminate wire shape: a ub-plane envelope through the
+   *  owner channel (same shape as the fork/navigate frames above). */
+  function terminateEnvelope(peer: string, id: string): string {
+    return outerFrame(peer, {
+      type: "ub",
+      ts: 1,
+      protocolVersion: 1,
+      ub: { type: "terminate", id },
+    })
+  }
+
+  it("shuts the host down by default (the app IS the UI on a headless box)", async () => {
+    const shutdownHost = vi.fn(async () => {})
+    const made = makeBridge({ shutdownHost })
+    await made.bridge.start()
+    await flush()
+    const uri = pairingUris(made.logs)[0]!
+    const peer = appPeerId()
+    made.relay.deliver(
+      outerFrame(peer, {
+        type: "pair_request",
+        id: "pr-1",
+        token: tokenOf(uri),
+        device_name: "Pixel Test",
+      }),
+    )
+    await flush()
+    made.relay.deliver(terminateEnvelope(peer, "term-1"))
+    await flush()
+    expect(shutdownHost).toHaveBeenCalledTimes(1)
+    await made.bridge.stop()
+  })
+
+  it("refuses when the config opts out (allow_remote_terminate: false)", async () => {
+    // UNBIEN_DIRECT_CONFIG is the daemon/headless escape hatch — it wins
+    // over every on-disk layer, so the refusal is hermetic.
+    process.env.UNBIEN_DIRECT_CONFIG = '{"allow_remote_terminate":false}'
+    try {
+      const shutdownHost = vi.fn(async () => {})
+      const made = makeBridge({ shutdownHost })
+      await made.bridge.start()
+      await flush()
+      const uri = pairingUris(made.logs)[0]!
+      const peer = appPeerId()
+      made.relay.deliver(
+        outerFrame(peer, {
+          type: "pair_request",
+          id: "pr-1",
+          token: tokenOf(uri),
+          device_name: "Pixel Test",
+        }),
+      )
+      await flush()
+      made.relay.deliver(terminateEnvelope(peer, "term-2"))
+      await flush()
+      expect(shutdownHost).not.toHaveBeenCalled()
+      expect(
+        made.logs.join("\n").includes("remote terminate disabled"),
+      ).toBe(true)
+      await made.bridge.stop()
+    } finally {
+      delete process.env.UNBIEN_DIRECT_CONFIG
+    }
   })
 })

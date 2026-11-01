@@ -36,10 +36,12 @@ import {
   createRpcEnvelope,
   createRpcHandlers,
   dispatchRpcCommand,
+  effectiveAllowRemoteTerminate,
   getOrCreateEd25519Keypair,
   helloEnvelope,
   isEnvelopeFrame,
   listPeers,
+  loadLocalConfig,
   nextAllowListVersion,
   pairingAllowList,
   qrSession,
@@ -802,6 +804,29 @@ export class DurableBridge {
       return
     }
     if (type === "terminate") {
+      // DELIBERATE ASYMMETRY vs the pi binding, documented here: on pi,
+      // terminate kills ONE session — a TUI the user may be locally typing
+      // into — so the gate is a per-session concern with a per-session
+      // config file. The durable host is a headless box with exactly ONE
+      // conversation and no local UI — the app IS the UI, so remote
+      // terminate is the machine's off switch and is served by design
+      // (shutdownHost: bridge stop → mesh leave → harness close → exit).
+      // What is NOT asymmetric: the advertised capability and the honored
+      // behavior must read the same config — sessionCapabilities() already
+      // gates the `remote_terminate` cap on this same check, so a host that
+      // advertises the cap honors it, and a host that opted out never shows
+      // the red trash in the first place. Same check, same layering
+      // (UNBIEN_DIRECT_CONFIG env wins, then the cwd's config.json, then the
+      // global defaults) — the headless box pins it via env.
+      if (
+        !effectiveAllowRemoteTerminate(loadLocalConfig(process.cwd()))
+      ) {
+        this.opts.log(
+          "terminate(ub): remote terminate disabled on this machine — refused",
+          "warning",
+        )
+        return
+      }
       this.opts.log("terminate(ub): graceful host shutdown requested", "warning")
       // routeUnBienPlane runs fire-and-forget from the channel loop — a
       // failed shutdown must log here, not escape as an unhandled rejection.

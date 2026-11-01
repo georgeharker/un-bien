@@ -66,6 +66,15 @@ export {
   type RpcHandlersDeps,
 } from "./session/rpc_handlers.js"
 
+// ── Local config (the durable host honors the same opt-outs it advertises) ────
+// The shared sessionCapabilities() already gates the advertised
+// remote_terminate/remote_launch caps on these; the durable bridge's inbound
+// gates read them too, so the advertised set and honored behavior can't drift.
+export {
+  effectiveAllowRemoteTerminate,
+  loadLocalConfig,
+} from "./session/local_config.js"
+
 // ── Transport ────────────────────────────────────────────────────────────────
 export { PlainPeerChannel } from "./transport/peer_channel.js"
 export { RelayClient } from "./transport/relay_client.js"
