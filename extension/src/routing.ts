@@ -283,13 +283,25 @@ export async function routeUnBienPlane(
       envLog(
         `session_fork(ub): entry=${entryId.slice(0, 8)}${position ? ` pos=${position}` : ""}`,
       )
-      await deps.sessionControl()?.fork(entryId, {
-        ...(position ? { position } : {}),
-        ...(reqId ? { requestId: reqId } : {}),
-      })
+      // routeUnBienPlane is dispatched fire-and-forget from the sync channel
+      // loop (void routeUnBienPlane in index.ts) — a rejection here would be
+      // an unhandled promise rejection. Catch at the await and envLog it.
+      try {
+        await deps.sessionControl()?.fork(entryId, {
+          ...(position ? { position } : {}),
+          ...(reqId ? { requestId: reqId } : {}),
+        })
+      } catch (err) {
+        envLog(`session_fork(ub) error: ${String(err)}`)
+      }
     } else {
       envLog(`session_navigate(ub): entry=${entryId.slice(0, 8)}`)
-      await deps.sessionControl()?.navigateTree(entryId)
+      // Same fire-and-forget dispatch — catch here, not in the channel loop.
+      try {
+        await deps.sessionControl()?.navigateTree(entryId)
+      } catch (err) {
+        envLog(`session_navigate(ub) error: ${String(err)}`)
+      }
     }
     return
   }
