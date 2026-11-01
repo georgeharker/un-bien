@@ -193,7 +193,14 @@ export class PiSessionPort implements AgentSessionPort {
  * self-dispatch); shutdown is the app-terminate graceful path.
  */
 export class PiSessionControl implements SessionControlPort {
-  constructor(private readonly getPi: () => ExtensionAPI | null) {}
+  constructor(
+    private readonly getPi: () => ExtensionAPI | null,
+    /** The root session_start ctx. abort/shutdown are CTX members, NOT
+     *  factory-pi members — the factory ExtensionAPI object exposes neither,
+     *  so reading them off getPi() made terminate a silent no-op (F2). */
+    private readonly getBaseCtx: () =>
+      Pick<ExtensionContext, "abort"> | null | undefined,
+  ) {}
 
   private dispatch(command: string): void {
     this.getPi()?.sendUserMessage(command, {
@@ -237,13 +244,16 @@ export class PiSessionControl implements SessionControlPort {
     // that re-checks the flag; on an idle session abort is a no-op and the
     // idle fast-path fires directly. NO process.exit fallback, ever: a raw
     // exit leaves the TTY in raw mode.
-    const pi = this.getPi()
-    // SAFETY: ExtensionContext.shutdown/abort are guarded getters on a
-    // proxy; a plain structural read is proxy-safe per property and the
-    // typeof checks below gate every invocation.
-    const ctx = pi as unknown as
+    // RECEIVER = the root session_start ctx (getBaseCtx), NOT the factory pi
+    // object — ExtensionAPI exposes no abort/shutdown members, so reading
+    // them off getPi() was reading them off nothing (terminate silently
+    // stopped working; F2). SAFETY: guarded getters on a proxy; a plain
+    // structural read is proxy-safe per property and the truthiness checks
+    // below gate every invocation.
+    const ctx = this.getBaseCtx() as unknown as
       | { abort?: () => void; shutdown?: () => void }
       | null
+      | undefined
     if (ctx?.shutdown) {
       ctx.abort?.()
       ctx.shutdown()

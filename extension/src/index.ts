@@ -2238,9 +2238,13 @@ function _piSessionPort(): AgentSessionPort | null {
   })
 }
 
-/** Live SessionControlPort over the root session's pi. */
+/** Live SessionControlPort over the root session's pi + base ctx. */
 function _piSessionControl(): PiSessionControl | null {
-  return _pi ? new PiSessionControl(() => _pi) : null
+  // getBaseCtx: terminate reads abort/shutdown off the root session_start
+  // ctx — they are ctx members, not factory-pi members (F2).
+  return _pi
+    ? new PiSessionControl(() => _pi, () => _rootState().baseCtx)
+    : null
 }
 
 function _wakeAgent(
