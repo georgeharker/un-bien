@@ -42,8 +42,10 @@ export interface PiSessionManagerView {
 export interface PiSessionPortOptions {
   /** The root session's ExtensionAPI (null before the factory wired it). */
   getPi(): ExtensionAPI | null
-  /** The always-fresh session_start base ctx (compact / abort / ui). */
-  getBaseCtx(): Pick<ExtensionContext, "compact" | "abort" | "ui"> | null
+  /** The always-fresh session_start base ctx (compact / abort / ui / isIdle). */
+  getBaseCtx():
+    | Pick<ExtensionContext, "compact" | "abort" | "ui" | "isIdle">
+    | null
   /** The root session's sessionManager (transcript + id + cwd reads). */
   getSessionManager(): PiSessionManagerView | null
 }
@@ -89,8 +91,12 @@ export class PiSessionPort implements AgentSessionPort {
 
   get streaming(): boolean {
     // The concrete AgentSession carries isStreaming; the public
-    // ExtensionAPI type omits it.
-    return (this.pi as { isStreaming?: boolean } | null)?.isStreaming === true
+    // ExtensionAPI type omits it. The base session ctx carries the same
+    // truth as isIdle() ("not streaming"), so derive from THAT — reading
+    // isStreaming off the factory pi object always read `undefined` and
+    // made streaming permanently false.
+    const ctx = this.opts.getBaseCtx()
+    return ctx ? !ctx.isIdle() : false
   }
 
   submit(content: SubmitContent, portOpts?: SubmitOptions): SubmitResult {

@@ -583,7 +583,9 @@ interface SessionState {
   sessionStartedAt: number | null
   /** This session's base ctx (compact/abort/ui fallback outside live events);
    *  base-ctx resolution reads the ROOT's. */
-  baseCtx: Pick<ExtensionContext, "compact" | "abort" | "ui"> | null
+  baseCtx:
+    | Pick<ExtensionContext, "compact" | "abort" | "ui" | "isIdle">
+    | null
 }
 /** A freshly-zeroed session record (root or subagent child). */
 function _freshSessionState(): SessionState {
