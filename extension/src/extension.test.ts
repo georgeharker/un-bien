@@ -1445,16 +1445,25 @@ describe("multi-channel broadcast (W2D)", () => {
 
   test("plan/43: busy app message without wire behavior is defensively steered", async () => {
     await _pairForTest("ownerA__1234567890")
+    // Busy state comes from the root session_start base ctx (isIdle()), NOT
+    // the factory pi object — the public ExtensionAPI type has no isStreaming
+    // member, and PiSessionPort.streaming derives from ctx.isIdle(). Fire a
+    // session_start whose ctx says busy (isIdle false) so the port's
+    // streaming getter reads true.
+    const onSessionStart = captureEventHandler("session_start")
+    onSessionStart({ type: "session_start" }, { isIdle: () => false })
     const onTurnStart = captureEventHandler("turn_start")
     onTurnStart({ type: "turn_start", turnIndex: 0, timestamp: 0 })
     expect(_getCurrentTurnIdForTest()).toBeNull()
     const sendUserMessage = vi.fn()
     // No wire behavior: rely on the handler's mechanical steer-when-streaming
-    // net (pi.isStreaming), not extension-side steer inference.
+    // net (the session port's streaming getter), not extension-side steer
+    // inference. RECEIVER PIN: the fake pi deliberately carries NO isStreaming
+    // member — if the getter ever regresses back to reading the factory pi,
+    // streaming stays false and this test fails instead of silently passing.
     _setPiForTest({
       sendUserMessage,
       sendMessage: () => undefined,
-      isStreaming: true,
     })
 
     relayRef.current!.emit(
@@ -1500,11 +1509,12 @@ describe("multi-channel broadcast (W2D)", () => {
 
   test("rpc prompt: busy followUp is delivered as followUp (not steered)", async () => {
     await _pairForTest("ownerA__1234567890")
+    const onSessionStart = captureEventHandler("session_start")
+    onSessionStart({ type: "session_start" }, { isIdle: () => false })
     const sendUserMessage = vi.fn()
     _setPiForTest({
       sendUserMessage,
       sendMessage: () => undefined,
-      isStreaming: true,
     })
     emitRpcPrompt("ownerA__1234567890", {
       id: "q1",
@@ -1520,11 +1530,12 @@ describe("multi-channel broadcast (W2D)", () => {
 
   test("rpc prompt: busy steer is delivered as steer", async () => {
     await _pairForTest("ownerA__1234567890")
+    const onSessionStart = captureEventHandler("session_start")
+    onSessionStart({ type: "session_start" }, { isIdle: () => false })
     const sendUserMessage = vi.fn()
     _setPiForTest({
       sendUserMessage,
       sendMessage: () => undefined,
-      isStreaming: true,
     })
     emitRpcPrompt("ownerA__1234567890", {
       id: "q2",
@@ -1540,11 +1551,14 @@ describe("multi-channel broadcast (W2D)", () => {
 
   test("rpc prompt: busy send with NO behavior defensively steers (mechanical net)", async () => {
     await _pairForTest("ownerA__1234567890")
+    // Busy via the base ctx (isIdle false) — see the plan/43 receiver pin
+    // above; the fake pi carries no isStreaming member.
+    const onSessionStart = captureEventHandler("session_start")
+    onSessionStart({ type: "session_start" }, { isIdle: () => false })
     const sendUserMessage = vi.fn()
     _setPiForTest({
       sendUserMessage,
       sendMessage: () => undefined,
-      isStreaming: true,
     })
     emitRpcPrompt("ownerA__1234567890", { id: "q3", message: "oops racing" })
     await new Promise<void>((r) => setImmediate(r))
@@ -1556,11 +1570,14 @@ describe("multi-channel broadcast (W2D)", () => {
 
   test("rpc prompt: IDLE send runs fresh (deliverAs undefined, behavior ignored)", async () => {
     await _pairForTest("ownerA__1234567890")
+    // Idle via the base ctx (isIdle true) — the same receiver as the busy
+    // tests above.
+    const onSessionStart = captureEventHandler("session_start")
+    onSessionStart({ type: "session_start" }, { isIdle: () => true })
     const sendUserMessage = vi.fn()
     _setPiForTest({
       sendUserMessage,
       sendMessage: () => undefined,
-      isStreaming: false,
     })
     emitRpcPrompt("ownerA__1234567890", {
       id: "q4",

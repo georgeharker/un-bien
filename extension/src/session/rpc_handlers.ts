@@ -178,9 +178,9 @@ export function createRpcHandlers(
       // NOT force steer over a followUp anymore. `shouldSteer` below is now only
       // BOOKKEEPING (turn-seeding + image-preview defer), not the delivery verb.
       const requestedSteer = opts.streamingBehavior === "steer"
-      // Authoritative busy signal from the session port (pi's own
-      // AgentSession.isStreaming under it), correct across subagent
-      // lifecycles (turnId/working stick busy after a subagent run).
+      // Authoritative busy signal from the session port (the base session
+      // ctx's isIdle() under it), correct across subagent lifecycles
+      // (turnId/working stick busy after a subagent run).
       const streaming = deps.session?.streaming === true
       const shouldSteer = requestedSteer || streaming
       const msg: ClientUserMessage = {
