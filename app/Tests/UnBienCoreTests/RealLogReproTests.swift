@@ -61,5 +61,33 @@ final class RealLogReproTests: XCTestCase {
         }
         XCTAssertTrue(assistantTexts.contains { $0.contains("exact segment that vanished before") },
                       "the trailing prose must render through the real sequence")
+
+        // SECOND-RELAPSE PERSISTENCE (the user's vanish report): the mesh
+        // pings (custom_message entries, display:true) must survive a fresh
+        // relapse — a NEW SessionState folding the same entries the cache
+        // holds, derived from the machine tail. Info/custom notices are
+        // conversation content, not transient errors.
+        var relaunch = SessionState()
+        relaunch.applyEntries(Array(entries[...cursorIdx]), leafId: "5b791d84")
+        relaunch.applyEntries(delta, leafId: nil)
+        relaunch.applyEntries([], leafId: tail)
+        let pingNotices = relaunch.items.filter { item in
+            if case let .notice(n) = item, n.code == "custom" {
+                return n.message.contains("toucan-mesh-test")
+            }
+            return false
+        }
+        XCTAssertFalse(pingNotices.isEmpty,
+                      "mesh ping custom_messages must birth as info notices on relapse")
+        // And the FIRST pass (the same fold) also birthed them — both
+        // passes carry them, not just the live wire.
+        let firstPassPings = state.items.filter { item in
+            if case let .notice(n) = item, n.code == "custom" {
+                return n.message.contains("toucan-mesh-test")
+            }
+            return false
+        }
+        XCTAssertFalse(firstPassPings.isEmpty,
+                      "the first pass must birth the pings too")
     }
 }
