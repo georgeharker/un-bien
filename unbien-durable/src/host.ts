@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
  * The un-bien durable host: a small always-on agent program that opens a
- * pi-durable Harness over SQLite storage, installs the un-bien durable
+ * pi-durable Harness over JSONL storage, installs the un-bien durable
  * extension + CodingTools, joins the local UDS agent mesh, and serves the
  * un-bien mobile app over the relay through the bridge.
  *
- * Because the conversation id is stable (SQLite), there is no session
+ * Because the conversation id is stable (JSONL storage), there is no session
  * bootstrap racing here: the room id is derived from the root conversation
  * id and survives every restart — the app reconnects to the same room and
  * its get_entries reconstructs the transcript from the mirror.
