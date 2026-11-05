@@ -123,6 +123,9 @@ export class DurableBridge {
   private stopped = false
   private pairingRotationActive = false
   private pairingRotationTimer: ReturnType<typeof setTimeout> | null = null
+  /** The last minted rotating invite (null when paired/not rotating) —
+   *  surfaced via currentPairingInvite() for host-side web pages. */
+  private lastPairingInvite: string | null = null
 
   constructor(private readonly opts: DurableBridgeOptions) {}
 
@@ -570,6 +573,8 @@ export class DurableBridge {
     const roomId = roomIdForSession(String(this.conversation.id))
     const { token, expiresAt } = qrSession.issueToken()
     const uri = buildQRUri(token, kp.publicKey, this.opts.displayName, roomId)
+    // Surfaced to host-side web pages (GET /pair) via currentPairingInvite().
+    this.lastPairingInvite = uri
     this.opts.log(
       `[un-bien-durable] machine unpaired — scan this QR with the un-bien app:\n\n` +
         `${renderQRAscii(uri)}\n` +
@@ -589,10 +594,79 @@ export class DurableBridge {
    *  design. */
   private stopPairingRotation(): void {
     this.pairingRotationActive = false
+    this.lastPairingInvite = null
     if (this.pairingRotationTimer !== null) {
       clearTimeout(this.pairingRotationTimer)
       this.pairingRotationTimer = null
     }
+  }
+
+  /** The CURRENT pairing invite as a deep-link URI — what a /pair web page
+   *  renders as a tappable link. null when not rotating (paired already, or
+   *  rotation stopped). Updated on every rotation tick. */
+  currentPairingInvite(): string | null {
+    return this.pairingRotationActive ? (this.lastPairingInvite ?? null) : null
+  }
+
+  /** Surface an OAuth "authorize" card to attached app peers: a persisted
+   *  display-only app entry (transcript + get_entries replay) AND a live
+   *  broadcast (extension_ui_request notify) so an attached app sees it
+   *  immediately. The app renders customType "un-bien:auth-required" with
+   *  a tappable `details.url`. */
+  async sendAuthorizeCard(
+    server: string,
+    url: string,
+    message: string,
+  ): Promise<void> {
+    const content = `${message}\n\nAuthorize ${server}: ${url}`
+    // 1. Persisted sidecar entry (display-only; the model-context filter
+    //    excludes un-bien: display:false custom entries — same contract
+    //    the extension's mesh-messages use on pi).
+    await this.conversation
+      .commit(
+        (tx) =>
+          tx.appendEntry(UnBienAppEntry, this.conversation.id, {
+            data: {
+              customType: "un-bien:auth-required",
+              content,
+              display: true,
+              details: { server, url, message, kind: "authorize" },
+            },
+          }),
+        this.opts.context,
+      )
+      .catch((err: unknown) => {
+        this.opts.log(
+          `authorize card commit failed: ${err instanceof Error ? err.message : String(err)}`,
+          "warning",
+        )
+      })
+    // 2. Live toast for attached peers.
+    await this.broadcastFlushed({
+      rpc: {
+        type: "extension_ui_request",
+        id: `auth-${Date.now()}`,
+        method: "notify",
+        message: `${message} (Authorize: ${url})`,
+        notify_type: "warning",
+      },
+    })
+  }
+
+  /** Mint a FRESH pairing invite on demand — for host-side pairing pages
+   *  (/pair) so a SECOND device can be added after the rotation retired, or
+   *  an operator can open pairing mode without a restart. One process mints
+   *  + consumes (this bridge), so the token race is structurally excluded.
+   *  Multi-device safe: adding a peer appends to peers.json; the page's
+   *  caller gates availability (enable/disable toggle). */
+  forcePairingInvite(): string | null {
+    const kp = this.keypair
+    if (!kp || this.stopped) return null
+    const roomId = roomIdForSession(String(this.conversation.id))
+    const { token } = qrSession.issueToken()
+    const uri = buildQRUri(token, kp.publicKey, this.opts.displayName, roomId)
+    this.lastPairingInvite = uri
+    return uri
   }
 
   private emitPairOk(

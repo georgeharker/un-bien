@@ -3,6 +3,7 @@ packages:
   - launcher
   - unbien-cli
   - unbien-durable
+  - ../../toucan
 
 # Native deps whose install build scripts pnpm (v10+) blocks by default. These
 # are trusted first-party build tools, allowed to run. Moved here from
@@ -18,3 +19,5 @@ supportedArchitectures:
     - linux
   cpu:
     - arm64
+shamefullyHoist: true
+confirmModulesPurge: false
