@@ -254,15 +254,20 @@ function _withTimeout<T>(
   op: string,
   ms: number = KEYRING_OP_TIMEOUT_MS,
 ): Promise<T> {
+  // The timer is cleared the moment the race settles: a keyring op that wins
+  // (the normal case, ~25ms) must not leave a live 3s timer holding the event
+  // loop — short-lived processes (the CLI, unbien-admin install, pair-token)
+  // otherwise sit idle until it fires before they can exit.
+  let timer: ReturnType<typeof setTimeout> | undefined
   return Promise.race([
     p,
-    new Promise<T>((_, reject) =>
-      setTimeout(
+    new Promise<T>((_, reject) => {
+      timer = setTimeout(
         () => reject(new Error(`keyring ${op} timed out after ${ms}ms`)),
         ms,
-      ),
-    ),
-  ])
+      )
+    }),
+  ]).finally(() => clearTimeout(timer))
 }
 
 /**
