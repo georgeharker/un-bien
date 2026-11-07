@@ -660,3 +660,58 @@ describe("DurableBridge terminate(ub)", () => {
     }
   })
 })
+describe("DurableBridge sendAuthorizeCard", () => {
+  function withCapture() {
+    const made = makeBridge()
+    const entries: Array<Record<string, unknown>> = []
+    const toasts: Array<Record<string, unknown>> = []
+    const seam = made.bridge as unknown as {
+      conversation: Conversation
+      broadcastFlushed(env: { rpc: Record<string, unknown> }): Promise<void>
+    }
+    seam.conversation = {
+      id: 1,
+      commit: async (change: (tx: unknown) => unknown) =>
+        change({
+          appendEntry: (_kind: unknown, _id: unknown, draft: { data: Record<string, unknown> }) => {
+            entries.push(draft.data)
+          },
+        }),
+    } as unknown as Conversation
+    seam.broadcastFlushed = async (env) => {
+      toasts.push(env.rpc)
+    }
+    return { bridge: made.bridge, entries, toasts }
+  }
+
+  it("shows one toast built from the elicit message; the entry is a hidden record", async () => {
+    const { bridge, entries, toasts } = withCapture()
+    await bridge.sendAuthorizeCard(
+      "combiner",
+      "https://auth.example/x",
+      "Authorize the 'gws_georgeharker' MCP server to continue.",
+    )
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0]!.message).toBe(
+      "Authorize the 'gws_georgeharker' MCP server to continue.\n\nhttps://auth.example/x",
+    )
+    expect(entries).toEqual([
+      expect.objectContaining({
+        customType: "un-bien:auth-required",
+        display: false,
+        details: expect.objectContaining({ server: "combiner", url: "https://auth.example/x" }),
+      }),
+    ])
+    expect(String(entries[0]!.content)).not.toContain("combiner")
+  })
+
+  it("doesn't repeat a URL the message carries, and adds nothing for an empty one", async () => {
+    const { bridge, toasts } = withCapture()
+    await bridge.sendAuthorizeCard("combiner", "https://a/b", "Open https://a/b to sign in.")
+    await bridge.sendAuthorizeCard("toucan", "", "Approve the deploy?")
+    expect(toasts.map((t) => t.message)).toEqual([
+      "Open https://a/b to sign in.",
+      "Approve the deploy?",
+    ])
+  })
+})

@@ -632,19 +632,24 @@ export class DurableBridge {
     return this.pairingRotationActive ? (this.lastPairingInvite ?? null) : null
   }
 
-  /** Surface an OAuth "authorize" card to attached app peers: a persisted
-   *  display app entry (the transcript notice, live and on get_entries
-   *  replay) AND a toast (extension_ui_request notify). The app renders
-   *  customType "un-bien:auth-required" with a tappable `details.url`. */
+  /** Ask attached app peers to authorize: ONE live toast
+   *  (extension_ui_request notify) is the visible channel. An authorize
+   *  pending expires in minutes, so nothing replays it; a late peer gets a
+   *  fresh mint when the model calls the tool again. The request is also
+   *  recorded as a hidden app entry (customType "un-bien:auth-required",
+   *  display:false), kept for the record and out of model context.
+   *
+   *  `message` is the elicit text and names the real upstream server;
+   *  `server` is the caller's label (the combiner bridge, say), kept in
+   *  details. `url` is appended unless the message already carries it, and
+   *  may be empty for a prompt with nothing to open. */
   async sendAuthorizeCard(
     server: string,
     url: string,
     message: string,
   ): Promise<void> {
-    const content = `${message}\n\nAuthorize ${server}: ${url}`
-    // 1. Persisted sidecar entry (display-only; the model-context filter
-    //    excludes un-bien: display:false custom entries — same contract
-    //    the extension's mesh-messages use on pi).
+    const content =
+      url !== "" && !message.includes(url) ? `${message}\n\n${url}` : message
     await this.conversation
       .commit(
         (tx) =>
@@ -652,7 +657,7 @@ export class DurableBridge {
             data: {
               customType: "un-bien:auth-required",
               content,
-              display: true,
+              display: false,
               details: { server, url, message, kind: "authorize" },
             },
           }),
@@ -664,13 +669,12 @@ export class DurableBridge {
           "warning",
         )
       })
-    // 2. Live toast for attached peers.
     await this.broadcastFlushed({
       rpc: {
         type: "extension_ui_request",
         id: `auth-${Date.now()}`,
         method: "notify",
-        message: `${message} (Authorize: ${url})`,
+        message: content,
         notify_type: "warning",
       },
     })
