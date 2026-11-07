@@ -140,6 +140,8 @@ import { makeTestBusEmitter, runTestScenario } from "./commands/test_scenarios.j
 import { routeRpcCommand, routeUnBienPlane, type PlaneRouterDeps } from "./routing.js"
 import { createTestHooks } from "./test_hooks.js"
 import { type RpcHandlersDeps } from "./session/rpc_handlers.js"
+import { PiAgentConfig } from "./pi_binding/agent_config.js"
+import type { ActionCtx } from "./actions/handlers.js"
 import {
   CTRL_PREFIX,
   _anyPeerActive,
@@ -1029,10 +1031,14 @@ const imageDeps: ImagePipelineDeps = {
 // (a factory this module's `_routeRpcCommandFrom` — which owns channel/sender
 // routing — calls per dispatch). Same pattern as CommandDeps: that module
 // never imports ../index.js — no circular imports.
+const _piAgentConfig = new PiAgentConfig({
+  getPi: () => _pi,
+  // The base session_start ctx carries the model registry + getModel.
+  getActionCtx: () => _rootState().baseCtx as ActionCtx | null,
+})
+
 const rpcDeps: RpcHandlersDeps = {
-  get pi() {
-    return _pi
-  },
+  agent: _piAgentConfig,
   get session() {
     return _piSessionPort()
   },
@@ -1040,9 +1046,6 @@ const rpcDeps: RpcHandlersDeps = {
     return _piSessionControl()
   },
   rootState: _rootState,
-  get lastEventCtx() {
-    return _rootState().baseCtx
-  },
   imageDeps,
   wakeAgent: _wakeAgent,
   abortCurrentTurn: () => _abortCurrentTurn(),

@@ -65,6 +65,8 @@ export {
   createRpcHandlers,
   type RpcHandlersDeps,
 } from "./session/rpc_handlers.js"
+// The app's model wire shape, for a binding's AgentConfigPort.
+export { wireFromModel } from "./actions/handlers.js"
 
 // ── Local config (the durable host honors the same opt-outs it advertises) ────
 // The shared sessionCapabilities() already gates the advertised

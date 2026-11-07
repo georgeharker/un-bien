@@ -386,6 +386,21 @@ describe("TUI built-in slash intercept", () => {
     expect(h.prompt).not.toHaveBeenCalled()
   })
 
+  it("/model <term> reads the { models, current } shape get_available_models answers", async () => {
+    const h = handlers({
+      getAvailableModels: vi.fn(async () => ({
+        models: [
+          { id: "claude-sonnet-4", name: "Claude Sonnet 4", provider: "anthropic" },
+          { id: "gpt-5", name: "GPT-5", provider: "openai" },
+        ],
+        current: { id: "gpt-5", name: "GPT-5", provider: "openai" },
+      })),
+    })
+    await dispatchRpcCommand({ type: "prompt", id: "m3", message: "/model sonnet" }, h)
+    expect(h.setModel).toHaveBeenCalledWith("anthropic", "claude-sonnet-4")
+    expect(h.prompt).not.toHaveBeenCalled()
+  })
+
   it("/model <term> ambiguous consumes with a warning (no set, no send)", async () => {
     const h = handlers({
       getAvailableModels: vi.fn(async () => [

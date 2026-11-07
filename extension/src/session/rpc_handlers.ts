@@ -6,39 +6,30 @@
  * abort, setModel/setThinkingLevel/getAvailableModels, compact, newSession,
  * clearQueue, and the paged get_entries transcript read.
  *
- * Seam: index.ts (composition root) owns the mutable module state and the
- * SDK-handoff helpers these handlers touch (`_pi`, the root session record,
- * `lastEventCtx`, `_wakeAgent`, `_abortCurrentTurn`, the image
- * pipeline); they are threaded through `RpcHandlersDeps`. This module MUST
- * NOT import `../index.js` (circular import).
+ * Seam: the composition root (index.ts for pi, the durable bridge) owns the
+ * state and SDK-handoff helpers these handlers touch (the session / control /
+ * agent-config ports, the root session record, `_wakeAgent`,
+ * `_abortCurrentTurn`, the image pipeline); they are threaded through
+ * `RpcHandlersDeps`. This module MUST NOT import `../index.js` (circular
+ * import).
  *
- * Moved with the handlers (only they use them): `_persistModelDefault`
- * (project-settings model write behind set_model). new_session no longer acts
- * here — it self-dispatches the `/unbien new` command (ctx.newSession is
- * command-ctx-only). NOT here: `_wakeAgent` /
+ * The model / thinking / name / queue verbs go through the AgentConfigPort
+ * (pi: pi_binding/agent_config.ts; durable: unbien-durable), so every binding
+ * answers them in the same wire shapes. new_session self-dispatches the
+ * `/unbien new` command on pi (ctx.newSession is command-ctx-only). NOT here:
+ * `_wakeAgent` /
  * `_abortCurrentTurn` (also used by the image pipeline + the stock cancel
  * router in index.ts — passed in as dep function refs) and `_resolveToolCwd`
  * (rpc-envelope enrichArgs path only — stays in index.ts entirely).
  */
-import { join, dirname } from "node:path"
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import type {
-  ExtensionAPI,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent"
-import type {
+  AgentConfigPort,
   AgentSessionPort,
   SessionControlPort,
   SubmitContent,
   SubmitDelivery,
   SubmitResult,
 } from "../core/port.js"
-import { ensureModelRegistry } from "../actions/registry.js"
-import {
-  wireFromModel,
-  type ActionCtx,
-  type ActionPi,
-} from "../actions/handlers.js"
 import type { ClientMessage, ThinkingLevel } from "../protocol/types.js"
 import type { PlainPeerChannel } from "../transport/peer_channel.js"
 import { pageEntries, type RpcCommandHandlers } from "./rpc_inbound.js"
@@ -54,21 +45,8 @@ import {
  */
 type ClientUserMessage = Extract<ClientMessage, { type: "user_message" }>
 
-/** Mirror of index.ts's sendUserMessage options (steering behavior verb). */
-type SendUserMessageOptions = NonNullable<
-  Parameters<ExtensionAPI["sendUserMessage"]>[1]
->
-
 /** Mirror of index.ts's `_wakeAgent` result shape. */
 type WakeAgentResult = SubmitResult
-
-// Minimal structural views of pi SDK internals the handlers reach for but the
-// public ExtensionAPI type does not surface. Each names exactly the member(s)
-// known to exist on the concrete AgentSession at runtime. (Mirrors of
-// index.ts's locals.)
-interface PiQueueControl {
-  clearQueue(): { steering: string[]; followUp: string[] }
-}
 
 /**
  * The seam between index.ts (composition root) and the rpc-inbound handlers.
@@ -77,18 +55,16 @@ interface PiQueueControl {
  * function references only, members added exactly as the moved code requires
  * them.
  *
- * Harness split: `session` (AgentSessionPort) + `sessionControl` carry every
- * port-covered verb, so a non-pi binding (the durable host) can serve the
- * whole rpc command dispatch; `pi` and `lastEventCtx` remain for the pi-only
- * verbs (model registry, slash-command registry, thinking-level plumbing) —
- * null on other bindings, where those commands answer with an error.
+ * Harness split: `session` (AgentSessionPort), `sessionControl`, and `agent`
+ * (AgentConfigPort) carry every verb, so any binding serves the whole rpc
+ * command dispatch.
  */
 export interface RpcHandlersDeps {
   // ── Read-only state ──────────────────────────────────────────────────────
 
-  /** The ROOT session's ExtensionAPI (never a subagent child's). Null on
-   *  non-pi bindings. */
-  readonly pi: ExtensionAPI | null
+  /** The ROOT session's model / thinking / name / queue verbs. Null when
+   *  unbound: those commands answer "agent session not bound". */
+  readonly agent: AgentConfigPort | null
   /** The ROOT session, port-typed — submit/streaming/getEntries/compact. */
   readonly session: AgentSessionPort | null
   /** Branching/replacement ops (new/fork/navigate/shutdown). */
@@ -97,12 +73,6 @@ export interface RpcHandlersDeps {
   rootState(): {
     turnId: string | null
   }
-  /** Freshest session_start ctx (model registry) — always the current
-   *  session's base ctx, re-captured on every session_start. */
-  readonly lastEventCtx: Pick<
-    ExtensionContext,
-    "compact" | "abort" | "ui"
-  > | null
   /** The image-pipeline seam index.ts builds (prompt with images). */
   readonly imageDeps: ImagePipelineDeps
 
@@ -118,38 +88,9 @@ export interface RpcHandlersDeps {
   abortCurrentTurn(): boolean
 }
 
-/**
- * Persist a model change to the PROJECT settings (`<cwd>/.pi/settings.json`) so
- * a model picked from the app survives a Pi/daemon restart. `pi.setModel` only
- * sets the LIVE model — on the next restart a fresh session reads the saved
- * default and reverts (the reported bug). We write the PROJECT scope, NOT
- * global, deliberately: the SDK merges global←project with PROJECT winning
- * (`SettingsManager`), so a folder that already has a project default (every
- * created daemon does) would shadow a global write like the TUI's. Project
- * scope is also correct for a fleet — each daemon keeps its own model rather
- * than leaking one default globally.
- *
- * Read-merge-write + best-effort: preserves other keys and never throws (a
- * settings write must not fail the live model change, which already applied).
- */
-function _persistModelDefault(provider: string, modelId: string): void {
-  try {
-    const path = join(process.cwd(), ".pi", "settings.json")
-    let obj: Record<string, unknown> = {}
-    try {
-      const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown
-      if (parsed && typeof parsed === "object")
-        obj = parsed as Record<string, unknown>
-    } catch {
-      /* no existing/parseable file → start fresh */
-    }
-    obj["defaultProvider"] = provider
-    obj["defaultModel"] = modelId
-    mkdirSync(dirname(path), { recursive: true })
-    writeFileSync(path, JSON.stringify(obj, null, 2))
-  } catch {
-    /* best-effort — model change already applied live */
-  }
+function requireAgent(deps: RpcHandlersDeps): AgentConfigPort {
+  if (!deps.agent) throw new Error("agent session not bound")
+  return deps.agent
 }
 
 /**
@@ -229,71 +170,37 @@ export function createRpcHandlers(
       if (!deps.abortCurrentTurn()) throw new Error("no active turn to abort")
     },
     isKnownSlash: (token) => {
-      // The session's slash registry (extension commands + prompt templates +
-      // skills) via pi.getCommands(). Registry failure => true (assume known;
-      // unknown tokens then keep their status-quo pass-through to pi).
-      try {
-        const commands =
-          (deps.pi as { getCommands?: () => Array<{ name: string }> } | null)
-            ?.getCommands?.() ?? []
-        const bare = token.slice(1)
-        return commands.some(
-          (c) => c.name === bare || c.name.startsWith(bare + " "),
-        )
-      } catch {
-        return true
-      }
+      // No registry on this binding: unknown tokens pass to the agent.
+      const known = deps.agent?.isKnownSlash?.(token)
+      return known ?? true
     },
-    setModel: async (provider, modelId) => {
-      if (!deps.pi) throw new Error("agent session not bound")
-      const actionCtx = deps.lastEventCtx as ActionCtx | null
-      const reg = actionCtx?.modelRegistry ?? ensureModelRegistry(actionCtx)
-      reg.refresh()
-      const model = reg.find(provider, modelId)
-      if (!model)
-        throw new Error(`model "${provider}/${modelId}" not in registry`)
-      // Route via the minimal ActionPi view (matches handleModelSet): the
-      // registry's `find` returns the minimal SdkModelLike, structurally fine
-      // for setModel at runtime.
-      // SAFETY: deps.pi (checked non-null above) is the concrete AgentSession;
-      // its setModel accepts the minimal SdkModelLike the registry's find()
-      // returns, matching handleModelSet's ActionPi view.
-      const ok = await (deps.pi as unknown as ActionPi).setModel(model)
-      if (!ok) throw new Error("no auth configured for this model")
-      _persistModelDefault(model.provider, model.id) // survive restart, mirrors stock model_set
-      return wireFromModel(model)
-    },
+    setModel: async (provider, modelId) =>
+      requireAgent(deps).setModel(provider, modelId),
     setThinkingLevel: async (level) => {
-      if (!deps.pi) throw new Error("agent session not bound")
-      deps.pi.setThinkingLevel(level as ThinkingLevel)
+      await requireAgent(deps).setThinkingLevel(level as ThinkingLevel)
     },
     setSessionName: async (name?: string) => {
       // Native pi set_session_name (remote rename, pre-release 2026-09-18):
-      // pi's own rpc verb — the reply rides the standard response plane, and
-      // pi's session_info_changed (forwarded in index.ts) confirms the new
-      // name to the app live.
-      if (!deps.pi) throw new Error("agent session not bound")
+      // the reply rides the standard response plane; the binding confirms
+      // the new name to the app live (pi: session_info_changed, forwarded in
+      // index.ts).
+      const agent = requireAgent(deps)
       if (typeof name !== "string" || name.length === 0)
         throw new Error("set_session_name: name required")
-      deps.pi.setSessionName(name)
+      await agent.setSessionName(name)
     },
     getState: async () => {
       // Native pi get_state snapshot. THE field the app reconciles against is
       // isStreaming (busy) — the session port's authoritative streaming flag,
       // the same signal the prompt handler reads. The rest mirror the app's
-      // SessionSnapshot so applyState hydrates model/thinking/session too.
-      // Non-pi bindings report their own port state; the model fields come
-      // from the pi-only registry and are omitted when absent.
+      // SessionSnapshot so applyState hydrates model/thinking/session too;
+      // the model fields come from the binding's agent config and are
+      // omitted when absent.
       if (!deps.session) throw new Error("agent session not bound")
       const streaming = deps.session.streaming
-      const actionCtx = deps.lastEventCtx as ActionCtx | null
-      const model = actionCtx?.getModel?.()
-      let thinkingLevel: string | undefined
-      try {
-        thinkingLevel = deps.pi?.getThinkingLevel()
-      } catch {
-        /* older SDK / no level — omit */
-      }
+      const { model, thinkingLevel } = deps.agent
+        ? await deps.agent.getModelState()
+        : {}
       const sessionId = deps.session.sessionId
       return {
         isStreaming: streaming,
@@ -303,14 +210,7 @@ export function createRpcHandlers(
         messageCount: deps.session.getEntries().entries.length,
       }
     },
-    getAvailableModels: async () => {
-      const actionCtx = deps.lastEventCtx as ActionCtx | null
-      const reg = actionCtx?.modelRegistry ?? ensureModelRegistry(actionCtx)
-      reg.refresh()
-      const models = reg.getAvailable().map(wireFromModel)
-      const current = actionCtx?.getModel?.()
-      return { models, current: current ? wireFromModel(current) : undefined }
-    },
+    getAvailableModels: async () => requireAgent(deps).listModels(),
     compact: async (customInstructions) => {
       if (!deps.session)
         throw new Error("compact unavailable (no active session ctx)")
@@ -332,12 +232,7 @@ export function createRpcHandlers(
       await deps.sessionControl.newSession()
       return { dispatched: true }
     },
-    clearQueue: async () => {
-      if (!deps.pi) throw new Error("agent session not bound")
-      // SAFETY: deps.pi (checked non-null above) is the concrete AgentSession,
-      // which implements clearQueue(); the public ExtensionAPI type omits it.
-      return (deps.pi as unknown as PiQueueControl).clearQueue()
-    },
+    clearQueue: async () => requireAgent(deps).clearQueue(),
     getEntries: async (since?: string) => {
       // Native pi get_entries, PAGED (design: get_entries backfill paging): the
       // app reconstructs the transcript itself from the raw entry log (each

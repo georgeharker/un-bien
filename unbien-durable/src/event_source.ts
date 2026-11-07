@@ -17,6 +17,7 @@ import {
   type Conversation,
   type ConversationWatch,
   type EntryRecord,
+  type InboxState,
   type LiveState,
   type RunFailure,
   type TranscriptView,
@@ -48,6 +49,7 @@ export class ConversationViewSource implements EventSource {
   private readonly transcript: ConversationTranscript
   private watch: ConversationWatch | null = null
   private stopping = false
+  private inboxState: InboxState | undefined
 
   constructor(private readonly opts: ConversationViewSourceOptions) {
     this.translator = new ViewTranslator({
@@ -67,6 +69,7 @@ export class ConversationViewSource implements EventSource {
     const watch = await this.opts.conversation.watch(this.opts.context)
     this.watch = watch
     const view = await this.complete(this.transcript.merge(watch.value))
+    this.inboxState = view.docs["pi.inbox"] as InboxState | undefined
     this.opts.mirror.ingest(entriesOf(view))
     this.translator.prime(liveOf(view))
     void watch.closed.then((end) => {
@@ -79,9 +82,15 @@ export class ConversationViewSource implements EventSource {
     this.watch?.start(async (call, context) => {
       if (call.kind !== "value") return
       const view = await this.complete(this.transcript.merge(call.value), context)
+      this.inboxState = view.docs["pi.inbox"] as InboxState | undefined
       const added = this.opts.mirror.ingest(entriesOf(view))
       this.translator.feed(added, liveOf(view))
     })
+  }
+
+  /** The conversation's queued submissions, as of the latest view value. */
+  get inbox(): InboxState | undefined {
+    return this.inboxState
   }
 
   async stop(): Promise<void> {

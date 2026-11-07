@@ -7,9 +7,9 @@
  *
  *   - pi-coding-agent: `PiSessionPort` / `PiSessionControl`
  *     (pi_binding/session_port.ts) wrap the root session's `ExtensionAPI` +
- *     the always-fresh session_start ctx. Slash commands, the ctx.ui/pi-ask
- *     bridge, and the model-registry rpc verbs stay pi-only and are NOT part
- *     of this port (flagged not-implemented on other bindings).
+ *     the always-fresh session_start ctx. Slash commands and the
+ *     ctx.ui/pi-ask bridge stay pi-only; the model / thinking / name / queue
+ *     verbs are the AgentConfigPort below.
  *   - pi-durable: `DurableSessionPort` / `DurableSessionControl`
  *     (unbien-durable) wrap a durable `Conversation`. Because durable
  *     conversations have stable IDs that survive restarts, the pi binding's
@@ -26,6 +26,8 @@
  * outer envelope) because the app reduces raw entries itself. Bindings that
  * store a different entry shape must map to this shape before returning.
  */
+
+import type { ThinkingLevel, WireModel } from "../protocol/types.js"
 
 // ── submit(): the app→agent content handoff ────────────────────────────────
 
@@ -166,6 +168,45 @@ export interface AgentSessionPort {
   subscribeEvents(
     handler: (event: string, payload: unknown) => void,
   ): () => void
+}
+
+// ── Agent configuration: model, thinking level, name, queue ────────────────
+
+/**
+ * The agent-configuration verbs of the app protocol (set_model,
+ * get_available_models, set_thinking_level, get_state's model fields,
+ * set_session_name, clear_queue), as each harness implements them:
+ *
+ *   - pi-coding-agent: `PiAgentConfig` (pi_binding/agent_config.ts) over the
+ *     root session's ExtensionAPI and the session_start ctx's model
+ *     registry.
+ *   - pi-durable: `DurableAgentConfig` (unbien-durable) over the
+ *     conversation's agent (`agent()` / `configure()`), the harness's model
+ *     registry, and its inbox.
+ *
+ * Results are the app's wire shapes (`WireModel`), so the rpc handlers pass
+ * them through unchanged for every binding.
+ */
+export interface AgentConfigPort {
+  /** The current model and thinking level (get_state). */
+  getModelState(): Promise<{
+    model?: { id: string; provider: string }
+    thinkingLevel?: string
+  }>
+  /** Models the session can switch to, and the current one. */
+  listModels(): Promise<{ models: WireModel[]; current?: WireModel }>
+  /** Switch the model; resolves to the model now in use. Throws when the
+   *  model is unknown or has no credentials. */
+  setModel(provider: string, modelId: string): Promise<WireModel>
+  /** Set the thinking level. Throws on a level the harness rejects. */
+  setThinkingLevel(level: ThinkingLevel): Promise<void>
+  /** Rename the session; the binding confirms the name to the app live. */
+  setSessionName(name: string): Promise<void>
+  /** Withdraw queued steering / follow-up input; resolves to its text. */
+  clearQueue(): Promise<{ steering: string[]; followUp: string[] }>
+  /** Whether a slash token names a command of this session. Absent: the
+   *  harness has no command registry, and tokens pass to the agent. */
+  isKnownSlash?(token: string): boolean
 }
 
 // ── Session control: branching + replacement ───────────────────────────────

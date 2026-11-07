@@ -8,6 +8,7 @@
  */
 
 export type {
+  AgentConfigPort,
   AgentSessionPort,
   CustomEntryInput,
   EntriesPage,
@@ -24,6 +25,7 @@ export type {
   SubmitResult,
 } from "./port.js"
 export type { EventSource } from "./event_source.js"
+export type { ThinkingLevel, WireModel } from "../protocol/types.js"
 export {
   defineMeshTools,
   type MeshToolDef,

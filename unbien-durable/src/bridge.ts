@@ -70,6 +70,7 @@ import { DurableSessionControl, DurableSessionPort } from "./port.js"
 import { DurableTranscriptMirror, UN_BIEN_APP_KIND } from "./mirror.js"
 import { ConversationViewSource } from "./event_source.js"
 import { DEFAULT_THINKING_LEVEL, ensureThinkingLevel } from "./thinking.js"
+import { DurableAgentConfig } from "./agent_config.js"
 
 /** App-defined entry kind carrying un-bien custom entries (data-only
  *  sidecars: display text + details payload). */
@@ -79,6 +80,26 @@ const UnBienAppEntry = defineEntryFn<{
   display?: boolean
   details?: JsonValue
 }>(UN_BIEN_APP_KIND)
+
+/** customType of the hidden record of a session rename. */
+const SESSION_NAME_CUSTOM_TYPE = "un-bien:session-name"
+
+/** The newest session name recorded in the conversation, if any. */
+function recordedSessionName(mirror: DurableTranscriptMirror): string | undefined {
+  // SAFETY: the mirror's wire entries are mirror.ts toWire() output; an
+  // un-bien.app record is a custom_message with string customType/content.
+  const entries = mirror.page().entries as unknown as Array<{
+    type?: string
+    customType?: string
+    content?: string
+  }>
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i]!
+    if (entry.type === "custom_message" && entry.customType === SESSION_NAME_CUSTOM_TYPE)
+      return entry.content
+  }
+  return undefined
+}
 
 /** customType of the transcript notice for a run that ended unanswered. */
 const RUN_FAILURE_CUSTOM_TYPE = "un-bien:durable-run-failure"
@@ -157,7 +178,14 @@ export class DurableBridge {
    *  surfaced via currentPairingInvite() for host-side web pages. */
   private lastPairingInvite: string | null = null
 
-  constructor(private readonly opts: DurableBridgeOptions) {}
+  /** The served session's display name: the newest rename recorded in the
+   *  conversation, else the host's displayName. */
+  private sessionName: string
+  private agentConfig: DurableAgentConfig | null = null
+
+  constructor(private readonly opts: DurableBridgeOptions) {
+    this.sessionName = opts.displayName
+  }
 
   /** The currently served conversation (stable id across restarts). */
   get currentConversation(): Conversation {
@@ -209,6 +237,18 @@ export class DurableBridge {
       },
     })
     await this.events.open()
+    this.sessionName = recordedSessionName(this.mirror) ?? this.opts.displayName
+    this.agentConfig =
+      this.opts.models !== undefined
+        ? new DurableAgentConfig({
+            conversation: () => this.conversation,
+            harness: this.opts.harness,
+            models: this.opts.models,
+            context: this.opts.context,
+            inbox: () => this.events?.inbox,
+            rename: (name) => this.renameSession(name),
+          })
+        : null
     this.events.start()
     this.rpcEnvelope?.dispose()
     this.rpcEnvelope = createRpcEnvelope(this.events, (env) =>
@@ -350,7 +390,7 @@ export class DurableBridge {
       await relay.connect({
         roomId,
         roomMeta: {
-          name: this.opts.displayName,
+          name: this.sessionName,
           cwd: this.opts.cwd,
           sessionId: String(this.conversation.id),
           caps: sessionCapabilities(),
@@ -705,6 +745,29 @@ export class DurableBridge {
     })
   }
 
+  /** Rename the served session: record it in the conversation (a hidden app
+   *  entry, read back at attach), then confirm it live as pi does — the
+   *  session_info evt to attached apps and room_meta_update so the relay
+   *  pushes the name to room subscribers. */
+  private async renameSession(name: string): Promise<void> {
+    await this.conversation.commit(
+      (tx) =>
+        tx.appendEntry(UnBienAppEntry, this.conversation.id, {
+          data: { customType: SESSION_NAME_CUSTOM_TYPE, content: name, display: false },
+        }),
+      this.opts.context,
+    )
+    this.sessionName = name
+    this.broadcast({ evt: { channel: "session_info", data: { name } } })
+    if (this.relay && this.myRoomId) {
+      this.relay.sendControl({
+        type: "room_meta_update",
+        room_id: this.myRoomId,
+        meta: { name },
+      })
+    }
+  }
+
   /** Record a run that ended without an answer as a display app entry, so
    *  the app shows why (live, and on replay). `nothing_to_answer` (a
    *  continue with nothing pending) is not a failure anyone needs to see. */
@@ -764,7 +827,7 @@ export class DurableBridge {
     this.sendInner(relay, appPeerId, {
       type: "pair_ok",
       in_reply_to: inner.id,
-      session_name: this.opts.displayName,
+      session_name: this.sessionName,
       session_started_at: this.sessionStartedAt,
       room_id: roomId,
       harness: { name: "pi-durable host", version: "0.1.0" },
@@ -851,11 +914,10 @@ export class DurableBridge {
   private buildRpcDeps(): RpcHandlersDeps {
     const port = this.port
     return {
-      pi: null, // pi-only verbs (model registry, slash registry) answer errors
+      agent: this.agentConfig,
       session: port,
       sessionControl: this.control,
       rootState: () => ({ turnId: null }),
-      lastEventCtx: null,
       imageDeps: {
         session: port,
         rootState: () => ({ turnId: null }),
@@ -903,7 +965,7 @@ export class DurableBridge {
           type: "session_sync_end",
           ...(typeof f.id === "string" ? { in_reply_to: f.id } : {}),
           session_started_at: this.sessionStartedAt,
-          session_name: this.opts.displayName,
+          session_name: this.sessionName,
         },
       } as EnvelopeMessage)
       return

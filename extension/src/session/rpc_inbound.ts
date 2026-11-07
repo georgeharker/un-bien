@@ -327,11 +327,13 @@ export async function interceptTuiBuiltInSlash(
             return true
           }
           if (!handlers.getAvailableModels || !handlers.setModel) break
-          const models = (await handlers.getAvailableModels()) as Array<{
-            id?: string
-            name?: string
-            provider?: string
-          }>
+          type Listed = { id?: string; name?: string; provider?: string }
+          // get_available_models answers { models, current }.
+          const listed = (await handlers.getAvailableModels()) as
+            | { models?: Listed[] }
+            | Listed[]
+            | undefined
+          const models = Array.isArray(listed) ? listed : listed?.models
           const hay = arg.toLowerCase()
           const matches = (models ?? []).filter((m) =>
             `${m.name ?? ""} ${m.id ?? ""}`.toLowerCase().includes(hay),
