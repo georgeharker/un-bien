@@ -22,8 +22,9 @@
  * Bindings:
  *   - pi-coding-agent: `PiOnEventSource` (pi_binding/pi_on_event_source.ts)
  *     wraps `pi.on` — the same events the extension factory registers for.
- *   - pi-durable: `WatchEventsSource` (unbien-durable) adapts the durable
- *     `watchEvents()` stream to the same names/payload shapes.
+ *   - pi-durable: `ConversationViewSource` (unbien-durable) translates the
+ *     durable conversation view (`Conversation.watch()`) into the same
+ *     names/payload shapes.
  */
 
 /**

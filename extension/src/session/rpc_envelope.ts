@@ -356,7 +356,7 @@ export function envelopeForEvent(
 /**
  * Register the live-plane event handlers against ANY EventSource (the pi
  * binding passes a PiOnEventSource wrapping `pi.on`; the durable host passes
- * its WatchEventsSource); each delivery fires `broadcast` with the
+ * its ConversationViewSource); each delivery fires `broadcast` with the
  * rpc-envelope frame. The frames out are IDENTICAL for every binding — the
  * builders below are the wire contract. Returns a handle whose `dispose()`
  * stops broadcasting (no binding offers unregister, so we gate on a disposed

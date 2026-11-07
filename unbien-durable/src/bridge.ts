@@ -14,8 +14,11 @@
  *   - the fail-closed signed pairing allow-list is pushed on every connect;
  *   - pair_request / known-peer reconnect / unknown-peer refusal mirror the
  *     pi extension's auto-listener;
- *   - live frames come from WatchEventsSource → createRpcEnvelope — the
- *     SAME producer the pi binding uses, over the SAME event shapes;
+ *   - live frames come from ConversationViewSource → createRpcEnvelope —
+ *     the SAME producer the pi binding uses, over the SAME event shapes;
+ *   - a run that ends without an answer is recorded as a display app entry
+ *     (customType un-bien:durable-run-failure), so it shows live and on
+ *     replay;
  *   - inbound rpc commands dispatch through the shared rpc_inbound/
  *     rpc_handlers pair (createRpcHandlers over the durable port); the
  *     model-registry/slash verbs answer errors (pi-only members are null);
@@ -23,8 +26,12 @@
  */
 import { hostname } from "node:os"
 import type { Context, JsonValue } from "@earendil-works/chord"
-import type { Conversation, Harness } from "@earendil-works/pi-durable"
-import { defineEntry as defineEntryFn, watchEvents } from "@earendil-works/pi-durable"
+import type {
+  Conversation,
+  Harness,
+  RunFailure,
+} from "@earendil-works/pi-durable"
+import { defineEntry as defineEntryFn } from "@earendil-works/pi-durable"
 import {
   TOKEN_TTL_MS,
   PlainPeerChannel,
@@ -57,12 +64,9 @@ import {
   type ServerMessage,
 } from "@geohar/un-bien/durable"
 import type { NotifyLevel } from "@geohar/un-bien/core"
-import {
-  DurableSessionControl,
-  DurableSessionPort,
-  DurableTranscriptMirror,
-} from "./port.js"
-import { WatchEventsSource } from "./event_source.js"
+import { DurableSessionControl, DurableSessionPort } from "./port.js"
+import { DurableTranscriptMirror, UN_BIEN_APP_KIND } from "./mirror.js"
+import { ConversationViewSource } from "./event_source.js"
 
 /** App-defined entry kind carrying un-bien custom entries (data-only
  *  sidecars: display text + details payload). */
@@ -71,7 +75,24 @@ const UnBienAppEntry = defineEntryFn<{
   content: string
   display?: boolean
   details?: JsonValue
-}>("un-bien.app")
+}>(UN_BIEN_APP_KIND)
+
+/** customType of the transcript notice for a run that ended unanswered. */
+const RUN_FAILURE_CUSTOM_TYPE = "un-bien:durable-run-failure"
+
+/** The notice text per RunFailureReason. */
+const RUN_FAILURE_TEXT: Record<RunFailure["reason"], string> = {
+  model_error: "The model request failed",
+  no_model: "No model is available",
+  aborted: "Stopped",
+  reset: "The context was reset before an answer",
+  faulted: "The run failed",
+  orphaned: "The run could not continue",
+  interrupted: "The host stopped while the model was answering",
+  restart_limit: "The run was cut off too many times",
+  nothing_to_answer: "Nothing to answer",
+  turn_limit: "The turn limit was reached",
+}
 
 /** Reconnect backoffs — the pi extension's ladder, minus the generations. */
 const RECONNECT_BACKOFFS_MS = [1_000, 2_000, 5_000, 10_000, 30_000]
@@ -114,7 +135,7 @@ export class DurableBridge {
   private busy = false
   private port!: DurableSessionPort
   private control!: DurableSessionControl
-  private events: WatchEventsSource | null = null
+  private events: ConversationViewSource | null = null
   private rpcEnvelope: { dispose(): void } | null = null
   private myRoomId: string | null = null
   private sessionStartedAt = Date.now()
@@ -146,20 +167,23 @@ export class DurableBridge {
     this.port = this.buildPort(conversation)
     this.control = this.buildControl()
 
-    this.events?.stop()
-    // The watch() stream is the event + transcript source of truth; its
-    // snapshot seeds the mirror (the get_entries surface).
-    const stream = await watchEventsShim(
-      this.opts.harness,
-      conversation.id,
-      this.opts.context,
-    )
-    this.events = new WatchEventsSource(stream, {
+    await this.events?.stop()
+    // The conversation view is the event + transcript source of truth: its
+    // first value (and the history before its window) seeds the mirror,
+    // the get_entries surface.
+    this.events = new ConversationViewSource({
+      conversation,
+      context: this.opts.context,
       mirror: this.mirror,
       onBusyChange: (busy) => {
         this.busy = busy
       },
+      onRunFailure: (failure) => this.recordRunFailure(failure),
+      onEnd: (end) => {
+        this.opts.log(`conversation watch ended: ${end.kind}`, "warning")
+      },
     })
+    await this.events.open()
     this.events.start()
     this.rpcEnvelope?.dispose()
     this.rpcEnvelope = createRpcEnvelope(this.events, (env) =>
@@ -609,10 +633,9 @@ export class DurableBridge {
   }
 
   /** Surface an OAuth "authorize" card to attached app peers: a persisted
-   *  display-only app entry (transcript + get_entries replay) AND a live
-   *  broadcast (extension_ui_request notify) so an attached app sees it
-   *  immediately. The app renders customType "un-bien:auth-required" with
-   *  a tappable `details.url`. */
+   *  display app entry (the transcript notice, live and on get_entries
+   *  replay) AND a toast (extension_ui_request notify). The app renders
+   *  customType "un-bien:auth-required" with a tappable `details.url`. */
   async sendAuthorizeCard(
     server: string,
     url: string,
@@ -651,6 +674,40 @@ export class DurableBridge {
         notify_type: "warning",
       },
     })
+  }
+
+  /** Record a run that ended without an answer as a display app entry, so
+   *  the app shows why (live, and on replay). `nothing_to_answer` (a
+   *  continue with nothing pending) is not a failure anyone needs to see. */
+  private recordRunFailure(failure: RunFailure): void {
+    if (failure.reason === "nothing_to_answer") return
+    const why = RUN_FAILURE_TEXT[failure.reason] ?? failure.reason
+    const content =
+      failure.detail !== undefined ? `${why}: ${failure.detail}` : why
+    void this.conversation
+      .commit(
+        (tx) =>
+          tx.appendEntry(UnBienAppEntry, this.conversation.id, {
+            data: {
+              customType: RUN_FAILURE_CUSTOM_TYPE,
+              content,
+              display: true,
+              details: {
+                reason: failure.reason,
+                ...(failure.detail !== undefined
+                  ? { detail: failure.detail }
+                  : {}),
+              },
+            },
+          }),
+        this.opts.context,
+      )
+      .catch((err: unknown) => {
+        this.opts.log(
+          `run failure entry commit failed: ${err instanceof Error ? err.message : String(err)}`,
+          "warning",
+        )
+      })
   }
 
   /** Mint a FRESH pairing invite on demand — for host-side pairing pages
@@ -983,14 +1040,4 @@ function defaultCreateRelay(
   keypair: Ed25519Keypair,
 ): RelayClient {
   return new RelayClient(wsUrl, keypair)
-}
-
-// The watchEvents stream is THE durable event plane; the bridge is its
-// only consumer (one stream per served conversation).
-function watchEventsShim(
-  harness: Harness,
-  conversationId: Parameters<typeof watchEvents>[1],
-  context: Context,
-) {
-  return watchEvents(harness, conversationId, context)
 }

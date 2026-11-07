@@ -12,7 +12,12 @@ export {
   type DurableSessionPortOptions,
 } from "./port.js"
 export { DurableToolRegistrar } from "./registrar.js"
-export { WatchEventsSource } from "./event_source.js"
+export {
+  ConversationViewSource,
+  type ConversationViewSourceOptions,
+} from "./event_source.js"
+export { ViewTranslator, type ViewTranslatorOptions } from "./view_translator.js"
+export { entryIdOf, toWire } from "./mirror.js"
 export {
   createUnBienDurableExtension,
   type UnBienDurableDeps,
