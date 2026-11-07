@@ -12,7 +12,8 @@
  *
  * Usage:
  *   unbien-durable [--cwd <dir>] [--name <agent-name>] [--relay <url>]
- *                   [--db <path>] [--model <provider/model>] [--no-pairing-qr]
+ *                   [--db <path>] [--model <provider/model>]
+ *                   [--thinking <level>] [--no-pairing-qr]
  *
  * Env: provider API keys are read by pi-ai's provider registry exactly as
  * pi reads them (ANTHROPIC_API_KEY, OPENAI_API_KEY, …). The model defaults
@@ -20,6 +21,9 @@
  * UNBIEN_NO_PAIRING_QR suppresses the auto-minted rotating pairing QR (same
  * as --no-pairing-qr): the invite mints with no user gesture, which headless
  * hosts pair via the un-bien CLI instead.
+ * --thinking (or UNBIEN_DURABLE_THINKING) sets the thinking level a
+ * conversation still at "off" is raised to: default "medium", pi's default,
+ * clamped to the model; "off" keeps pi-durable's default.
  */
 import { join, dirname, resolve } from "node:path"
 import { mkdirSync } from "node:fs"
@@ -53,6 +57,11 @@ import { createUnBienDurableExtension } from "./extension.js"
 import { HeadlessPiLaunch } from "./pi_launch.js"
 import { DurableBridge } from "./bridge.js"
 import { wireMeshInbox } from "./mesh_delivery.js"
+import {
+  DEFAULT_THINKING_LEVEL,
+  parseThinkingLevel,
+} from "./thinking.js"
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai"
 
 // ── CLI ────────────────────────────────────────────────────────────────────
 
@@ -63,6 +72,7 @@ interface HostOptions {
   relayUrl: string
   dbPath: string
   model: string | undefined // "provider/modelId"
+  thinkingLevel: ModelThinkingLevel
   /** Suppress the auto-minted rotating pairing QR (CLI flag --no-pairing-qr
    *  or env UNBIEN_NO_PAIRING_QR). Pairing then happens via the un-bien CLI. */
   noPairingQr: boolean
@@ -83,7 +93,7 @@ function parseArgs(argv: string[]): HostOptions {
     }
     const value = argv[i + 1]
     if (!key.startsWith("--") || value === undefined) {
-      process.stderr.write(`Usage: unbien-durable [--cwd <dir>] [--name <agent-name>] [--relay <url>] [--db <path>] [--model <provider/model>] [--no-pairing-qr]\n`)
+      process.stderr.write(`Usage: unbien-durable [--cwd <dir>] [--name <agent-name>] [--relay <url>] [--db <path>] [--model <provider/model>] [--thinking <level>] [--no-pairing-qr]\n`)
       process.exit(2)
     }
     args.set(key.slice(2), value)
@@ -102,7 +112,23 @@ function parseArgs(argv: string[]): HostOptions {
     "durable",
   )
   const dbPath = resolve(args.get("db") ?? join(stateDir, "session"))
-  return { cwd, name, machineName, relayUrl, dbPath, model: args.get("model"), noPairingQr }
+  const thinkingArg =
+    args.get("thinking") ?? process.env["UNBIEN_DURABLE_THINKING"]
+  const thinkingLevel = parseThinkingLevel(thinkingArg)
+  if (thinkingArg !== undefined && thinkingLevel === undefined) {
+    process.stderr.write(`unbien-durable: unknown thinking level "${thinkingArg}"\n`)
+    process.exit(2)
+  }
+  return {
+    cwd,
+    name,
+    machineName,
+    relayUrl,
+    dbPath,
+    model: args.get("model"),
+    thinkingLevel: thinkingLevel ?? DEFAULT_THINKING_LEVEL,
+    noPairingQr,
+  }
 }
 
 function log(message: string, level: "info" | "warning" | "error" = "info"): void {
@@ -250,6 +276,8 @@ async function main(): Promise<void> {
     machineName: opts.machineName,
     cwd: opts.cwd,
     pairingQr: !opts.noPairingQr,
+    models,
+    thinkingLevel: opts.thinkingLevel,
     log: (message, level) => log(message, level ?? "info"),
     shutdownHost: shutdown,
   })

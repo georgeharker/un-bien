@@ -24,6 +24,7 @@ import { MemoryStorage } from "@earendil-works/pi-durable/storage/memory"
 import { CodingTools } from "@earendil-works/pi-durable/tools"
 import { ConversationViewSource } from "./event_source.js"
 import { DurableTranscriptMirror } from "./mirror.js"
+import { ensureThinkingLevel } from "./thinking.js"
 
 const ctx = BACKGROUND_CONTEXT
 let harness: Harness | null = null
@@ -212,5 +213,46 @@ describe("ConversationViewSource on a real Harness", () => {
     )
     await settledAgain
     expect(failures).toEqual(["model_error"])
+  })
+})
+
+describe("ensureThinkingLevel on a real Harness", () => {
+  it("raises an \"off\" conversation to the default, reaching the request, and leaves a set level alone", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "unbien-think-"))
+    const faux = fauxProvider({ models: [{ id: "thinker", reasoning: true }] })
+    const models = createModels()
+    models.setProvider(faux.provider)
+    harness = await Harness.open(
+      new MemoryStorage(),
+      { models, registry: createRegistry(), env: () => new NodeExecutionEnv({ cwd }) },
+      ctx,
+    )
+    const conversation = await harness.root(ctx, {
+      agent: { model: { provider: "faux", modelId: "thinker" }, cwd },
+    })
+    harness.resume()
+    expect((await conversation.agent(ctx)).thinkingLevel).toBe("off")
+
+    expect(await ensureThinkingLevel(conversation, models, "medium", ctx)).toBe("medium")
+    expect((await conversation.agent(ctx)).thinkingLevel).toBe("medium")
+
+    const seen: unknown[] = []
+    faux.setResponses([
+      (_context, options) => {
+        seen.push((options as { reasoning?: unknown } | undefined)?.reasoning)
+        return fauxAssistantMessage("ok")
+      },
+    ])
+    const submission = await conversation.submit(
+      { type: "input", content: [{ type: "text", text: "hi" }] },
+      ctx,
+    )
+    await submission.wait(ctx)
+    expect(seen).toEqual(["medium"])
+
+    await conversation.configure({ thinkingLevel: "low" }, ctx)
+    expect(await ensureThinkingLevel(conversation, models, "high", ctx)).toBeUndefined()
+    expect((await conversation.agent(ctx)).thinkingLevel).toBe("low")
+    expect(await ensureThinkingLevel(conversation, models, "off", ctx)).toBeUndefined()
   })
 })

@@ -32,3 +32,8 @@ export {
 } from "./launch_wait_quit.js"
 export { DurableBridge, type DurableBridgeOptions } from "./bridge.js"
 export { ollamaCloudProvider } from "./ollama_cloud.js"
+export {
+  DEFAULT_THINKING_LEVEL,
+  ensureThinkingLevel,
+  parseThinkingLevel,
+} from "./thinking.js"

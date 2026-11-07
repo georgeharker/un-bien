@@ -26,6 +26,8 @@
  */
 import { hostname } from "node:os"
 import type { Context, JsonValue } from "@earendil-works/chord"
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai"
+import type { Models } from "@earendil-works/pi-ai/models"
 import type {
   Conversation,
   Harness,
@@ -67,6 +69,7 @@ import type { NotifyLevel } from "@geohar/un-bien/core"
 import { DurableSessionControl, DurableSessionPort } from "./port.js"
 import { DurableTranscriptMirror, UN_BIEN_APP_KIND } from "./mirror.js"
 import { ConversationViewSource } from "./event_source.js"
+import { DEFAULT_THINKING_LEVEL, ensureThinkingLevel } from "./thinking.js"
 
 /** App-defined entry kind carrying un-bien custom entries (data-only
  *  sidecars: display text + details payload). */
@@ -120,6 +123,12 @@ export interface DurableBridgeOptions {
   /** Relay client factory — tests inject a fake; production gets the real
    *  RelayClient. */
   createRelay?: (wsUrl: string, keypair: Ed25519Keypair) => RelayClient
+  /** The harness's model registry. With it, each attached conversation
+   *  still at thinking level "off" (pi-durable's default) is raised to
+   *  `thinkingLevel`, clamped to its model — see thinking.ts. */
+  models?: Models
+  /** Default thinking level (default "medium", pi's). "off" disables. */
+  thinkingLevel?: ModelThinkingLevel
   /** Host log surface (notify + async failures). */
   log(message: string, level?: NotifyLevel): void
   /** Graceful host shutdown (terminate frame) — close bridge + harness. */
@@ -163,6 +172,22 @@ export class DurableBridge {
   /** Attach to a conversation: port + control + watch + event fanout. */
   async attach(conversation: Conversation): Promise<void> {
     this.conversation = conversation
+    if (this.opts.models !== undefined) {
+      try {
+        const set = await ensureThinkingLevel(
+          conversation,
+          this.opts.models,
+          this.opts.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
+          this.opts.context,
+        )
+        if (set !== undefined) this.opts.log(`thinking level: ${set}`)
+      } catch (err: unknown) {
+        this.opts.log(
+          `thinking level not set: ${err instanceof Error ? err.message : String(err)}`,
+          "warning",
+        )
+      }
+    }
     this.mirror = new DurableTranscriptMirror()
     this.port = this.buildPort(conversation)
     this.control = this.buildControl()
