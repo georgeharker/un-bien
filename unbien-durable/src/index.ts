@@ -13,6 +13,10 @@ export {
 } from "./port.js"
 export { DurableToolRegistrar } from "./registrar.js"
 export {
+  DurableAgentConfig,
+  type DurableAgentConfigOptions,
+} from "./agent_config.js"
+export {
   ConversationViewSource,
   type ConversationViewSourceOptions,
 } from "./event_source.js"
