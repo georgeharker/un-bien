@@ -268,6 +268,22 @@ describe("ViewTranslator", () => {
     translator.feed([], {} as LiveState)
     expect(names()).toEqual(["turn_end", "agent_end", "agent_settled"])
   })
+
+  it("a notice written while idle opens no turn; the next run still does", () => {
+    const { translator, names } = make()
+    translator.prime(undefined)
+    // e.g. the "Stopped" notice the bridge records after an aborted run.
+    translator.feed(
+      [record(50, "un-bien.app", { data: { customType: "x", content: "Stopped", display: true } })],
+      {} as LiveState,
+    )
+    expect(names()).toEqual(["message_start", "message_end"])
+    translator.feed(
+      [record(51, "pi.user", { model: [{ role: "user", content: "next" }] })],
+      { run } as unknown as LiveState,
+    )
+    expect(names().slice(2)).toEqual(["agent_start", "turn_start", "message_start", "message_end"])
+  })
 })
 
 // ── DurableToolRegistrar ───────────────────────────────────────────────────

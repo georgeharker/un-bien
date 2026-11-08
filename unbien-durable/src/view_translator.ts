@@ -160,9 +160,11 @@ export class ViewTranslator {
     }
   }
 
-  /** A message that arrives complete: start and end in one go. */
+  /** A message that arrives complete: start and end in one go. Only a run's
+   *  messages open a turn; a notice written while idle (a run failure, a
+   *  mesh notice) is just the message. */
   private whole(message: Message): void {
-    this.beginTurn()
+    if (this.busy) this.beginTurn()
     this.opts.emit("message_start", { type: "message_start", message })
     this.opts.emit("message_end", { type: "message_end", message })
   }
