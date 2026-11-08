@@ -46,10 +46,11 @@ if (!load) {
       "            resume a stored session (picker: name/summary, recency)\n" +
       "  replay    render a captured envelope stream from a file\n" +
       "  pair      pair with a machine (paste its unbien:// invite)\n" +
-"  pair-token  generate a pairing invite (QR + URI) for this machine\n" +
-"              (add --wait to let the CLI validate the scan itself)\n" +
+      "  pair-token  pair a phone with THIS machine: shows an invite (QR + URI)\n" +
+      "            and waits for the app to scan it\n" +
       "  relay     manage remembered relays (add / remove / list)\n\n" +
-      "run `unbien <command>` with no arguments for its options.",
+      "run `unbien <command>` with no arguments for its options\n" +
+      "(pair-token starts at once: use `unbien pair-token --help`).",
   )
   process.exit(command ? 1 : 0)
 }

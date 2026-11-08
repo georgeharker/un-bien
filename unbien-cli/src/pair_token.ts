@@ -13,21 +13,18 @@
  * a container must generate the invite for the MACHINE it's on, so
  * the app's pair_request routes to the right room.
  *
- * Two modes:
- *   ALWAYS waits (the qrSession is per-process — a print-and-exit token
- *     extension bridge (or the durable host's bridge) is the live
- *     validator: it receives the app's pair_request against its own
- *     QRSession and answers pair_ok.
- *   The CLI itself IS the pairing endpoint (minter + validator):
- *     session — the CLI connects to the relay as the machine's room
- *     holder, listens for the app's pair_request, validates the token,
- *     persists the peer, re-pushes the signed allow-list, replies
- *     pair_ok, and exits 0 (timeout exits 1). The handshake is the
- *     same wire protocol the extension's auto-listener speaks
- *     (relay_lifecycle._handlePairRequest), so the app cannot tell
- *     the difference. Relay pair frames (pair_request / pair_ok) are
- *     exempt from the fail-closed content gate, so pairing bootstraps
- *     before any trust relationship exists.
+ * The CLI is the pairing endpoint, minter and validator both: a token is
+ * only valid in the process that issued it (the QRSession is per-process),
+ * so the CLI mints the invite, then connects to the relay as the machine's
+ * room holder and waits. On the app's pair_request it validates the token,
+ * persists the peer, re-pushes the signed allow-list, replies pair_ok, and
+ * exits 0 once the reply is written (timeout or relay loss exits 1). The
+ * handshake is the wire protocol the extension's auto-listener speaks
+ * (relay_lifecycle._handlePairRequest), so the app cannot tell the
+ * difference. Relay pair frames (pair_request / pair_ok) are exempt from
+ * the fail-closed content gate, so pairing bootstraps before any trust
+ * relationship exists. A machine with a live session or durable host on
+ * the room pairs through that instead (its bridge mints and validates).
  *
  * Usage:
  *   unbien pair-token [--name <session-name>] [--room <room-id>]
@@ -35,9 +32,9 @@
  *                     [--relay <url>]
  *
  * Output: QR ASCII to stderr (for a terminal), plain unbien://pair URI
- * to stdout (for copy-paste / piping). The token rotates (60s TTL per
- * the token lives for the whole wait window (clamped to the safe
- * pairing bounds) so a scan at any point in it is valid.
+ * to stdout (for copy-paste / piping). The token lives for the whole wait
+ * window (clamped to the safe pairing bounds), so a scan at any point in
+ * it is valid.
  */
 import { hostname as osHostname } from "node:os"
 import type { QRSession } from "@geohar/un-bien"
@@ -54,6 +51,9 @@ import type {
 
 /** Default wait window: two minutes to fetch a phone and scan. */
 export const DEFAULT_WAIT_TIMEOUT_MS = 120_000
+
+/** Longest wait for pair_ok to reach the socket before exiting anyway. */
+const PAIR_OK_FLUSH_MS = 2_000
 
 export interface PairTokenOptions {
   /** Session name shown in the app's pre-pair preview (the QR's `n`). */
@@ -316,7 +316,7 @@ async function runPairTokenCommand(argv: string[]): Promise<number> {
   return runPairTokenWait(unbien, opts, kp, qrSession)
 }
 
-/** The --wait mode: the CLI IS the machine's pairing endpoint. */
+/** Wait as the machine's pairing endpoint until a scan pairs or time runs out. */
 async function runPairTokenWait(
   unbien: Awaited<typeof import("@geohar/un-bien")>,
   opts: PairTokenOptions,
@@ -328,7 +328,7 @@ async function runPairTokenWait(
   const httpUrl = opts.relayUrl || unbien.resolveRelayUrl().url
   if (!httpUrl) {
     process.stderr.write(
-      "[pair-token] --wait needs a relay: pass --relay <url> or set UNBIEN_RELAY " +
+      "[pair-token] no relay configured: pass --relay <url> or set UNBIEN_RELAY " +
         "(/unbien set-relay on a machine with a session).\n",
     )
     return 1
@@ -357,8 +357,8 @@ async function runPairTokenWait(
     if (err instanceof client.RoomAlreadyOpenError) {
       process.stderr.write(
         "[pair-token] the relay says this identity+room is already connected — " +
-          "a session or the durable host is live on this machine. Use the default " +
-          "print-and-exit mode and let the running bridge validate the scan.\n",
+          "a session or the durable host is live on this machine. Pair through it " +
+          "(its QR or pairing page), or stop it and re-run pair-token.\n",
       )
       return 1
     }
@@ -485,18 +485,39 @@ async function runPairTokenWait(
         { id: frame.id, token: frame.token, device_name: frame.device_name },
       )
       const ct = Buffer.from(JSON.stringify(reply)).toString("base64")
-      relay.send(JSON.stringify({ peer: outer.peer, ct }))
+      const framed = JSON.stringify({ peer: outer.peer, ct })
       if (settled) {
         process.stderr.write(
           `\n[pair-token] Paired with ${deviceName} — the device is in peers.json. ` +
             "Start the durable host (or a pi session) and the app will reconnect.\n",
         )
-        finish(0)
-      } else {
-        process.stderr.write(
-          `[pair-token] refused a scan (${reply.type === "pair_error" ? reply.code : "?"}) — still waiting…\n`,
-        )
+        // Exit only once pair_ok is on the socket: exiting right after
+        // send() can drop it, leaving the app's pair flow to time out.
+        const fallback = setTimeout(() => finish(0), PAIR_OK_FLUSH_MS)
+        try {
+          relay.send(framed, () => {
+            clearTimeout(fallback)
+            finish(0)
+          })
+        } catch (err) {
+          clearTimeout(fallback)
+          const detail = err instanceof Error ? err.message : String(err)
+          process.stderr.write(
+            `[pair-token] paired, but pair_ok could not be sent (${detail}) — ` +
+              "the app may need to scan again; the device is already trusted.\n",
+          )
+          finish(1)
+        }
+        return
       }
+      try {
+        relay.send(framed)
+      } catch {
+        return // the relay close handler ends the wait
+      }
+      process.stderr.write(
+        `[pair-token] refused a scan (${reply.type === "pair_error" ? reply.code : "?"}) — still waiting…\n`,
+      )
     })()
   })
   relay.on("close", () => {
