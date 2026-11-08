@@ -13,11 +13,16 @@ allowBuilds:
   esbuild: true
   koffi: true
   protobufjs: true
+# Optional native binaries to install: the machine running the install
+# (`current` — e.g. the x64 CI runners, whose vitest needs its rolldown
+# binding) plus darwin/linux arm64 for the docker image builds.
 supportedArchitectures:
   os:
+    - current
     - darwin
     - linux
   cpu:
+    - current
     - arm64
 shamefullyHoist: true
 confirmModulesPurge: false
