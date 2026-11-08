@@ -1,0 +1,9 @@
+# Build-context filter for the relay image (relay/Dockerfile, built from
+# this directory by push-docker.sh). The image compiles from Cargo.toml,
+# Cargo.lock, src/ and migrations/ only; cargo's target/ (release and
+# incremental output, tens of GB after a test run) must never be sent as
+# context.
+target
+tests
+*.md
+.DS_Store
