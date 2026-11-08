@@ -1,12 +1,17 @@
 #!/bin/sh
 # Cut a release: version bumps, tags, push. One command per component — or all.
 #
-# Usage: scripts/release.sh <ext|cli|relay|all> <patch|minor> [--dry-run|--yes|--dev]
+# Usage: scripts/release.sh <ext|cli|relay|durable|all> <patch|minor> [--dry-run|--yes|--dev]
 #
 #   ext     -> extension/package.json  (@geohar/un-bien)        tag v<ver>
 #   cli     -> unbien-cli/package.json (@geohar/unbien-cli)     tag cli-v<ver>
 #   relay   -> relay/Cargo.toml        (un-bien-relay)          tag relay-v<ver>
-#   all     -> ext + cli + relay (relay/cli patch unless given per-component)
+#   durable -> unbien-durable/package.json (@geohar/unbien-durable) tag durable-v<ver>
+#   all     -> ext + cli + relay + durable (each takes the given bump)
+#
+# The cli and durable packages depend on the extension as `workspace:*`,
+# which `pnpm publish` pins to the extension version in the tagged tree: cut
+# them after (or with) the extension release they should pin.
 #
 #   --dev   append -dev.YYYYMMDD to each version (pre-release). npm packages
 #           publish under the `dev` tag (not `latest`); crates.io treats it
@@ -21,7 +26,7 @@
 #
 # Tag -> workflow mapping (each tag publishes exactly one package):
 #   v* -> npm-publish (ext)   cli-v* -> cli-publish   relay-v* -> relay-publish
-#   launcher-v* -> launcher-publish
+#   launcher-v* -> launcher-publish   durable-v* -> durable-publish
 #
 # - Pushes via the gh-credential URL recipe (plain `git push origin` fails
 #   under this repo's gh-auth setup).
@@ -57,9 +62,9 @@ for arg in "$@"; do
 done
 
 case "$COMPONENT" in
-ext | cli | relay | all) ;;
+ext | cli | relay | durable | all) ;;
 *)
-  echo "usage: scripts/release.sh <ext|cli|relay|all> <patch|minor> [--dry-run|--yes]" >&2
+  echo "usage: scripts/release.sh <ext|cli|relay|durable|all> <patch|minor> [--dry-run|--yes|--dev]" >&2
   exit 2
   ;;
 esac
@@ -96,16 +101,19 @@ EXT_NOW=$(json_version "$ROOT/extension/package.json")
 CLI_NOW=$(json_version "$ROOT/unbien-cli/package.json")
 RELAY_NOW=$(cargo_version "$ROOT/relay/Cargo.toml")
 LAUNCHER_NOW=$(json_version "$ROOT/launcher/package.json")
+DURABLE_NOW=$(json_version "$ROOT/unbien-durable/package.json")
 
 EXT_NEW=$(bump_version "$EXT_NOW" "$([ "$COMPONENT" = all ] && echo "$BUMP" || echo patch)")
 CLI_NEW=$(bump_version "$CLI_NOW" "$([ "$COMPONENT" = all ] && echo "$BUMP" || echo patch)")
 RELAY_NEW=$(bump_version "$RELAY_NOW" "$([ "$COMPONENT" = all ] && echo "$BUMP" || echo patch)")
 LAUNCHER_NEW=$(bump_version "$LAUNCHER_NOW" patch)
+DURABLE_NEW=$(bump_version "$DURABLE_NOW" "$([ "$COMPONENT" = all ] && echo "$BUMP" || echo patch)")
 
 # ext explicit: user chose the bump; all: shared bump; others: patch only.
 [ "$COMPONENT" = ext ] && EXT_NEW=$(bump_version "$EXT_NOW" "$BUMP")
 [ "$COMPONENT" = cli ] && CLI_NEW=$(bump_version "$CLI_NOW" "$BUMP")
 [ "$COMPONENT" = relay ] && RELAY_NEW=$(bump_version "$RELAY_NOW" "$BUMP")
+[ "$COMPONENT" = durable ] && DURABLE_NEW=$(bump_version "$DURABLE_NOW" "$BUMP")
 
 # --dev: append a date-based pre-release suffix to each version.
 if [ "$DEV" = 1 ]; then
@@ -114,6 +122,7 @@ if [ "$DEV" = 1 ]; then
   CLI_NEW="${CLI_NEW}${DEV_SUFFIX}"
   RELAY_NEW="${RELAY_NEW}${DEV_SUFFIX}"
   LAUNCHER_NEW="${LAUNCHER_NEW}${DEV_SUFFIX}"
+  DURABLE_NEW="${DURABLE_NEW}${DEV_SUFFIX}"
 fi
 
 # What actually gets cut.
@@ -121,6 +130,7 @@ DO_EXT=0
 DO_CLI=0
 DO_RELAY=0
 DO_LAUNCHER=0
+DO_DURABLE=0
 case "$COMPONENT" in
 ext)
   DO_EXT=1
@@ -128,11 +138,13 @@ ext)
   ;; # launcher repin ALWAYS rides an ext cut
 cli) DO_CLI=1 ;;
 relay) DO_RELAY=1 ;;
+durable) DO_DURABLE=1 ;;
 all)
   DO_EXT=1
   DO_CLI=1
   DO_RELAY=1
   DO_LAUNCHER=1
+  DO_DURABLE=1
   ;;
 esac
 
@@ -141,11 +153,12 @@ echo "Release plan ($COMPONENT, $BUMP):"
 [ "$DO_CLI" = 1 ] && echo "  cli      $CLI_NOW  -> $CLI_NEW        tag cli-v$CLI_NEW        (cli-publish)"
 [ "$DO_RELAY" = 1 ] && echo "  relay    $RELAY_NOW  -> $RELAY_NEW        tag relay-v$RELAY_NEW    (relay-publish)"
 [ "$DO_LAUNCHER" = 1 ] && echo "  launcher $LAUNCHER_NOW  -> $LAUNCHER_NEW        tag launcher-v$LAUNCHER_NEW (launcher-publish; repin to ext $EXT_NEW)"
+[ "$DO_DURABLE" = 1 ] && echo "  durable  $DURABLE_NOW  -> $DURABLE_NEW        tag durable-v$DURABLE_NEW  (durable-publish)"
 
 # ── preflight ───────────────────────────────────────────────────────────────
 
 cd "$ROOT"
-if git status --porcelain -- extension unbien-cli relay launcher | grep -qv '^??'; then
+if git status --porcelain -- extension unbien-cli relay launcher unbien-durable | grep -qv '^??'; then
   echo "ERROR: uncommitted changes in component dirs — commit or stash first." >&2
   exit 1
 fi
@@ -214,6 +227,17 @@ if [ "$DO_LAUNCHER" = 1 ]; then
   echo "cut launcher $LAUNCHER_NEW (repin -> ext $EXT_NEW)"
 fi
 
+# After the extension: the tagged tree must carry the extension version
+# `pnpm publish` pins for the workspace:* dependency.
+if [ "$DO_DURABLE" = 1 ]; then
+  sed -i '' "s/\"version\": \"$DURABLE_NOW\"/\"version\": \"$DURABLE_NEW\"/" unbien-durable/package.json
+  git add unbien-durable/package.json
+  git commit -m "chore(release): durable $DURABLE_NEW" >/dev/null
+  git tag -a "durable-v$DURABLE_NEW" -m "Durable host $DURABLE_NEW"
+  TAGS="$TAGS durable-v$DURABLE_NEW"
+  echo "cut durable $DURABLE_NEW"
+fi
+
 # ── push ────────────────────────────────────────────────────────────────────
 
 echo "pushing main + tags:$TAGS"
@@ -225,4 +249,5 @@ echo "Pushed. Workflows triggered:"
 [ "$DO_CLI" = 1 ] && echo "  cli-v$CLI_NEW        -> cli-publish        (@geohar/unbien-cli)"
 [ "$DO_RELAY" = 1 ] && echo "  relay-v$RELAY_NEW    -> relay-publish      (un-bien-relay)"
 [ "$DO_LAUNCHER" = 1 ] && echo "  launcher-v$LAUNCHER_NEW -> launcher-publish (@geohar/un-bien-launcher -> ext $EXT_NEW)"
+[ "$DO_DURABLE" = 1 ] && echo "  durable-v$DURABLE_NEW  -> durable-publish    (@geohar/unbien-durable)"
 echo "Watch: gh run list --limit 4"

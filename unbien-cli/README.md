@@ -25,6 +25,7 @@ npm install -g @geohar/unbien-cli
 | `unbien`                   | Connect (default — same as `unbien connect`)         |
 | `unbien connect [options]` | Attach to a live pi session                          |
 | `unbien pair <invite>`     | Pair with a machine (paste its `unbien://` URI)      |
+| `unbien pair-token`        | Pair a phone with THIS machine: shows an invite QR and waits for the scan (headless hosts) |
 | `unbien relay <sub>`       | Manage remembered relays (`add` / `remove` / `list`) |
 | `unbien replay <file>`     | Render a captured envelope stream offline            |
 | `unbien --version`         | Print the version                                    |

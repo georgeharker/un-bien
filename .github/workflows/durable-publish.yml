@@ -1,0 +1,62 @@
+---
+name: Publish durable host
+
+"on":
+  push:
+    tags:
+      # Component-scoped: extension publishes on `v*`, relay on
+      # `relay-v*`, launcher on `launcher-v*`, cli on `cli-v*`, durable on
+      # `durable-v*` — one tag never publishes two packages.
+      - "durable-v*"
+  workflow_dispatch:
+
+permissions:
+  id-token: write # Required for OIDC trusted publishing
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24.x"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - run: npm install -g npm@latest
+
+      # The durable binding imports @geohar/un-bien/core and /durable (the
+      # ports, the rpc dispatch, the relay + mesh transport), so the
+      # extension must be built before it typechecks.
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -C extension build
+      - run: pnpm -C unbien-durable build
+
+      # Guard the publish: the translator and mirror tests (including the
+      # real in-memory Harness runs) pin the pi wire shapes the app reads.
+      - run: pnpm -C unbien-durable test
+
+      # `pnpm publish` rewrites the `workspace:*` dep on @geohar/un-bien
+      # to the concrete version in the workspace (npm publish can't), so
+      # cut the extension first when both change.
+      # Pre-release versions (containing '-') publish under the `dev` tag.
+      - name: Detect pre-release
+        id: prerelease
+        working-directory: unbien-durable
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          if echo "$VER" | grep -q '-'; then
+            echo "tag=--tag dev" >> "$GITHUB_OUTPUT"
+            echo "pre-release $VER -> publishing under 'dev' tag"
+          else
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish @geohar/unbien-durable
+        working-directory: unbien-durable
+        run: pnpm publish --provenance --access public --no-git-checks ${{ steps.prerelease.outputs.tag }}
