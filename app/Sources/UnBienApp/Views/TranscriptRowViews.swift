@@ -680,16 +680,17 @@ struct ToolCardView: View {
             return true
         }
         if let hunks = card.hunks, !hunks.isEmpty { return true }
-        // codemode (and legacy mcpscript) is rich BY IDENTITY (a JS snippet
-        // is small + is the whole call — worth the default expansion);
-        // bash-family is NOT — the command face renders on manual expand,
-        // and auto-expanding every shell call would flip the default for
-        // all existing history.
+        // codemode (and legacy mcpscript) is rich BY IDENTITY: its JS snippet
+        // is the whole call.
         let isCodemodeFamily = ToolOutputClassifier.isCodemodeFamily(card.tool)
         if isCodemodeFamily,
            let code = stringArg(card.args, ["code", "script"]), !code.isEmpty {
             return true
         }
+        // So are the shell-faced calls (bash-family commands, grep/find
+        // searches): the highlighted command is the call, so "Expand rich
+        // tool results" opens them like edits and codemode.
+        if content(for: card)?.lang == "shell" { return true }
         for key in ["content", "contents", "text", "new_string", "new_str", "newText"] {
             if let value = card.args[key]?.stringValue, !value.isEmpty { return true }
         }
@@ -791,6 +792,12 @@ struct ToolCardView: View {
                     // .toolCardHeaderHeight: CHANGE THAT CONSTANT if the callout
                     // font/size changes (ESTIMATE-ONLY — no literal to share).
                     Text(card.tool).font(.callout.weight(.medium)).foregroundStyle(theme.text)
+                    // MCP proxy calls: the proxied tool, smaller, on the same
+                    // line (one line, so the header height is unchanged).
+                    if let subtitle = Self.mcpSubtitle(for: card) {
+                        Text(subtitle).font(.caption).foregroundStyle(theme.secondaryText)
+                            .lineLimit(1).truncationMode(.middle)
+                    }
                 }
             }
             .tint(theme.toolAccent)

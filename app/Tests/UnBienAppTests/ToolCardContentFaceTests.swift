@@ -58,6 +58,27 @@ final class ToolCardContentFaceTests: XCTestCase {
         ToolCard(toolCallID: "t1", tool: tool, args: args)
     }
 
+    // MARK: - MCP proxy → the proxied call as the header subtitle
+
+    func testMCPSubtitleNamesTheProxiedCall() {
+        // The argument shapes the mcp tool is called with in real sessions.
+        XCTAssertEqual(ToolCardView.mcpSubtitle(for: card(tool: "mcp", args: [
+            "tool": .string("svg-mcp_render_document"), "args": .string("{}")])),
+            "svg-mcp_render_document")
+        XCTAssertEqual(ToolCardView.mcpSubtitle(for: card(tool: "mcp", args: [
+            "describe": .string("svg-mcp_import_svg")])), "describe svg-mcp_import_svg")
+        XCTAssertEqual(ToolCardView.mcpSubtitle(for: card(tool: "mcp", args: [
+            "search": .string("design_lookup"), "limit": .number(6)])), "search \"design_lookup\"")
+        XCTAssertEqual(ToolCardView.mcpSubtitle(for: card(tool: "mcp", args: [
+            "list": .bool(true), "server": .string("cribsheet")])), "list cribsheet")
+    }
+
+    func testMCPSubtitleOnlyForTheProxyAndOnlyWhenNamed() {
+        XCTAssertNil(ToolCardView.mcpSubtitle(for: card(tool: "bash", args: ["tool": .string("x")])))
+        XCTAssertNil(ToolCardView.mcpSubtitle(for: card(tool: "mcp", args: [:])))
+        XCTAssertNil(ToolCardView.mcpSubtitle(for: card(tool: "mcp", args: ["tool": .string("")])))
+    }
+
     // MARK: - codemode → JavaScript snippet
 
     func testCodemodeRendersArgsCodeAsJavaScript() {
@@ -100,9 +121,10 @@ final class ToolCardContentFaceTests: XCTestCase {
         let face = ToolCardView.content(for: c)
         XCTAssertEqual(face?.text, "cargo test --quiet")
         XCTAssertEqual(face?.lang, "shell")
-        // NOT rich by the command face — expansion default stays unchanged
-        // for all existing shell-call history (face renders on expand).
-        XCTAssertFalse(ToolCardView.isRich(c))
+        // Rich by the command face: "Expand rich tool results" opens it.
+        XCTAssertTrue(ToolCardView.isRich(c))
+        // A bash call with no command has no face, so stays collapsed.
+        XCTAssertFalse(ToolCardView.isRich(card(tool: "bash", args: [:])))
     }
 
     func testBashFamilyPatternCoversShellTools() {
@@ -149,7 +171,7 @@ final class ToolCardContentFaceTests: XCTestCase {
         let face = ToolCardView.content(for: c)
         XCTAssertEqual(face?.text, "grep \"UNBIEN_RELAY_BIND\" relay/src")
         XCTAssertEqual(face?.lang, "shell")
-        XCTAssertFalse(ToolCardView.isRich(c), "same default as bash-family — face on expand")
+        XCTAssertTrue(ToolCardView.isRich(c), "same default as bash-family")
     }
 
     func testGrepToolFaceEscapesEmbeddedQuotes() {
