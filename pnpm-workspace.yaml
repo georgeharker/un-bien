@@ -26,3 +26,8 @@ supportedArchitectures:
     - arm64
 shamefullyHoist: true
 confirmModulesPurge: false
+# Report a node_modules / workspace-state mismatch before a script instead
+# of reinstalling: another tree's prod-only deploy (toucan's pnpm deploy
+# --prod) records dev=false in the shared state, and the default reinstall
+# then silently dropped every package's devDependencies (vitest, @types/ws).
+verifyDepsBeforeRun: warn
