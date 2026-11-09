@@ -47,7 +47,7 @@
     "vitest": "^4.1.6"
   },
   "dependencies": {
-    "@geohar/un-bien": "workspace:*",
+    "@geohar/un-bien": "workspace:^",
     "@earendil-works/pi-coding-agent": ">=0.84.3",
     "@earendil-works/pi-tui": "^0.84.4"
   },

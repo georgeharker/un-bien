@@ -126,7 +126,7 @@ importers:
         specifier: ^0.84.4
         version: 0.84.4
       '@geohar/un-bien':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../extension
     devDependencies:
       '@types/node':
@@ -157,7 +157,7 @@ importers:
         specifier: ^1.5.0
         version: 1.5.0(@aws-sdk/credential-provider-node@3.972.93)(@modelcontextprotocol/sdk@1.30.0(zod@4.5.4))(@smithy/signature-v4@5.7.5)(esbuild@0.28.2)(undici@8.12.3)(zod@4.5.4)
       '@geohar/un-bien':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../extension
       typebox:
         specifier: 1.3.27
