@@ -4,7 +4,8 @@ import {
   createConnection,
   createServer,
 } from "node:net"
-import { existsSync, lstatSync, unlinkSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, unlinkSync } from "node:fs"
+import { dirname } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { usesNamedPipe } from "./ipc.js"
 
@@ -54,6 +55,15 @@ export async function joinOrLead(
   const maxAttempts = limits.maxAttempts ?? MAX_ATTEMPTS
   const busyMaxAttempts = limits.busyMaxAttempts ?? BUSY_MAX_ATTEMPTS
   const pipe = usesNamedPipe()
+  // The socket's directory may not exist yet (a fresh state volume); create
+  // it owner-only. A failure here surfaces as the bind's own error below.
+  if (!pipe) {
+    try {
+      mkdirSync(dirname(sockPath), { recursive: true, mode: 0o700 })
+    } catch {
+      /* reported by _tryBind with the real code */
+    }
+  }
   let busySeen = 0
   let raceRetries = 0
   while (raceRetries < maxAttempts && busySeen <= busyMaxAttempts) {
@@ -108,9 +118,10 @@ export function tryConnect(sockPath: string): Promise<Socket | null> {
 
 /**
  * Attempts to bind a UDS server on `sockPath`. Returns the live server on
- * success, null when the path is already held (EADDRINUSE) or any other
- * bind error. Caller is responsible for `unlink`ing a stale sock file
- * before retrying.
+ * success, null when the path is already held (EADDRINUSE: a lost bind race).
+ * Any other bind error (ENOENT, EACCES, ENOTDIR, ENAMETOOLONG, EPERM, …)
+ * throws a BindError naming the code and path — retrying cannot fix it.
+ * Caller is responsible for `unlink`ing a stale sock file before retrying.
  */
 export function tryBind(sockPath: string): Promise<Server | null> {
   return _tryBind(sockPath)
@@ -221,24 +232,54 @@ function _probeBroker(sockPath: string): Promise<LeaderProbe> {
   })
 }
 
+/** A bind failure that is not a race: the socket path itself is unusable. */
+export class BindError extends Error {
+  constructor(
+    readonly sockPath: string,
+    readonly code: string,
+  ) {
+    const hint = BIND_ERROR_HINTS[code]
+    super(
+      `leader election: cannot bind ${sockPath}: ${code}` +
+        (hint ? ` (${hint})` : ""),
+    )
+    this.name = "BindError"
+  }
+}
+
+const BIND_ERROR_HINTS: Record<string, string> = {
+  ENOENT: "parent directory missing",
+  EACCES: "permission denied on the socket directory",
+  EPERM: "operation not permitted on the socket directory",
+  ENOTDIR: "a path component is not a directory",
+  ENAMETOOLONG: "socket path too long for a unix socket",
+}
+
 function _tryBind(sockPath: string): Promise<Server | null> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const server = createServer()
     let settled = false
-    const settle = (val: Server | null) => {
+    const close = () => {
+      try {
+        server.close()
+      } catch {
+        /* ignored */
+      }
+    }
+    server.once("error", (err: NodeJS.ErrnoException) => {
       if (settled) return
       settled = true
-      if (!val) {
-        try {
-          server.close()
-        } catch {
-          /* ignored */
-        }
-      }
-      resolve(val)
-    }
-    server.once("error", () => settle(null))
-    server.listen(sockPath, () => settle(server))
+      close()
+      // Only a held path is a race (POSIX, and Node's code for a busy
+      // Windows named pipe); anything else is the path itself failing.
+      if (err.code === "EADDRINUSE") resolve(null)
+      else reject(new BindError(sockPath, err.code ?? "EUNKNOWN"))
+    })
+    server.listen(sockPath, () => {
+      if (settled) return
+      settled = true
+      resolve(server)
+    })
   })
 }
 

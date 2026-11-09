@@ -1,9 +1,9 @@
 import { describe, expect, test } from "vitest"
-import { mkdtempSync, writeFileSync, existsSync, lstatSync } from "node:fs"
+import { chmodSync, mkdtempSync, writeFileSync, existsSync, lstatSync } from "node:fs"
 import { execFileSync } from "node:child_process"
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
-import { joinOrLead } from "./leader_election.js"
+import { BindError, joinOrLead } from "./leader_election.js"
 import { Broker } from "./broker.js"
 import { ipcAddress } from "./ipc.js"
 
@@ -198,4 +198,45 @@ describe("joinOrLead", () => {
       }
     },
   )
+})
+
+// A bind error that is not a race fails at once with its code: retrying
+// cannot create a directory or grant a permission.
+describe("joinOrLead bind errors", () => {
+  const posix = process.platform !== "win32"
+
+  test.skipIf(!posix)("creates a missing socket directory and leads", async () => {
+    const base = mkdtempSync(join(tmpdir(), "pi-le-dir-"))
+    const sock = join(base, "sessions", "local", "broker.sock")
+    const r = await joinOrLead(sock)
+    expect(r.role).toBe("leader")
+    expect((lstatSync(join(base, "sessions", "local")).mode & 0o777).toString(8)).toBe("700")
+    if (r.role === "leader") await new Promise<void>((res) => r.server.close(() => res()))
+  })
+
+  test.skipIf(!posix || process.getuid?.() === 0)(
+    "an unwritable socket directory fails fast with EACCES, not 20 retries",
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "pi-le-ro-"))
+      chmodSync(dir, 0o500)
+      try {
+        const started = Date.now()
+        const err = await joinOrLead(join(dir, "broker.sock")).catch((e: unknown) => e)
+        expect(err).toBeInstanceOf(BindError)
+        expect((err as BindError).code).toBe("EACCES")
+        expect((err as Error).message).toContain("cannot bind")
+        expect(Date.now() - started).toBeLessThan(500)
+      } finally {
+        chmodSync(dir, 0o700)
+      }
+    },
+  )
+
+  test.skipIf(!posix)("a file where the directory should be fails with ENOTDIR", async () => {
+    const base = mkdtempSync(join(tmpdir(), "pi-le-file-"))
+    writeFileSync(join(base, "notadir"), "")
+    const err = await joinOrLead(join(base, "notadir", "broker.sock")).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(BindError)
+    expect((err as BindError).code).toBe("ENOTDIR")
+  })
 })
