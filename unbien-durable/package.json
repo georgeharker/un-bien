@@ -1,6 +1,6 @@
 {
   "name": "@geohar/unbien-durable",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Durable host binding for un-bien: a pi-durable Harness agent on the un-bien mesh + relay, serving the un-bien mobile app. Core ports (AgentSessionPort, EventSource, ToolRegistrar) and the mesh/relay transport come from @geohar/un-bien.",
   "type": "module",
   "main": "./dist/host.js",
