@@ -3,7 +3,6 @@ packages:
   - launcher
   - unbien-cli
   - unbien-durable
-  - ../../toucan
 
 # Native deps whose install build scripts pnpm (v10+) blocks by default. These
 # are trusted first-party build tools, allowed to run. Moved here from
@@ -24,10 +23,7 @@ supportedArchitectures:
   cpu:
     - current
     - arm64
-shamefullyHoist: true
-confirmModulesPurge: false
 # Report a node_modules / workspace-state mismatch before a script instead
-# of reinstalling: another tree's prod-only deploy (toucan's pnpm deploy
-# --prod) records dev=false in the shared state, and the default reinstall
-# then silently dropped every package's devDependencies (vitest, @types/ws).
+# of reinstalling: a reinstall from a prod-only state (a pnpm deploy --prod
+# run against this workspace) silently drops every devDependency.
 verifyDepsBeforeRun: warn
