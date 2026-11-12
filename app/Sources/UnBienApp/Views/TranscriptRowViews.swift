@@ -647,8 +647,8 @@ struct ToolCardView: View {
             } else if showsInputSection(for: card, hideInputRich: hideInputRich) {
                 n += 1                       // "input"
             }
-            let shellFace = content?.lang == "shell"
-            if shellFace { n += 1 }          // "COMMAND"
+            let shellFace = content != nil && callFaceLabel(for: card) != nil
+            if shellFace { n += 1 }          // "COMMAND" / "SCRIPT"
             if !blocks.isEmpty {
                 // A "DIFF" label belongs to the hunks face only; the historical
                 // text face renders bare, as code blocks do.
@@ -682,6 +682,18 @@ struct ToolCardView: View {
     static func startsExpanded(_ card: ToolCard, policy: ToolDisplayPolicy) -> Bool {
         guard policy.disclosure(for: card) != .collapsed else { return false }
         return isRich(card) || card.result != nil || card.state == .failed
+    }
+
+    /// The label of a CALL face — the content face that is the call's own
+    /// input (a shell command, a grep/find search, a codemode script) and so
+    /// shows WITH the output, not instead of it. nil for an edit/write's new
+    /// content, which stands in for a bare success result.
+    nonisolated static func callFaceLabel(for card: ToolCard) -> String? {
+        if ToolOutputClassifier.isCodemodeFamily(card.tool) { return "SCRIPT" }
+        if ToolOutputClassifier.isBashFamily(card.tool) || card.tool == "grep" || card.tool == "find" {
+            return "COMMAND"
+        }
+        return nil
     }
 
     static func isRich(_ card: ToolCard) -> Bool {
@@ -775,11 +787,12 @@ struct ToolCardView: View {
                                   !(hideInputRich && !knownOutputBlocks.isEmpty) {
                             labeled("input", derived.argsPretty)
                         }
-                        if let face = derived.content, face.lang == "shell" {
-                            // A shell call: the command is the input, so its
-                            // output still follows (blocks, else plain text).
+                        if let face = derived.content, let callLabel = Self.callFaceLabel(for: card) {
+                            // A call face (shell command, search, codemode
+                            // script) is the call's input, so its output
+                            // still follows (blocks, else plain text).
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("COMMAND").font(.system(size: 9, weight: .bold))
+                                Text(callLabel).font(.system(size: 9, weight: .bold))
                                     .foregroundStyle(theme.secondaryText)
                                 codeView(face.text, lang: face.lang)
                             }

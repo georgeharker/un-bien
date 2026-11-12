@@ -212,9 +212,10 @@ enum RowHeightEstimator {
             labeledSections: ToolCardView.sectionLabels(for: card, hideInputRich: hideInputRich),
             imageCount: card.images.count)
         let body: String
-        if let face = ToolCardView.content(for: card), face.lang == "shell" {
-            // A shell call draws its command, then the plain output when no
-            // output block renders it (the blocks are counted below).
+        if let face = ToolCardView.content(for: card), ToolCardView.callFaceLabel(for: card) != nil {
+            // A call face (shell command, search, codemode script) draws the
+            // call's input, then the plain output when no output block
+            // renders it (the blocks are counted below).
             let output = ToolCardView.outputBlocks(for: card).isEmpty
                 ? card.result.map { card.state == .running
                     ? String($0.prettyString.prefix(4_000)) : $0.prettyString }

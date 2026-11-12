@@ -141,6 +141,23 @@ final class ToolCardContentFaceTests: XCTestCase {
         // An edit's content face still stands in for its bare result.
         let write = card(tool: "write", args: ["content": .string("x")])
         XCTAssertEqual(ToolCardView.sectionLabels(for: write, hideInputRich: true), 1)
+        XCTAssertNil(ToolCardView.callFaceLabel(for: write))
+    }
+
+    /// A codemode card shows its SCRIPT and then its output: with classified
+    /// output (live, and on replay since tool faces stage 1) the output used
+    /// to replace the script.
+    func testCodemodeCardShowsTheScriptAndThenItsOutput() {
+        let blocks = ToolCard(toolCallID: "t3", tool: "codemode", args: ["code": .string("return 1")],
+                              result: nil, state: .ok,
+                              output: .object(["v": .number(1), "blocks": .array([.object([
+                                  "kind": .string("code"), "text": .string("1")])])]))
+        XCTAssertEqual(ToolCardView.callFaceLabel(for: blocks), "SCRIPT")
+        XCTAssertEqual(ToolCardView.sectionLabels(for: blocks, hideInputRich: true), 1, "SCRIPT + block")
+        let plain = ToolCard(toolCallID: "t4", tool: "codemode", args: ["code": .string("return 1")],
+                             result: .string("1"), state: .ok)
+        XCTAssertEqual(ToolCardView.sectionLabels(for: plain, hideInputRich: true), 2, "SCRIPT + output")
+        XCTAssertEqual(ToolCardView.callFaceLabel(for: card(tool: "grep", args: [:])), "COMMAND")
     }
 
     func testBashFamilyPatternCoversShellTools() {
