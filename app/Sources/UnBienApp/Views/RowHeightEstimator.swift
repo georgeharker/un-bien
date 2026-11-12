@@ -106,6 +106,9 @@ enum RowHeightEstimator {
         /// Markdown bodies (web / agent prose) as drawn (budgeted), estimated
         /// with the prose estimator at the card's content width.
         var markdownTexts: [String]
+        /// Notice rows (one label-height row each, in labeledSections); a
+        /// long one wraps, and its extra lines are added at estimate time.
+        var noticeTexts: [String] = []
         init(expanded: Bool, hasSwitcher: Bool = false, labeledSections: Int = 0,
              monoLineTokens: [[Int]] = [], imageCount: Int = 0,
              imageAspects: [Double] = [], bodySections: Int = 1, markdownTexts: [String] = []) {
@@ -193,6 +196,7 @@ enum RowHeightEstimator {
         for text in facts.markdownTexts {
             h += estimateText(text, images: [], style: style, width: diffWidth, spec: .toolCardProse)
         }
+        for text in facts.noticeTexts { h += noticeExtraHeight(text, width: diffWidth) }
         // Args sections render in body font; mono lines dominate — the blend is
         // approximated by mono (cards are overwhelmingly mono).
         h += Double(max(facts.bodySections - 1, 0)) * TranscriptMetrics.toolCardSectionSpacing
@@ -206,9 +210,10 @@ enum RowHeightEstimator {
     /// WIDTH-INDEPENDENT by construction: facts describe the CARD; geometry is
     /// applied by estimateToolCard, which owns the style. Accepting a width
     /// here would invite wrap math that has no font to measure with.
-    /// `preview` must be ToolCardView.startsPreviewing for the same card.
-    static func toolCardFacts(for card: ToolCard, expanded: Bool,
-                              hideInputRich: Bool, preview: Bool = false) -> ToolCardFacts {
+    /// `preview` must be ToolCardView.startsPreviewing for the same card, and
+    /// `showAgentPrompts` the display policy's.
+    static func toolCardFacts(for card: ToolCard, expanded: Bool, hideInputRich: Bool,
+                              preview: Bool = false, showAgentPrompts: Bool = true) -> ToolCardFacts {
         // Mirrors ToolCardView.body: the INPUT section (switcher, or diff /
         // input / call face / content), then the RESULT parts the card draws
         // from the same ToolCardView.resultParts list.
@@ -270,8 +275,12 @@ enum RowHeightEstimator {
                 }
             }
         }
-        let parts = ToolCardView.resultParts(for: card, preview: preview)
-        facts.bodySections = sections + ToolCardView.resultSections(parts).count
+        // An agent's PROMPT section, then the result: both drawn by resultView.
+        let prompt = ToolCardView.promptParts(for: card, show: showAgentPrompts)
+        let parts = prompt + ToolCardView.resultParts(for: card, preview: preview)
+        facts.bodySections = sections + ToolCardView.resultSections(prompt).count
+            + ToolCardView.resultSections(ToolCardView.resultParts(for: card, preview: preview)).count
+        if !prompt.isEmpty { facts.labeledSections += 1 }   // "PROMPT"
         for part in parts {
             switch part {
             case .mono(let text), .error(let text), .code(let text, _, _):
@@ -283,7 +292,9 @@ enum RowHeightEstimator {
                 if text.count > toolBudget { tokens.append([0]) }   // SHOW ALL row
             case .more:
                 tokens.append([0])   // one row, like BudgetedContent's SHOW ALL
-            case .label, .notice:
+            case .notice(let text), .errorNotice(let text):
+                facts.noticeTexts.append(text)   // its first row is in labeledSections
+            case .label:
                 break   // counted in labeledSections
             }
         }
@@ -337,6 +348,10 @@ enum RowHeightEstimator {
         let chrome: Double
         /// Horizontal inset the text is laid out within (both sides summed).
         let inset: Double
+        /// The row draws its text verbatim (a user bubble's `Text`): every
+        /// newline is a line and markdown markers show, so it is measured as
+        /// plain text, not through the markdown estimator.
+        var plain = false
         static let assistant = RowTextSpec(
             chrome: TranscriptMetrics.assistantRowChrome, inset: 0)
         /// Prose inside a tool card: no row chrome; the card's padding is
@@ -344,7 +359,7 @@ enum RowHeightEstimator {
         static let toolCardProse = RowTextSpec(chrome: 0, inset: 0)
         static let user = RowTextSpec(
             chrome: TranscriptMetrics.userRowChrome,
-            inset: Double(TranscriptMetrics.userBubblePadding) * 2)
+            inset: Double(TranscriptMetrics.userBubblePadding) * 2, plain: true)
     }
 
     /// A row the leading pass warms: the BUBBLE id to key the entity cache by,
@@ -364,6 +379,14 @@ enum RowHeightEstimator {
                              spec: RowTextSpec = .assistant) -> Double {
         guard width > 0 else { return 0 }
         let width = max(1, width - spec.inset)
+        if spec.plain {
+            var total = plainTextHeight(text, style: style, width: width)
+            for (i, img) in images.enumerated() {
+                if i > 0 || total > 0 { total += imageSpacing }
+                total += imageHeight(img, width: width)
+            }
+            return total + spec.chrome
+        }
         let m = markdownEstimateMetrics(text, style: style, width: width)
         let monoLine = Self.lineHeight(size: style.codeSize ?? style.baseSize,
                                      name: style.codeFontName, mono: true)
@@ -392,6 +415,51 @@ enum RowHeightEstimator {
             total += imageHeight(img, width: width)
         }
         return total + spec.chrome
+    }
+
+    /// Verbatim text in the style's body font at `width`, as `Text` lays it
+    /// out (budgeted like BudgetedContent; its SHOW ALL row added). Lines are
+    /// measured at the drawn line height: whole points on macOS.
+    static func plainTextHeight(_ text: String, style: MarkdownProseStyle, width: Double) -> Double {
+        guard !text.isEmpty else { return 0 }
+        let budget = 32_000   // TranscriptRowViews markdownBudget
+        let shown = text.count > budget ? String(text.prefix(budget)) : text
+        #if os(macOS)
+        let font = style.fontName.flatMap { NSFont(name: $0, size: style.baseSize) }
+            ?? NSFont.systemFont(ofSize: style.baseSize)
+        #else
+        let font = style.fontName.flatMap { UIFont(name: $0, size: style.baseSize) }
+            ?? UIFont.systemFont(ofSize: style.baseSize)
+        #endif
+        let lineHeight = lineHeight(size: style.baseSize, name: style.fontName)
+        let single = NSAttributedString(string: "X", attributes: [.font: font])
+            .boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude),
+                          options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil).height
+        let laid = NSAttributedString(string: shown, attributes: [.font: font])
+            .boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude),
+                          options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil).height
+        // Line count from the layout, height from the drawn line height.
+        let lines = max(1, (laid / max(single, 1)).rounded())
+        var height = lines * lineHeight
+        if shown.count < text.count { height += 24 }   // SHOW ALL row (caption + padding)
+        return height
+    }
+
+    /// The height a 9pt notice row adds beyond its first line when it wraps
+    /// at `width` (measured with the font it draws in).
+    static func noticeExtraHeight(_ text: String, width: Double) -> Double {
+        #if os(macOS)
+        let font = NSFont.systemFont(ofSize: 9)
+        #else
+        let font = UIFont.systemFont(ofSize: 9)
+        #endif
+        let attributed = NSAttributedString(string: text, attributes: [.font: font])
+        let full = attributed.boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude),
+                                           options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
+        let one = NSAttributedString(string: "X", attributes: [.font: font])
+            .boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude),
+                          options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
+        return max(0, (full.height - one.height).rounded(.up))
     }
 
     /// Real line height from font metrics (ascent+descent+leading) for the

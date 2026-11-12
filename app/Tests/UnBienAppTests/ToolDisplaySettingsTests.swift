@@ -20,7 +20,19 @@ final class ToolDisplaySettingsTests: XCTestCase {
     func testLegacyToggleOffMigratesToAllClosed() {
         let defaults = freshDefaults()
         defaults.set(false, forKey: AppModel.legacyExpandRichKey)
-        XCTAssertEqual(AppModel.loadToolDisplayPolicy(defaults), .allCollapsed)
+        let policy = AppModel.loadToolDisplayPolicy(defaults)
+        XCTAssertEqual(policy.defaults, ToolDisplayPolicy.allCollapsed.defaults)
+        XCTAssertFalse(policy.expandFailed, "everything closed, failed calls too, as in 1.5")
+    }
+
+    func testPolicySavedBeforeAgentPromptsDecodesWithThemOn() throws {
+        // The JSON 1.6.0 (26) saved: no showAgentPrompts key.
+        let old = #"{"defaults":{"shell":"expanded","mcp":"collapsed"},"expandFailed":false}"#
+        let policy = try JSONDecoder().decode(ToolDisplayPolicy.self, from: Data(old.utf8))
+        XCTAssertTrue(policy.showAgentPrompts)
+        XCTAssertFalse(policy.expandFailed)
+        XCTAssertEqual(policy[.mcp], .collapsed)
+        XCTAssertEqual(policy[.reads], .preview, "a category missing from the saved JSON takes the standard default")
     }
 
     func testLegacyToggleOnMigratesToStandard() {

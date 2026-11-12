@@ -29,12 +29,39 @@ public struct ToolPreview: Equatable, Sendable {
     }
 
     /// `text` cut to the preview's lines, and how many lines that hid (0: the
-    /// text is shown whole). Trailing empty lines don't count, as in pi.
+    /// text is shown whole). Trailing empty lines don't count, as in pi. One
+    /// byte scan counts the lines; only the kept ones are copied.
     public func cut(_ text: String) -> (text: String, hidden: Int) {
-        var all = text.split(separator: "\n", omittingEmptySubsequences: false)
-        while let last = all.last, last.isEmpty { all.removeLast() }
-        guard all.count > lines else { return (text, 0) }
-        let kept = fromEnd ? all.suffix(lines) : all.prefix(lines)
-        return (kept.joined(separator: "\n"), all.count - lines)
+        let utf8 = text.utf8
+        var end = utf8.endIndex
+        while end > utf8.startIndex, utf8[utf8.index(before: end)] == 0x0A { end = utf8.index(before: end) }
+        let body = utf8[utf8.startIndex..<end]
+        let total = body.isEmpty ? 0 : body.reduce(1) { $1 == 0x0A ? $0 + 1 : $0 }
+        guard total > lines else { return (text, 0) }
+        var cutAt: String.Index
+        if fromEnd {
+            // Back from the end to the newline before the last `lines` lines.
+            var seen = 0
+            cutAt = end
+            while cutAt > utf8.startIndex {
+                let previous = utf8.index(before: cutAt)
+                if utf8[previous] == 0x0A {
+                    seen += 1
+                    if seen == lines { break }
+                }
+                cutAt = previous
+            }
+            return (String(text[cutAt..<end]), total - lines)
+        }
+        var seen = 0
+        cutAt = utf8.startIndex
+        while cutAt < end {
+            if utf8[cutAt] == 0x0A {
+                seen += 1
+                if seen == lines { break }
+            }
+            cutAt = utf8.index(after: cutAt)
+        }
+        return (String(text[utf8.startIndex..<cutAt]), total - lines)
     }
 }

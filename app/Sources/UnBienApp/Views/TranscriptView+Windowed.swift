@@ -126,7 +126,7 @@ struct TranscriptStackView: View, Equatable {
     /// Extracted from `body`: inline, it overwhelmed the type checker.
     @MainActor
     private static func cardWarm(card: ToolCard, theme: AppTheme, themeID: ThemeID,
-                                 typography: Typography, preview: Bool,
+                                 typography: Typography, preview: Bool, showAgentPrompts: Bool,
                                  scope: String) -> (@MainActor () -> Void)? {
         let diff = ToolCardView.diffProducer(for: card, theme: theme, themeID: themeID)
         let content = ToolCardView.contentProducer(for: card, theme: theme,
@@ -137,7 +137,8 @@ struct TranscriptStackView: View, Equatable {
         let result = ToolCardView.resultProducers(for: card, theme: theme, typography: typography,
                                                   themeID: themeID, preview: preview)
         // Web / agent prose: the entity renders the card's markdown parts read.
-        let markdown = ToolCardView.resultMarkdown(for: card, preview: preview)
+        let markdown = ToolCardView.resultMarkdown(for: card, preview: preview,
+                                                   showAgentPrompts: showAgentPrompts)
         let style = MarkdownStyleCache.style(theme: theme, typography: typography)
         guard diff != nil || content != nil || !result.isEmpty || !markdown.isEmpty else { return nil }
         return {
@@ -201,11 +202,13 @@ struct TranscriptStackView: View, Equatable {
                 let expanded = cardUI.expanded(card.toolCallID,
                                                 default: ToolCardView.startsExpanded(card, policy: displayPolicy))
                 let preview = ToolCardView.startsPreviewing(card, policy: displayPolicy, store: cardUI)
+                let prompts = displayPolicy.showAgentPrompts
                 let facts = RowHeightEstimator.toolCardFacts(for: card, expanded: expanded,
-                                                             hideInputRich: hideInputRich, preview: preview)
+                                                             hideInputRich: hideInputRich, preview: preview,
+                                                             showAgentPrompts: prompts)
                 // Warm fires for LEADING rows only (driver-gated).
-                let warm = Self.cardWarm(card: card, theme: theme, themeID: themeID,
-                                         typography: typography, preview: preview, scope: sessionScope)
+                let warm = Self.cardWarm(card: card, theme: theme, themeID: themeID, typography: typography,
+                                         preview: preview, showAgentPrompts: prompts, scope: sessionScope)
                 return (item.id, RowHeightEstimator.ToolWarmSpec(facts: facts, warm: warm))
             }, uniquingKeysWith: { first, _ in first })
         // CODE-SEGMENT warm factory: builds the SAME content-addressed

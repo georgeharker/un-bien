@@ -27,13 +27,21 @@ final class CardUIState: @unchecked Sendable {
     private var showContentByID: [String: Bool] = [:]
     private var showsAllByID: Set<String> = []
 
-    /// Expanded state for `id`, falling back to the card's computed default the
-    /// first time it's seen (rich cards start expanded when the pref is on).
+    /// Expanded state for `id`: the user's override when they left the card
+    /// different from its default, otherwise the default (which moves as the
+    /// card settles or Settings change).
     func expanded(_ id: String, default fallback: Bool) -> Bool {
         expandedByID[id] ?? fallback
     }
 
-    func setExpanded(_ id: String, _ value: Bool) { expandedByID[id] = value }
+    /// Whether the user has overridden `id`'s default.
+    func hasExpandedOverride(_ id: String) -> Bool { expandedByID[id] != nil }
+
+    /// Record the card's open state: an override when it differs from the
+    /// default, cleared when it matches (so the card follows its default again).
+    func setExpanded(_ id: String, _ value: Bool, default fallback: Bool) {
+        expandedByID[id] = value == fallback ? nil : value
+    }
 
     /// Diff⇄Content toggle (false = Diff, the default).
     func showContent(_ id: String) -> Bool { showContentByID[id] ?? false }

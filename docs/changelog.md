@@ -6,30 +6,45 @@ requirements where they matter.
 
 ## App
 
-### 1.6.0 (build 26, 2026-11-12)
+### 1.6.0 (2026-11-12)
 
 - **Tool results look like what they are.** Every tool card now draws its
   result from what the tool declares it returns, the same live and when
-  reopened: shell commands with their plain output, files read with
-  highlighting, edits as real diffs with line numbers, searches as their
-  matches, codemode as its script, calls and output, and web pages and
-  agent reports as formatted text. Failed calls show why they failed. No
-  more raw JSON, including while a command is still running.
+  reopened: shell output as plain terminal text (colour codes and progress
+  carriage returns cleaned up as pi does), files read with highlighting,
+  edits as diffs (with real line numbers when the tool records its patch),
+  searches as their matches, codemode as its script, calls and output, and
+  web pages and agent reports as formatted text. A result that is a patch
+  shows as a diff whatever tool returned it. Failed calls show why they
+  failed. Results no longer show as raw JSON, including while a command is
+  still running; a tool's raw input arguments still show as JSON when you
+  choose to see them.
 - **Choose how each kind of tool card starts** (Settings → Tool results):
   open, Preview, or closed, per kind: shell, reads, edits, writes,
-  searches, codemode, MCP, agents, web and other. Failed calls can always
-  open.
+  searches, codemode, MCP, agents, web and other. Shell, edit, write and
+  codemode cards open by default; reads and searches preview; the rest
+  start closed. Failed calls can always open. This replaces the single
+  "Expand rich tool results" switch: if you had it off, everything starts
+  closed, failed calls included.
 - **Preview** shows a short result the way pi does: the last lines of
   shell output and the first lines of a read or search, with a row to see
-  the rest. Reads and searches preview by default.
+  the rest.
+- **Agent prompts**: agent cards show the task the agent was given above
+  its report (Settings → Tool results → Show agent prompts).
 - **Card headers name what the call acts on**: a read's file and line
-  range, an edited or written file, a fetched URL, an agent's task.
+  range, an edited or written file, a fetched URL or search query, an
+  agent's task, an MCP call's tool; and how long a finished call took.
+- **Long notices wrap** (a "Full output" path is readable on a phone), and
+  an error reported by a call that still succeeded shows in red.
 - **A jump-to-end button** appears while you're scrolled away from the
   newest messages.
 - **Durable sessions** (pi-durable hosts) render their tool results the
-  same way as pi sessions, including live edit diffs.
-- **Steadier scrolling**: card heights are estimated far more closely
-  before they render, so the transcript jumps less as you scroll.
+  same way as pi sessions, including live edit diffs and call durations
+  (needs un-bien 0.25.2 and unbien-durable 0.1.4).
+- **Steadier scrolling**: card and message heights are estimated far more
+  closely before they render, including multi-line messages you send, so
+  the transcript jumps less as you scroll; transcripts with large command
+  output rebuild faster than in 1.5.
 
 ### 1.5.5 (build 25, 2026-11-01)
 

@@ -15,10 +15,11 @@ extension SettingsView {
                 }
             }
             Toggle("Always open failed calls", isOn: $model.toolDisplayPolicy.expandFailed)
+            Toggle("Show agent prompts", isOn: $model.toolDisplayPolicy.showAgentPrompts)
         } header: {
             Text("Tool results")
         } footer: {
-            Text("How each kind of tool card starts. Preview shows the last lines of shell output and the first lines of a read or search. Tap a card to open or close it.")
+            Text("How each kind of tool card starts. Preview shows the last lines of shell output and the first lines of a read or search. Agent prompts show the task an agent was given above its report. Tap a card to open or close it.")
         }
     }
 

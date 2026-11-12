@@ -624,7 +624,7 @@ struct ToolCardView: View {
 
     /// A settled edit's hunks from the record's `details.patch`, nil without one.
     nonisolated static func recordHunks(for card: ToolCard) -> [JSONValue]? {
-        guard card.state == .ok, case .diff(let hunks?, _) = ToolFaceResolver.resolve(card).face,
+        guard card.state == .ok, case .diff(let hunks?, _) = card.resultView.face,
               !hunks.isEmpty else { return nil }
         return hunks
     }
@@ -648,7 +648,7 @@ struct ToolCardView: View {
     nonisolated static func showsInputSection(for card: ToolCard, hideInputRich: Bool) -> Bool {
         guard hunks(for: card) == nil, content(for: card) == nil,
               !card.args.isEmpty else { return false }
-        return !(hideInputRich && ToolFaceResolver.resolve(card).isStructured)
+        return !(hideInputRich && card.resultView.isStructured)
     }
 
     nonisolated static func sectionLabels(for card: ToolCard, hideInputRich: Bool) -> Int {
@@ -674,7 +674,7 @@ struct ToolCardView: View {
         // row counts as a mono line).
         for part in resultParts(for: card) {
             switch part {
-            case .label, .notice, .diff: n += 1
+            case .label, .notice, .errorNotice, .diff: n += 1
             case .mono, .error, .code, .markdown, .more: break
             }
         }
@@ -817,8 +817,10 @@ struct ToolCardView: View {
                             }
                         }
                     }
-                    // The RESULT, resolved from the tool's spec (shared with
-                    // the height estimator: resultParts).
+                    // An agent's task (Settings: Show agent prompts), then the
+                    // RESULT, resolved from the tool's spec (both shared with
+                    // the height estimator).
+                    resultView(Self.promptParts(for: card, show: displayPolicy.showAgentPrompts))
                     resultView(derived.parts)
                 }
                 .font(typography.monoFont(size: typography.codeSize))
@@ -838,6 +840,12 @@ struct ToolCardView: View {
                         Text(subtitle.text).font(.caption).foregroundStyle(theme.secondaryText)
                             .lineLimit(1).truncationMode(subtitle.isPath ? .head : .middle)
                     }
+                    // How long a settled call ran (pi's "Took …"), same line.
+                    if card.state != .running, let took = Self.durationText(card.durationMs) {
+                        Spacer(minLength: 4)
+                        Text(took).font(.caption2.monospacedDigit()).foregroundStyle(theme.secondaryText)
+                            .lineLimit(1).fixedSize()
+                    }
                 }
             }
             .tint(theme.toolAccent)
@@ -851,9 +859,21 @@ struct ToolCardView: View {
         .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
         // Persist toggles back to the windowing-surviving store (write-only on
         // change — never per-render).
-        .onChange(of: expanded) { _, value in store.setExpanded(card.toolCallID, value) }
+        .onChange(of: expanded) { _, value in
+            store.setExpanded(card.toolCallID, value,
+                              default: Self.startsExpanded(card, policy: displayPolicy))
+        }
         .onChange(of: showContent) { _, value in store.setShowContent(card.toolCallID, value) }
         .onChange(of: previewing) { _, value in if !value { store.setShowsAll(card.toolCallID) } }
+        // The default moves when the card settles (a running read has nothing
+        // to show yet; a failed call may always open) or Settings change. A
+        // card the user hasn't overridden follows it, as the estimator does.
+        .onChange(of: Self.startsExpanded(card, policy: displayPolicy)) { _, value in
+            if !store.hasExpandedOverride(card.toolCallID) { expanded = value }
+        }
+        .onChange(of: displayPolicy) { _, policy in
+            previewing = Self.startsPreviewing(card, policy: policy, store: store)
+        }
     }
 
     // The content key matches codeView's BudgetedContent truncation, so the warm
@@ -955,17 +975,5 @@ struct ToolCardView: View {
         case .ok: return theme.success
         case .failed: return theme.error
         }
-    }
-}
-
-extension JSONValue {
-    /// Pretty-printed JSON (shared: card rendering + the tool-facts resolver).
-    var prettyString: String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes, .sortedKeys]
-        if let data = try? encoder.encode(self), let string = String(data: data, encoding: .utf8) {
-            return string
-        }
-        return ""
     }
 }

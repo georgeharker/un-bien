@@ -3,8 +3,9 @@ import UnBienCore
 
 // Persistence for the tool-card display defaults (Settings → Tool results).
 // The policy is stored as JSON. An install that predates it inherits from the
-// former single "Expand rich tool results" toggle: off means every category
-// starts closed; on (or never set) means the standard defaults.
+// former single "Expand rich tool results" toggle: off means every card starts
+// closed, failed calls included (as 1.5 behaved); on (or never set) means the
+// standard defaults.
 extension AppModel {
     // nonisolated: UserDefaults + pure values only, no model state.
     nonisolated static let toolDisplayPolicyKey = "com.georgeharker.un-bien.tool-display-policy"
@@ -17,7 +18,9 @@ extension AppModel {
             return policy
         }
         if defaults.object(forKey: legacyExpandRichKey) as? Bool == false {
-            return .allCollapsed
+            var closed = ToolDisplayPolicy.allCollapsed
+            closed.expandFailed = false
+            return closed
         }
         return .standard
     }

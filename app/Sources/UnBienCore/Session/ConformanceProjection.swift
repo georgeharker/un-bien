@@ -85,7 +85,7 @@ public extension SessionState {
             case let .tool(card):
                 // The result's face (ToolFaceResolver), then "hunks" when the
                 // card carries a live edit diff.
-                var blocks: [JSONValue] = [.string(ToolFaceResolver.resolve(card).faceName)]
+                var blocks: [JSONValue] = [.string(card.resultView.faceName)]
                 if card.hunks != nil { blocks.append(.string("hunks")) }
                 let state: String
                 switch card.state {

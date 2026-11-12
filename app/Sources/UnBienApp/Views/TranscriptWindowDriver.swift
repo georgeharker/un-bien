@@ -465,9 +465,19 @@ final class TranscriptWindowDriver {
                              leading: leading)
         }
         // The entity store parses text; row SHAPE is the estimator's concern.
+        // Plain rows (user bubbles) never render entities, and an entity
+        // estimate would treat their text as markdown: they only warm their
+        // images there, with no estimate.
+        let plainImages = rows.filter { $0.spec.plain && !$0.images.isEmpty }
+        if !plainImages.isEmpty {
+            MarkdownEntityStore.shared.prewarm(
+                scope: sessionScope,
+                rows: plainImages.map { (id: $0.id, text: "", images: $0.images) },
+                style: style, width: 0)
+        }
         MarkdownEntityStore.shared.prewarm(
             scope: sessionScope,
-            rows: rows.map { (id: $0.id, text: $0.text, images: $0.images) },
+            rows: rows.filter { !$0.spec.plain }.map { (id: $0.id, text: $0.text, images: $0.images) },
             style: style, width: prewarmWidth,
             onEstimate: { bubble, estimate in
                 guard let rowID = rowByBubble[bubble] else { return }

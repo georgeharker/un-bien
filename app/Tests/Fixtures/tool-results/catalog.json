@@ -8,7 +8,7 @@
     "category": "shell",
     "face": "terminal",
     "notices": [],
-    "text": "README.md\nsrc\n"
+    "text": "README.md\nsrc"
    },
    "id": "bash.ok",
    "live": [
@@ -357,7 +357,7 @@
     "notices": [
      "Showing lines 2001-4000 of 4000. Full output: /var/folders/zz/T/pi-bash-1.log"
     ],
-    "text": "2001\n2002\n"
+    "text": "2001\n2002"
    },
    "id": "bash.truncated",
    "live": [
@@ -550,7 +550,7 @@
     "category": "reads",
     "face": "file",
     "lang": "swift",
-    "text": "import Foundation\nlet x = 1\n"
+    "text": "import Foundation\nlet x = 1"
    },
    "id": "read.text",
    "live": [
@@ -2895,7 +2895,7 @@
      "[error] Tool call blocked: denied by policy"
     ],
     "face": "terminal",
-    "text": "a\n"
+    "text": "a"
    },
    "id": "durable.diagnostics",
    "live": [

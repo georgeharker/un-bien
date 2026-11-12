@@ -43,9 +43,16 @@ PLATFORM="${1:-both}"
 AUTH=""
 if [ -n "${ASC_KEY_ID:-}" ] && [ -n "${ASC_ISSUER_ID:-}" ]; then
     KEY_PATH="${ASC_KEY_PATH:-$HOME/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8}"
+    # A quoted ~ in the variable is not expanded by the shell.
+    case "$KEY_PATH" in
+        "~/"*) KEY_PATH="$HOME/${KEY_PATH#\~/}" ;;
+    esac
     if [ -f "$KEY_PATH" ]; then
         AUTH="-authenticationKeyPath $KEY_PATH -authenticationKeyID $ASC_KEY_ID -authenticationKeyIssuerID $ASC_ISSUER_ID"
         echo "==> signing with the App Store Connect API key"
+    else
+        echo "WARNING: ASC_KEY_ID / ASC_ISSUER_ID are set but no key at $KEY_PATH;"
+        echo "         signing with the Xcode account instead."
     fi
 fi
 

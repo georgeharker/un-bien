@@ -5,15 +5,52 @@ import Foundation
 /// tool faces use for a patch in a result or a diff in shell output. The
 /// result itself is drawn from the tool's declared spec (ToolFaceResolver).
 public enum ToolKinds {
-    private static let bashToolPattern = "^(bash|shell|zsh|sh|exec|command|run|terminal)"
+    // Whole names, or a family name followed by `_` (exec_command,
+    // run_terminal_cmd); a bare prefix would take show_*, share_*, run_tests
+    // or shopify_* for shell. `run` alone is a shell; `run_*` only when it
+    // names one.
+    private static let bashToolPattern =
+        "^((bash|shell|zsh|sh|exec|command|terminal|powershell|pwsh)(_.*)?|run(_(terminal|shell|command)(_.*)?)?)$"
     // The JS meta-tool, both its names (the earlier mcpscript and codemode).
     private static let codemodeToolPattern = "^(codemode|mcpscript)"
+    // File readers by other names (read_file, view, cat, open_file, …).
+    private static let readToolPattern = "^(read|view|cat|open)(_(text_)?file)?$|^file_read$"
 
     /// Whether `tool` is bash-family (its command shows as a shell snippet,
     /// its result as terminal output).
     public static func isBashFamily(_ tool: String) -> Bool {
         matches(bashToolPattern, tool, caseInsensitive: true)
     }
+
+    /// Whether `tool` reads a file (pi's `read`, or another agent's reader).
+    public static func isReadFamily(_ tool: String) -> Bool {
+        matches(readToolPattern, tool, caseInsensitive: true)
+    }
+
+    /// Tool output as pi's renderers show it (render-utils getTextOutput):
+    /// ANSI escapes stripped, control characters other than tab and newline
+    /// removed (sanitizeBinaryOutput), carriage returns removed. Text without
+    /// any of them is returned untouched (one scan).
+    public static func cleanOutput(_ text: String) -> String {
+        var hasEscape = false
+        var hasControl = false
+        for unit in text.utf8 where unit < 0x20 && unit != 0x0A && unit != 0x09 {
+            if unit == 0x1B { hasEscape = true } else { hasControl = true }
+            if hasEscape && hasControl { break }
+        }
+        let c1 = text.unicodeScalars.contains { $0.value == 0x9B || $0.value == 0x9C || (0xFFF9...0xFFFB).contains($0.value) }
+        guard hasEscape || hasControl || c1 else { return text }
+        var out = text
+        if hasEscape || c1 {
+            out = out.replacingOccurrences(of: ansiPattern, with: "", options: .regularExpression)
+        }
+        return out.replacingOccurrences(of: #"[\x00-\x08\x0B-\x1F\x{FFF9}-\x{FFFB}]"#, with: "",
+                                        options: .regularExpression)
+    }
+
+    // pi's utils/ansi.ts: OSC up to its string terminator, or a CSI sequence.
+    private static let ansiPattern =
+        #"(?:\x1B\][\s\S]*?(?:\x07|\x1B\\|\x{9C}))|[\x1B\x{9B}][\[\]()#;?]*(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]"#
 
     /// Whether `tool` is the JS meta-tool (codemode / legacy mcpscript).
     public static func isCodemodeFamily(_ tool: String) -> Bool {

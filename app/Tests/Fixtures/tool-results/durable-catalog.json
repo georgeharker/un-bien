@@ -97,7 +97,7 @@
    "expect": {
     "face": "terminal",
     "category": "shell",
-    "text": "hi\n",
+    "text": "hi",
     "notices": []
    }
   },

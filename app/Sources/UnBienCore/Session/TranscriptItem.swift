@@ -161,10 +161,15 @@ public struct ToolCard: Equatable, Sendable {
     public enum State: Equatable, Sendable { case running, ok, failed }
     public let toolCallID: String
     public let tool: String
-    public var args: [String: JSONValue]
-    public var result: JSONValue?
+    public var args: [String: JSONValue] { didSet { refreshResultView() } }
+    public var result: JSONValue? { didSet { refreshResultView() } }
     public var error: String?
-    public var state: State
+    public var state: State { didSet { if state != oldValue { refreshResultView() } } }
+    /// The result as its face draws it (ToolFaceResolver), resolved when the
+    /// args, result or state change, so readers never re-resolve: a large
+    /// shell result costs one pass per change, not one per caller per
+    /// transcript rebuild.
+    public private(set) var resultView: ToolResultView
     /// Images returned in the tool result (screenshots/plots), rendered on the card.
     public var images: [WireImage]
     /// Raw Edit-diff `hunks` array from the envelope `aux` sidecar; when present,
@@ -186,6 +191,11 @@ public struct ToolCard: Equatable, Sendable {
         self.images = images
         self.hunks = hunks
         self.durationMs = durationMs
+        self.resultView = ToolFaceResolver.resolve(tool: tool, args: args, result: result, state: state)
+    }
+
+    private mutating func refreshResultView() {
+        resultView = ToolFaceResolver.resolve(tool: tool, args: args, result: result, state: state)
     }
 }
 

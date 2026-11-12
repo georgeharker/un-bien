@@ -59,7 +59,7 @@ final class HeightEstimateRegressionTests: XCTestCase {
     /// "", so a COLD first measurement renders an empty diff and reads short.
     /// That — not DisclosureGroup — is what made each diff card's first touch
     /// unmeasurable while every later touch (warm process-wide cache) was fine.
-    private func prewarm(_ card: ToolCard, preview: Bool = false) async {
+    private func prewarm(_ card: ToolCard, preview: Bool = false, showAgentPrompts: Bool = true) async {
         if let diff = ToolCardView.diffProducer(for: card, theme: theme, themeID: .oneDark) {
             _ = await AttributedTextCache.shared.attributed(diff)
         }
@@ -77,7 +77,7 @@ final class HeightEstimateRegressionTests: XCTestCase {
         // Web / agent prose: the entities the card's markdown parts read (the
         // harness renders with the default, empty session scope).
         let proseStyle = MarkdownStyleCache.style(theme: theme, typography: typography)
-        for body in ToolCardView.resultMarkdown(for: card, preview: preview) {
+        for body in ToolCardView.resultMarkdown(for: card, preview: preview, showAgentPrompts: showAgentPrompts) {
             _ = await MarkdownEntityStore.shared.produce(
                 MarkdownEntityStore.key(scope: "", id: body.id, styleHash: proseStyle.hashValue),
                 text: body.text, style: proseStyle)
@@ -287,6 +287,45 @@ final class HeightEstimateRegressionTests: XCTestCase {
         }
     }
 
+    /// The USER bubble as TranscriptRow draws it: role caption, then the text
+    /// verbatim (not markdown) in a padded surface.
+    private func userRow(_ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("you").font(.caption.weight(.semibold)).foregroundStyle(theme.toolAccent)
+            Text(text)
+                .font(typography.bodyFont())
+                .padding(10)
+                .background(theme.surface, in: RoundedRectangle(cornerRadius: 10))
+        }
+    }
+
+    /// User bubbles draw their text verbatim: a newline is a line and markdown
+    /// markers show. They were estimated through the markdown estimator,
+    /// which joins soft-broken lines and drops markers: a pasted four-line
+    /// log estimated as one line.
+    func testUserBubbles() {
+        let cases: [(String, String)] = [
+            ("one-line", "Can you look at the failing test?"),
+            ("pasted-log", "line one\nline two\nline three\nline four"),
+            ("markers", "**not bold** and [a link](https://example.com) and `code` stay literal\n- not a list"),
+            ("long-prose", String(repeating: "This message is long enough to wrap several times in the bubble. ", count: 8)),
+            ("code-paste", "func f() {\n    let x = 1\n\n    return x\n}\n\nWhy does this fail?"),
+        ]
+        for width in widths {
+            for (id, text) in cases {
+                let rendered = measure(userRow(text), width: width)
+                let est = RowHeightEstimator.estimateText(text, images: [], style: style, width: width, spec: .user)
+                // What the markdown estimator says for the same text (the old path).
+                var markdown = RowHeightEstimator.RowTextSpec.user
+                markdown.plain = false
+                let old = RowHeightEstimator.estimateText(text, images: [], style: style, width: width, spec: markdown)
+                print(String(format: "HUSER w=%3.0f %-12s rendered=%7.1f est=%7.1f d=%+6.1f markdown-est=%7.1f",
+                             width, (id as NSString).utf8String!, rendered, est, rendered - est, old))
+                XCTAssertLessThan(abs(rendered - est), 12, "\(id) @\(Int(width)): rendered \(Int(rendered)) vs est \(Int(est))")
+            }
+        }
+    }
+
     func testToolCardCorpus() async {
         func hunk(_ lines: [(String, String)]) -> JSONValue {
             .object(["lines": .array(lines.map { kind, text in
@@ -446,19 +485,23 @@ final class HeightEstimateRegressionTests: XCTestCase {
         let allPreview = ToolDisplayPolicy(
             defaults: Dictionary(uniqueKeysWithValues: ToolCategory.allCases.map { ($0, ToolDisclosure.preview) }),
             expandFailed: true)
+        var openNoPrompts = allOpen
+        openNoPrompts.showAgentPrompts = false
         let policies: [(String, ToolDisplayPolicy)] = [("", .standard), ("/closed", .allCollapsed),
-                                                       ("/open", allOpen), ("/preview", allPreview)]
+                                                       ("/open", allOpen), ("/preview", allPreview),
+                                                       ("/open/no-prompts", openNoPrompts)]
         for width in widths {
             for hideInputRich in [true, false] {
                 for (policyName, policy) in policies {
                     for (fixtureID, card) in cards {
                         let preview = ToolCardView.startsPreviewing(card, policy: policy, store: CardUIState())
-                        await prewarm(card, preview: preview)
+                        await prewarm(card, preview: preview, showAgentPrompts: policy.showAgentPrompts)
                         let expanded = ToolCardView.startsExpanded(card, policy: policy)
                         let rendered = measure(toolCardRow(card, policy: policy, hideInputRich: hideInputRich),
                                                width: width)
                         let facts = RowHeightEstimator.toolCardFacts(for: card, expanded: expanded,
-                                                                     hideInputRich: hideInputRich, preview: preview)
+                                                                     hideInputRich: hideInputRich, preview: preview,
+                                                                     showAgentPrompts: policy.showAgentPrompts)
                         let est = RowHeightEstimator.estimateToolCard(facts, style: style, width: width)
                         let delta = rendered - est
                         let id = "\(fixtureID)\(policyName)\(hideInputRich ? "" : "/show-input")"

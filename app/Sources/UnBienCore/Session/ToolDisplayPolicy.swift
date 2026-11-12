@@ -20,10 +20,25 @@ public struct ToolDisplayPolicy: Equatable, Hashable, Codable, Sendable {
     /// Keyed by `ToolCategory.rawValue` so the stored JSON stays stable.
     public private(set) var defaults: [String: ToolDisclosure]
     public var expandFailed: Bool
+    /// Agent cards show the task they were given (a PROMPT section) above
+    /// the agent's report. Separate from "Hide input on rich results", which
+    /// hides the raw arguments.
+    public var showAgentPrompts: Bool
 
-    public init(defaults: [ToolCategory: ToolDisclosure], expandFailed: Bool) {
+    public init(defaults: [ToolCategory: ToolDisclosure], expandFailed: Bool, showAgentPrompts: Bool = true) {
         self.defaults = Dictionary(uniqueKeysWithValues: defaults.map { ($0.key.rawValue, $0.value) })
         self.expandFailed = expandFailed
+        self.showAgentPrompts = showAgentPrompts
+    }
+
+    private enum CodingKeys: String, CodingKey { case defaults, expandFailed, showAgentPrompts }
+
+    /// Settings saved before a field existed take its standard value.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        defaults = try container.decode([String: ToolDisclosure].self, forKey: .defaults)
+        expandFailed = try container.decodeIfPresent(Bool.self, forKey: .expandFailed) ?? true
+        showAgentPrompts = try container.decodeIfPresent(Bool.self, forKey: .showAgentPrompts) ?? true
     }
 
     /// Shell output and diffs open; reads and searches preview; MCP, agents,
@@ -34,7 +49,7 @@ public struct ToolDisplayPolicy: Equatable, Hashable, Codable, Sendable {
         .mcp: .collapsed, .agents: .collapsed, .web: .collapsed, .other: .collapsed,
     ], expandFailed: true)
 
-    /// Every category closed (the former "Expand rich tool results" off).
+    /// Every category closed; failed calls still open.
     public static let allCollapsed = ToolDisplayPolicy(
         defaults: Dictionary(uniqueKeysWithValues: ToolCategory.allCases.map { ($0, ToolDisclosure.collapsed) }),
         expandFailed: true)
@@ -55,6 +70,6 @@ public struct ToolDisplayPolicy: Equatable, Hashable, Codable, Sendable {
     /// Stable identity of the layout this policy produces (height-cache key).
     public var fingerprint: String {
         let parts = ToolCategory.allCases.map { "\($0.rawValue)=\(self[$0].rawValue)" }
-        return parts.joined(separator: ",") + "|failed=\(expandFailed)"
+        return parts.joined(separator: ",") + "|failed=\(expandFailed)|prompts=\(showAgentPrompts)"
     }
 }

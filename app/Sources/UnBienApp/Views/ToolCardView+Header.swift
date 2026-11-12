@@ -35,6 +35,16 @@ extension ToolCardView {
         return (card.tool == "read" ? path + readLineRange(card.args) : path, true)
     }
 
+    /// A call's run time for the header: "840ms", "12.3s", "2m 05s"; nil
+    /// when unmeasured.
+    nonisolated static func durationText(_ ms: Int?) -> String? {
+        guard let ms, ms >= 0 else { return nil }
+        if ms < 1000 { return "\(ms)ms" }
+        if ms < 60_000 { return String(format: "%.1fs", Double(ms) / 1000) }
+        let seconds = ms / 1000
+        return String(format: "%dm %02ds", seconds / 60, seconds % 60)
+    }
+
     /// A read's line range as pi's read renderer writes it: ":start-end" with
     /// a limit, ":start" with only an offset, nothing for a whole file.
     nonisolated static func readLineRange(_ args: [String: JSONValue]) -> String {

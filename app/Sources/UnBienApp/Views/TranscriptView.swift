@@ -351,9 +351,14 @@ struct TranscriptView: View {
             // from it (the pin is off: they scrolled up, or a restore landed
             // mid-transcript). An overlay, so rows never move for it.
             .overlay(alignment: .bottomTrailing) {
-                if !shouldPin { jumpToEndButton }
+                // The animation is scoped to the button: on the ScrollView it
+                // would also animate the scroll-position and row changes that
+                // share a transaction with the pin (restore, submit, jump).
+                ZStack {
+                    if !shouldPin { jumpToEndButton }
+                }
+                .animation(.easeInOut(duration: 0.15), value: shouldPin)
             }
-            .animation(.easeInOut(duration: 0.15), value: shouldPin)
             // Per-card expand/toggle state that survives row windowing
             // (ToolCardView reads/writes it keyed by toolCallID).
             .environment(\.cardUIState, cardUIState)

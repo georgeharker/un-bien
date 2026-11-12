@@ -56,6 +56,17 @@ public struct ToolResultView: Equatable, Sendable {
     public let face: ToolFace
     public let category: ToolCategory
     public let diagnostics: [String]
+    /// A unified diff found in a text or script face's output (an MCP or
+    /// codemode result that is a patch), drawn as a diff. The terminal face
+    /// carries its own.
+    public let outputDiff: JSONValue?
+
+    public init(face: ToolFace, category: ToolCategory, diagnostics: [String], outputDiff: JSONValue? = nil) {
+        self.face = face
+        self.category = category
+        self.diagnostics = diagnostics
+        self.outputDiff = outputDiff
+    }
 
     /// Whether the result has a structured face (terminal output, a file, a
     /// diff, a confirmation, lines, a script) rather than plain text, an
@@ -90,7 +101,7 @@ public enum ToolFaceResolver {
         if ToolKinds.isBashFamily(tool) { return .shell }
         if ToolKinds.isCodemodeFamily(tool) { return .codemode }
         switch tool {
-        case "read": return .reads
+        case _ where ToolKinds.isReadFamily(tool): return .reads
         case "edit": return .edits
         case "write": return .writes
         case "grep", "find", "ls": return .searches
@@ -102,80 +113,130 @@ public enum ToolFaceResolver {
         }
     }
 
+    /// The card's result view. Cards store it (`ToolCard.resultView`,
+    /// refreshed when the result or state changes), so views, the estimator
+    /// and prewarm read it instead of resolving per call.
     public static func resolve(_ card: ToolCard) -> ToolResultView {
-        let category = category(tool: card.tool)
-        var texts = textBlocks(card.result)
-        let diagnostics = takeHarnessBlock(&texts)
+        resolve(tool: card.tool, args: card.args, result: card.result, state: card.state)
+    }
+
+    public static func resolve(tool: String, args: [String: JSONValue], result: JSONValue?,
+                               state: ToolCard.State) -> ToolResultView {
+        let category = category(tool: tool)
+        var raw = textBlocks(result)
+        let diagnostics = takeHarnessBlock(&raw)
+        // Text as pi's renderers show it: ANSI, control characters and
+        // carriage returns removed.
+        let texts = raw.map(ToolKinds.cleanOutput)
         let joined = texts.joined(separator: "\n")
-        let details = card.result?.objectValue?["details"]
+        let details = result?.objectValue?["details"]
         let face: ToolFace
-        switch card.state {
+        var outputDiff: JSONValue?
+        switch state {
         case .running:
             // Partial output streams as it arrives: shell as terminal text,
             // anything else (an agent's progress) as plain text.
-            if joined.isEmpty {
+            let text = trimLines(joined)
+            if text.isEmpty {
                 face = .pending
             } else {
-                face = category == .shell ? .terminal(text: joined, notices: [], diff: nil) : .text(joined)
+                face = category == .shell ? .terminal(text: text, notices: [], diff: nil) : .text(text)
             }
         case .failed:
             // The call's own text, then its error diagnostics: pi-durable reports
             // an exit status or a missing file as an `[error]` diagnostic where
             // pi puts it in the text ("…\n\nCommand exited with code N").
-            let text = stripScriptHeader(texts, tool: card.tool).joined(separator: "\n")
+            let text = trimLines(stripScriptHeader(texts, tool: tool).joined(separator: "\n"))
             let reasons = diagnostics.compactMap(Self.errorMessage)
-            let trimmed = text.replacingOccurrences(of: #"\n+$"#, with: "", options: .regularExpression)
-            face = .error(([trimmed] + reasons).filter { !$0.isEmpty }.joined(separator: "\n\n"))
+            face = .error(([text] + reasons).filter { !$0.isEmpty }.joined(separator: "\n\n"))
         case .ok:
-            face = settledFace(card, category: category, texts: texts, joined: joined, details: details)
+            if let result, case .object(let fields) = result, fields["content"] == nil {
+                // Not a {content, details?} result (a foreign tool returning a
+                // bare object): its JSON is all there is to show.
+                face = .text(result.prettyString)
+            } else {
+                face = settledFace(tool: tool, args: args, category: category, texts: texts,
+                                   joined: joined, details: details)
+            }
+            switch face {
+            case .text(let text): outputDiff = outputDiffIn(text)
+            case .script(_, let output): outputDiff = outputDiffIn(output)
+            default: break
+            }
         }
-        return ToolResultView(face: face, category: category, diagnostics: diagnostics)
+        return ToolResultView(face: face, category: category, diagnostics: diagnostics, outputDiff: outputDiff)
     }
 
     // MARK: - Settled faces
 
-    private static func settledFace(_ card: ToolCard, category: ToolCategory, texts: [String],
-                                    joined: String, details: JSONValue?) -> ToolFace {
+    private static func settledFace(tool: String, args: [String: JSONValue], category: ToolCategory,
+                                    texts: [String], joined: String, details: JSONValue?) -> ToolFace {
         switch category {
         case .shell:
-            guard detailsFit(details, ["truncation", "fullOutputPath"]) else { return .text(joined) }
+            guard detailsFit(details, ["truncation", "fullOutputPath"]) else { return .text(trimLines(joined)) }
             let (body, notices) = details?["truncation"] != nil
                 ? splitNotice(joined) : (joined, [])
-            return .terminal(text: body, notices: notices, diff: shellDiff(body))
-        case .reads where card.tool == "read":
-            guard detailsFit(details, ["truncation"]) else { return .text(joined) }
+            let text = trimLines(body)
+            return .terminal(text: text, notices: notices, diff: outputDiffIn(text))
+        case .reads where tool == "read":
+            guard detailsFit(details, ["truncation"]) else { return .text(trimLines(joined)) }
             let (body, notices) = splitReadNotice(joined)
-            return .file(text: body, lang: path(card.args).flatMap(ToolKinds.language(forPath:)),
-                         notices: notices)
-        case .edits where card.tool == "edit":
-            guard detailsFit(details, ["diff", "patch", "firstChangedLine"]) else { return .text(joined) }
+            return .file(text: trimTrailingEmptyLines(body),
+                         lang: path(args).flatMap(ToolKinds.language(forPath:)), notices: notices)
+        case .reads:
+            // Another agent's file reader: the text as read, highlighted by
+            // its path; its details (if any) are not pi's, so no notices.
+            return .file(text: trimTrailingEmptyLines(joined),
+                         lang: path(args).flatMap(ToolKinds.language(forPath:)), notices: [])
+        case .edits where tool == "edit":
+            guard detailsFit(details, ["diff", "patch", "firstChangedLine"]) else { return .text(trimLines(joined)) }
             let hunks = (details?["patch"]?.stringValue).flatMap(ToolKinds.parseDiff)?["hunks"]?.arrayValue
             return .diff(hunks: hunks, confirmation: joined.isEmpty ? nil : joined)
-        case .writes where card.tool == "write":
-            guard detailsFit(details, []) else { return .text(joined) }
-            return .confirmation(joined)
+        case .writes where tool == "write":
+            guard detailsFit(details, []) else { return .text(trimLines(joined)) }
+            return .confirmation(trimLines(joined))
         case .searches:
             let allowed: [String: [String]] = [
                 "grep": ["truncation", "matchLimitReached", "linesTruncated"],
                 "find": ["truncation", "resultLimitReached"],
                 "ls": ["truncation", "entryLimitReached"],
             ]
-            guard let keys = allowed[card.tool], detailsFit(details, keys) else { return .text(joined) }
+            guard let keys = allowed[tool], detailsFit(details, keys) else { return .text(trimLines(joined)) }
             let flagged = !(details?.objectValue ?? [:]).isEmpty
             let (body, notices) = flagged ? splitNotice(joined) : (joined, [])
-            return .lines(text: body, notices: notices)
+            return .lines(text: trimLines(body), notices: notices)
         case .codemode:
             // Older codemode (and mcpscript) results carry no details.calls:
             // still a script's output, with no calls to list.
             return .script(calls: scriptCalls(details) ?? [],
-                           output: stripScriptHeader(texts, tool: card.tool).joined(separator: "\n"))
+                           output: trimLines(stripScriptHeader(texts, tool: tool).joined(separator: "\n")))
         case .web, .agents:
             // Web and agent tools come from extensions with their own details;
             // their text is prose either way.
-            return joined.isEmpty ? .text(joined) : .markdown(joined)
+            let text = trimLines(joined)
+            return text.isEmpty ? .text(text) : .markdown(text)
         default:
-            return .text(joined)
+            return .text(trimLines(joined))
         }
+    }
+
+    /// Leading and trailing blank lines dropped (pi's renderers trim output);
+    /// the first line's indentation is kept.
+    static func trimLines(_ text: String) -> String {
+        var view = Substring(text)
+        while let last = view.last, last.isWhitespace { view = view.dropLast() }
+        while let newline = view.firstIndex(of: "\n"),
+              view[..<newline].allSatisfy(\.isWhitespace) {
+            view = view[view.index(after: newline)...]
+        }
+        return String(view)
+    }
+
+    /// Trailing empty lines dropped (pi's read renderer).
+    private static func trimTrailingEmptyLines(_ text: String) -> String {
+        var view = Substring(text)
+        while view.hasSuffix("\n") { view = view.dropLast() }
+        return String(view)
     }
 
     // MARK: - Spec helpers
@@ -212,13 +273,23 @@ public enum ToolFaceResolver {
 
     /// pi-durable's diagnostics block (harness/tool.js appendToolResult): the
     /// last text block, exactly `<harness>\n…\n</harness>`. Removed from the
-    /// text and returned as its lines.
+    /// text and returned as one entry per diagnostic, `[severity] message`. A
+    /// message may span lines (it is written unescaped), so a line that
+    /// doesn't open with a severity continues the one before it.
     private static func takeHarnessBlock(_ texts: inout [String]) -> [String] {
         guard let last = texts.last, last.hasPrefix("<harness>\n"), last.hasSuffix("\n</harness>")
         else { return [] }
         texts.removeLast()
-        return last.dropFirst("<harness>\n".count).dropLast("\n</harness>".count)
-            .split(separator: "\n").map(String.init)
+        var out: [String] = []
+        for line in last.dropFirst("<harness>\n".count).dropLast("\n</harness>".count)
+            .split(separator: "\n", omittingEmptySubsequences: false) {
+            if line.range(of: #"^\[[a-z]+\] "#, options: .regularExpression) != nil || out.isEmpty {
+                out.append(String(line))
+            } else {
+                out[out.count - 1] += "\n" + line
+            }
+        }
+        return out.filter { !$0.isEmpty }
     }
 
     /// The trailing notice block pi appends after a blank line:
@@ -243,11 +314,32 @@ public enum ToolFaceResolver {
         return known ? (body, notices) : (text, [])
     }
 
-    /// The parsed diff block when shell output is a unified diff.
-    private static func shellDiff(_ text: String) -> JSONValue? {
-        guard text.range(of: #"(?m)^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@"#, options: .regularExpression) != nil
-        else { return nil }
+    /// The parsed diff block when output is a unified diff. A plain `@@ -`
+    /// search gates the parse, so output without one costs a single scan.
+    static func outputDiffIn(_ text: String) -> JSONValue? {
+        guard hasHunkHeaderStart(text) else { return nil }
         return ToolKinds.parseDiff(text)
+    }
+
+    /// Whether a line starts with `@@ -`: a byte scan (Foundation's
+    /// `contains` costs ten times more on large output).
+    private static func hasHunkHeaderStart(_ text: String) -> Bool {
+        let bytes = Array("@@ -".utf8)
+        var lineStart = true
+        var matched = 0
+        for byte in text.utf8 {
+            if matched > 0 || lineStart {
+                if byte == bytes[matched] {
+                    matched += 1
+                    if matched == bytes.count { return true }
+                    lineStart = false
+                    continue
+                }
+                matched = 0
+            }
+            lineStart = byte == 0x0A
+        }
+        return false
     }
 
     /// Text blocks without codemode's leading header block
@@ -278,5 +370,18 @@ public enum ToolFaceResolver {
             if let p = args[key]?.stringValue { return p }
         }
         return nil
+    }
+}
+
+extension JSONValue {
+    /// Pretty-printed JSON (the raw-args section, and a result that is a bare
+    /// object).
+    public var prettyString: String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes, .sortedKeys]
+        if let data = try? encoder.encode(self), let string = String(data: data, encoding: .utf8) {
+            return string
+        }
+        return ""
     }
 }

@@ -202,7 +202,9 @@ struct SettingsView: View {
         } header: {
             Text("Transcript")
         } footer: {
-            Text("A tool card with a rich result (diff / code) can hide its raw input block to stay compact.")
+            Text("A tool card whose result has its own display (output, a file, a diff, search lines, "
+                 + "a script, formatted text) can hide its raw input arguments to stay compact. Commands "
+                 + "and scripts still show; agent prompts have their own setting under Tool results.")
         }
     }
 

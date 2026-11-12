@@ -61,7 +61,7 @@ extension ToolCard {
     /// pi-durable reports an exit status or a missing file as a diagnostic).
     /// nil unless the card failed.
     public var errorText: String? {
-        guard state == .failed, case .error(let text) = ToolFaceResolver.resolve(self).face else { return nil }
+        guard state == .failed, case .error(let text) = resultView.face else { return nil }
         return text.isEmpty ? nil : text
     }
 }

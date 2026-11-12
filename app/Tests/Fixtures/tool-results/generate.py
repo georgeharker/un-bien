@@ -101,7 +101,7 @@ F.append(fixture(
     "bash.ok", "bash: merged output as one text block; details undefined when not truncated",
     "bash", {"command": "ls"}, [text("README.md\nsrc\n")],
     updates=[{"content": [text("README.md\n")], "details": {}}],
-    expect={"face": "terminal", "category": "shell", "text": "README.md\nsrc\n", "notices": []}))
+    expect={"face": "terminal", "category": "shell", "text": "README.md\nsrc", "notices": []}))
 F.append(fixture(
     "bash.ok-empty-details", "bash: some runs persist details as {} (seen in session logs)",
     "bash", {"command": "true"}, [text("")], details={},
@@ -122,7 +122,7 @@ F.append(fixture(
     # The path pi reports is under os.tmpdir() (macOS: /var/folders/…/T/).
     [text("2001\n2002\n\n\n[Showing lines 2001-4000 of 4000. Full output: /var/folders/zz/T/pi-bash-1.log]")],
     details={"truncation": truncation(content="2001\n2002\n"), "fullOutputPath": "/var/folders/zz/T/pi-bash-1.log"},
-    expect={"face": "terminal", "category": "shell", "text": "2001\n2002\n",
+    expect={"face": "terminal", "category": "shell", "text": "2001\n2002",
             "notices": ["Showing lines 2001-4000 of 4000. Full output: /var/folders/zz/T/pi-bash-1.log"]}))
 F.append(fixture(
     "bash.git-diff", "bash: a unified diff in output (kept improvement: rendered as a diff)",
@@ -134,7 +134,7 @@ F.append(fixture(
 F.append(fixture(
     "read.text", "read: the file text AS READ, no line numbers; details undefined",
     "read", {"path": "src/a.swift"}, [text("import Foundation\nlet x = 1\n")],
-    expect={"face": "file", "category": "reads", "lang": "swift", "text": "import Foundation\nlet x = 1\n"}))
+    expect={"face": "file", "category": "reads", "lang": "swift", "text": "import Foundation\nlet x = 1"}))
 F.append(fixture(
     "read.ranged", "read: user limit stopped early -> '[N more lines in file. Use offset=K to continue.]'",
     "read", {"path": "src/a.ts", "offset": 1, "limit": 2},
@@ -291,7 +291,7 @@ F.append(fixture(
     "bash", {"command": "ls"},
     [text("a\n"), text("<harness>\n[error] Tool call blocked: denied by policy\n</harness>")],
     details={},
-    expect={"face": "terminal", "category": "shell", "text": "a\n",
+    expect={"face": "terminal", "category": "shell", "text": "a",
             "diagnostics": ["[error] Tool call blocked: denied by policy"]}))
 
 # ── compatibility (older or foreign producers) ───────────────────────────────

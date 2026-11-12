@@ -8,9 +8,12 @@ import UnBienCore
 enum ToolResultPart: Equatable, Sendable {
     /// A 9pt section label ("OUTPUT", "ERROR", "CALLS").
     case label(String)
-    /// A one-line 9pt secondary row: a truncation / limit notice, a
-    /// confirmation, a harness diagnostic.
+    /// A 9pt secondary row: a truncation / limit notice, a confirmation, a
+    /// harness diagnostic. Wraps (a spill path must be readable on a phone).
     case notice(String)
+    /// A notice in the error colour: an `[error]` diagnostic on a call that
+    /// still succeeded (a policy-blocked step, say).
+    case errorNotice(String)
     /// Plain mono text (shell output, search lines, tool text), unhighlighted.
     case mono(String)
     /// Plain mono text in the error color.
@@ -81,18 +84,13 @@ extension ToolCardView {
     }
 
     nonisolated private static func fullResultParts(for card: ToolCard) -> [ToolResultPart] {
-        let view = ToolFaceResolver.resolve(card)
+        let view = card.resultView
         var parts: [ToolResultPart] = []
         switch view.face {
         case .pending:
             break
         case .terminal(let text, let notices, let diff):
-            if let hunks = diff?["hunks"]?.arrayValue, !hunks.isEmpty {
-                parts.append(.diff(hunks, face: "diff-out"))
-            } else if !text.isEmpty {
-                parts += [.label("output"), .mono(text)]
-            }
-            parts += notices.map(ToolResultPart.notice)
+            parts += outputParts(text, diff: diff, code: false) + notices.map(ToolResultPart.notice)
         case .file(let text, let lang, let notices):
             if !text.isEmpty { parts.append(.code(text, lang: lang, face: "output")) }
             parts += notices.map(ToolResultPart.notice)
@@ -103,25 +101,37 @@ extension ToolCardView {
         case .confirmation(let line):
             if !line.isEmpty { parts.append(.notice(line)) }
         case .lines(let text, let notices):
-            if !text.isEmpty { parts += [.label("output"), .mono(text)] }
-            parts += notices.map(ToolResultPart.notice)
+            parts += outputParts(text, diff: nil, code: false) + notices.map(ToolResultPart.notice)
         case .script(let calls, let output):
             if !calls.isEmpty { parts += [.label("calls"), .mono(scriptCallLines(calls))] }
-            if !output.isEmpty { parts += [.label("output"), .code(output, lang: nil, face: "output")] }
+            parts += outputParts(output, diff: view.outputDiff, code: true)
         case .error(let text):
             parts += [.label("error"), .error(text.isEmpty ? "The call failed." : text)]
         case .markdown(let text):
             parts += [.label("output"), .markdown(text, face: "md")]
         case .text(let text):
-            if !text.isEmpty { parts += [.label("output"), .mono(text)] }
+            parts += outputParts(text, diff: view.outputDiff, code: false)
         }
-        // Harness diagnostics as notice rows; a failed call's error lines are
-        // already in its error text.
+        // Harness diagnostics: an [error] on a failed call is already in its
+        // error text; on a call that succeeded it draws in the error colour;
+        // the rest are notices.
         let failed = card.state == .failed
-        parts += view.diagnostics
-            .filter { !(failed && ToolFaceResolver.errorMessage($0) != nil) }
-            .map { .notice(ToolFaceResolver.noticeText($0)) }
+        for diagnostic in view.diagnostics {
+            if let message = ToolFaceResolver.errorMessage(diagnostic) {
+                if !failed { parts.append(.errorNotice(message)) }
+            } else {
+                parts.append(.notice(ToolFaceResolver.noticeText(diagnostic)))
+            }
+        }
         return parts
+    }
+
+    /// Output text under an OUTPUT label (plain, or highlighted for code), or
+    /// the diff it is.
+    nonisolated private static func outputParts(_ text: String, diff: JSONValue?, code: Bool) -> [ToolResultPart] {
+        if let hunks = diff?["hunks"]?.arrayValue, !hunks.isEmpty { return [.diff(hunks, face: "diff-out")] }
+        guard !text.isEmpty else { return [] }
+        return [.label("output"), code ? .code(text, lang: nil, face: "output") : .mono(text)]
     }
 
     /// The cached renders the result section draws (highlighted code, output
@@ -143,18 +153,36 @@ extension ToolCardView {
                 return DiffProducer(toolCallID: card.toolCallID, themeID: "\(themeID)", face: face,
                                     hunks: hunks, add: theme.success, remove: theme.error,
                                     context: theme.secondaryText)
-            case .label, .notice, .mono, .error, .markdown, .more:
+            case .label, .notice, .errorNotice, .mono, .error, .markdown, .more:
                 return nil
             }
         }
     }
 
-    /// The markdown bodies the result section draws, as (entity-cache id,
-    /// text) — budgeted and keyed EXACTLY as resultPartView draws them, so a
-    /// warm fills the slot the card reads. The entity cache keys by id, not
-    /// text, so the full and the budgeted text take different ids.
-    nonisolated static func resultMarkdown(for card: ToolCard, preview: Bool = false) -> [(id: String, text: String)] {
-        resultParts(for: card, preview: preview).compactMap { part in
+    /// The task an agent call was given (a subagent's `prompt`, a steer's
+    /// `message`), when agent prompts are shown; nil otherwise.
+    nonisolated static func agentPrompt(for card: ToolCard, show: Bool) -> String? {
+        guard show, card.resultView.category == .agents,
+              let text = stringArg(card.args, ["prompt", "task", "message"]) else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// The PROMPT section an agent card draws above its result (markdown, its
+    /// own entity slot), or nothing.
+    nonisolated static func promptParts(for card: ToolCard, show: Bool) -> [ToolResultPart] {
+        guard let prompt = agentPrompt(for: card, show: show) else { return [] }
+        return [.label("prompt"), .markdown(prompt, face: "prompt")]
+    }
+
+    /// The markdown bodies the card draws (an agent's prompt, then the
+    /// result's), as (entity-cache id, text) — budgeted and keyed EXACTLY as
+    /// resultPartView draws them, so a warm fills the slot the card reads. The
+    /// entity cache keys by id, not text, so the full and the budgeted text
+    /// take different ids.
+    nonisolated static func resultMarkdown(for card: ToolCard, preview: Bool = false,
+                                           showAgentPrompts: Bool = true) -> [(id: String, text: String)] {
+        (promptParts(for: card, show: showAgentPrompts) + resultParts(for: card, preview: preview)).compactMap { part in
             guard case .markdown(let text, let face) = part else { return nil }
             let shown = text.count > toolBudget ? String(text.prefix(toolBudget)) : text
             return (markdownID(card: card, face: face, whole: shown.count == text.count), shown)
@@ -222,9 +250,14 @@ extension ToolCardView {
                 Text(text.uppercased()).font(.system(size: 9, weight: .bold))
                     .foregroundStyle(theme.secondaryText)
             case .notice(let text):
-                // One row at the section-label height: never wraps.
+                // The estimator counts its wrapped lines (noticeLineCount).
                 Text(text).font(.system(size: 9)).foregroundStyle(theme.secondaryText)
-                    .lineLimit(1).truncationMode(.middle)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            case .errorNotice(let text):
+                Text(text).font(.system(size: 9)).foregroundStyle(theme.error)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
             case .mono(let text):
                 BudgetedContent(text: text, budget: toolBudget) { budgeted in
                     Text(budgeted).foregroundStyle(theme.text).textSelection(.enabled)
