@@ -3,7 +3,8 @@ import UnBienCore
 
 // The header subtitle: what the call acts on, after the tool name. pi's
 // renderers title a read with its path and line range, an edit, write or ls
-// with its path; pi's `mcp` tool is one tool for every MCP server, so its
+// with its path; a web call shows its URL or query, an agent its task; pi's
+// `mcp` tool is one tool for every MCP server, so its
 // title alone ("mcp") says nothing — the call it makes rides its arguments.
 extension ToolCardView {
     /// Whether `tool` is the MCP proxy tool.
@@ -16,6 +17,18 @@ extension ToolCardView {
     /// arguments name nothing.
     nonisolated static func headerSubtitle(for card: ToolCard) -> (text: String, isPath: Bool)? {
         if let mcp = mcpSubtitle(for: card) { return (mcp, false) }
+        // A web call's URL or query; an agent's task description.
+        switch ToolFaceResolver.category(tool: card.tool) {
+        case .web:
+            if let url = stringArg(card.args, ["url"]), !url.isEmpty { return (url, true) }
+            if let query = stringArg(card.args, ["query", "q"]), !query.isEmpty { return ("\"\(query)\"", false) }
+            return nil
+        case .agents:
+            if let task = stringArg(card.args, ["description"]), !task.isEmpty { return (task, false) }
+            return nil
+        default:
+            break
+        }
         guard ["read", "edit", "write", "ls"].contains(card.tool),
               let path = stringArg(card.args, ["path", "file_path"]), !path.isEmpty
         else { return nil }

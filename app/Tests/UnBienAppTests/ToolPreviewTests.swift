@@ -48,6 +48,30 @@ final class ToolPreviewTests: XCTestCase {
                                                                 args: ["path": .string("x")])))
     }
 
+    func testWebAndAgentSubtitles() {
+        func sub(_ tool: String, _ args: [String: JSONValue]) -> String? {
+            ToolCardView.headerSubtitle(for: ToolCard(toolCallID: "w", tool: tool, args: args))?.text
+        }
+        XCTAssertEqual(sub("web_fetch", ["url": .string("https://x.dev/a")]), "https://x.dev/a")
+        XCTAssertEqual(sub("web_search", ["query": .string("swift ui")]), "\"swift ui\"")
+        XCTAssertEqual(sub("subagent", ["description": .string("review"), "prompt": .string("…")]), "review")
+        XCTAssertNil(sub("web_fetch", [:]))
+    }
+
+    func testWebAndAgentResultsAreMarkdown() {
+        let card = ToolCard(toolCallID: "a", tool: "subagent", args: [:],
+                            result: .object(["content": .array([.object([
+                                "type": .string("text"), "text": .string("**Verdict: ready.**")])])]),
+                            state: .ok)
+        XCTAssertEqual(ToolCardView.resultParts(for: card),
+                       [.label("output"), .markdown("**Verdict: ready.**", face: "md")])
+        XCTAssertEqual(ToolCardView.resultMarkdown(for: card).map(\.id), ["a\u{1}@md-all"])
+        var running = card
+        running.state = .running
+        XCTAssertEqual(ToolCardView.resultParts(for: running), [.label("output"), .mono("**Verdict: ready.**")],
+                       "running output stays plain text")
+    }
+
     // MARK: - ToolPreview
 
     func testPreviewLineCountsArePis() {

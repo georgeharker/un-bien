@@ -136,7 +136,10 @@ struct TranscriptStackView: View, Equatable {
         // codemode output), keyed exactly as the card draws them.
         let result = ToolCardView.resultProducers(for: card, theme: theme, typography: typography,
                                                   themeID: themeID, preview: preview)
-        guard diff != nil || content != nil || !result.isEmpty else { return nil }
+        // Web / agent prose: the entity renders the card's markdown parts read.
+        let markdown = ToolCardView.resultMarkdown(for: card, preview: preview)
+        let style = MarkdownStyleCache.style(theme: theme, typography: typography)
+        guard diff != nil || content != nil || !result.isEmpty || !markdown.isEmpty else { return nil }
         return {
             if let diff {
                 Task.detached(priority: .userInitiated) {
@@ -151,6 +154,12 @@ struct TranscriptStackView: View, Equatable {
             for producer in result {
                 Task.detached(priority: .userInitiated) {
                     _ = await AttributedTextCache.shared.attributed(producer, scope: scope)
+                }
+            }
+            for body in markdown {
+                let key = MarkdownEntityStore.key(scope: scope, id: body.id, styleHash: style.hashValue)
+                Task.detached(priority: .userInitiated) {
+                    _ = await MarkdownEntityStore.shared.produce(key, text: body.text, style: style)
                 }
             }
         }

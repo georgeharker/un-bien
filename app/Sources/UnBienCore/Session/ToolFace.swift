@@ -29,6 +29,9 @@ public enum ToolFace: Equatable, Sendable {
     case script(calls: [ScriptCall], output: String)
     /// A failed call's error text.
     case error(String)
+    /// Prose (a fetched page, search results, an agent's report), rendered
+    /// as markdown.
+    case markdown(String)
     /// Plain text: the result's text blocks joined (the universal fallback).
     case text(String)
 }
@@ -60,7 +63,7 @@ public struct ToolResultView: Equatable, Sendable {
     /// arguments of such cards.
     public var isStructured: Bool {
         switch face {
-        case .terminal, .file, .diff, .confirmation, .lines, .script: return true
+        case .terminal, .file, .diff, .confirmation, .lines, .script, .markdown: return true
         case .pending, .error, .text: return false
         }
     }
@@ -75,6 +78,7 @@ public struct ToolResultView: Equatable, Sendable {
         case .confirmation: return "confirmation"
         case .lines: return "lines"
         case .script: return "script"
+        case .markdown: return "markdown"
         case .error: return "error"
         case .text: return "text"
         }
@@ -165,6 +169,10 @@ public enum ToolFaceResolver {
             // still a script's output, with no calls to list.
             return .script(calls: scriptCalls(details) ?? [],
                            output: stripScriptHeader(texts, tool: card.tool).joined(separator: "\n"))
+        case .web, .agents:
+            // Web and agent tools come from extensions with their own details;
+            // their text is prose either way.
+            return joined.isEmpty ? .text(joined) : .markdown(joined)
         default:
             return .text(joined)
         }

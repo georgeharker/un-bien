@@ -675,7 +675,7 @@ struct ToolCardView: View {
         for part in resultParts(for: card) {
             switch part {
             case .label, .notice, .diff: n += 1
-            case .mono, .error, .code, .more: break
+            case .mono, .error, .code, .markdown, .more: break
             }
         }
         return n

@@ -2367,7 +2367,7 @@
    },
    "expect": {
     "category": "agents",
-    "face": "text"
+    "face": "markdown"
    },
    "id": "subagent.ok",
    "live": [
@@ -2466,7 +2466,7 @@
    },
    "expect": {
     "category": "web",
-    "face": "text"
+    "face": "markdown"
    },
    "id": "web_fetch.ok",
    "live": [

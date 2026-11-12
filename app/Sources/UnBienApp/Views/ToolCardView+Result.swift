@@ -20,6 +20,9 @@ enum ToolResultPart: Equatable, Sendable {
     case code(String, lang: String?, face: String)
     /// A diff in the output (e.g. `git diff`); draws its own "DIFF" label.
     case diff([JSONValue], face: String)
+    /// Prose rendered as markdown (the entity renderer assistant text uses);
+    /// `face` keys its entity-cache slot under the card.
+    case markdown(String, face: String)
     /// A Preview card's "N more lines" row: tapping it shows the result in full.
     case more(Int)
 }
@@ -48,7 +51,7 @@ extension ToolCardView {
     nonisolated static func previewParts(_ parts: [ToolResultPart], tool: String) -> [ToolResultPart] {
         let mainIndex = parts.lastIndex { part in
             switch part {
-            case .mono, .code: return true
+            case .mono, .code, .markdown: return true
             default: return false
             }
         }
@@ -65,6 +68,11 @@ extension ToolCardView {
             let cut = preview.cut(text)
             guard cut.hidden > 0 else { return parts }
             parts[index] = .code(cut.text, lang: lang, face: "preview")
+            parts.insert(.more(cut.hidden), at: index + 1)
+        case .markdown(let text, _):
+            let cut = preview.cut(text)
+            guard cut.hidden > 0 else { return parts }
+            parts[index] = .markdown(cut.text, face: "md-preview")
             parts.insert(.more(cut.hidden), at: index + 1)
         default:
             break
@@ -102,6 +110,8 @@ extension ToolCardView {
             if !output.isEmpty { parts += [.label("output"), .code(output, lang: nil, face: "output")] }
         case .error(let text):
             parts += [.label("error"), .error(text.isEmpty ? "The call failed." : text)]
+        case .markdown(let text):
+            parts += [.label("output"), .markdown(text, face: "md")]
         case .text(let text):
             if !text.isEmpty { parts += [.label("output"), .mono(text)] }
         }
@@ -133,10 +143,26 @@ extension ToolCardView {
                 return DiffProducer(toolCallID: card.toolCallID, themeID: "\(themeID)", face: face,
                                     hunks: hunks, add: theme.success, remove: theme.error,
                                     context: theme.secondaryText)
-            case .label, .notice, .mono, .error, .more:
+            case .label, .notice, .mono, .error, .markdown, .more:
                 return nil
             }
         }
+    }
+
+    /// The markdown bodies the result section draws, as (entity-cache id,
+    /// text) — budgeted and keyed EXACTLY as resultPartView draws them, so a
+    /// warm fills the slot the card reads. The entity cache keys by id, not
+    /// text, so the full and the budgeted text take different ids.
+    nonisolated static func resultMarkdown(for card: ToolCard, preview: Bool = false) -> [(id: String, text: String)] {
+        resultParts(for: card, preview: preview).compactMap { part in
+            guard case .markdown(let text, let face) = part else { return nil }
+            let shown = text.count > toolBudget ? String(text.prefix(toolBudget)) : text
+            return (markdownID(card: card, face: face, whole: shown.count == text.count), shown)
+        }
+    }
+
+    nonisolated static func markdownID(card: ToolCard, face: String, whole: Bool) -> String {
+        "\(card.toolCallID)\u{1}@\(face)" + (whole ? "-all" : "")
     }
 
     /// codemode's nested calls, one per line: status, name, args, duration.
@@ -211,6 +237,16 @@ extension ToolCardView {
                 codeView(text, lang: lang, identity: "\(card.toolCallID)\u{1}@\(face)")
             case .diff(let hunks, let face):
                 diffView(hunks, face: face)
+            case .markdown(let text, let face):
+                // Settled prose only (running output keeps its text face), so
+                // the id's text never changes under it.
+                BudgetedContent(text: text, budget: toolBudget) { budgeted in
+                    MarkdownEntitiesView(
+                        text: budgeted,
+                        id: Self.markdownID(card: card, face: face, whole: budgeted.count == text.count),
+                        theme: theme, typography: typography)
+                        .font(typography.bodyFont())
+                }
             case .more(let hidden):
                 // Drawn like BudgetedContent's SHOW ALL row (the estimator
                 // counts both as one mono line).

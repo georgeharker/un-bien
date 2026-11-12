@@ -103,11 +103,15 @@ enum RowHeightEstimator {
         /// toggle and face, the input section, the call / content face, and
         /// each result section. Each child after the first adds one gap.
         var bodySections: Int
+        /// Markdown bodies (web / agent prose) as drawn (budgeted), estimated
+        /// with the prose estimator at the card's content width.
+        var markdownTexts: [String]
         init(expanded: Bool, hasSwitcher: Bool = false, labeledSections: Int = 0,
              monoLineTokens: [[Int]] = [], imageCount: Int = 0,
-             imageAspects: [Double] = [], bodySections: Int = 1) {
+             imageAspects: [Double] = [], bodySections: Int = 1, markdownTexts: [String] = []) {
             self.expanded = expanded; self.hasSwitcher = hasSwitcher
             self.bodySections = bodySections
+            self.markdownTexts = markdownTexts
             self.labeledSections = labeledSections
             self.monoLineTokens = monoLineTokens
             self.imageCount = imageCount; self.imageAspects = imageAspects
@@ -186,6 +190,9 @@ enum RowHeightEstimator {
             $0 + wrappedLineCount(tokens: $1, perLine: perLine)
         }
         h += Double(monoLines) * monoLine
+        for text in facts.markdownTexts {
+            h += estimateText(text, images: [], style: style, width: diffWidth, spec: .toolCardProse)
+        }
         // Args sections render in body font; mono lines dominate — the blend is
         // approximated by mono (cards are overwhelmingly mono).
         h += Double(max(facts.bodySections - 1, 0)) * TranscriptMetrics.toolCardSectionSpacing
@@ -271,6 +278,9 @@ enum RowHeightEstimator {
                 tokens += budgeted(text)
             case .diff(let hunks, _):
                 tokens += hunkTokens(hunks)
+            case .markdown(let text, _):
+                facts.markdownTexts.append(String(text.prefix(toolBudget)))
+                if text.count > toolBudget { tokens.append([0]) }   // SHOW ALL row
             case .more:
                 tokens.append([0])   // one row, like BudgetedContent's SHOW ALL
             case .label, .notice:
@@ -329,6 +339,9 @@ enum RowHeightEstimator {
         let inset: Double
         static let assistant = RowTextSpec(
             chrome: TranscriptMetrics.assistantRowChrome, inset: 0)
+        /// Prose inside a tool card: no row chrome; the card's padding is
+        /// already taken off the width.
+        static let toolCardProse = RowTextSpec(chrome: 0, inset: 0)
         static let user = RowTextSpec(
             chrome: TranscriptMetrics.userRowChrome,
             inset: Double(TranscriptMetrics.userBubblePadding) * 2)

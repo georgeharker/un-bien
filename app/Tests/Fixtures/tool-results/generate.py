@@ -260,12 +260,12 @@ F.append(fixture(
     "subagent", {"description": "review", "prompt": "…"}, [text("**Verdict: ready.**\n\n- one\n- two")],
     details={"displayName": "Agent", "description": "review", "subagentType": "general-purpose",
              "toolUses": 3, "tokens": "10k", "durationMs": 5000, "status": "completed"},
-    expect={"face": "text", "category": "agents"}))
+    expect={"face": "markdown", "category": "agents"}))
 F.append(fixture(
     "web_fetch.ok", "@juicesharp/rpiv-web-tools web_fetch: markdown by convention; details {url, contentType}",
     "web_fetch", {"url": "https://x.dev"}, [text("**Fetched:** https://x.dev\n**Content-Type:** text/html\n\n# Title")],
     details={"url": "https://x.dev", "contentType": "text/html"},
-    expect={"face": "text", "category": "web"}))
+    expect={"face": "markdown", "category": "web"}))
 F.append(fixture(
     "agent_send.ok", "un-bien agent_send: one line; details {ok, status, target, id}",
     "agent_send", {"to": "x@y", "body": "hi"},

@@ -74,6 +74,14 @@ final class HeightEstimateRegressionTests: XCTestCase {
                                                      themeID: .oneDark, preview: preview) {
             _ = await AttributedTextCache.shared.attributed(producer)
         }
+        // Web / agent prose: the entities the card's markdown parts read (the
+        // harness renders with the default, empty session scope).
+        let proseStyle = MarkdownStyleCache.style(theme: theme, typography: typography)
+        for body in ToolCardView.resultMarkdown(for: card, preview: preview) {
+            _ = await MarkdownEntityStore.shared.produce(
+                MarkdownEntityStore.key(scope: "", id: body.id, styleHash: proseStyle.hashValue),
+                text: body.text, style: proseStyle)
+        }
     }
 
     private func toolCardRow(_ card: ToolCard, policy: ToolDisplayPolicy,
@@ -220,6 +228,18 @@ final class HeightEstimateRegressionTests: XCTestCase {
              queue: empty
              ```
              """, 90),
+            // A single newline inside a paragraph is a soft break: the
+            // renderer joins the lines (a fetched page's header lines). Was
+            // -48pt at 760 when each line was measured on its own; what is
+            // left (~-12) is the heading's estimate running ~6pt high.
+            ("prose-soft-breaks",
+             """
+             **Fetched:** https://x.dev
+             **Content-Type:** text/html
+             one more short line
+
+             # Title
+             """, 16),
             ("mixed-quote-nested",
              """
              Before:

@@ -45,6 +45,7 @@ final class ToolFaceTests: XCTestCase {
         case .confirmation: return "confirmation"
         case .lines: return "lines"
         case .script: return "script"
+        case .markdown: return "markdown"
         case .error: return "error"
         case .text: return "text"
         }
@@ -53,7 +54,7 @@ final class ToolFaceTests: XCTestCase {
     private func bodyText(_ face: ToolFace) -> String? {
         switch face {
         case .terminal(let text, _, _), .file(let text, _, _), .lines(let text, _),
-             .text(let text), .error(let text), .confirmation(let text): return text
+             .text(let text), .markdown(let text), .error(let text), .confirmation(let text): return text
         case .script(_, let output): return output
         case .pending, .diff: return nil
         }
