@@ -64,8 +64,10 @@ enum TranscriptMetrics {
     /// ESTIMATE-ONLY: the DiffContentToggle switcher row ≈ 30 (natural height,
     /// present when hunks AND content both exist).
     static let toolCardSwitcherHeight: Double = 30
-    /// ESTIMATE-ONLY: a section label row ("CONTENT"/"input"/… 9pt + spacing 2) ≈ 16.
-    static let toolCardSectionLabelHeight: Double = 16
+    /// ESTIMATE-ONLY: a section label row ("CONTENT"/"input"/… 9pt + spacing 2)
+    /// ≈ 14, fitted against the catalog height regression once the gaps
+    /// between body sections were counted separately (bodySections).
+    static let toolCardSectionLabelHeight: Double = 14
     /// COLLAPSED card total (padding ×2 + header) — a collapsed card's height
     /// is content-INDEPENDENT (DisclosureGroup hides the body; images remain).
     static let toolCardCollapsedChrome: Double = 44

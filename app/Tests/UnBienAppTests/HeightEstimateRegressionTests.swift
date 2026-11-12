@@ -68,25 +68,11 @@ final class HeightEstimateRegressionTests: XCTestCase {
                                                       toolBudget: toolBudget) {
             _ = await AttributedTextCache.shared.attributed(content)
         }
-        for block in ToolCardView.outputBlocks(for: card) {
-            switch block["kind"]?.stringValue {
-            case "code":
-                guard let text = block["text"]?.stringValue, !text.isEmpty else { continue }
-                _ = await AttributedTextCache.shared.attributed(HighlightProducer(
-                    code: String(text.prefix(toolBudget)), language: block["lang"]?.stringValue,
-                    style: theme.codeHighlightStyle, font: typography.monoPlatformFont()))
-            case "diff":
-                if let hunks = block["hunks"]?.arrayValue, !hunks.isEmpty {
-                    _ = await AttributedTextCache.shared.attributed(DiffProducer(
-                        toolCallID: card.toolCallID, themeID: "\(ThemeID.oneDark)", hunks: hunks,
-                        add: theme.success, remove: theme.error, context: theme.secondaryText))
-                } else if let text = block["text"]?.stringValue, !text.isEmpty {
-                    _ = await AttributedTextCache.shared.attributed(HighlightProducer(
-                        code: String(text.prefix(toolBudget)), language: "diff",
-                        style: theme.codeHighlightStyle, font: typography.monoPlatformFont()))
-                }
-            default: continue
-            }
+        // The result section's highlighted code / output diffs, exactly as the
+        // card and the production prewarm build them.
+        for producer in ToolCardView.resultProducers(for: card, theme: theme, typography: typography,
+                                                     themeID: .oneDark) {
+            _ = await AttributedTextCache.shared.attributed(producer)
         }
     }
 
@@ -399,6 +385,73 @@ final class HeightEstimateRegressionTests: XCTestCase {
             }
            }
           }
+        }
+    }
+
+    // MARK: - Catalog tool cards (tool faces stage 4)
+
+    private func card(in state: SessionState, _ id: String) -> ToolCard? {
+        for case .tool(let c) in state.items where c.toolCallID == id { return c }
+        return nil
+    }
+
+    /// Every stage-0 fixture (app/Tests/Fixtures/tool-results, transcribed from
+    /// each tool's declared result spec) as the card the reducer builds from
+    /// the RECORD, settled, plus a RUNNING card for fixtures that stream
+    /// partials. Each is measured at every width, with and without the input
+    /// section, under the standard, all-closed and all-open display policies
+    /// (all-open forces the MCP / agent / web / other faces open), against the
+    /// estimate for the start state the card renders in.
+    func testCatalogToolCards() async throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/tool-results/catalog.json")
+        let fixtures = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: url))["fixtures"]?
+            .arrayValue ?? []
+        var cards: [(String, ToolCard)] = []
+        for fixture in fixtures {
+            let id = fixture["id"]?.stringValue ?? "?"
+            let callID = fixture["toolCallId"]?.stringValue ?? ""
+            let stored = fixture["stored"]?.arrayValue ?? []
+            var replay = SessionState()
+            replay.applyEntries(stored, leafId: stored.last?["id"]?.stringValue, authoritative: true)
+            if let settled = card(in: replay, callID), settled.state != .running {
+                cards.append((id, settled))
+            }
+            let live = fixture["live"]?.arrayValue ?? []
+            if live.contains(where: { $0["type"]?.stringValue == "tool_execution_update" }) {
+                var streaming = SessionState()
+                for frame in live where frame["type"]?.stringValue != "tool_execution_end" {
+                    streaming.applyRPC(frame)
+                }
+                if let running = card(in: streaming, callID) { cards.append(("\(id)/running", running)) }
+            }
+        }
+        XCTAssertGreaterThan(cards.count, 30, "the catalog loaded")
+        let allOpen = ToolDisplayPolicy(
+            defaults: Dictionary(uniqueKeysWithValues: ToolCategory.allCases.map { ($0, ToolDisclosure.expanded) }),
+            expandFailed: true)
+        let policies: [(String, ToolDisplayPolicy)] = [("", .standard), ("/closed", .allCollapsed), ("/open", allOpen)]
+        for width in widths {
+            for hideInputRich in [true, false] {
+                for (policyName, policy) in policies {
+                    for (fixtureID, card) in cards {
+                        await prewarm(card)
+                        let expanded = ToolCardView.startsExpanded(card, policy: policy)
+                        let rendered = measure(toolCardRow(card, policy: policy, hideInputRich: hideInputRich),
+                                               width: width)
+                        let facts = RowHeightEstimator.toolCardFacts(for: card, expanded: expanded,
+                                                                     hideInputRich: hideInputRich)
+                        let est = RowHeightEstimator.estimateToolCard(facts, style: style, width: width)
+                        let delta = rendered - est
+                        let id = "\(fixtureID)\(policyName)\(hideInputRich ? "" : "/show-input")"
+                        print(String(format: "HCAT w=%3.0f %-44s open=%d rendered=%7.1f est=%7.1f d=%+7.1f",
+                                     width, (id as NSString).utf8String!, expanded ? 1 : 0, rendered, est, delta))
+                        XCTAssertLessThan(abs(delta), 12,
+                                          "\(id) @\(Int(width)): rendered \(Int(rendered)) vs est \(Int(est))")
+                    }
+                }
+            }
         }
     }
 

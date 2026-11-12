@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 import MarkdownUI
 import UnBienCore
 #if os(macOS)
@@ -97,11 +98,16 @@ enum RowHeightEstimator {
         /// style, so it owns the wrap.
         var monoLineTokens: [[Int]]
         var imageCount: Int
-        var imageAspects: [Double]   // w/h per image (warmed decode; 0 = unknown)
+        var imageAspects: [Double]   // w/h per image (header decode; 0 = unknown)
+        /// Children of the expanded body's VStack (spacing 6): the switcher's
+        /// toggle and face, the input section, the call / content face, and
+        /// each result section. Each child after the first adds one gap.
+        var bodySections: Int
         init(expanded: Bool, hasSwitcher: Bool = false, labeledSections: Int = 0,
              monoLineTokens: [[Int]] = [], imageCount: Int = 0,
-             imageAspects: [Double] = []) {
+             imageAspects: [Double] = [], bodySections: Int = 1) {
             self.expanded = expanded; self.hasSwitcher = hasSwitcher
+            self.bodySections = bodySections
             self.labeledSections = labeledSections
             self.monoLineTokens = monoLineTokens
             self.imageCount = imageCount; self.imageAspects = imageAspects
@@ -165,10 +171,8 @@ enum RowHeightEstimator {
         var h = TranscriptMetrics.toolCardCollapsedChrome   // padding + header (+ images below)
         guard facts.expanded else { return h + imageTerms(facts, width: width) }
         h = TranscriptMetrics.toolCardExpandedBase
-        var sections = 1
         if facts.hasSwitcher {
             h += DiffContentToggle.estimatedHeight   // estimate OWNED by the component
-            sections += 1
         }
         h += Double(facts.labeledSections) * TranscriptMetrics.toolCardSectionLabelHeight
         // WRAP THE DIFF HERE, with the real style: diff lines render mono at
@@ -184,7 +188,7 @@ enum RowHeightEstimator {
         h += Double(monoLines) * monoLine
         // Args sections render in body font; mono lines dominate — the blend is
         // approximated by mono (cards are overwhelmingly mono).
-        h += Double(max(sections - 1, 0)) * TranscriptMetrics.toolCardSectionSpacing
+        h += Double(max(facts.bodySections - 1, 0)) * TranscriptMetrics.toolCardSectionSpacing
         return h + imageTerms(facts, width: width)
     }
 
@@ -210,7 +214,8 @@ enum RowHeightEstimator {
             expanded: expanded,
             hasSwitcher: hasHunks && content != nil,
             labeledSections: ToolCardView.sectionLabels(for: card, hideInputRich: hideInputRich),
-            imageCount: card.images.count)
+            imageCount: card.images.count,
+            imageAspects: card.images.map(imageAspect))
         // Text renders through BudgetedContent, which draws only the first
         // `toolBudget` characters plus a SHOW ALL row. Estimating the
         // untruncated string reserves height for content the card never draws.
@@ -236,23 +241,30 @@ enum RowHeightEstimator {
             }
         }
         var tokens: [[Int]] = []
+        var sections = 0
         if facts.hasSwitcher {
+            sections = 2   // the toggle and the face it shows
             // A SWITCHER draws exactly one face, and Diff is the default.
             tokens = hunkTokens(renderedHunks)
         } else {
             if hasHunks {
                 tokens += hunkTokens(renderedHunks)
+                sections += 1
             } else if ToolCardView.showsInputSection(for: card, hideInputRich: hideInputRich) {
                 tokens += budgeted(JSONValue.object(card.args).prettyString)
+                sections += 1
             }
             if let content {
                 // Call face (COMMAND / SCRIPT), or a write's CONTENT.
                 if ToolCardView.callFaceLabel(for: card) != nil || !hasHunks {
                     tokens += budgeted(content.text)
+                    sections += 1
                 }
             }
         }
-        for part in ToolCardView.resultParts(for: card) {
+        let parts = ToolCardView.resultParts(for: card)
+        facts.bodySections = sections + ToolCardView.resultSections(parts).count
+        for part in parts {
             switch part {
             case .mono(let text), .error(let text), .code(let text, _, _):
                 tokens += budgeted(text)
@@ -266,12 +278,33 @@ enum RowHeightEstimator {
         return facts
     }
 
+    /// An image's width / height from its header (PNG / JPEG / GIF / … via
+    /// ImageIO): only the leading bytes are decoded, never the pixels.
+    /// Honours EXIF rotation. 0 when unknown (SVG, undecodable) — the
+    /// estimate then reserves `imageCap`.
+    nonisolated static func imageAspect(_ image: WireImage) -> Double {
+        let head = image.data.prefix(65_536)
+        let usable = head.count - head.count % 4
+        guard usable > 0, let data = Data(base64Encoded: String(head.prefix(usable))),
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let w = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue,
+              let h = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue,
+              w > 0, h > 0 else { return 0 }
+        let orientation = (props[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
+        return orientation >= 5 ? h / w : w / h   // 5–8 are rotated 90°
+    }
+
     private static func imageTerms(_ facts: ToolCardFacts, width: Double) -> Double {
         guard facts.imageCount > 0 else { return 0 }
         var total = 0.0
+        // Images sit inside the card's padding, so they fit the CONTENT width;
+        // the card's VStack (spacing 8) puts a gap before each one, the first
+        // included (after the header / disclosure).
+        let contentWidth = max(1, width - Double(TranscriptMetrics.toolCardPadding) * 2)
         for i in 0..<facts.imageCount {
-            if i > 0 { total += TranscriptMetrics.imageSpacing }
-            let fitWidth = min(width, TranscriptMetrics.imageCap)
+            total += TranscriptMetrics.imageSpacing
+            let fitWidth = min(contentWidth, TranscriptMetrics.imageCap)
             let aspect = i < facts.imageAspects.count ? facts.imageAspects[i] : 0
             total += aspect > 0 ? min(Double(TranscriptMetrics.imageCap), fitWidth / aspect)
                                 : Double(TranscriptMetrics.imageCap)

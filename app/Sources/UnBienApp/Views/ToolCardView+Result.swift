@@ -63,6 +63,31 @@ extension ToolCardView {
         return parts
     }
 
+    /// The cached renders the result section draws (highlighted code, output
+    /// diffs), built EXACTLY as resultView builds them — same budget
+    /// truncation and identity as `codeView` — so a warm hits the slot the
+    /// card reads. Shared by the prewarm resolver and the height tests.
+    static func resultProducers(for card: ToolCard, theme: AppTheme, typography: Typography,
+                                themeID: ThemeID) -> [any AttributedTextProducer] {
+        resultParts(for: card).compactMap { part -> (any AttributedTextProducer)? in
+            switch part {
+            case .code(let text, let lang, let face):
+                let truncated = text.count > toolBudget
+                return HighlightProducer(
+                    code: truncated ? String(text.prefix(toolBudget)) : text,
+                    language: lang, style: theme.codeHighlightStyle,
+                    font: typography.monoPlatformFont(),
+                    identity: "\(card.toolCallID)\u{1}@\(face)" + (truncated ? "" : "-all"))
+            case .diff(let hunks, let face):
+                return DiffProducer(toolCallID: card.toolCallID, themeID: "\(themeID)", face: face,
+                                    hunks: hunks, add: theme.success, remove: theme.error,
+                                    context: theme.secondaryText)
+            case .label, .notice, .mono, .error:
+                return nil
+            }
+        }
+    }
+
     /// codemode's nested calls, one per line: status, name, args, duration.
     nonisolated static func scriptCallLines(_ calls: [ScriptCall]) -> String {
         calls.map { call in
@@ -81,9 +106,38 @@ extension ToolCardView {
         }.joined(separator: "\n")
     }
 
+    /// The parts grouped for drawing: a label travels with the part after it
+    /// (one tight section, like `labeled`), every other part stands alone.
+    nonisolated static func resultSections(_ parts: [ToolResultPart]) -> [[ToolResultPart]] {
+        var sections: [[ToolResultPart]] = []
+        var pendingLabel: ToolResultPart?
+        for part in parts {
+            if case .label = part {
+                if let label = pendingLabel { sections.append([label]) }
+                pendingLabel = part
+            } else if let label = pendingLabel {
+                sections.append([label, part])
+                pendingLabel = nil
+            } else {
+                sections.append([part])
+            }
+        }
+        if let label = pendingLabel { sections.append([label]) }
+        return sections
+    }
+
     /// Draw the result parts (same budget and producers as the input side).
     @ViewBuilder func resultView(_ parts: [ToolResultPart]) -> some View {
-        ForEach(Array(parts.enumerated()), id: \.offset) { _, part in
+        ForEach(Array(Self.resultSections(parts).enumerated()), id: \.offset) { _, section in
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(section.enumerated()), id: \.offset) { _, part in
+                    resultPartView(part)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func resultPartView(_ part: ToolResultPart) -> some View {
             switch part {
             case .label(let text):
                 // Section-label row — natural height ≈ TranscriptMetrics
@@ -107,6 +161,5 @@ extension ToolCardView {
             case .diff(let hunks, let face):
                 diffView(hunks, face: face)
             }
-        }
     }
 }

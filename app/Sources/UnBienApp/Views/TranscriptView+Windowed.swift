@@ -132,7 +132,11 @@ struct TranscriptStackView: View, Equatable {
         let content = ToolCardView.contentProducer(for: card, theme: theme,
                                                    typography: typography,
                                                    toolBudget: toolBudget)
-        guard diff != nil || content != nil else { return nil }
+        // The result section's highlighted code / output diffs (read files,
+        // codemode output), keyed exactly as the card draws them.
+        let result = ToolCardView.resultProducers(for: card, theme: theme, typography: typography,
+                                                  themeID: themeID)
+        guard diff != nil || content != nil || !result.isEmpty else { return nil }
         return {
             if let diff {
                 Task.detached(priority: .userInitiated) {
@@ -142,6 +146,11 @@ struct TranscriptStackView: View, Equatable {
             if let content {
                 Task.detached(priority: .userInitiated) {
                     _ = await AttributedTextCache.shared.attributed(content, scope: scope)
+                }
+            }
+            for producer in result {
+                Task.detached(priority: .userInitiated) {
+                    _ = await AttributedTextCache.shared.attributed(producer, scope: scope)
                 }
             }
         }
