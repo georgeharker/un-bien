@@ -1,0 +1,3321 @@
+{
+ "fixtures": [
+  {
+   "args": {
+    "command": "ls"
+   },
+   "expect": {
+    "category": "shell",
+    "face": "terminal",
+    "notices": [],
+    "text": "README.md\nsrc\n"
+   },
+   "id": "bash.ok",
+   "live": [
+    {
+     "args": {
+      "command": "ls"
+     },
+     "toolCallId": "call_bash_ok",
+     "toolName": "bash",
+     "type": "tool_execution_start"
+    },
+    {
+     "args": {
+      "command": "ls"
+     },
+     "partialResult": {
+      "content": [
+       {
+        "text": "README.md\n",
+        "type": "text"
+       }
+      ],
+      "details": {}
+     },
+     "toolCallId": "call_bash_ok",
+     "toolName": "bash",
+     "type": "tool_execution_update"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "README.md\nsrc\n",
+        "type": "text"
+       }
+      ]
+     },
+     "toolCallId": "call_bash_ok",
+     "toolName": "bash",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "bash: merged output as one text block; details undefined when not truncated",
+   "stored": [
+    {
+     "id": "a2bc9ff1",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "command": "ls"
+        },
+        "id": "call_bash_ok",
+        "name": "bash",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "r2bc9ff1",
+     "message": {
+      "content": [
+       {
+        "text": "README.md\nsrc\n",
+        "type": "text"
+       }
+      ],
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_bash_ok",
+      "toolName": "bash"
+     },
+     "parentId": "a2bc9ff1",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "bash",
+   "toolCallId": "call_bash_ok"
+  },
+  {
+   "args": {
+    "command": "true"
+   },
+   "expect": {
+    "category": "shell",
+    "face": "terminal",
+    "notices": [],
+    "text": ""
+   },
+   "id": "bash.ok-empty-details",
+   "live": [
+    {
+     "args": {
+      "command": "true"
+     },
+     "toolCallId": "call_bash_ok_empty_details",
+     "toolName": "bash",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "",
+        "type": "text"
+       }
+      ],
+      "details": {}
+     },
+     "toolCallId": "call_bash_ok_empty_details",
+     "toolName": "bash",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "bash: some runs persist details as {} (seen in session logs)",
+   "stored": [
+    {
+     "id": "a4654d3a",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "command": "true"
+        },
+        "id": "call_bash_ok_empty_details",
+        "name": "bash",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "r4654d3a",
+     "message": {
+      "content": [
+       {
+        "text": "",
+        "type": "text"
+       }
+      ],
+      "details": {},
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_bash_ok_empty_details",
+      "toolName": "bash"
+     },
+     "parentId": "a4654d3a",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "bash",
+   "toolCallId": "call_bash_ok_empty_details"
+  },
+  {
+   "args": {
+    "command": "make"
+   },
+   "expect": {
+    "category": "shell",
+    "face": "error",
+    "isError": true,
+    "text": "make: *** No rule to make target.\n\nCommand exited with code 2"
+   },
+   "id": "bash.exit-code",
+   "live": [
+    {
+     "args": {
+      "command": "make"
+     },
+     "toolCallId": "call_bash_exit_code",
+     "toolName": "bash",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": true,
+     "result": {
+      "content": [
+       {
+        "text": "make: *** No rule to make target.\n\nCommand exited with code 2",
+        "type": "text"
+       }
+      ],
+      "isError": true
+     },
+     "toolCallId": "call_bash_exit_code",
+     "toolName": "bash",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "bash: non-zero exit returns isError with 'Command exited with code N' appended after a blank line",
+   "stored": [
+    {
+     "id": "a7012141",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "command": "make"
+        },
+        "id": "call_bash_exit_code",
+        "name": "bash",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "r7012141",
+     "message": {
+      "content": [
+       {
+        "text": "make: *** No rule to make target.\n\nCommand exited with code 2",
+        "type": "text"
+       }
+      ],
+      "durationMs": 12,
+      "isError": true,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_bash_exit_code",
+      "toolName": "bash"
+     },
+     "parentId": "a7012141",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "bash",
+   "toolCallId": "call_bash_exit_code"
+  },
+  {
+   "args": {
+    "command": "sleep 100"
+   },
+   "expect": {
+    "category": "shell",
+    "face": "error",
+    "isError": true,
+    "text": "partial\n\nCommand aborted"
+   },
+   "id": "bash.aborted",
+   "live": [
+    {
+     "args": {
+      "command": "sleep 100"
+     },
+     "toolCallId": "call_bash_aborted",
+     "toolName": "bash",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": true,
+     "result": {
+      "content": [
+       {
+        "text": "partial\n\nCommand aborted",
+        "type": "text"
+       }
+      ],
+      "details": {},
+      "isError": true
+     },
+     "toolCallId": "call_bash_aborted",
+     "toolName": "bash",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "bash: abort throws 'Command aborted'; the loop's createErrorToolResult gives details {}",
+   "stored": [
+    {
+     "id": "a93956dc",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "command": "sleep 100"
+        },
+        "id": "call_bash_aborted",
+        "name": "bash",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "r93956dc",
+     "message": {
+      "content": [
+       {
+        "text": "partial\n\nCommand aborted",
+        "type": "text"
+       }
+      ],
+      "details": {},
+      "durationMs": 12,
+      "isError": true,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_bash_aborted",
+      "toolName": "bash"
+     },
+     "parentId": "a93956dc",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "bash",
+   "toolCallId": "call_bash_aborted"
+  },
+  {
+   "args": {
+    "command": "seq 4000"
+   },
+   "expect": {
+    "category": "shell",
+    "face": "terminal",
+    "notices": [
+     "Showing lines 2001-4000 of 4000. Full output: /var/folders/zz/T/pi-bash-1.log"
+    ],
+    "text": "2001\n2002\n"
+   },
+   "id": "bash.truncated",
+   "live": [
+    {
+     "args": {
+      "command": "seq 4000"
+     },
+     "toolCallId": "call_bash_truncated",
+     "toolName": "bash",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "2001\n2002\n\n[Showing lines 2001-4000 of 4000. Full output: /var/folders/zz/T/pi-bash-1.log]",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "fullOutputPath": "/var/folders/zz/T/pi-bash-1.log",
+       "truncation": {
+        "content": "2001\n2002\n",
+        "firstLineExceedsLimit": false,
+        "lastLinePartial": false,
+        "maxBytes": 51200,
+        "maxLines": 2000,
+        "outputBytes": 60000,
+        "outputLines": 2000,
+        "totalBytes": 120000,
+        "totalLines": 4000,
+        "truncated": true,
+        "truncatedBy": "lines"
+       }
+      }
+     },
+     "toolCallId": "call_bash_truncated",
+     "toolName": "bash",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "bash: tail kept; '[Showing lines a-b of N. Full output: path]' appended; details {truncation, fullOutputPath}",
+   "stored": [
+    {
+     "id": "a8b43b7d",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "command": "seq 4000"
+        },
+        "id": "call_bash_truncated",
+        "name": "bash",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "r8b43b7d",
+     "message": {
+      "content": [
+       {
+        "text": "2001\n2002\n\n[Showing lines 2001-4000 of 4000. Full output: /var/folders/zz/T/pi-bash-1.log]",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "fullOutputPath": "/var/folders/zz/T/pi-bash-1.log",
+       "truncation": {
+        "content": "2001\n2002\n",
+        "firstLineExceedsLimit": false,
+        "lastLinePartial": false,
+        "maxBytes": 51200,
+        "maxLines": 2000,
+        "outputBytes": 60000,
+        "outputLines": 2000,
+        "totalBytes": 120000,
+        "totalLines": 4000,
+        "truncated": true,
+        "truncatedBy": "lines"
+       }
+      },
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_bash_truncated",
+      "toolName": "bash"
+     },
+     "parentId": "a8b43b7d",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "bash",
+   "toolCallId": "call_bash_truncated"
+  },
+  {
+   "args": {
+    "command": "git diff"
+   },
+   "expect": {
+    "category": "shell",
+    "diffInOutput": true,
+    "face": "terminal"
+   },
+   "id": "bash.git-diff",
+   "live": [
+    {
+     "args": {
+      "command": "git diff"
+     },
+     "toolCallId": "call_bash_git_diff",
+     "toolName": "bash",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n",
+        "type": "text"
+       }
+      ]
+     },
+     "toolCallId": "call_bash_git_diff",
+     "toolName": "bash",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "bash: a unified diff in output (kept improvement: rendered as a diff)",
+   "stored": [
+    {
+     "id": "a4089d94",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "command": "git diff"
+        },
+        "id": "call_bash_git_diff",
+        "name": "bash",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "r4089d94",
+     "message": {
+      "content": [
+       {
+        "text": "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n",
+        "type": "text"
+       }
+      ],
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_bash_git_diff",
+      "toolName": "bash"
+     },
+     "parentId": "a4089d94",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "bash",
+   "toolCallId": "call_bash_git_diff"
+  },
+  {
+   "args": {
+    "path": "src/a.swift"
+   },
+   "expect": {
+    "category": "reads",
+    "face": "file",
+    "lang": "swift",
+    "text": "import Foundation\nlet x = 1\n"
+   },
+   "id": "read.text",
+   "live": [
+    {
+     "args": {
+      "path": "src/a.swift"
+     },
+     "toolCallId": "call_read_text",
+     "toolName": "read",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "import Foundation\nlet x = 1\n",
+        "type": "text"
+       }
+      ]
+     },
+     "toolCallId": "call_read_text",
+     "toolName": "read",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "read: the file text AS READ, no line numbers; details undefined",
+   "stored": [
+    {
+     "id": "a4b02e35",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "path": "src/a.swift"
+        },
+        "id": "call_read_text",
+        "name": "read",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "r4b02e35",
+     "message": {
+      "content": [
+       {
+        "text": "import Foundation\nlet x = 1\n",
+        "type": "text"
+       }
+      ],
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_read_text",
+      "toolName": "read"
+     },
+     "parentId": "a4b02e35",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "read",
+   "toolCallId": "call_read_text"
+  },
+  {
+   "args": {
+    "limit": 2,
+    "offset": 1,
+    "path": "src/a.ts"
+   },
+   "expect": {
+    "category": "reads",
+    "face": "file",
+    "lang": "typescript",
+    "notices": [
+     "120 more lines in file. Use offset=3 to continue."
+    ],
+    "text": "line1\nline2\n"
+   },
+   "id": "read.ranged",
+   "live": [
+    {
+     "args": {
+      "limit": 2,
+      "offset": 1,
+      "path": "src/a.ts"
+     },
+     "toolCallId": "call_read_ranged",
+     "toolName": "read",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "line1\nline2\n\n[120 more lines in file. Use offset=3 to continue.]",
+        "type": "text"
+       }
+      ]
+     },
+     "toolCallId": "call_read_ranged",
+     "toolName": "read",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "read: user limit stopped early -> '[N more lines in file. Use offset=K to continue.]'",
+   "stored": [
+    {
+     "id": "a544021c",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "limit": 2,
+         "offset": 1,
+         "path": "src/a.ts"
+        },
+        "id": "call_read_ranged",
+        "name": "read",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "r544021c",
+     "message": {
+      "content": [
+       {
+        "text": "line1\nline2\n\n[120 more lines in file. Use offset=3 to continue.]",
+        "type": "text"
+       }
+      ],
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_read_ranged",
+      "toolName": "read"
+     },
+     "parentId": "a544021c",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "read",
+   "toolCallId": "call_read_ranged"
+  },
+  {
+   "args": {
+    "path": "big.py"
+   },
+   "expect": {
+    "category": "reads",
+    "face": "file",
+    "lang": "python",
+    "notices": [
+     "Showing lines 1-2000 of 5000. Use offset=2001 to continue."
+    ],
+    "text": "x = 1\n"
+   },
+   "id": "read.truncated",
+   "live": [
+    {
+     "args": {
+      "path": "big.py"
+     },
+     "toolCallId": "call_read_truncated",
+     "toolName": "read",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "x = 1\n\n[Showing lines 1-2000 of 5000. Use offset=2001 to continue.]",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "truncation": {
+        "content": "x = 1\n",
+        "firstLineExceedsLimit": false,
+        "lastLinePartial": false,
+        "maxBytes": 51200,
+        "maxLines": 2000,
+        "outputBytes": 60000,
+        "outputLines": 2000,
+        "totalBytes": 120000,
+        "totalLines": 5000,
+        "truncated": true,
+        "truncatedBy": "lines"
+       }
+      }
+     },
+     "toolCallId": "call_read_truncated",
+     "toolName": "read",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "read: tool limit -> '[Showing lines a-b of N. Use offset=K to continue.]' + details {truncation}",
+   "stored": [
+    {
+     "id": "a0a2de4c",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "path": "big.py"
+        },
+        "id": "call_read_truncated",
+        "name": "read",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "r0a2de4c",
+     "message": {
+      "content": [
+       {
+        "text": "x = 1\n\n[Showing lines 1-2000 of 5000. Use offset=2001 to continue.]",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "truncation": {
+        "content": "x = 1\n",
+        "firstLineExceedsLimit": false,
+        "lastLinePartial": false,
+        "maxBytes": 51200,
+        "maxLines": 2000,
+        "outputBytes": 60000,
+        "outputLines": 2000,
+        "totalBytes": 120000,
+        "totalLines": 5000,
+        "truncated": true,
+        "truncatedBy": "lines"
+       }
+      },
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_read_truncated",
+      "toolName": "read"
+     },
+     "parentId": "a0a2de4c",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "read",
+   "toolCallId": "call_read_truncated"
+  },
+  {
+   "args": {
+    "path": "shot.png"
+   },
+   "expect": {
+    "category": "reads",
+    "face": "file",
+    "images": 1,
+    "text": "Read image file [image/png]"
+   },
+   "id": "read.image",
+   "live": [
+    {
+     "args": {
+      "path": "shot.png"
+     },
+     "toolCallId": "call_read_image",
+     "toolName": "read",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "Read image file [image/png]",
+        "type": "text"
+       },
+       {
+        "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+        "mimeType": "image/png",
+        "type": "image"
+       }
+      ]
+     },
+     "toolCallId": "call_read_image",
+     "toolName": "read",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "read: image -> 'Read image file [mime]' note + image block",
+   "stored": [
+    {
+     "id": "a209f294",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "path": "shot.png"
+        },
+        "id": "call_read_image",
+        "name": "read",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "r209f294",
+     "message": {
+      "content": [
+       {
+        "text": "Read image file [image/png]",
+        "type": "text"
+       },
+       {
+        "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+        "mimeType": "image/png",
+        "type": "image"
+       }
+      ],
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_read_image",
+      "toolName": "read"
+     },
+     "parentId": "a209f294",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "read",
+   "toolCallId": "call_read_image"
+  },
+  {
+   "args": {
+    "path": "missing.txt"
+   },
+   "expect": {
+    "category": "reads",
+    "face": "error",
+    "isError": true,
+    "text": "ENOENT: no such file or directory, access '/w/missing.txt'"
+   },
+   "id": "read.error",
+   "live": [
+    {
+     "args": {
+      "path": "missing.txt"
+     },
+     "toolCallId": "call_read_error",
+     "toolName": "read",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": true,
+     "result": {
+      "content": [
+       {
+        "text": "ENOENT: no such file or directory, access '/w/missing.txt'",
+        "type": "text"
+       }
+      ],
+      "details": {},
+      "isError": true
+     },
+     "toolCallId": "call_read_error",
+     "toolName": "read",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "read: thrown error -> createErrorToolResult (details {})",
+   "stored": [
+    {
+     "id": "afa8c829",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "path": "missing.txt"
+        },
+        "id": "call_read_error",
+        "name": "read",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "rfa8c829",
+     "message": {
+      "content": [
+       {
+        "text": "ENOENT: no such file or directory, access '/w/missing.txt'",
+        "type": "text"
+       }
+      ],
+      "details": {},
+      "durationMs": 12,
+      "isError": true,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_read_error",
+      "toolName": "read"
+     },
+     "parentId": "afa8c829",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "read",
+   "toolCallId": "call_read_error"
+  },
+  {
+   "args": {
+    "edits": [
+     {
+      "newText": "source \"$HOME/.env.sh\"\nCONTEXT=\"colima\"",
+      "oldText": "CONTEXT=\"colima\""
+     }
+    ],
+    "path": "/w/colima.sh"
+   },
+   "expect": {
+    "category": "edits",
+    "confirmation": "Successfully replaced 1 block(s) in /w/colima.sh.",
+    "diffFrom": "details.patch",
+    "face": "diff"
+   },
+   "id": "edit.ok",
+   "live": [
+    {
+     "args": {
+      "edits": [
+       {
+        "newText": "source \"$HOME/.env.sh\"\nCONTEXT=\"colima\"",
+        "oldText": "CONTEXT=\"colima\""
+       }
+      ],
+      "path": "/w/colima.sh"
+     },
+     "toolCallId": "call_edit_ok",
+     "toolName": "edit",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "Successfully replaced 1 block(s) in /w/colima.sh.",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "diff": "    ...\n  5 \n  6 export PATH=\"/opt/homebrew/bin:$PATH\"\n+ 7 source \"$HOME/.env.sh\"\n  7 CONTEXT=\"colima\"\n    ...",
+       "firstChangedLine": 7,
+       "patch": "--- /w/colima.sh\n+++ /w/colima.sh\n@@ -5,3 +5,4 @@\n \n export PATH=\"/opt/homebrew/bin:$PATH\"\n+source \"$HOME/.env.sh\"\n CONTEXT=\"colima\"\n"
+      }
+     },
+     "toolCallId": "call_edit_ok",
+     "toolName": "edit",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "edit: 'Successfully replaced N block(s) in path.' + details {diff (numbered display), patch (unified), firstChangedLine}",
+   "stored": [
+    {
+     "id": "a135ad08",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "edits": [
+          {
+           "newText": "source \"$HOME/.env.sh\"\nCONTEXT=\"colima\"",
+           "oldText": "CONTEXT=\"colima\""
+          }
+         ],
+         "path": "/w/colima.sh"
+        },
+        "id": "call_edit_ok",
+        "name": "edit",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "r135ad08",
+     "message": {
+      "content": [
+       {
+        "text": "Successfully replaced 1 block(s) in /w/colima.sh.",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "diff": "    ...\n  5 \n  6 export PATH=\"/opt/homebrew/bin:$PATH\"\n+ 7 source \"$HOME/.env.sh\"\n  7 CONTEXT=\"colima\"\n    ...",
+       "firstChangedLine": 7,
+       "patch": "--- /w/colima.sh\n+++ /w/colima.sh\n@@ -5,3 +5,4 @@\n \n export PATH=\"/opt/homebrew/bin:$PATH\"\n+source \"$HOME/.env.sh\"\n CONTEXT=\"colima\"\n"
+      },
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_edit_ok",
+      "toolName": "edit"
+     },
+     "parentId": "a135ad08",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "edit",
+   "toolCallId": "call_edit_ok"
+  },
+  {
+   "args": {
+    "newText": "x",
+    "oldText": "nope",
+    "path": "/w/a.ts"
+   },
+   "expect": {
+    "category": "edits",
+    "diffFrom": "args",
+    "face": "error",
+    "isError": true
+   },
+   "id": "edit.error",
+   "live": [
+    {
+     "args": {
+      "newText": "x",
+      "oldText": "nope",
+      "path": "/w/a.ts"
+     },
+     "toolCallId": "call_edit_error",
+     "toolName": "edit",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": true,
+     "result": {
+      "content": [
+       {
+        "text": "Could not edit file: /w/a.ts. The text to replace was not found.",
+        "type": "text"
+       }
+      ],
+      "details": {},
+      "isError": true
+     },
+     "toolCallId": "call_edit_error",
+     "toolName": "edit",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "edit: thrown 'Could not edit file: path. reason.' (details {})",
+   "stored": [
+    {
+     "id": "a15d9001",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "newText": "x",
+         "oldText": "nope",
+         "path": "/w/a.ts"
+        },
+        "id": "call_edit_error",
+        "name": "edit",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "r15d9001",
+     "message": {
+      "content": [
+       {
+        "text": "Could not edit file: /w/a.ts. The text to replace was not found.",
+        "type": "text"
+       }
+      ],
+      "details": {},
+      "durationMs": 12,
+      "isError": true,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_edit_error",
+      "toolName": "edit"
+     },
+     "parentId": "a15d9001",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "edit",
+   "toolCallId": "call_edit_error"
+  },
+  {
+   "args": {
+    "content": "#!/bin/sh\necho hi\n",
+    "path": "/w/x.sh"
+   },
+   "expect": {
+    "category": "writes",
+    "confirmation": "Successfully wrote to /w/x.sh",
+    "face": "confirmation"
+   },
+   "id": "write.ok",
+   "live": [
+    {
+     "args": {
+      "content": "#!/bin/sh\necho hi\n",
+      "path": "/w/x.sh"
+     },
+     "toolCallId": "call_write_ok",
+     "toolName": "write",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "Successfully wrote to /w/x.sh",
+        "type": "text"
+       }
+      ]
+     },
+     "toolCallId": "call_write_ok",
+     "toolName": "write",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "write: 'Successfully wrote to path'; details undefined",
+   "stored": [
+    {
+     "id": "ab074305",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "content": "#!/bin/sh\necho hi\n",
+         "path": "/w/x.sh"
+        },
+        "id": "call_write_ok",
+        "name": "write",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "rb074305",
+     "message": {
+      "content": [
+       {
+        "text": "Successfully wrote to /w/x.sh",
+        "type": "text"
+       }
+      ],
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_write_ok",
+      "toolName": "write"
+     },
+     "parentId": "ab074305",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "write",
+   "toolCallId": "call_write_ok"
+  },
+  {
+   "args": {
+    "path": "src",
+    "pattern": "TODO"
+   },
+   "expect": {
+    "category": "searches",
+    "face": "lines",
+    "notices": [],
+    "text": "src/a.ts:12: // TODO x\nsrc/b.ts:3: // TODO y"
+   },
+   "id": "grep.hits",
+   "live": [
+    {
+     "args": {
+      "path": "src",
+      "pattern": "TODO"
+     },
+     "toolCallId": "call_grep_hits",
+     "toolName": "grep",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "src/a.ts:12: // TODO x\nsrc/b.ts:3: // TODO y",
+        "type": "text"
+       }
+      ]
+     },
+     "toolCallId": "call_grep_hits",
+     "toolName": "grep",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "grep: 'path:line: text' lines; details undefined without notices",
+   "stored": [
+    {
+     "id": "aad48766",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "path": "src",
+         "pattern": "TODO"
+        },
+        "id": "call_grep_hits",
+        "name": "grep",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "rad48766",
+     "message": {
+      "content": [
+       {
+        "text": "src/a.ts:12: // TODO x\nsrc/b.ts:3: // TODO y",
+        "type": "text"
+       }
+      ],
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_grep_hits",
+      "toolName": "grep"
+     },
+     "parentId": "aad48766",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "grep",
+   "toolCallId": "call_grep_hits"
+  },
+  {
+   "args": {
+    "pattern": "zzz"
+   },
+   "expect": {
+    "category": "searches",
+    "face": "lines",
+    "text": "No matches found"
+   },
+   "id": "grep.none",
+   "live": [
+    {
+     "args": {
+      "pattern": "zzz"
+     },
+     "toolCallId": "call_grep_none",
+     "toolName": "grep",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "No matches found",
+        "type": "text"
+       }
+      ]
+     },
+     "toolCallId": "call_grep_none",
+     "toolName": "grep",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "grep: 'No matches found', details undefined",
+   "stored": [
+    {
+     "id": "af106aa8",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "pattern": "zzz"
+        },
+        "id": "call_grep_none",
+        "name": "grep",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "rf106aa8",
+     "message": {
+      "content": [
+       {
+        "text": "No matches found",
+        "type": "text"
+       }
+      ],
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_grep_none",
+      "toolName": "grep"
+     },
+     "parentId": "af106aa8",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "grep",
+   "toolCallId": "call_grep_none"
+  },
+  {
+   "args": {
+    "limit": 100,
+    "pattern": "x"
+   },
+   "expect": {
+    "category": "searches",
+    "face": "lines",
+    "notices": [
+     "100 matches limit reached. Use limit=200 for more, or refine pattern",
+     "Some lines truncated to 500 chars. Use read tool to see full lines"
+    ],
+    "text": "a.ts:1: x"
+   },
+   "id": "grep.limit",
+   "live": [
+    {
+     "args": {
+      "limit": 100,
+      "pattern": "x"
+     },
+     "toolCallId": "call_grep_limit",
+     "toolName": "grep",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "a.ts:1: x\n\n[100 matches limit reached. Use limit=200 for more, or refine pattern. Some lines truncated to 500 chars. Use read tool to see full lines]",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "linesTruncated": true,
+       "matchLimitReached": 100
+      }
+     },
+     "toolCallId": "call_grep_limit",
+     "toolName": "grep",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "grep: notices joined with '. ' inside one '[...]' after a blank line; details {matchLimitReached, linesTruncated}",
+   "stored": [
+    {
+     "id": "a2d88241",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "limit": 100,
+         "pattern": "x"
+        },
+        "id": "call_grep_limit",
+        "name": "grep",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "r2d88241",
+     "message": {
+      "content": [
+       {
+        "text": "a.ts:1: x\n\n[100 matches limit reached. Use limit=200 for more, or refine pattern. Some lines truncated to 500 chars. Use read tool to see full lines]",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "linesTruncated": true,
+       "matchLimitReached": 100
+      },
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_grep_limit",
+      "toolName": "grep"
+     },
+     "parentId": "a2d88241",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "grep",
+   "toolCallId": "call_grep_limit"
+  },
+  {
+   "args": {
+    "path": "app",
+    "pattern": "*.swift"
+   },
+   "expect": {
+    "category": "searches",
+    "face": "lines",
+    "text": "app/A.swift\napp/B.swift"
+   },
+   "id": "find.hits",
+   "live": [
+    {
+     "args": {
+      "path": "app",
+      "pattern": "*.swift"
+     },
+     "toolCallId": "call_find_hits",
+     "toolName": "find",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "app/A.swift\napp/B.swift",
+        "type": "text"
+       }
+      ]
+     },
+     "toolCallId": "call_find_hits",
+     "toolName": "find",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "find: one path per line",
+   "stored": [
+    {
+     "id": "aefc345f",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "path": "app",
+         "pattern": "*.swift"
+        },
+        "id": "call_find_hits",
+        "name": "find",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "refc345f",
+     "message": {
+      "content": [
+       {
+        "text": "app/A.swift\napp/B.swift",
+        "type": "text"
+       }
+      ],
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_find_hits",
+      "toolName": "find"
+     },
+     "parentId": "aefc345f",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "find",
+   "toolCallId": "call_find_hits"
+  },
+  {
+   "args": {
+    "pattern": "*.zz"
+   },
+   "expect": {
+    "category": "searches",
+    "face": "lines",
+    "text": "No files found matching pattern"
+   },
+   "id": "find.none",
+   "live": [
+    {
+     "args": {
+      "pattern": "*.zz"
+     },
+     "toolCallId": "call_find_none",
+     "toolName": "find",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "No files found matching pattern",
+        "type": "text"
+       }
+      ]
+     },
+     "toolCallId": "call_find_none",
+     "toolName": "find",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "find: 'No files found matching pattern'",
+   "stored": [
+    {
+     "id": "afb09d25",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "pattern": "*.zz"
+        },
+        "id": "call_find_none",
+        "name": "find",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "rfb09d25",
+     "message": {
+      "content": [
+       {
+        "text": "No files found matching pattern",
+        "type": "text"
+       }
+      ],
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_find_none",
+      "toolName": "find"
+     },
+     "parentId": "afb09d25",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "find",
+   "toolCallId": "call_find_none"
+  },
+  {
+   "args": {
+    "path": "empty"
+   },
+   "expect": {
+    "category": "searches",
+    "face": "lines",
+    "text": "(empty directory)"
+   },
+   "id": "ls.empty",
+   "live": [
+    {
+     "args": {
+      "path": "empty"
+     },
+     "toolCallId": "call_ls_empty",
+     "toolName": "ls",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "(empty directory)",
+        "type": "text"
+       }
+      ]
+     },
+     "toolCallId": "call_ls_empty",
+     "toolName": "ls",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "ls: '(empty directory)'",
+   "stored": [
+    {
+     "id": "aced747e",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "path": "empty"
+        },
+        "id": "call_ls_empty",
+        "name": "ls",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "rced747e",
+     "message": {
+      "content": [
+       {
+        "text": "(empty directory)",
+        "type": "text"
+       }
+      ],
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_ls_empty",
+      "toolName": "ls"
+     },
+     "parentId": "aced747e",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "ls",
+   "toolCallId": "call_ls_empty"
+  },
+  {
+   "args": {
+    "code": "return await tools.github_get_latest_release({repo: 'x'})"
+   },
+   "expect": {
+    "calls": 1,
+    "category": "codemode",
+    "face": "script",
+    "text": "{\"tag_name\":\"v1\"}"
+   },
+   "id": "codemode.completed",
+   "live": [
+    {
+     "args": {
+      "code": "return await tools.github_get_latest_release({repo: 'x'})"
+     },
+     "toolCallId": "call_codemode_completed",
+     "toolName": "codemode",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "Script completed\nWall time 0.9 seconds\nOutput:\n",
+        "type": "text"
+       },
+       {
+        "text": "{\"tag_name\":\"v1\"}",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "calls": [
+        {
+         "args": "{\"repo\":\"x\"}",
+         "durationMs": 420,
+         "id": "call_cm/1",
+         "name": "github_get_latest_release",
+         "status": "ok"
+        }
+       ]
+      }
+     },
+     "toolCallId": "call_codemode_completed",
+     "toolName": "codemode",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "codemode: header block 'Script completed\\nWall time S seconds\\nOutput:\\n' then output blocks; details {calls}",
+   "stored": [
+    {
+     "id": "a7ddeacd",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "code": "return await tools.github_get_latest_release({repo: 'x'})"
+        },
+        "id": "call_codemode_completed",
+        "name": "codemode",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "r7ddeacd",
+     "message": {
+      "content": [
+       {
+        "text": "Script completed\nWall time 0.9 seconds\nOutput:\n",
+        "type": "text"
+       },
+       {
+        "text": "{\"tag_name\":\"v1\"}",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "calls": [
+        {
+         "args": "{\"repo\":\"x\"}",
+         "durationMs": 420,
+         "id": "call_cm/1",
+         "name": "github_get_latest_release",
+         "status": "ok"
+        }
+       ]
+      },
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_codemode_completed",
+      "toolName": "codemode"
+     },
+     "parentId": "a7ddeacd",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "codemode",
+   "toolCallId": "call_codemode_completed"
+  },
+  {
+   "args": {
+    "code": "throw new Error('boom')"
+   },
+   "expect": {
+    "category": "codemode",
+    "face": "error",
+    "isError": true,
+    "text": "Script error:\nError: boom"
+   },
+   "id": "codemode.failed",
+   "live": [
+    {
+     "args": {
+      "code": "throw new Error('boom')"
+     },
+     "toolCallId": "call_codemode_failed",
+     "toolName": "codemode",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": true,
+     "result": {
+      "content": [
+       {
+        "text": "Script failed\nWall time 0.1 seconds\nOutput:\n",
+        "type": "text"
+       },
+       {
+        "text": "Script error:\nError: boom",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "calls": []
+      },
+      "isError": true
+     },
+     "toolCallId": "call_codemode_failed",
+     "toolName": "codemode",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "codemode: 'Script failed' header, 'Script error:\\n…' item, isError true",
+   "stored": [
+    {
+     "id": "add04511",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "code": "throw new Error('boom')"
+        },
+        "id": "call_codemode_failed",
+        "name": "codemode",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "rdd04511",
+     "message": {
+      "content": [
+       {
+        "text": "Script failed\nWall time 0.1 seconds\nOutput:\n",
+        "type": "text"
+       },
+       {
+        "text": "Script error:\nError: boom",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "calls": []
+      },
+      "durationMs": 12,
+      "isError": true,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_codemode_failed",
+      "toolName": "codemode"
+     },
+     "parentId": "add04511",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "codemode",
+   "toolCallId": "call_codemode_failed"
+  },
+  {
+   "args": {
+    "code": "// @options: {bad"
+   },
+   "expect": {
+    "category": "codemode",
+    "face": "error",
+    "isError": true
+   },
+   "id": "codemode.rejected",
+   "live": [
+    {
+     "args": {
+      "code": "// @options: {bad"
+     },
+     "toolCallId": "call_codemode_rejected",
+     "toolName": "codemode",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": true,
+     "result": {
+      "content": [
+       {
+        "text": "Invalid @options line: expected JSON",
+        "type": "text"
+       }
+      ],
+      "details": {},
+      "isError": true
+     },
+     "toolCallId": "call_codemode_rejected",
+     "toolName": "codemode",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "codemode: invalid options rejected before running: no header",
+   "stored": [
+    {
+     "id": "a2dd5a2d",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "code": "// @options: {bad"
+        },
+        "id": "call_codemode_rejected",
+        "name": "codemode",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "r2dd5a2d",
+     "message": {
+      "content": [
+       {
+        "text": "Invalid @options line: expected JSON",
+        "type": "text"
+       }
+      ],
+      "details": {},
+      "durationMs": 12,
+      "isError": true,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_codemode_rejected",
+      "toolName": "codemode"
+     },
+     "parentId": "a2dd5a2d",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "codemode",
+   "toolCallId": "call_codemode_rejected"
+  },
+  {
+   "args": {
+    "args": "{}",
+    "tool": "cribsheet_note_lookup"
+   },
+   "expect": {
+    "category": "mcp",
+    "face": "text",
+    "text": "[{\"relpath\":\"a.md\"}]"
+   },
+   "id": "mcp.call",
+   "live": [
+    {
+     "args": {
+      "args": "{}",
+      "tool": "cribsheet_note_lookup"
+     },
+     "toolCallId": "call_mcp_call",
+     "toolName": "mcp",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "[{\"relpath\":\"a.md\"}]",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "mode": "call",
+       "server": "cribsheet",
+       "tool": "cribsheet_note_lookup"
+      }
+     },
+     "toolCallId": "call_mcp_call",
+     "toolName": "mcp",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "mcp: upstream content passed through; details {mode:'call', server, tool}",
+   "stored": [
+    {
+     "id": "a20c2c89",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "args": "{}",
+         "tool": "cribsheet_note_lookup"
+        },
+        "id": "call_mcp_call",
+        "name": "mcp",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "r20c2c89",
+     "message": {
+      "content": [
+       {
+        "text": "[{\"relpath\":\"a.md\"}]",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "mode": "call",
+       "server": "cribsheet",
+       "tool": "cribsheet_note_lookup"
+      },
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_mcp_call",
+      "toolName": "mcp"
+     },
+     "parentId": "a20c2c89",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "mcp",
+   "toolCallId": "call_mcp_call"
+  },
+  {
+   "args": {
+    "search": "crib"
+   },
+   "expect": {
+    "category": "mcp",
+    "face": "text"
+   },
+   "id": "mcp.search",
+   "live": [
+    {
+     "args": {
+      "search": "crib"
+     },
+     "toolCallId": "call_mcp_search",
+     "toolName": "mcp",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "2 of ~2 matches for \"crib\"\ncribsheet_a — x\ncribsheet_b — y",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "count": 2,
+       "mode": "search",
+       "query": "crib"
+      }
+     },
+     "toolCallId": "call_mcp_search",
+     "toolName": "mcp",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "mcp: search mode; details {mode:'search', query, count}",
+   "stored": [
+    {
+     "id": "ac791530",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "search": "crib"
+        },
+        "id": "call_mcp_search",
+        "name": "mcp",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "rc791530",
+     "message": {
+      "content": [
+       {
+        "text": "2 of ~2 matches for \"crib\"\ncribsheet_a — x\ncribsheet_b — y",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "count": 2,
+       "mode": "search",
+       "query": "crib"
+      },
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_mcp_search",
+      "toolName": "mcp"
+     },
+     "parentId": "ac791530",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "mcp",
+   "toolCallId": "call_mcp_search"
+  },
+  {
+   "args": {
+    "args": "{}",
+    "tool": "svg-mcp_render_document"
+   },
+   "expect": {
+    "category": "mcp",
+    "face": "text",
+    "images": 1
+   },
+   "id": "mcp.image",
+   "live": [
+    {
+     "args": {
+      "args": "{}",
+      "tool": "svg-mcp_render_document"
+     },
+     "toolCallId": "call_mcp_image",
+     "toolName": "mcp",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "rendered",
+        "type": "text"
+       },
+       {
+        "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+        "mimeType": "image/png",
+        "type": "image"
+       }
+      ],
+      "details": {
+       "mode": "call",
+       "server": "svg-mcp",
+       "tool": "svg-mcp_render_document"
+      }
+     },
+     "toolCallId": "call_mcp_image",
+     "toolName": "mcp",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "mcp: image content from an upstream tool",
+   "stored": [
+    {
+     "id": "a5a85e2b",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "args": "{}",
+         "tool": "svg-mcp_render_document"
+        },
+        "id": "call_mcp_image",
+        "name": "mcp",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "r5a85e2b",
+     "message": {
+      "content": [
+       {
+        "text": "rendered",
+        "type": "text"
+       },
+       {
+        "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+        "mimeType": "image/png",
+        "type": "image"
+       }
+      ],
+      "details": {
+       "mode": "call",
+       "server": "svg-mcp",
+       "tool": "svg-mcp_render_document"
+      },
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_mcp_image",
+      "toolName": "mcp"
+     },
+     "parentId": "a5a85e2b",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "mcp",
+   "toolCallId": "call_mcp_image"
+  },
+  {
+   "args": {
+    "description": "review",
+    "prompt": "…"
+   },
+   "expect": {
+    "category": "agents",
+    "face": "text"
+   },
+   "id": "subagent.ok",
+   "live": [
+    {
+     "args": {
+      "description": "review",
+      "prompt": "…"
+     },
+     "toolCallId": "call_subagent_ok",
+     "toolName": "subagent",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "**Verdict: ready.**\n\n- one\n- two",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "description": "review",
+       "displayName": "Agent",
+       "durationMs": 5000,
+       "status": "completed",
+       "subagentType": "general-purpose",
+       "tokens": "10k",
+       "toolUses": 3
+      }
+     },
+     "toolCallId": "call_subagent_ok",
+     "toolName": "subagent",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "@gotgenes/pi-subagents agent tool: the agent's answer; details AgentDetails",
+   "stored": [
+    {
+     "id": "ace334f8",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "description": "review",
+         "prompt": "…"
+        },
+        "id": "call_subagent_ok",
+        "name": "subagent",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "rce334f8",
+     "message": {
+      "content": [
+       {
+        "text": "**Verdict: ready.**\n\n- one\n- two",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "description": "review",
+       "displayName": "Agent",
+       "durationMs": 5000,
+       "status": "completed",
+       "subagentType": "general-purpose",
+       "tokens": "10k",
+       "toolUses": 3
+      },
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_subagent_ok",
+      "toolName": "subagent"
+     },
+     "parentId": "ace334f8",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "subagent",
+   "toolCallId": "call_subagent_ok"
+  },
+  {
+   "args": {
+    "url": "https://x.dev"
+   },
+   "expect": {
+    "category": "web",
+    "face": "text"
+   },
+   "id": "web_fetch.ok",
+   "live": [
+    {
+     "args": {
+      "url": "https://x.dev"
+     },
+     "toolCallId": "call_web_fetch_ok",
+     "toolName": "web_fetch",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "**Fetched:** https://x.dev\n**Content-Type:** text/html\n\n# Title",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "contentType": "text/html",
+       "url": "https://x.dev"
+      }
+     },
+     "toolCallId": "call_web_fetch_ok",
+     "toolName": "web_fetch",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "@juicesharp/rpiv-web-tools web_fetch: markdown by convention; details {url, contentType}",
+   "stored": [
+    {
+     "id": "abc6eb80",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "url": "https://x.dev"
+        },
+        "id": "call_web_fetch_ok",
+        "name": "web_fetch",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "rbc6eb80",
+     "message": {
+      "content": [
+       {
+        "text": "**Fetched:** https://x.dev\n**Content-Type:** text/html\n\n# Title",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "contentType": "text/html",
+       "url": "https://x.dev"
+      },
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_web_fetch_ok",
+      "toolName": "web_fetch"
+     },
+     "parentId": "abc6eb80",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "web_fetch",
+   "toolCallId": "call_web_fetch_ok"
+  },
+  {
+   "args": {
+    "body": "hi",
+    "to": "x@y"
+   },
+   "expect": {
+    "category": "other",
+    "face": "text"
+   },
+   "id": "agent_send.ok",
+   "live": [
+    {
+     "args": {
+      "body": "hi",
+      "to": "x@y"
+     },
+     "toolCallId": "call_agent_send_ok",
+     "toolName": "agent_send",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "Delivered to \"x@y\" — peer will process it in an upcoming turn.",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "id": "01a",
+       "ok": true,
+       "status": "received",
+       "target": "x@y"
+      }
+     },
+     "toolCallId": "call_agent_send_ok",
+     "toolName": "agent_send",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "un-bien agent_send: one line; details {ok, status, target, id}",
+   "stored": [
+    {
+     "id": "a2f1a244",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "body": "hi",
+         "to": "x@y"
+        },
+        "id": "call_agent_send_ok",
+        "name": "agent_send",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "r2f1a244",
+     "message": {
+      "content": [
+       {
+        "text": "Delivered to \"x@y\" — peer will process it in an upcoming turn.",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "id": "01a",
+       "ok": true,
+       "status": "received",
+       "target": "x@y"
+      },
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_agent_send_ok",
+      "toolName": "agent_send"
+     },
+     "parentId": "a2f1a244",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "agent_send",
+   "toolCallId": "call_agent_send_ok"
+  },
+  {
+   "args": {
+    "body": "q",
+    "to": "x@y"
+   },
+   "expect": {
+    "category": "other",
+    "face": "text",
+    "text": "the answer"
+   },
+   "id": "agent_request.reply",
+   "live": [
+    {
+     "args": {
+      "body": "q",
+      "to": "x@y"
+     },
+     "toolCallId": "call_agent_request_reply",
+     "toolName": "agent_request",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "the answer",
+        "type": "text"
+       }
+      ],
+      "details": "the answer"
+     },
+     "toolCallId": "call_agent_request_reply",
+     "toolName": "agent_request",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "un-bien agent_request: success returns details = the reply BODY, any JSON (here a string); pi types details as JsonValue",
+   "stored": [
+    {
+     "id": "a1394bd0",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "body": "q",
+         "to": "x@y"
+        },
+        "id": "call_agent_request_reply",
+        "name": "agent_request",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "r1394bd0",
+     "message": {
+      "content": [
+       {
+        "text": "the answer",
+        "type": "text"
+       }
+      ],
+      "details": "the answer",
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_agent_request_reply",
+      "toolName": "agent_request"
+     },
+     "parentId": "a1394bd0",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "agent_request",
+   "toolCallId": "call_agent_request_reply"
+  },
+  {
+   "args": {
+    "re": "01a"
+   },
+   "expect": {
+    "category": "other",
+    "face": "text"
+   },
+   "id": "mesh_wait_message.timeout",
+   "live": [
+    {
+     "args": {
+      "re": "01a"
+     },
+     "toolCallId": "call_mesh_wait_message_timeout",
+     "toolName": "mesh_wait_message",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "No message within 30000ms.",
+        "type": "text"
+       }
+      ],
+      "details": null
+     },
+     "toolCallId": "call_mesh_wait_message_timeout",
+     "toolName": "mesh_wait_message",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "un-bien mesh_wait_message: a timed-out wait returns details null",
+   "stored": [
+    {
+     "id": "a9c487c3",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "re": "01a"
+        },
+        "id": "call_mesh_wait_message_timeout",
+        "name": "mesh_wait_message",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "r9c487c3",
+     "message": {
+      "content": [
+       {
+        "text": "No message within 30000ms.",
+        "type": "text"
+       }
+      ],
+      "details": null,
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_mesh_wait_message_timeout",
+      "toolName": "mesh_wait_message"
+     },
+     "parentId": "a9c487c3",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "mesh_wait_message",
+   "toolCallId": "call_mesh_wait_message_timeout"
+  },
+  {
+   "args": {},
+   "expect": {
+    "category": "other",
+    "face": "error",
+    "isError": true,
+    "text": "Tool nonexistent not found"
+   },
+   "id": "tool.not-found",
+   "live": [
+    {
+     "args": {},
+     "toolCallId": "call_tool_not_found",
+     "toolName": "nonexistent",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": true,
+     "result": {
+      "content": [
+       {
+        "text": "Tool nonexistent not found",
+        "type": "text"
+       }
+      ],
+      "details": {},
+      "isError": true
+     },
+     "toolCallId": "call_tool_not_found",
+     "toolName": "nonexistent",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "pi-agent-core: unknown tool -> createErrorToolResult('Tool NAME not found')",
+   "stored": [
+    {
+     "id": "ae5057f4",
+     "message": {
+      "content": [
+       {
+        "arguments": {},
+        "id": "call_tool_not_found",
+        "name": "nonexistent",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "re5057f4",
+     "message": {
+      "content": [
+       {
+        "text": "Tool nonexistent not found",
+        "type": "text"
+       }
+      ],
+      "details": {},
+      "durationMs": 12,
+      "isError": true,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_tool_not_found",
+      "toolName": "nonexistent"
+     },
+     "parentId": "ae5057f4",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "nonexistent",
+   "toolCallId": "call_tool_not_found"
+  },
+  {
+   "args": {
+    "command": "ls"
+   },
+   "expect": {
+    "category": "shell",
+    "diagnostics": [
+     "[error] Tool call blocked: denied by policy"
+    ],
+    "face": "terminal",
+    "text": "a\n"
+   },
+   "id": "durable.diagnostics",
+   "live": [
+    {
+     "args": {
+      "command": "ls"
+     },
+     "toolCallId": "call_durable_diagnostics",
+     "toolName": "bash",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "a\n",
+        "type": "text"
+       },
+       {
+        "text": "<harness>\n[error] Tool call blocked: denied by policy\n</harness>",
+        "type": "text"
+       }
+      ],
+      "details": {}
+     },
+     "toolCallId": "call_durable_diagnostics",
+     "toolName": "bash",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "pi-durable: diagnostics rendered as a trailing '<harness>' text block; structured list in entry data (not on the wire)",
+   "stored": [
+    {
+     "id": "ab7eb1e5",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "command": "ls"
+        },
+        "id": "call_durable_diagnostics",
+        "name": "bash",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "rb7eb1e5",
+     "message": {
+      "content": [
+       {
+        "text": "a\n",
+        "type": "text"
+       },
+       {
+        "text": "<harness>\n[error] Tool call blocked: denied by policy\n</harness>",
+        "type": "text"
+       }
+      ],
+      "details": {},
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_durable_diagnostics",
+      "toolName": "bash"
+     },
+     "parentId": "ab7eb1e5",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "bash",
+   "toolCallId": "call_durable_diagnostics"
+  },
+  {
+   "args": {
+    "command": "ls"
+   },
+   "compat": "live result is a bare string; stored entry is pi-shaped",
+   "expect": {
+    "category": "shell",
+    "face": "terminal",
+    "text": "a\nb"
+   },
+   "id": "compat.string-result",
+   "live": [
+    {
+     "args": {
+      "command": "ls"
+     },
+     "toolCallId": "call_compat_string_result",
+     "toolName": "bash",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": "a\nb",
+     "toolCallId": "call_compat_string_result",
+     "toolName": "bash",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "pre-1.5 un-bien durable translator: tool_execution_end result was the joined text string",
+   "stored": [
+    {
+     "id": "a44a4719",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "command": "ls"
+        },
+        "id": "call_compat_string_result",
+        "name": "bash",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "r44a4719",
+     "message": {
+      "content": [
+       {
+        "text": "a\nb",
+        "type": "text"
+       }
+      ],
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_compat_string_result",
+      "toolName": "bash"
+     },
+     "parentId": "a44a4719",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "bash",
+   "toolCallId": "call_compat_string_result"
+  },
+  {
+   "args": {
+    "pattern": "x"
+   },
+   "compat": "details do not validate against pi's GrepToolDetails -> text fallback",
+   "expect": {
+    "category": "searches",
+    "face": "text",
+    "text": "a.ts:1: x"
+   },
+   "id": "compat.foreign-grep",
+   "live": [
+    {
+     "args": {
+      "pattern": "x"
+     },
+     "toolCallId": "call_compat_foreign_grep",
+     "toolName": "grep",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "a.ts:1: x",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "fileCount": 1,
+       "kind": "content",
+       "output": "a.ts:1: x",
+       "query": "x",
+       "resultCount": 1,
+       "timedOut": false,
+       "truncated": false
+      }
+     },
+     "toolCallId": "call_compat_foreign_grep",
+     "toolName": "grep",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "pi-find (@tian.zuo/pi-find) grep: same NAME as pi's builtin, different details",
+   "stored": [
+    {
+     "id": "ae113881",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "pattern": "x"
+        },
+        "id": "call_compat_foreign_grep",
+        "name": "grep",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "re113881",
+     "message": {
+      "content": [
+       {
+        "text": "a.ts:1: x",
+        "type": "text"
+       }
+      ],
+      "details": {
+       "fileCount": 1,
+       "kind": "content",
+       "output": "a.ts:1: x",
+       "query": "x",
+       "resultCount": 1,
+       "timedOut": false,
+       "truncated": false
+      },
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_compat_foreign_grep",
+      "toolName": "grep"
+     },
+     "parentId": "ae113881",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "grep",
+   "toolCallId": "call_compat_foreign_grep"
+  },
+  {
+   "args": {
+    "newText": "b",
+    "oldText": "a",
+    "path": "/w/a.ts"
+   },
+   "compat": "no details.patch -> diff from the stored args (no line numbers)",
+   "expect": {
+    "category": "edits",
+    "diffFrom": "args",
+    "face": "diff"
+   },
+   "id": "compat.edit-no-details",
+   "live": [
+    {
+     "args": {
+      "newText": "b",
+      "oldText": "a",
+      "path": "/w/a.ts"
+     },
+     "toolCallId": "call_compat_edit_no_details",
+     "toolName": "edit",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "Successfully replaced 1 block(s) in /w/a.ts.",
+        "type": "text"
+       }
+      ]
+     },
+     "toolCallId": "call_compat_edit_no_details",
+     "toolName": "edit",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "older pi: edit result without details (no diff/patch in the record)",
+   "stored": [
+    {
+     "id": "a7fcc40d",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "newText": "b",
+         "oldText": "a",
+         "path": "/w/a.ts"
+        },
+        "id": "call_compat_edit_no_details",
+        "name": "edit",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "r7fcc40d",
+     "message": {
+      "content": [
+       {
+        "text": "Successfully replaced 1 block(s) in /w/a.ts.",
+        "type": "text"
+       }
+      ],
+      "durationMs": 12,
+      "isError": false,
+      "role": "toolResult",
+      "timestamp": 1794000000002,
+      "toolCallId": "call_compat_edit_no_details",
+      "toolName": "edit"
+     },
+     "parentId": "a7fcc40d",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "edit",
+   "toolCallId": "call_compat_edit_no_details"
+  },
+  {
+   "args": {
+    "command": "cat huge"
+   },
+   "compat": "replay has no toolResult; the card keeps its live value or shows 'result not available'",
+   "expect": {
+    "category": "shell",
+    "face": "terminal",
+    "replayAvailable": false
+   },
+   "id": "compat.elided-entry",
+   "live": [
+    {
+     "args": {
+      "command": "cat huge"
+     },
+     "toolCallId": "call_compat_elided_entry",
+     "toolName": "bash",
+     "type": "tool_execution_start"
+    },
+    {
+     "isError": false,
+     "result": {
+      "content": [
+       {
+        "text": "…",
+        "type": "text"
+       }
+      ]
+     },
+     "toolCallId": "call_compat_elided_entry",
+     "toolName": "bash",
+     "type": "tool_execution_end"
+    }
+   ],
+   "spec": "un-bien extension fitEntryForTransport: an entry over 5 MiB is replaced by an assistant placeholder",
+   "stored": [
+    {
+     "id": "af438674",
+     "message": {
+      "content": [
+       {
+        "arguments": {
+         "command": "cat huge"
+        },
+        "id": "call_compat_elided_entry",
+        "name": "bash",
+        "type": "toolCall"
+       }
+      ],
+      "role": "assistant",
+      "timestamp": 1794000000001
+     },
+     "parentId": null,
+     "timestamp": "2026-11-12T00:00:01.000Z",
+     "type": "message"
+    },
+    {
+     "id": "rf438674",
+     "message": {
+      "content": [
+       {
+        "text": "[entry rX exceeds the transport ceiling — content elided]",
+        "type": "text"
+       }
+      ],
+      "role": "assistant"
+     },
+     "parentId": "af438674",
+     "timestamp": "2026-11-12T00:00:02.000Z",
+     "type": "message"
+    }
+   ],
+   "tool": "bash",
+   "toolCallId": "call_compat_elided_entry"
+  }
+ ],
+ "schema": 1,
+ "source": "Transcribed from pi-coding-agent / pi-agent-core 1.5.0 tool sources; see each fixture's spec."
+}
