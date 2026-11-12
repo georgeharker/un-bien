@@ -71,6 +71,7 @@ import { DurableTranscriptMirror, UN_BIEN_APP_KIND } from "./mirror.js"
 import { ConversationViewSource } from "./event_source.js"
 import { DEFAULT_THINKING_LEVEL, ensureThinkingLevel } from "./thinking.js"
 import { DurableAgentConfig } from "./agent_config.js"
+import { envelopeOptions } from "./envelope_options.js"
 
 /** App-defined entry kind carrying un-bien custom entries (data-only
  *  sidecars: display text + details payload). */
@@ -251,8 +252,10 @@ export class DurableBridge {
         : null
     this.events.start()
     this.rpcEnvelope?.dispose()
-    this.rpcEnvelope = createRpcEnvelope(this.events, (env) =>
-      this.broadcast(env),
+    this.rpcEnvelope = createRpcEnvelope(
+      this.events,
+      (env) => this.broadcast(env),
+      envelopeOptions(this.opts.cwd),
     )
     // The conversation's session clock: a fresh attach (first start or a
     // retarget to a NEW conversation) restamps; a restart re-attaching the

@@ -61,6 +61,9 @@ export {
   type EnvelopeMessage,
 } from "./session/rpc_envelope.js"
 export { dispatchRpcCommand } from "./session/rpc_inbound.js"
+// An edit call's diff hunks from its args and the file (the envelope's
+// aux.hunks on tool_execution_start), as the pi binding sends them.
+export { _enrichToolArgs } from "./enrich_tool_args.js"
 export {
   createRpcHandlers,
   type RpcHandlersDeps,

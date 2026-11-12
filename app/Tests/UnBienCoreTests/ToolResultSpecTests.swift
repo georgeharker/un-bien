@@ -21,6 +21,8 @@ final class ToolResultSpecTests: XCTestCase {
         let live: [JSONValue]
         let stored: [JSONValue]
         let compat: String?
+        /// The envelope sidecar on the start frame (an edit's aux.hunks).
+        let liveAux: JSONValue?
         let expect: JSONValue
 
         /// The settled live result object (tool_execution_end.result).
@@ -57,6 +59,7 @@ final class ToolResultSpecTests: XCTestCase {
                     live: f["live"]?.arrayValue ?? [],
                     stored: f["stored"]?.arrayValue ?? [],
                     compat: f["compat"]?.stringValue,
+                    liveAux: f["liveAux"],
                     expect: f["expect"] ?? .object([:]))
         }
     }
@@ -210,6 +213,24 @@ final class ToolResultSpecTests: XCTestCase {
     }
 
     // MARK: - 4. Live vs replay through the reducer, as it stands
+
+    /// An edit's start frame, delivered as the envelope it rode (with its
+    /// aux.hunks sidecar), lands the hunks on the running card: a durable
+    /// edit shows its diff with context and line numbers while it runs, as a
+    /// pi edit does.
+    func testLiveAuxHunksReachTheRunningCard() throws {
+        let withAux = try loadCatalog().filter { $0.liveAux != nil }
+        XCTAssertFalse(withAux.isEmpty, "the durable catalog records an edit's aux")
+        for f in withAux {
+            guard let start = f.live.first(where: { $0["type"]?.stringValue == "tool_execution_start" })
+            else { XCTFail(f.id); continue }
+            var reducer = EnvelopeReducer()
+            reducer.apply(EnvelopeMessage(rpc: start, aux: f.liveAux))
+            let running = card(in: reducer.session, f.toolCallID)
+            XCTAssertEqual(running?.state, .running, f.id)
+            XCTAssertEqual(running?.hunks, f.liveAux?["hunks"]?.arrayValue, "\(f.id): live hunks")
+        }
+    }
 
     private func liveCard(_ f: Fixture) -> ToolCard? {
         var state = SessionState()

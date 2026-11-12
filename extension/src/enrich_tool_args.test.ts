@@ -77,6 +77,13 @@ describe("_enrichToolArgs — edit diff enrichment", () => {
     expect(contextTexts).toContain("line4")
   })
 
+  it("builds no hunk for an edit whose old text is not in the file", () => {
+    // The edit already landed (durable reports its start after the tool ran).
+    const p = tempFile("done.ts", "a\nb\nnew line\nd\n")
+    const args = { path: p, edits: [{ oldText: "old line", newText: "new line" }] }
+    expect(_enrichToolArgs("edit", args)).toEqual(args)
+  })
+
   it("returns the base args (no hunks) when the file cannot be read", () => {
     const args = {
       path: "/no/such/unbien/file.txt",

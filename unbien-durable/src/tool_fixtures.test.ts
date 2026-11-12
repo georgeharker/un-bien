@@ -30,6 +30,7 @@ import { CodingTools } from "@earendil-works/pi-durable/tools"
 import { createRpcEnvelope } from "@geohar/un-bien/durable"
 import { ConversationViewSource } from "./event_source.js"
 import { DurableTranscriptMirror } from "./mirror.js"
+import { envelopeOptions } from "./envelope_options.js"
 
 const ctx = BACKGROUND_CONTEXT
 const CATALOG = join(dirname(fileURLToPath(import.meta.url)),
@@ -135,9 +136,12 @@ async function capture(s: Scenario) {
   const frames: Record<string, Json>[] = []
   let settled: () => void = () => undefined
   const done = new Promise<void>((resolve) => { settled = resolve })
+  const auxByCall = new Map<string, Json>()
   createRpcEnvelope(source, (env) => {
-    frames.push(env.rpc as Record<string, Json>)
-  })
+    const rpc = env.rpc as Record<string, Json>
+    frames.push(rpc)
+    if (env.aux !== undefined) auxByCall.set(String(rpc.toolCallId), env.aux as Json)
+  }, envelopeOptions(cwd))
   source.on("agent_settled", () => settled())
   await source.open()
   source.start()
@@ -149,7 +153,7 @@ async function capture(s: Scenario) {
   await conversation.submit({ type: "input", content: [{ type: "text", text: "go" }] }, ctx)
   await done
   const wire = mirror.page().entries as unknown as Record<string, Json>[]
-  return { cwd, callId, frames, wire }
+  return { cwd, callId, frames, wire, aux: auxByCall.get(callId) ?? null }
 }
 
 /** Stable values for the committed catalog: the temp cwd, spill paths,
@@ -181,7 +185,16 @@ describe("durable tool results reach the app as pi tool results", () => {
   it("live equals stored for every CodingTools call; the catalog matches", async () => {
     const fixtures: Json[] = []
     for (const s of SCENARIOS) {
-      const { cwd, callId, frames, wire } = await capture(s)
+      const { cwd, callId, frames, wire, aux } = await capture(s)
+      // An edit's start frame carries its diff hunks (aux.hunks) as in a pi
+      // session: the replaced line removed, its replacement added.
+      if (s.tool === "edit") {
+        const lines = ((aux as { hunks?: { lines?: Json[] }[] } | null)?.hunks ?? []).flatMap((h) => h.lines ?? [])
+        expect(lines, `${s.id}: aux.hunks`).toContainEqual({ kind: "remove", oldLine: 2, text: "b=2" })
+        expect(lines, `${s.id}: aux.hunks`).toContainEqual({ kind: "add", newLine: 2, text: "b=3" })
+      } else {
+        expect(aux, `${s.id}: no aux`).toBeNull()
+      }
       const tool = frames.filter((f) => typeof f.type === "string" &&
         f.type.startsWith("tool_execution_") && f.toolCallId === callId)
       const end = tool.find((f) => f.type === "tool_execution_end")
@@ -210,6 +223,8 @@ describe("durable tool results reach the app as pi tool results", () => {
         id: s.id, spec: s.spec, tool: s.tool, toolCallId: callId, args: s.args,
         // The settled frames (start, end): partial-update counts depend on timing.
         live: tool.filter((f) => f.type !== "tool_execution_update"),
+        // The envelope sidecar on the start frame (an edit's aux.hunks).
+        ...(aux === null ? {} : { liveAux: aux }),
         // The call and its result, linked as one path.
         stored: [
           { ...callEntry!, parentId: null },

@@ -706,6 +706,42 @@
      "isError": false
     }
    ],
+   "liveAux": {
+    "hunks": [
+     {
+      "lines": [
+       {
+        "kind": "context",
+        "oldLine": 1,
+        "newLine": 1,
+        "text": "a=1"
+       },
+       {
+        "kind": "remove",
+        "oldLine": 2,
+        "text": "b=2"
+       },
+       {
+        "kind": "add",
+        "newLine": 2,
+        "text": "b=3"
+       },
+       {
+        "kind": "context",
+        "oldLine": 3,
+        "newLine": 3,
+        "text": "c=3"
+       },
+       {
+        "kind": "context",
+        "oldLine": 4,
+        "newLine": 4,
+        "text": ""
+       }
+      ]
+     }
+    ]
+   },
    "stored": [
     {
      "type": "message",
