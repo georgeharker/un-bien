@@ -78,7 +78,9 @@ extension AppModel {
         // hs3.4.0: mono lines estimate at their drawn height (whole points on
         // macOS) and the tool-card chrome is per platform. hs3.5.0: Preview
         // cards (reads and searches by default) draw a shortened result.
-        let schema = "hs3.5.0"
+        // hs3.6.0: web / agent results draw as markdown; prose soft breaks
+        // and inline markup estimate as drawn.
+        let schema = "hs3.6.0"
         let tools = "\(toolDisplayPolicy.fingerprint)|hideInput=\(hideInputWhenRich)"
         return "\(themeID.rawValue)|\(body)|\(mono)|\(String(format: "%.2f", textScale))|\(tools)|\(schema)"
     }

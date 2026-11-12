@@ -347,6 +347,13 @@ struct TranscriptView: View {
                 if debugActivityHUD { DebugActivityHUD().padding(8) }
                 #endif
             }
+            // Jump to the newest content, shown while the reader is away
+            // from it (the pin is off: they scrolled up, or a restore landed
+            // mid-transcript). An overlay, so rows never move for it.
+            .overlay(alignment: .bottomTrailing) {
+                if !shouldPin { jumpToEndButton }
+            }
+            .animation(.easeInOut(duration: 0.15), value: shouldPin)
             // Per-card expand/toggle state that survives row windowing
             // (ToolCardView reads/writes it keyed by toolCallID).
             .environment(\.cardUIState, cardUIState)
@@ -820,6 +827,31 @@ struct TranscriptView: View {
         }
     }
 
+    private var jumpToEndButton: some View {
+        Button(action: scrollToEnd) {
+            Image(systemName: "arrow.down")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(theme.text)
+                .frame(width: 40, height: 40)
+                .background(theme.surface, in: Circle())
+                .overlay(Circle().stroke(theme.secondaryText.opacity(0.3), lineWidth: 1))
+                .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Jump to the newest message")
+        .padding(12)
+        .transition(.opacity.combined(with: .scale(scale: 0.8)))
+    }
+
+    /// Explicit read-the-newest intent (the jump button, a double-tap on the
+    /// composer's chrome, a submit): cancel a pending restore, pin the
+    /// bottom, bind the sentinel.
+    private func scrollToEnd() {
+        cancelPendingRestore()
+        shouldPin = true
+        scrollAnchor = Self.bottomSentinelID
+    }
+
     private var inputBar: some View {
         // Submitting is intent to engage the newest content: cancel any
         // pending backfill-wait restore (their position wins), arm the pin,
@@ -831,14 +863,7 @@ struct TranscriptView: View {
             // binding set is the phase-free command.
             shouldPin = true
             scrollAnchor = Self.bottomSentinelID
-        }, onScrollToEnd: {
-            // Double-tap on the bar's chrome = explicit read-the-newest
-            // intent: same policy as submit — cancel a pending restore,
-            // pin the bottom, bind the sentinel.
-            cancelPendingRestore()
-            shouldPin = true
-            scrollAnchor = Self.bottomSentinelID
-        })
+        }, onScrollToEnd: scrollToEnd)
         .equatable()
     }
 
