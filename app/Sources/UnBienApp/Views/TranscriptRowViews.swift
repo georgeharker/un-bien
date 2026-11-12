@@ -647,6 +647,8 @@ struct ToolCardView: View {
             } else if showsInputSection(for: card, hideInputRich: hideInputRich) {
                 n += 1                       // "input"
             }
+            let shellFace = content?.lang == "shell"
+            if shellFace { n += 1 }          // "COMMAND"
             if !blocks.isEmpty {
                 // A "DIFF" label belongs to the hunks face only; the historical
                 // text face renders bare, as code blocks do.
@@ -654,7 +656,7 @@ struct ToolCardView: View {
                     $0["kind"]?.stringValue == "diff"
                         && !($0["hunks"]?.arrayValue ?? []).isEmpty
                 }.count
-            } else if content != nil {
+            } else if content != nil, !shellFace {
                 n += 1                       // "CONTENT"
             } else if card.result != nil {
                 n += 1                       // "output"
@@ -764,7 +766,20 @@ struct ToolCardView: View {
                                   !(hideInputRich && !knownOutputBlocks.isEmpty) {
                             labeled("input", derived.argsPretty)
                         }
-                        if !knownOutputBlocks.isEmpty {
+                        if let face = derived.content, face.lang == "shell" {
+                            // A shell call: the command is the input, so its
+                            // output still follows (blocks, else plain text).
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("COMMAND").font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(theme.secondaryText)
+                                codeView(face.text, lang: face.lang)
+                            }
+                            if !knownOutputBlocks.isEmpty {
+                                outputBlocksView
+                            } else if let output = derived.outputPretty {
+                                labeled("output", output)
+                            }
+                        } else if !knownOutputBlocks.isEmpty {
                             outputBlocksView
                         } else if let content = derived.content {
                             // Replay floor: no live diff, so show the new text

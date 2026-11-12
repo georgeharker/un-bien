@@ -127,6 +127,22 @@ final class ToolCardContentFaceTests: XCTestCase {
         XCTAssertFalse(ToolCardView.isRich(card(tool: "bash", args: [:])))
     }
 
+    func testShellCardShowsTheCommandAndThenItsOutput() {
+        // Plain output (no classified block): COMMAND + "output" sections.
+        let plain = ToolCard(toolCallID: "t1", tool: "bash",
+                             args: ["command": .string("ls")], result: .string("a\nb"), state: .ok)
+        XCTAssertEqual(ToolCardView.sectionLabels(for: plain, hideInputRich: true), 2)
+        // Classified output: COMMAND, then the code block (which draws no label).
+        let blocks = ToolCard(toolCallID: "t2", tool: "bash", args: ["command": .string("make")],
+                              result: nil, state: .ok,
+                              output: .object(["v": .number(1), "blocks": .array([.object([
+                                  "kind": .string("code"), "text": .string("ok")])])]))
+        XCTAssertEqual(ToolCardView.sectionLabels(for: blocks, hideInputRich: true), 1)
+        // An edit's content face still stands in for its bare result.
+        let write = card(tool: "write", args: ["content": .string("x")])
+        XCTAssertEqual(ToolCardView.sectionLabels(for: write, hideInputRich: true), 1)
+    }
+
     func testBashFamilyPatternCoversShellTools() {
         // The same pattern the OUTPUT classifier uses (shared via
         // ToolOutputClassifier.isBashFamily — the two must never disagree).
