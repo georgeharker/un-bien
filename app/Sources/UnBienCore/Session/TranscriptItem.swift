@@ -175,9 +175,13 @@ public struct ToolCard: Equatable, Sendable {
     /// The card renders each block whose `kind` it knows (diff, code) in order
     /// and skips the rest; an empty/all-unknown list → raw `result` JSON fallback.
     public var output: JSONValue?
+    /// How long the tool ran (ms): the stored message's `durationMs`, or the
+    /// live frame's when it carries one. nil when neither does.
+    public var durationMs: Int?
     public init(toolCallID: String, tool: String, args: [String: JSONValue],
                 result: JSONValue? = nil, error: String? = nil, state: State = .running,
-                images: [WireImage] = [], hunks: [JSONValue]? = nil, output: JSONValue? = nil) {
+                images: [WireImage] = [], hunks: [JSONValue]? = nil, output: JSONValue? = nil,
+                durationMs: Int? = nil) {
         self.toolCallID = toolCallID
         self.tool = tool
         self.args = args
@@ -187,6 +191,7 @@ public struct ToolCard: Equatable, Sendable {
         self.images = images
         self.hunks = hunks
         self.output = output
+        self.durationMs = durationMs
     }
 }
 

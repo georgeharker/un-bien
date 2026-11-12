@@ -244,22 +244,63 @@ final class ToolResultSpecTests: XCTestCase {
         }
     }
 
-    /// KNOWN DEFECT (fixed by stage 1, plan 01M77YF8E4HYB9Y2J1C7N1NCAK): replay
-    /// hands the reducer `content` alone (details dropped, array shape), so the
-    /// replayed card's result and classification differ from live, and a live
-    /// card's replay fold overwrites them. Strict: once stage 1 makes the paths
-    /// equal this test fails, and the expectation is removed with the fix.
-    func testReplayDiffersFromLiveUntilStageOne() throws {
-        let fixtures = try loadCatalog().filter { $0.compat == nil }
-        XCTExpectFailure("stage 1: replay drops details and reshapes the result", strict: true) {
-            for f in fixtures {
-                guard let live = liveCard(f), let replay = replayCard(f),
-                      let folded = liveThenReplayCard(f) else { continue }
-                XCTAssertEqual(live.result, replay.result, "\(f.id): result")
-                XCTAssertEqual(live.output, replay.output, "\(f.id): output")
-                XCTAssertEqual(live.result, folded.result, "\(f.id): fold kept the live result")
-                XCTAssertEqual(live.output, folded.output, "\(f.id): fold kept the live output")
+    /// Stage 1: live and replay hold ONE canonical result value, so the
+    /// replayed card equals the live one and a live card's replay fold leaves
+    /// it unchanged. Includes the compat producers whose record holds a
+    /// toolResult: a string result (pre-1.5 durable) canonicalizes to the same
+    /// value the stored message gives.
+    func testReplayEqualsLiveAndTheFoldKeepsIt() throws {
+        for f in try loadCatalog() where f.storedResult != nil {
+            guard let live = liveCard(f), let replay = replayCard(f),
+                  let folded = liveThenReplayCard(f) else {
+                XCTFail("\(f.id): a path built no card"); continue
             }
+            XCTAssertEqual(live.result, replay.result, "\(f.id): result")
+            XCTAssertEqual(live.output, replay.output, "\(f.id): output")
+            XCTAssertEqual(live.images, replay.images, "\(f.id): images")
+            XCTAssertEqual(live.state, replay.state, "\(f.id): state")
+            XCTAssertEqual(live.result, folded.result, "\(f.id): fold kept the live result")
+            XCTAssertEqual(live.output, folded.output, "\(f.id): fold kept the live output")
+            // The duration comes from the record (the forwarded live frame
+            // carries none today), and survives the fold.
+            let stored = f.storedResult?["durationMs"]?.intValue
+            XCTAssertEqual(replay.durationMs, stored, "\(f.id): durationMs")
+            XCTAssertEqual(folded.durationMs, stored, "\(f.id): fold durationMs")
+        }
+    }
+
+    /// The canonical value is `{content, details?}`: details kept exactly as
+    /// sent (absent, an object, a string, null), live-only fields dropped.
+    func testCanonicalResultKeepsContentAndDetailsOnly() throws {
+        for f in try loadCatalog() where f.storedResult != nil {
+            guard let card = replayCard(f), let result = card.result?.objectValue else {
+                XCTFail("\(f.id): no canonical result"); continue
+            }
+            XCTAssertTrue(Set(result.keys).isSubset(of: ["content", "details"]), "\(f.id): keys")
+            XCTAssertEqual(result["content"], f.storedResult?["content"], "\(f.id): content")
+            XCTAssertEqual(result["details"], f.storedResult?.objectValue?["details"], "\(f.id): details")
+        }
+        // A live object's extra fields don't survive.
+        let extra: JSONValue = .object(["content": .array([]), "details": .string("d"),
+                                        "structuredContent": .object([:]), "isError": .bool(true),
+                                        "terminate": .bool(true)])
+        XCTAssertEqual(SessionState.canonicalToolResult(extra),
+                       .object(["content": .array([]), "details": .string("d")]))
+    }
+
+    /// A failed card's error text is its content's text (pi puts a thrown
+    /// error's message, an exit status, or a script error there).
+    func testFailedCardsCarryTheirErrorText() throws {
+        for f in try loadCatalog() where f.expect["isError"]?.boolValue == true {
+            guard let card = replayCard(f) else { XCTFail(f.id); continue }
+            XCTAssertEqual(card.state, .failed, f.id)
+            XCTAssertNotNil(card.errorText, "\(f.id): error text")
+            if let expected = f.expect["text"]?.stringValue {
+                XCTAssertTrue(card.errorText?.contains(expected) ?? false, "\(f.id): error text content")
+            }
+        }
+        for f in try loadCatalog() where f.expect["isError"]?.boolValue != true && !f.liveIsError {
+            XCTAssertNil(replayCard(f)?.errorText, "\(f.id): no error text on success")
         }
     }
 }

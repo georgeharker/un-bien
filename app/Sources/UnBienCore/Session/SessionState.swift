@@ -386,12 +386,13 @@ public struct SessionState: Equatable, Sendable {
     /// card exists (an unknown-id fill is a replay straggler, not output).
     @discardableResult
     private mutating func fillToolCard(toolCallID: String, result: JSONValue?, error: String?,
-                                       images: [WireImage] = []) -> Bool {
+                                       images: [WireImage] = [], durationMs: Int? = nil) -> Bool {
         guard let index = toolIndex[toolCallID], case var .tool(card) = items[index] else { return false }
         card.result = result
         card.error = error
         card.state = error == nil ? .ok : .failed
         if !images.isEmpty { card.images = images }
+        if let durationMs { card.durationMs = durationMs }
         // OUTPUT classification is APP-SIDE (design 01M177AF): classify the
         // persisted result here so a get_entries replay (which synthesizes
         // tool_execution_end → this same path) is enriched identically to live.
@@ -472,14 +473,17 @@ public struct SessionState: Equatable, Sendable {
             }
         case "tool_execution_update":
             if updateToolCard(toolCallID: frame["toolCallId"]?.stringValue ?? "",
-                              partial: frame["partialResult"]) {
+                              partial: Self.canonicalToolResult(frame["partialResult"])) {
                 liveArrivals += 1
             }
         case "tool_execution_end":
+            // One canonical value for live and replay (SessionState+ToolResult).
             let isError = frame["isError"]?.boolValue ?? false
+            let result = Self.canonicalToolResult(frame["result"])
             if fillToolCard(toolCallID: frame["toolCallId"]?.stringValue ?? "",
-                           result: frame["result"], error: isError ? "error" : nil,
-                           images: Self.imagesFromToolResult(frame["result"])) {
+                           result: result, error: isError ? "error" : nil,
+                           images: Self.imagesFromToolResult(result),
+                           durationMs: frame["durationMs"]?.intValue) {
                 liveArrivals += 1
             }
         case "compaction_end":

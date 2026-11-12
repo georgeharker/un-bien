@@ -69,8 +69,10 @@ extension AppModel {
         // Highlightr-era heights fought the new measurements — the "…"
         // bounced on every relaunch instead of settling once), budget changes,
         // row-structure changes. Stale entries then fail to seed and are
-        // overwritten at the first flush.
-        let schema = "hs3.1.0"
+        // overwritten at the first flush. hs3.2.0: replayed tool cards carry
+        // their result's details and classify like live ones (tool faces
+        // stage 1), so their bodies render differently.
+        let schema = "hs3.2.0"
         return "\(themeID.rawValue)|\(body)|\(mono)|\(String(format: "%.2f", textScale))|\(schema)"
     }
 

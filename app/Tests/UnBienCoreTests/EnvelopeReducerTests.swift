@@ -160,11 +160,15 @@ final class EnvelopeReducerTests: XCTestCase {
         let blocks = try XCTUnwrap(card.output?["blocks"]?.arrayValue)
         XCTAssertEqual(blocks.count, 1)
         XCTAssertEqual(blocks[0]["kind"]?.stringValue, "diff")
-        XCTAssertEqual(card.result?.stringValue, "@@ -1 +1 @@\n-a\n+b")   // raw untouched
+        // The card holds the canonical {content, details?} value: a bare
+        // string result arrives as its one text block (SessionState+ToolResult).
+        XCTAssertEqual(card.result?["content"]?.arrayValue?.first?["text"]?.stringValue,
+                       "@@ -1 +1 @@\n-a\n+b")
     }
 
     /// A read result is classified into a `code` block, with `lang` inferred
-    /// from the tool's `args.path` extension. Raw rpc.result stays untouched.
+    /// from the tool's `args.path` extension. The card holds the canonical
+    /// result value (the string as one text block).
     func testReadResultClassifiedToCodeBlock() throws {
         let lines = [
             #"{"rpc":{"type":"tool_execution_start","toolCallId":"tc7","toolName":"read","args":{"path":"/a/Foo.swift"}}}"#,
@@ -180,7 +184,7 @@ final class EnvelopeReducerTests: XCTestCase {
         XCTAssertEqual(blocks[0]["kind"]?.stringValue, "code")
         XCTAssertEqual(blocks[0]["text"]?.stringValue, "let x = 1")
         XCTAssertEqual(blocks[0]["lang"]?.stringValue, "swift")
-        XCTAssertEqual(card.result?.stringValue, "let x = 1")
+        XCTAssertEqual(card.result?["content"]?.arrayValue?.first?["text"]?.stringValue, "let x = 1")
     }
 
     /// The whole point of moving classification app-side: a `get_entries` REPLAY
@@ -274,7 +278,8 @@ final class EnvelopeReducerTests: XCTestCase {
         let rebornCard = try XCTUnwrap(toolCards(replay.session).first)
         XCTAssertEqual(rebornCard.hunks?.count, 1, "entry rebirth must NOT strip live hunks")
         XCTAssertEqual(rebornCard.hunks?.first?["lines"]?.arrayValue?.count, 2)
-        XCTAssertEqual(rebornCard.result?.stringValue, "ok", "result survives the rebirth")
+        XCTAssertEqual(rebornCard.result?["content"]?.arrayValue?.first?["text"]?.stringValue, "ok",
+                       "result survives the rebirth")
     }
     // MARK: - Stage 0 — branch-aware fold (design 01M1FTV2)
 

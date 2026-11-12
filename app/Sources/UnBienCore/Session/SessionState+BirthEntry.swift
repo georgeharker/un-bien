@@ -85,10 +85,13 @@ extension SessionState {
                                   "message": msg,
                                   "entryId": entry["id"] ?? .null]))
             case "toolResult":
+                // The stored message's content AND details, in the live
+                // result shape, so the replayed card equals the live one.
                 applyRPC(.object(["type": .string("tool_execution_end"),
                                   "toolCallId": msg["toolCallId"] ?? .string(""),
-                                  "result": msg["content"] ?? .null,
-                                  "isError": msg["isError"] ?? .bool(false)]))
+                                  "result": Self.storedToolResult(msg) ?? .null,
+                                  "isError": msg["isError"] ?? .bool(false),
+                                  "durationMs": msg["durationMs"] ?? .null]))
             default:
                 break
             }
