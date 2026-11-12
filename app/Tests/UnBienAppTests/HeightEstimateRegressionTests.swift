@@ -276,39 +276,27 @@ final class HeightEstimateRegressionTests: XCTestCase {
         let diffHunks: [JSONValue] = [
             hunk([("context", "func old() {"), ("remove", "  return 0"), ("add", "  return 1"), ("context", "}")]),
         ]
-        let codeOutput: JSONValue = .object([
-            "v": .number(1),
-            "blocks": .array([.object(["kind": .string("code"), "text": .string("out1\nout2\nout3"), "lang": .string("bash")])]),
-        ])
-        // OUTPUT-as-diff: the shape the corpus was missing. A `diff` block
-        // carries `hunks`, not `text`, so it contributed zero estimated lines
-        // while rendering a full diff — invisible here until this case existed.
-        let diffOutput: JSONValue = .object([
-            "v": .number(1),
-            "blocks": .array([.object([
-                "kind": .string("diff"),
-                "hunks": .array([hunk([
-                    ("context", "@@ tool output diff @@"),
-                    ("remove", "  let oldValue = computeTheThing(withAVeryLongArgumentName: true)"),
-                    ("add", "  let newValue = computeTheThing(withAVeryLongArgumentName: false)"),
-                    ("context", "  return newValue"),
-                ])]),
-            ])]),
-        ])
-        // HISTORICAL diff output: text instead of hunks. Replay carries this
-        // shape, and it wraps like any other long code line.
-        let historicalDiffOutput: JSONValue = .object([
-            "v": .number(1),
-            "blocks": .array([.object([
-                "kind": .string("diff"),
-                "text": .string("""
-                @@ historical @@
-                -  let oldValue = computeTheThing(withAVeryLongArgumentName: true)
-                +  let newValue = computeTheThing(withAVeryLongArgumentName: false)
-                   return newValue
-                """),
-            ])]),
-        ])
+        // Results as tools return them ({content}); each face draws from them.
+        func textResult(_ text: String) -> JSONValue {
+            .object(["content": .array([.object(["type": .string("text"), "text": .string(text)])])])
+        }
+        let codeOutput = textResult("out1\nout2\nout3")
+        // Shell output that is a unified diff shows as a diff.
+        let diffOutput = textResult("""
+        diff --git a/x.swift b/x.swift
+        @@ -1,2 +1,2 @@
+        -  let oldValue = computeTheThing(withAVeryLongArgumentName: true)
+        +  let newValue = computeTheThing(withAVeryLongArgumentName: false)
+           return newValue
+        """)
+        // A malformed hunk header: plain terminal text that wraps like any
+        // other long line.
+        let historicalDiffOutput = textResult("""
+        @@ historical @@
+        -  let oldValue = computeTheThing(withAVeryLongArgumentName: true)
+        +  let newValue = computeTheThing(withAVeryLongArgumentName: false)
+           return newValue
+        """)
         let cases: [(String, ToolCard, Double)] = [
             // BUDGETS (2026-09-11): tightened 40-100 -> 12 after the wrap,
             // section-label, hideInputRich, trailing-newline and cold-cache
@@ -334,17 +322,17 @@ final class HeightEstimateRegressionTests: XCTestCase {
                       state: .ok, hunks: diffHunks), 12),
             ("card-code-output",
              ToolCard(toolCallID: "t3", tool: "bash", args: ["command": .string("make")],
-                      result: nil, state: .ok, output: codeOutput), 12),
+                      result: codeOutput, state: .ok), 12),
             ("card-diff-output",
              ToolCard(toolCallID: "t8", tool: "bash", args: ["command": .string("git diff")],
-                      result: nil, state: .ok, output: diffOutput), 12),
+                      result: diffOutput, state: .ok), 12),
             ("card-diff-historical",
              ToolCard(toolCallID: "t9", tool: "bash", args: ["command": .string("git show")],
-                      result: nil, state: .ok, output: historicalDiffOutput), 12),
+                      result: historicalDiffOutput, state: .ok), 12),
             ("card-codemode-output",
              ToolCard(toolCallID: "t10", tool: "codemode",
                       args: ["code": .string("const r = await tools.read({path: 'a'})\nreturn r")],
-                      result: nil, state: .ok, output: codeOutput), 12),
+                      result: textResult("Script completed\n\nout1\nout2\nout3"), state: .ok), 12),
             ("card-switcher",
              ToolCard(toolCallID: "t4", tool: "edit",
                       args: ["path": .string("/a.swift"), "new_string": .string("let x = 2\nlet y = 3")],

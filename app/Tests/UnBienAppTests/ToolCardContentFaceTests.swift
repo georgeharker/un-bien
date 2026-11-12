@@ -185,38 +185,34 @@ final class ToolCardContentFaceTests: XCTestCase {
 
     func testBashFamilyPatternCoversShellTools() {
         // The same pattern the OUTPUT classifier uses (shared via
-        // ToolOutputClassifier.isBashFamily — the two must never disagree).
+        // ToolKinds.isBashFamily — the two must never disagree).
         for tool in ["bash", "shell", "zsh", "sh", "exec", "command", "run", "terminal"] {
-            XCTAssertTrue(ToolOutputClassifier.isBashFamily(tool), "\(tool) should be bash-family")
+            XCTAssertTrue(ToolKinds.isBashFamily(tool), "\(tool) should be bash-family")
         }
-        XCTAssertFalse(ToolOutputClassifier.isBashFamily("codemode"))
-        XCTAssertFalse(ToolOutputClassifier.isBashFamily("read"))
-        XCTAssertFalse(ToolOutputClassifier.isBashFamily("edit"))
-        XCTAssertFalse(ToolOutputClassifier.isBashFamily("grep"))
+        XCTAssertFalse(ToolKinds.isBashFamily("codemode"))
+        XCTAssertFalse(ToolKinds.isBashFamily("read"))
+        XCTAssertFalse(ToolKinds.isBashFamily("edit"))
+        XCTAssertFalse(ToolKinds.isBashFamily("grep"))
     }
 
     // MARK: - codemode result blocks (output side)
 
-    func testCodemodeResultClassifiesAsCodeBlock() {
+    func testCodemodeResultIsTheScriptFace() {
         // The JS meta-tool's result (console logs + the return value's JSON)
-        // used to fall through the output classifier (only bash/read families
-        // gated) and render as the RAW result JSON wrapper — the
-        // "non-formatted block post codemode". Now it classifies as a code
-        // block, language omitted so the highlighter auto-detects (the
-        // output mixes prose logs and JSON — a forced language mis-colors).
-        let result = "Script completed\n\n{\"template\":\"rendered block: [HELLO → FROM → CODEMODE]\",\"isTest\":true}"
-        let blocks = ToolOutputClassifier.classify(tool: "codemode", result: .string(result), args: nil)
-        let block = blocks?["blocks"]?.arrayValue?.first
-        XCTAssertEqual(block?["kind"]?.stringValue, "code")
-        XCTAssertNil(block?["lang"]?.stringValue, "auto-detect, not a forced language")
-        XCTAssertEqual(block?["text"]?.stringValue, result)
-        // The legacy name classifies the same.
-        let legacy = ToolOutputClassifier.classify(tool: "mcpscript", result: .string(result), args: nil)
-        XCTAssertEqual(legacy?["blocks"]?.arrayValue?.first?["kind"]?.stringValue, "code")
-        // And the family helper agrees with the face detection.
-        XCTAssertTrue(ToolOutputClassifier.isCodemodeFamily("codemode"))
-        XCTAssertTrue(ToolOutputClassifier.isCodemodeFamily("mcpscript"))
-        XCTAssertFalse(ToolOutputClassifier.isCodemodeFamily("bash"))
+        // shows as its output, highlighted with the language auto-detected,
+        // under either name, with the "Script completed" header dropped.
+        let output = "{\"template\":\"rendered block: [HELLO → FROM → CODEMODE]\",\"isTest\":true}"
+        for tool in ["codemode", "mcpscript"] {
+            let card = ToolCard(toolCallID: "c", tool: tool, args: ["code": .string("return 1")],
+                                result: .object(["content": .array([
+                                    .object(["type": .string("text"),
+                                             "text": .string("Script completed\nWall time 0.4 seconds\nOutput:\n")]),
+                                    .object(["type": .string("text"), "text": .string(output)]),
+                                ])]),
+                                state: .ok)
+            XCTAssertEqual(ToolCardView.resultParts(for: card),
+                           [.label("output"), .code(output, lang: nil, face: "output")], tool)
+        }
     }
 
     // MARK: - search tools (pi's grep/find) → shell-shaped face

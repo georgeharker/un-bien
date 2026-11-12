@@ -53,12 +53,38 @@ public struct ToolResultView: Equatable, Sendable {
     public let face: ToolFace
     public let category: ToolCategory
     public let diagnostics: [String]
+
+    /// Whether the result has a structured face (terminal output, a file, a
+    /// diff, a confirmation, lines, a script) rather than plain text, an
+    /// error or nothing yet. "Hide input on rich results" hides the raw
+    /// arguments of such cards.
+    public var isStructured: Bool {
+        switch face {
+        case .terminal, .file, .diff, .confirmation, .lines, .script: return true
+        case .pending, .error, .text: return false
+        }
+    }
+
+    /// The face's name (conformance projection, logs).
+    public var faceName: String {
+        switch face {
+        case .pending: return "pending"
+        case .terminal(_, _, let diff): return diff == nil ? "terminal" : "terminal-diff"
+        case .file: return "file"
+        case .diff: return "diff"
+        case .confirmation: return "confirmation"
+        case .lines: return "lines"
+        case .script: return "script"
+        case .error: return "error"
+        case .text: return "text"
+        }
+    }
 }
 
 public enum ToolFaceResolver {
     public static func category(tool: String) -> ToolCategory {
-        if ToolOutputClassifier.isBashFamily(tool) { return .shell }
-        if ToolOutputClassifier.isCodemodeFamily(tool) { return .codemode }
+        if ToolKinds.isBashFamily(tool) { return .shell }
+        if ToolKinds.isCodemodeFamily(tool) { return .codemode }
         switch tool {
         case "read": return .reads
         case "edit": return .edits
@@ -115,11 +141,11 @@ public enum ToolFaceResolver {
         case .reads where card.tool == "read":
             guard detailsFit(details, ["truncation"]) else { return .text(joined) }
             let (body, notices) = splitReadNotice(joined)
-            return .file(text: body, lang: path(card.args).flatMap(ToolOutputClassifier.language(forPath:)),
+            return .file(text: body, lang: path(card.args).flatMap(ToolKinds.language(forPath:)),
                          notices: notices)
         case .edits where card.tool == "edit":
             guard detailsFit(details, ["diff", "patch", "firstChangedLine"]) else { return .text(joined) }
-            let hunks = (details?["patch"]?.stringValue).flatMap(ToolOutputClassifier.parseDiff)?["hunks"]?.arrayValue
+            let hunks = (details?["patch"]?.stringValue).flatMap(ToolKinds.parseDiff)?["hunks"]?.arrayValue
             return .diff(hunks: hunks, confirmation: joined.isEmpty ? nil : joined)
         case .writes where card.tool == "write":
             guard detailsFit(details, []) else { return .text(joined) }
@@ -135,8 +161,10 @@ public enum ToolFaceResolver {
             let (body, notices) = flagged ? splitNotice(joined) : (joined, [])
             return .lines(text: body, notices: notices)
         case .codemode:
-            guard let calls = scriptCalls(details) else { return .text(joined) }
-            return .script(calls: calls, output: stripScriptHeader(texts, tool: card.tool).joined(separator: "\n"))
+            // Older codemode (and mcpscript) results carry no details.calls:
+            // still a script's output, with no calls to list.
+            return .script(calls: scriptCalls(details) ?? [],
+                           output: stripScriptHeader(texts, tool: card.tool).joined(separator: "\n"))
         default:
             return .text(joined)
         }
@@ -211,13 +239,13 @@ public enum ToolFaceResolver {
     private static func shellDiff(_ text: String) -> JSONValue? {
         guard text.range(of: #"(?m)^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@"#, options: .regularExpression) != nil
         else { return nil }
-        return ToolOutputClassifier.parseDiff(text)
+        return ToolKinds.parseDiff(text)
     }
 
     /// Text blocks without codemode's leading header block
     /// (`Script completed|failed\nWall time S seconds\nOutput:\n`).
     private static func stripScriptHeader(_ texts: [String], tool: String) -> [String] {
-        guard ToolOutputClassifier.isCodemodeFamily(tool), let first = texts.first,
+        guard ToolKinds.isCodemodeFamily(tool), let first = texts.first,
               first.range(of: #"^Script (completed|failed)\nWall time [\d.]+ seconds\nOutput:\n$"#,
                           options: .regularExpression) != nil
         else { return texts }

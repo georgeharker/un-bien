@@ -140,14 +140,13 @@ final class EnvelopeReducerTests: XCTestCase {
         XCTAssertEqual(card.images, [WireImage(data: "BBBB", mime: "image/jpeg")])
     }
 
-    /// OUTPUT enrichment is app-side (design 01M177AF): the reducer classifies
-    /// the raw `tool_execution_end` result into `card.output` — no wire aux.
-    /// An edit result that IS a unified diff becomes a `diff` block; the raw
-    /// rpc.result stays untouched on the card.
-    func testEditResultClassifiedToDiffBlock() throws {
+    /// The reducer keeps the raw `tool_execution_end` result on the card (no
+    /// wire aux); its face comes from it. Shell output that IS a unified diff
+    /// shows as a diff.
+    func testShellDiffResultShowsAsDiff() throws {
         let lines = [
-            #"{"rpc":{"type":"tool_execution_start","toolCallId":"tc9","toolName":"edit","args":{}}}"#,
-            #"{"rpc":{"type":"tool_execution_end","toolCallId":"tc9","toolName":"edit","isError":false,"result":"@@ -1 +1 @@\n-a\n+b"}}"#,
+            #"{"rpc":{"type":"tool_execution_start","toolCallId":"tc9","toolName":"bash","args":{}}}"#,
+            #"{"rpc":{"type":"tool_execution_end","toolCallId":"tc9","toolName":"bash","isError":false,"result":"@@ -1 +1 @@\n-a\n+b"}}"#,
         ]
         let decoder = JSONDecoder()
         let messages = try lines.map { try decoder.decode(EnvelopeMessage.self, from: Data($0.utf8)) }
@@ -155,21 +154,18 @@ final class EnvelopeReducerTests: XCTestCase {
         reducer.apply(messages)
 
         let card = try XCTUnwrap(toolCards(reducer.session).first)
-        XCTAssertEqual(card.tool, "edit")
-        XCTAssertEqual(card.output?["v"]?.intValue, 1)
-        let blocks = try XCTUnwrap(card.output?["blocks"]?.arrayValue)
-        XCTAssertEqual(blocks.count, 1)
-        XCTAssertEqual(blocks[0]["kind"]?.stringValue, "diff")
+        XCTAssertEqual(card.tool, "bash")
+        XCTAssertEqual(ToolFaceResolver.resolve(card).faceName, "terminal-diff")
         // The card holds the canonical {content, details?} value: a bare
         // string result arrives as its one text block (SessionState+ToolResult).
         XCTAssertEqual(card.result?["content"]?.arrayValue?.first?["text"]?.stringValue,
                        "@@ -1 +1 @@\n-a\n+b")
     }
 
-    /// A read result is classified into a `code` block, with `lang` inferred
-    /// from the tool's `args.path` extension. The card holds the canonical
-    /// result value (the string as one text block).
-    func testReadResultClassifiedToCodeBlock() throws {
+    /// A read result is the file face, its language from the tool's
+    /// `args.path` extension. The card holds the canonical result value (the
+    /// string as one text block).
+    func testReadResultIsTheFileFace() throws {
         let lines = [
             #"{"rpc":{"type":"tool_execution_start","toolCallId":"tc7","toolName":"read","args":{"path":"/a/Foo.swift"}}}"#,
             #"{"rpc":{"type":"tool_execution_end","toolCallId":"tc7","toolName":"read","isError":false,"result":"let x = 1"}}"#,
@@ -180,22 +176,19 @@ final class EnvelopeReducerTests: XCTestCase {
         reducer.apply(messages)
 
         let card = try XCTUnwrap(toolCards(reducer.session).first)
-        let blocks = try XCTUnwrap(card.output?["blocks"]?.arrayValue)
-        XCTAssertEqual(blocks[0]["kind"]?.stringValue, "code")
-        XCTAssertEqual(blocks[0]["text"]?.stringValue, "let x = 1")
-        XCTAssertEqual(blocks[0]["lang"]?.stringValue, "swift")
+        XCTAssertEqual(ToolFaceResolver.resolve(card).face, .file(text: "let x = 1", lang: "swift", notices: []))
         XCTAssertEqual(card.result?["content"]?.arrayValue?.first?["text"]?.stringValue, "let x = 1")
     }
 
-    /// The whole point of moving classification app-side: a `get_entries` REPLAY
-    /// (no wire aux at all) still enriches tool output. The reducer synthesizes
-    /// tool_execution_end from the toolResult entry → fillToolCard → classify.
-    func testGetEntriesReplayEnrichesOutput() throws {
+    /// A `get_entries` REPLAY (no wire aux at all) resolves the same face: the
+    /// reducer synthesizes tool_execution_end from the toolResult entry →
+    /// fillToolCard.
+    func testGetEntriesReplayResolvesTheFace() throws {
         // Entries carry id+parentId (pi's real shape). Derive fires on the
         // EMPTY TERMINAL page (design 01M2435): the first page indexes entries
-        // (index-only), the empty terminal derives the path → fillToolCard →
-        // classify. So the fixture feeds the page THEN an empty terminal.
-        let assistant = #"{"type":"message","id":"e1","parentId":"","message":{"role":"assistant","content":[{"type":"toolCall","id":"tcR","name":"edit","arguments":{}}]}}"#
+        // (index-only), the empty terminal derives the path → fillToolCard.
+        // So the fixture feeds the page THEN an empty terminal.
+        let assistant = #"{"type":"message","id":"e1","parentId":"","message":{"role":"assistant","content":[{"type":"toolCall","id":"tcR","name":"bash","arguments":{}}]}}"#
         let toolResult = #"{"type":"message","id":"e2","parentId":"e1","message":{"role":"toolResult","toolCallId":"tcR","content":"@@ -1 +1 @@\n-x\n+y","isError":false}}"#
         let page = #"{"rpc":{"type":"response","command":"get_entries","data":{"entries":["# + assistant + "," + toolResult + #"],"leafId":"e2"}}}"#
         let terminal = #"{"rpc":{"type":"response","command":"get_entries","data":{"entries":[],"leafId":"e2"}}}"#
@@ -204,9 +197,8 @@ final class EnvelopeReducerTests: XCTestCase {
         reducer.apply(try JSONDecoder().decode(EnvelopeMessage.self, from: Data(terminal.utf8)))
 
         let card = try XCTUnwrap(toolCards(reducer.session).first)
-        XCTAssertEqual(card.tool, "edit")
-        let blocks = try XCTUnwrap(card.output?["blocks"]?.arrayValue)
-        XCTAssertEqual(blocks[0]["kind"]?.stringValue, "diff")
+        XCTAssertEqual(card.tool, "bash")
+        XCTAssertEqual(ToolFaceResolver.resolve(card).faceName, "terminal-diff")
         XCTAssertEqual(reducer.leafId, "e2")
     }
 

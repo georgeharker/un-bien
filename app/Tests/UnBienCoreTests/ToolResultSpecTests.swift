@@ -283,11 +283,12 @@ final class ToolResultSpecTests: XCTestCase {
                 XCTFail("\(f.id): a path built no card"); continue
             }
             XCTAssertEqual(live.result, replay.result, "\(f.id): result")
-            XCTAssertEqual(live.output, replay.output, "\(f.id): output")
+            XCTAssertEqual(ToolFaceResolver.resolve(live), ToolFaceResolver.resolve(replay), "\(f.id): face")
             XCTAssertEqual(live.images, replay.images, "\(f.id): images")
             XCTAssertEqual(live.state, replay.state, "\(f.id): state")
             XCTAssertEqual(live.result, folded.result, "\(f.id): fold kept the live result")
-            XCTAssertEqual(live.output, folded.output, "\(f.id): fold kept the live output")
+            XCTAssertEqual(ToolFaceResolver.resolve(live), ToolFaceResolver.resolve(folded),
+                           "\(f.id): fold kept the live face")
             // The duration comes from the record (the forwarded live frame
             // carries none today), and survives the fold.
             let stored = f.storedResult?["durationMs"]?.intValue

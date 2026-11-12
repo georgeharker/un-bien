@@ -17,7 +17,7 @@ public struct ToolPreview: Equatable, Sendable {
     }
 
     public static func forTool(_ tool: String) -> ToolPreview {
-        if ToolOutputClassifier.isBashFamily(tool) || ToolOutputClassifier.isCodemodeFamily(tool) {
+        if ToolKinds.isBashFamily(tool) || ToolKinds.isCodemodeFamily(tool) {
             return ToolPreview(lines: 5, fromEnd: true)
         }
         switch tool {

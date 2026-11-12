@@ -393,11 +393,6 @@ public struct SessionState: Equatable, Sendable {
         card.state = error == nil ? .ok : .failed
         if !images.isEmpty { card.images = images }
         if let durationMs { card.durationMs = durationMs }
-        // OUTPUT classification is APP-SIDE (design 01M177AF): classify the
-        // persisted result here so a get_entries replay (which synthesizes
-        // tool_execution_end → this same path) is enriched identically to live.
-        card.output = ToolOutputClassifier.classify(tool: card.tool, result: result,
-                                                    args: .object(card.args))
         items[index] = .tool(card)
         return true
     }

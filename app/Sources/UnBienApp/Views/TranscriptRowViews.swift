@@ -519,8 +519,6 @@ struct ToolCardView: View {
         _previewing = State(initialValue: Self.startsPreviewing(card, policy: displayPolicy, store: store))
     }
 
-    /// A card is "rich" when it has a renderable output block, an input diff, or
-    /// new content from args — i.e. something better than raw JSON to show.
     // MARK: - Shared card derivations (view + prewarm resolver both call these;
     // single source guarantees the warm builds the EXACT producers the card
     // will — identity-keyed slots cannot tolerate mismatches)
@@ -536,15 +534,14 @@ struct ToolCardView: View {
         //         including its // @options header — rendered as JS.
         // - bash-family: the command as a shell snippet. In BACKFILLED
         //         history this is all a collapsed card could ever hint at,
-        //         and raw {"command": …} JSON hid it; live and replay now
-        //         show the same face (output classification was already
-        //         uniform — design 01M177AF; the input face now is too).
-        let isCodemodeFamily = ToolOutputClassifier.isCodemodeFamily(card.tool)
+        //         and raw {"command": …} JSON hid it; live and replay
+        //         show the same face.
+        let isCodemodeFamily = ToolKinds.isCodemodeFamily(card.tool)
         if isCodemodeFamily,
            let code = stringArg(card.args, ["code", "script"]), !code.isEmpty {
             return (code, "javascript")
         }
-        if ToolOutputClassifier.isBashFamily(card.tool),
+        if ToolKinds.isBashFamily(card.tool),
            let command = stringArg(card.args, ["command", "cmd", "script"]),
            !command.isEmpty {
             return (command, "shell")
@@ -578,7 +575,7 @@ struct ToolCardView: View {
     nonisolated static func contentLang(for card: ToolCard) -> String? {
         for key in ["path", "file", "filename", "filepath"] {
             if let path = card.args[key]?.stringValue {
-                return ToolOutputClassifier.language(forPath: path)
+                return ToolKinds.language(forPath: path)
             }
         }
         return nil
@@ -639,12 +636,6 @@ struct ToolCardView: View {
         recordHunks(for: card) != nil ? "diff-patch" : "diff"
     }
 
-    /// The output blocks the card actually RENDERS (v1 + renderable kinds).
-    nonisolated static func outputBlocks(for card: ToolCard) -> [JSONValue] {
-        guard card.output?["v"]?.intValue == 1,
-              let blocks = card.output?["blocks"]?.arrayValue else { return [] }
-        return blocks.filter { renderableKinds.contains($0["kind"]?.stringValue ?? "") }
-    }
 
     /// How many 9pt section labels ("DIFF"/"CONTENT"/"input"/"output"/"error")
     /// the expanded body renders — MIRRORS the body's branch structure so the
@@ -657,7 +648,7 @@ struct ToolCardView: View {
     nonisolated static func showsInputSection(for card: ToolCard, hideInputRich: Bool) -> Bool {
         guard hunks(for: card) == nil, content(for: card) == nil,
               !card.args.isEmpty else { return false }
-        return !(hideInputRich && !outputBlocks(for: card).isEmpty)
+        return !(hideInputRich && ToolFaceResolver.resolve(card).isStructured)
     }
 
     nonisolated static func sectionLabels(for card: ToolCard, hideInputRich: Bool) -> Int {
@@ -714,23 +705,21 @@ struct ToolCardView: View {
     /// shows WITH the output, not instead of it. nil for an edit/write's new
     /// content, which stands in for a bare success result.
     nonisolated static func callFaceLabel(for card: ToolCard) -> String? {
-        if ToolOutputClassifier.isCodemodeFamily(card.tool) { return "SCRIPT" }
-        if ToolOutputClassifier.isBashFamily(card.tool) || card.tool == "grep" || card.tool == "find" {
+        if ToolKinds.isCodemodeFamily(card.tool) { return "SCRIPT" }
+        if ToolKinds.isBashFamily(card.tool) || card.tool == "grep" || card.tool == "find" {
             return "COMMAND"
         }
         return nil
     }
 
+    /// A card is "rich" when its call has something better than raw JSON to
+    /// show: an input diff, a codemode script, a shell-faced command, or new
+    /// content from args.
     static func isRich(_ card: ToolCard) -> Bool {
-        if card.output?["v"]?.intValue == 1,
-           let blocks = card.output?["blocks"]?.arrayValue,
-           blocks.contains(where: { renderableKinds.contains($0["kind"]?.stringValue ?? "") }) {
-            return true
-        }
         if let hunks = card.hunks, !hunks.isEmpty { return true }
         // codemode (and legacy mcpscript) is rich BY IDENTITY: its JS snippet
         // is the whole call.
-        let isCodemodeFamily = ToolOutputClassifier.isCodemodeFamily(card.tool)
+        let isCodemodeFamily = ToolKinds.isCodemodeFamily(card.tool)
         if isCodemodeFamily,
            let code = stringArg(card.args, ["code", "script"]), !code.isEmpty {
             return true
@@ -808,8 +797,7 @@ struct ToolCardView: View {
                     } else {
                         if let hunks = derived.hunks {
                             diffView(hunks, face: Self.diffFace(for: card))
-                        } else if derived.content == nil, !card.args.isEmpty,
-                                  !(hideInputRich && !knownOutputBlocks.isEmpty) {
+                        } else if Self.showsInputSection(for: card, hideInputRich: hideInputRich) {
                             labeled("input", derived.argsPretty)
                         }
                         if let face = derived.content, let callLabel = Self.callFaceLabel(for: card) {
@@ -932,13 +920,7 @@ struct ToolCardView: View {
         }
     }
 
-    // Renderable blocks from the versioned `aux.output` container. Guards on
-    // `v==1` and keeps only kinds the app knows how to draw; unknown kinds are
-    // skipped so an empty result falls back to raw JSON.
-    nonisolated static let renderableKinds: Set<String> = ["diff", "code"]
-    private var knownOutputBlocks: [JSONValue] { Self.outputBlocks(for: card) }
 
-    // `code` block: plain output text syntax-highlighted via the shared
     // Syntax-highlighted code via the shared windowed cache (HighlightProducer,
     // HighlighterSwift/highlight.js). `lang` may be nil → highlight.js
     // auto-detects. Budget applies BEFORE highlighting (toolBudget).

@@ -83,12 +83,9 @@ public extension SessionState {
                     "streaming": .bool(block.streaming),
                 ]))
             case let .tool(card):
-                var blocks: [JSONValue] = []
-                if let output = card.output, let arr = output["blocks"]?.arrayValue {
-                    for block in arr {
-                        blocks.append(.string(block["kind"]?.stringValue ?? "?"))
-                    }
-                }
+                // The result's face (ToolFaceResolver), then "hunks" when the
+                // card carries a live edit diff.
+                var blocks: [JSONValue] = [.string(ToolFaceResolver.resolve(card).faceName)]
                 if card.hunks != nil { blocks.append(.string("hunks")) }
                 let state: String
                 switch card.state {

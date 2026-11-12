@@ -148,9 +148,8 @@ public struct EnvelopeReducer {
                let hunks = aux?["hunks"]?.arrayValue {
                 session.attachToolHunks(toolCallID: toolCallID, hunks: hunks)
             }
-            // OUTPUT enrichment is app-side (design 01M177AF): SessionState
-            // classifies the raw result in fillToolCard, covering live AND
-            // get_entries replay. No aux.output is read from the wire.
+            // The result is drawn from the tool's spec (ToolFaceResolver), the
+            // same for a live frame and a get_entries replay.
         }
     }
 
