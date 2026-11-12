@@ -6,6 +6,36 @@ requirements where they matter.
 
 ## App
 
+### 1.6.0 (build 26, 2026-11-12)
+
+- **Tool results look like what they are.** Every tool card now draws its
+  result from what the tool declares it returns, the same live and when
+  reopened: shell commands with their plain output, files read with
+  highlighting, edits as real diffs with line numbers, searches as their
+  matches, codemode as its script, calls and output, and web pages and
+  agent reports as formatted text. Failed calls show why they failed. No
+  more raw JSON, including while a command is still running.
+- **Choose how each kind of tool card starts** (Settings → Tool results):
+  open, Preview, or closed, per kind: shell, reads, edits, writes,
+  searches, codemode, MCP, agents, web and other. Failed calls can always
+  open.
+- **Preview** shows a short result the way pi does: the last lines of
+  shell output and the first lines of a read or search, with a row to see
+  the rest. Reads and searches preview by default.
+- **Card headers name what the call acts on**: a read's file and line
+  range, an edited or written file, a fetched URL, an agent's task.
+- **A jump-to-end button** appears while you're scrolled away from the
+  newest messages.
+- **Durable sessions** (pi-durable hosts) render their tool results the
+  same way as pi sessions, including live edit diffs.
+- **Steadier scrolling**: card heights are estimated far more closely
+  before they render, so the transcript jumps less as you scroll.
+
+### 1.5.5 (build 25, 2026-11-01)
+
+- **Mesh messages render as info blocks** (white text, full markdown), not
+  red warnings, and stay after reopening a conversation.
+
 ### 1.5.1 - 1.5.4 (build 21, 2026-10-26)
 
 - **Fixed: messages could go missing forever.** Some replies never appeared
