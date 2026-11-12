@@ -35,6 +35,20 @@ TEAM="B8V3694RNX"
 
 PLATFORM="${1:-both}"
 
+# Signing auth: with an App Store Connect API key configured (the same
+# ASC_KEY_ID / ASC_ISSUER_ID [/ ASC_KEY_PATH] upload-appstore.sh uses),
+# xcodebuild signs with it (cloud-managed distribution certificate) instead
+# of the Xcode account login, which can expire. Without one, the Xcode
+# account is used as before. The key path holds no spaces (word-split below).
+AUTH=""
+if [ -n "${ASC_KEY_ID:-}" ] && [ -n "${ASC_ISSUER_ID:-}" ]; then
+    KEY_PATH="${ASC_KEY_PATH:-$HOME/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8}"
+    if [ -f "$KEY_PATH" ]; then
+        AUTH="-authenticationKeyPath $KEY_PATH -authenticationKeyID $ASC_KEY_ID -authenticationKeyIssuerID $ASC_ISSUER_ID"
+        echo "==> signing with the App Store Connect API key"
+    fi
+fi
+
 mkdir -p "$ARCHIVES" "$EXPORT"
 
 write_export_options() { # $1 = platform tag
@@ -70,7 +84,7 @@ do_archive() { # $1 = scheme, $2 = destination
         -destination "$dest" \
         -archivePath "$ARCHIVES/$scheme.xcarchive" \
         -derivedDataPath "$DERIVED" \
-        -allowProvisioningUpdates \
+        -allowProvisioningUpdates $AUTH \
         archive >"$log" 2>&1; then
         tail -30 "$log"
         echo "ERROR: $scheme archive failed — NOT exporting (see $log)"
@@ -101,7 +115,7 @@ do_export() { # $1 = scheme, $2 = platform tag
         -archivePath "$ARCHIVES/$scheme.xcarchive" \
         -exportOptionsPlist "$DERIVED/ExportOptions-$tag.plist" \
         -exportPath "$EXPORT" \
-        -allowProvisioningUpdates >"$log" 2>&1; then
+        -allowProvisioningUpdates $AUTH >"$log" 2>&1; then
         tail -30 "$log"
         echo "ERROR: $scheme export failed (see $log)"
         exit 1
