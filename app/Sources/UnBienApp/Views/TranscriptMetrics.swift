@@ -70,7 +70,19 @@ enum TranscriptMetrics {
     static let toolCardSectionLabelHeight: Double = 14
     /// COLLAPSED card total (padding ×2 + header) — a collapsed card's height
     /// is content-INDEPENDENT (DisclosureGroup hides the body; images remain).
-    static let toolCardCollapsedChrome: Double = 44
-    /// Expanded non-content base (padding ×2 + header + top pad 4).
-    static let toolCardExpandedBase: Double = 48
+    /// Measured by the catalog regression on each platform: the header's text
+    /// styles are larger on iOS, so its row is 4.7pt taller there.
+    #if os(macOS)
+    static let toolCardCollapsedChrome: Double = 43
+    #else
+    static let toolCardCollapsedChrome: Double = 47.7
+    #endif
+    /// Expanded non-content base (padding ×2 + header + top pad 4), fitted
+    /// against the catalog regression with mono lines at their drawn height;
+    /// iOS adds the same taller header row.
+    #if os(macOS)
+    static let toolCardExpandedBase: Double = 45
+    #else
+    static let toolCardExpandedBase: Double = 49.7
+    #endif
 }

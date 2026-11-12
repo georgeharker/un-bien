@@ -55,14 +55,13 @@ extension SessionState {
 }
 
 extension ToolCard {
-    /// What a failed call reported: its content's text blocks joined. nil
-    /// unless the card failed (pi puts a thrown error's message, a non-zero
-    /// exit status, or a script error in the content, not a separate field).
+    /// What a failed call reported, as its error face draws it: the content's
+    /// text, then the harness block's error diagnostics (pi puts a thrown
+    /// error's message, an exit status, or a script error in the content;
+    /// pi-durable reports an exit status or a missing file as a diagnostic).
+    /// nil unless the card failed.
     public var errorText: String? {
-        guard state == .failed else { return nil }
-        let text = (result?["content"]?.arrayValue ?? []).compactMap { block -> String? in
-            block["type"]?.stringValue == "text" ? block["text"]?.stringValue : nil
-        }.joined(separator: "\n")
+        guard state == .failed, case .error(let text) = ToolFaceResolver.resolve(self).face else { return nil }
         return text.isEmpty ? nil : text
     }
 }

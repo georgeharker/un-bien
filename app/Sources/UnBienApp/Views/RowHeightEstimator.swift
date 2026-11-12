@@ -390,7 +390,7 @@ enum RowHeightEstimator {
             font = mono ? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
                         : NSFont.systemFont(ofSize: size)
         }
-        return font.ascender + font.descender.magnitude + font.leading
+        return (font.ascender + font.descender.magnitude + font.leading).rounded(.up)
         #else
         let font: UIFont
         if let name, let named = UIFont(name: name, size: size) {

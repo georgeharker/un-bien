@@ -6,11 +6,16 @@ import XCTest
 /// extras its `expect` block states — from the replayed card AND the live one,
 /// which must agree.
 final class ToolFaceTests: XCTestCase {
+    /// The pi catalog and the durable one (captured from pi-durable's tools by
+    /// unbien-durable/src/tool_fixtures.test.ts): both must resolve the same way.
     private func catalog() throws -> [JSONValue] {
-        let url = URL(fileURLWithPath: #filePath)
+        let dir = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/tool-results/catalog.json")
-        return try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: url))["fixtures"]?.arrayValue ?? []
+            .appendingPathComponent("Fixtures/tool-results")
+        return try ["catalog.json", "durable-catalog.json"].flatMap { name in
+            try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: dir.appendingPathComponent(name)))["fixtures"]?
+                .arrayValue ?? []
+        }
     }
 
     private func card(_ state: SessionState, _ id: String) -> ToolCard? {

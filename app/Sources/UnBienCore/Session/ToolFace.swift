@@ -89,7 +89,13 @@ public enum ToolFaceResolver {
                 face = category == .shell ? .terminal(text: joined, notices: [], diff: nil) : .text(joined)
             }
         case .failed:
-            face = .error(stripScriptHeader(texts, tool: card.tool).joined(separator: "\n"))
+            // The call's own text, then its error diagnostics: pi-durable reports
+            // an exit status or a missing file as an `[error]` diagnostic where
+            // pi puts it in the text ("…\n\nCommand exited with code N").
+            let text = stripScriptHeader(texts, tool: card.tool).joined(separator: "\n")
+            let reasons = diagnostics.compactMap(Self.errorMessage)
+            let trimmed = text.replacingOccurrences(of: #"\n+$"#, with: "", options: .regularExpression)
+            face = .error(([trimmed] + reasons).filter { !$0.isEmpty }.joined(separator: "\n\n"))
         case .ok:
             face = settledFace(card, category: category, texts: texts, joined: joined, details: details)
         }
@@ -137,6 +143,20 @@ public enum ToolFaceResolver {
     }
 
     // MARK: - Spec helpers
+
+    /// The message of an `[error] …` harness diagnostic line, nil otherwise.
+    public static func errorMessage(_ diagnostic: String) -> String? {
+        diagnostic.hasPrefix("[error] ") ? String(diagnostic.dropFirst("[error] ".count)) : nil
+    }
+
+    /// A harness diagnostic line as a notice: `[info]` / `[warn]` dropped (pi
+    /// shows the same notices bare); other severities kept.
+    public static func noticeText(_ diagnostic: String) -> String {
+        for prefix in ["[info] ", "[warn] "] where diagnostic.hasPrefix(prefix) {
+            return String(diagnostic.dropFirst(prefix.count))
+        }
+        return diagnostic
+    }
 
     /// `details` validates when absent / null, or an object whose keys are all
     /// among the tool's declared ones (pi omits empty details, or stores {}).

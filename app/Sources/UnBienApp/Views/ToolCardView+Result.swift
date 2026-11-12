@@ -59,7 +59,12 @@ extension ToolCardView {
         case .text(let text):
             if !text.isEmpty { parts += [.label("output"), .mono(text)] }
         }
-        parts += view.diagnostics.map(ToolResultPart.notice)
+        // Harness diagnostics as notice rows; a failed call's error lines are
+        // already in its error text.
+        let failed = card.state == .failed
+        parts += view.diagnostics
+            .filter { !(failed && ToolFaceResolver.errorMessage($0) != nil) }
+            .map { .notice(ToolFaceResolver.noticeText($0)) }
         return parts
     }
 

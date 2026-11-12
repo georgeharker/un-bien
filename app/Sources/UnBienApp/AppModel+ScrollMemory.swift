@@ -75,7 +75,9 @@ extension AppModel {
         // their result's details and classify like live ones (tool faces
         // stage 1). hs3.3.0: tool cards draw their result from the tool's
         // spec, and the estimator counts body-section gaps (stages 3-4).
-        let schema = "hs3.3.0"
+        // hs3.4.0: mono lines estimate at their drawn height (whole points on
+        // macOS) and the tool-card chrome is per platform.
+        let schema = "hs3.4.0"
         let tools = "\(toolDisplayPolicy.fingerprint)|hideInput=\(hideInputWhenRich)"
         return "\(themeID.rawValue)|\(body)|\(mono)|\(String(format: "%.2f", textScale))|\(tools)|\(schema)"
     }

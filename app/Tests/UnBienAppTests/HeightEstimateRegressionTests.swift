@@ -403,11 +403,13 @@ final class HeightEstimateRegressionTests: XCTestCase {
     /// (all-open forces the MCP / agent / web / other faces open), against the
     /// estimate for the start state the card renders in.
     func testCatalogToolCards() async throws {
-        let url = URL(fileURLWithPath: #filePath)
+        let dir = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/tool-results/catalog.json")
-        let fixtures = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: url))["fixtures"]?
-            .arrayValue ?? []
+            .appendingPathComponent("Fixtures/tool-results")
+        let fixtures = try ["catalog.json", "durable-catalog.json"].flatMap { name in
+            try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: dir.appendingPathComponent(name)))["fixtures"]?
+                .arrayValue ?? []
+        }
         var cards: [(String, ToolCard)] = []
         for fixture in fixtures {
             let id = fixture["id"]?.stringValue ?? "?"
