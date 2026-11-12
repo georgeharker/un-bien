@@ -138,6 +138,18 @@ describe("envelopeForEvent — live plane", () => {
     })
   })
 
+  it("tool_execution_end forwards pi's durationMs when it measured one", () => {
+    const env = envelopeForEvent("tool_execution_end", {
+      type: "tool_execution_end",
+      toolCallId: "tc_1",
+      toolName: "bash",
+      result: { content: [] },
+      isError: false,
+      durationMs: 1234,
+    })
+    expect((env?.rpc as { durationMs?: number }).durationMs).toBe(1234)
+  })
+
   it("message_end / message_start carry the message", () => {
     const message = { role: "user", content: [{ type: "text", text: "hi" }] }
     expect(
@@ -293,7 +305,29 @@ describe("createRpcEnvelope — wiring", () => {
     expect((out[0] as { rpc: { args: unknown } }).rpc.args).toBe(rawArgs)
   })
 
-  it("emits NO aux on tool_execution_end — OUTPUT classification is app-side", () => {
+  it("enrichArgs sees the emitted payload; its hints stay off the wire", () => {
+    const { pi, handlers } = fakePi()
+    const out: { rpc: Record<string, unknown>; aux?: unknown }[] = []
+    const seen: unknown[] = []
+    createRpcEnvelope(pi, (env) => out.push(env as never), {
+      enrichArgs: (_tool, _args, payload) => {
+        seen.push(payload.afterExecution)
+        return payload.afterExecution === true ? null : { hunks: [] }
+      },
+    })
+    handlers.get("tool_execution_start")?.({
+      type: "tool_execution_start",
+      toolCallId: "tc_late",
+      toolName: "edit",
+      args: {},
+      afterExecution: true,
+    })
+    expect(seen).toEqual([true])
+    expect(out[0]?.aux).toBeUndefined()
+    expect(out[0]?.rpc).not.toHaveProperty("afterExecution")
+  })
+
+  it("emits NO aux on tool_execution_end — results are drawn app-side", () => {
     const { pi, handlers } = fakePi()
     const out: unknown[] = []
     const rawResult = "@@ -1 +1 @@\n-a\n+b"

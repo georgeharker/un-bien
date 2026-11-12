@@ -297,6 +297,9 @@ const BUILDERS: Record<string, Builder> = {
     toolName: p.toolName,
     result: p.result,
     isError: p.isError ?? false,
+    // How long the call ran, when pi measured it (additive: apps that
+    // predate it ignore it and read it from the stored result).
+    ...(typeof p.durationMs === "number" ? { durationMs: p.durationMs } : {}),
   }),
   // DEAD ON THE LIVE PLANE — pi does NOT deliver queue_update to extensions.
   // AgentSession._emitQueueUpdate() (pi agent-session.ts) calls only this._emit()
@@ -366,7 +369,14 @@ export function createRpcEnvelope(
   events: EventSource,
   broadcast: (env: EnvelopeMessage) => void,
   opts?: {
-    enrichArgs?: (tool: string, args: unknown) => { hunks: unknown[] } | null
+    /** Display hunks for a tool_execution_start. `payload` is the event as
+     *  the binding emitted it (it may carry binding-only hints; only
+     *  toolCallId, toolName and args reach the wire). */
+    enrichArgs?: (
+      tool: string,
+      args: unknown,
+      payload: Record<string, unknown>,
+    ) => { hunks: unknown[] } | null
   },
 ): { dispose(): void } {
   let disposed = false
@@ -377,7 +387,7 @@ export function createRpcEnvelope(
       let env = envelopeForEvent(name, p)
       if (!env) return
       if (name === "tool_execution_start" && opts?.enrichArgs) {
-        const enriched = opts.enrichArgs(p.toolName as string, p.args)
+        const enriched = opts.enrichArgs(p.toolName as string, p.args, p)
         if (enriched && Array.isArray(enriched.hunks)) {
           env = { ...env, aux: { hunks: enriched.hunks } }
           envLog(
@@ -393,9 +403,8 @@ export function createRpcEnvelope(
           )
         }
       }
-      // OUTPUT enrichment is app-side (design 01M177AF): the app classifies the
-      // persisted result in its reducer (live + get_entries replay). No
-      // aux.output is emitted here; only aux.hunks (input Edit diff) rides live.
+      // Results are drawn app-side from each tool's spec (live and replay);
+      // only aux.hunks (an edit's input diff) rides live.
       try {
         broadcast(env)
       } catch {

@@ -58,6 +58,8 @@ type Message = {
   details?: unknown
   isError?: boolean
   usage?: unknown
+  /** A tool result's execution time (absent when it never executed). */
+  durationMs?: number
 }
 
 export interface ViewTranslatorOptions {
@@ -191,7 +193,8 @@ export class ViewTranslator {
 
   private toolResult(message: Message): void {
     const callId = message.toolCallId ?? ""
-    this.startTool(callId, message.toolName ?? "")
+    // No live slot opened this call: its start is reported after it ran.
+    this.startTool(callId, message.toolName ?? "", true)
     if (!this.toolsEnded.has(callId)) {
       this.toolsEnded.add(callId)
       this.opts.emit("tool_execution_end", {
@@ -203,6 +206,8 @@ export class ViewTranslator {
           ...(message.details !== undefined ? { details: message.details } : {}),
         },
         isError: message.isError === true,
+        // As pi's end event carries it (the stored message has it too).
+        ...(typeof message.durationMs === "number" ? { durationMs: message.durationMs } : {}),
       })
     }
     this.whole(message)
@@ -316,7 +321,9 @@ export class ViewTranslator {
     })
   }
 
-  private startTool(callId: string, toolName: string): void {
+  /** `afterExecution`: the call already ran (its result is what opened it).
+   *  A binding-only hint for the envelope's enrichment; not sent. */
+  private startTool(callId: string, toolName: string, afterExecution = false): void {
     if (this.toolsStarted.has(callId)) return
     this.toolsStarted.add(callId)
     this.opts.emit("tool_execution_start", {
@@ -324,6 +331,7 @@ export class ViewTranslator {
       toolCallId: callId,
       toolName,
       args: this.argsOf(callId),
+      ...(afterExecution ? { afterExecution: true } : {}),
     })
   }
 

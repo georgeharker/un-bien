@@ -60,10 +60,12 @@ function _enrichEditToolArgs(base: ToolArgs, cwd: string): ToolArgs {
     const fallbackAt =
       oldText && matchAt < 0 && text !== null ? text.indexOf(oldText) : matchAt
     if (text === null) continue
-    // Old text no longer in the file (the edit already landed, or the file
-    // changed): no hunk. A hunk anchored anywhere else would show the wrong
-    // lines as context; without one the app derives the diff from the args.
-    if (oldText && fallbackAt < 0) continue
+    // Old text not in the file (the edit already landed, the file changed,
+    // or pi matched it loosely: CRLF, fuzzy whitespace): no hunks at all. A
+    // hunk anchored elsewhere would show the wrong lines, and dropping only
+    // this edit's would show an incomplete diff; without hunks the app
+    // derives every edit's diff from the args until the result's patch.
+    if (oldText && fallbackAt < 0) return base
     const startOffset = fallbackAt >= 0 ? fallbackAt : searchFrom
     const hunk = _buildEditHunk(text, startOffset, oldText, newText)
     if (hunk.length > 0) hunks.push({ lines: hunk })

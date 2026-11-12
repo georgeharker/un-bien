@@ -54,7 +54,7 @@ const SCENARIOS: Scenario[] = [
   {
     id: "durable.bash.ok", tool: "bash", args: { command: "echo hi" },
     spec: "pi-durable tools/bash: no output of its own; the retained output becomes the content",
-    expect: { face: "terminal", category: "shell", text: "hi\n", notices: [] },
+    expect: { face: "terminal", category: "shell", text: "hi", notices: [] },
   },
   {
     id: "durable.bash.exit-code", tool: "bash", args: { command: "echo out; exit 3" },
@@ -214,6 +214,8 @@ describe("durable tool results reach the app as pi tool results", () => {
       expect(live.content, `${s.id}: content`).toEqual(stored.content)
       expect(live.details ?? null, `${s.id}: details`).toEqual(stored.details ?? null)
       expect(end!.isError, `${s.id}: isError`).toBe(stored.isError)
+      // The live end frame carries the stored duration, as a pi session's does.
+      expect(end!.durationMs ?? null, `${s.id}: durationMs`).toEqual(stored.durationMs ?? null)
       if (s.expect.isError === true) expect(stored.isError, s.id).toBe(true)
       // Partial frames, when they come, carry pi's {content, details?} shape.
       for (const update of tool.filter((f) => f.type === "tool_execution_update")) {

@@ -84,6 +84,18 @@ describe("_enrichToolArgs — edit diff enrichment", () => {
     expect(_enrichToolArgs("edit", args)).toEqual(args)
   })
 
+  it("builds no hunks at all when one edit of several is not in the file", () => {
+    const p = tempFile("multi.ts", "one\ntwo\nthree\n")
+    const args = {
+      path: p,
+      edits: [
+        { oldText: "one", newText: "ONE" },
+        { oldText: "missing", newText: "x" },
+      ],
+    }
+    expect(_enrichToolArgs("edit", args)).toEqual(args)
+  })
+
   it("returns the base args (no hunks) when the file cannot be read", () => {
     const args = {
       path: "/no/such/unbien/file.txt",
