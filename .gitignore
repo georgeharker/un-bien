@@ -37,3 +37,7 @@ app/Prototypes/*/*.xcodeproj
 /_site/
 app/build-mac/
 TESTING.md
+
+# Python bytecode (fixture generators)
+__pycache__/
+*.pyc
