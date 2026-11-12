@@ -290,7 +290,7 @@ let toolBudget = 8_000
 /// prefix + a SHOW ALL button (one user-initiated full parse — rare and
 /// deliberate); everything else renders verbatim. Expanded state is
 /// view-local: a husk rebirth (re-key) re-collapses — accepted.
-private struct BudgetedContent<Content: View>: View {
+struct BudgetedContent<Content: View>: View {
     let text: String
     let budget: Int
     @ViewBuilder let render: (String) -> Content
@@ -463,7 +463,7 @@ struct ToolCardView: View {
         let hunks: [JSONValue]?
         let content: (text: String, lang: String?)?
         let argsPretty: String
-        let outputPretty: String?
+        let parts: [ToolResultPart]
     }
     /// A REFERENCE box, not a `@State` value. `derived` is read from `body`,
     /// so writing the memo through a value-typed `@State` is "modifying state
@@ -483,14 +483,11 @@ struct ToolCardView: View {
         if let c = derivationBox.cached, c.card == card, c.running == running {
             return c.d
         }
-        let prefixLimit = 8_000   // ≫ any display budget; SHOW ALL waits for settle
         let d = CardDerivations(
             hunks: inputHunks,
             content: contentText,
             argsPretty: JSONValue.object(card.args).prettyString,
-            outputPretty: card.result.map { running
-                ? String($0.prettyString.prefix(prefixLimit))
-                : $0.prettyString }
+            parts: Self.resultParts(for: card)
         )
         derivationBox.cached = (card, running, d)
         return d
@@ -594,6 +591,9 @@ struct ToolCardView: View {
     /// sessions (where hunks are always derived) with a cold diff on every
     /// card, which is exactly the cold-scroll case warming exists for.
     nonisolated static func hunks(for card: ToolCard) -> [JSONValue]? {
+        // The RECORD first: a settled edit's stored patch (real line numbers;
+        // tool faces stage 3). Then the live sidecar, then the stored args.
+        if let patch = recordHunks(for: card) { return patch }
         if let hunks = card.hunks, !hunks.isEmpty { return hunks }
         var derived: [JSONValue] = []
         for pair in editPairs(card.args) {
@@ -611,6 +611,20 @@ struct ToolCardView: View {
             if !lines.isEmpty { derived.append(.object(["lines": .array(lines)])) }
         }
         return derived.isEmpty ? nil : derived
+    }
+
+    /// A settled edit's hunks from the record's `details.patch`, nil without one.
+    nonisolated static func recordHunks(for card: ToolCard) -> [JSONValue]? {
+        guard card.state == .ok, case .diff(let hunks?, _) = ToolFaceResolver.resolve(card).face,
+              !hunks.isEmpty else { return nil }
+        return hunks
+    }
+
+    /// The DiffProducer face of the input diff: `diff-patch` from the record,
+    /// `diff` from the live sidecar or the stored args (different context
+    /// lines, so different cache slots).
+    nonisolated static func diffFace(for card: ToolCard) -> String {
+        recordHunks(for: card) != nil ? "diff-patch" : "diff"
     }
 
     /// The output blocks the card actually RENDERS (v1 + renderable kinds).
@@ -637,7 +651,6 @@ struct ToolCardView: View {
     nonisolated static func sectionLabels(for card: ToolCard, hideInputRich: Bool) -> Int {
         let hunks = hunks(for: card)
         let content = content(for: card)
-        let blocks = outputBlocks(for: card)
         var n = 0
         if hunks != nil, content != nil {
             n += 1   // switcher renders ONE face; Diff is the default → "DIFF"
@@ -647,22 +660,20 @@ struct ToolCardView: View {
             } else if showsInputSection(for: card, hideInputRich: hideInputRich) {
                 n += 1                       // "input"
             }
-            let shellFace = content != nil && callFaceLabel(for: card) != nil
-            if shellFace { n += 1 }          // "COMMAND" / "SCRIPT"
-            if !blocks.isEmpty {
-                // A "DIFF" label belongs to the hunks face only; the historical
-                // text face renders bare, as code blocks do.
-                n += blocks.filter {
-                    $0["kind"]?.stringValue == "diff"
-                        && !($0["hunks"]?.arrayValue ?? []).isEmpty
-                }.count
-            } else if content != nil, !shellFace {
+            if content != nil, callFaceLabel(for: card) != nil {
+                n += 1                       // "COMMAND" / "SCRIPT"
+            } else if hunks == nil, content != nil {
                 n += 1                       // "CONTENT"
-            } else if card.result != nil {
-                n += 1                       // "output"
             }
         }
-        if card.error != nil { n += 1 }       // "error"
+        // Result rows at the label height: labels, notices, and the "DIFF"
+        // label an output diff draws.
+        for part in resultParts(for: card) {
+            switch part {
+            case .label, .notice, .diff: n += 1
+            case .mono, .error, .code: break
+            }
+        }
         return n
     }
 
@@ -671,7 +682,8 @@ struct ToolCardView: View {
     static func diffProducer(for card: ToolCard, theme: AppTheme,
                              themeID: ThemeID) -> DiffProducer? {
         guard let hunks = hunks(for: card) else { return nil }
-        return DiffProducer(toolCallID: card.toolCallID, themeID: "\(themeID)", hunks: hunks,
+        return DiffProducer(toolCallID: card.toolCallID, themeID: "\(themeID)",
+                            face: diffFace(for: card), hunks: hunks,
                             add: theme.success, remove: theme.error, context: theme.secondaryText)
     }
 
@@ -778,46 +790,35 @@ struct ToolCardView: View {
                             codeView(content.text, lang: content.lang,
                                      identity: "\(card.toolCallID)\u{1}@source")
                         } else {
-                            diffView(hunks)
+                            diffView(hunks, face: Self.diffFace(for: card))
                         }
                     } else {
                         if let hunks = derived.hunks {
-                            diffView(hunks)
+                            diffView(hunks, face: Self.diffFace(for: card))
                         } else if derived.content == nil, !card.args.isEmpty,
                                   !(hideInputRich && !knownOutputBlocks.isEmpty) {
                             labeled("input", derived.argsPretty)
                         }
                         if let face = derived.content, let callLabel = Self.callFaceLabel(for: card) {
                             // A call face (shell command, search, codemode
-                            // script) is the call's input, so its output
-                            // still follows (blocks, else plain text).
+                            // script) is the call's input; its result follows.
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(callLabel).font(.system(size: 9, weight: .bold))
                                     .foregroundStyle(theme.secondaryText)
                                 codeView(face.text, lang: face.lang)
                             }
-                            if !knownOutputBlocks.isEmpty {
-                                outputBlocksView
-                            } else if let output = derived.outputPretty {
-                                labeled("output", output)
-                            }
-                        } else if !knownOutputBlocks.isEmpty {
-                            outputBlocksView
-                        } else if let content = derived.content {
-                            // Replay floor: no live diff, so show the new text
-                            // (from persisted args) as a code block.
+                        } else if derived.hunks == nil, let content = derived.content {
+                            // A write's new text, from the stored args.
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("CONTENT").font(.system(size: 9, weight: .bold))
                                     .foregroundStyle(theme.secondaryText)
                                 codeView(content.text, lang: content.lang)
                             }
-                        } else if let output = derived.outputPretty {
-                            labeled("output", output)
                         }
                     }
-                    if let error = card.error {
-                        labeled("error", error).foregroundStyle(theme.error)
-                    }
+                    // The RESULT, resolved from the tool's spec (shared with
+                    // the height estimator: resultParts).
+                    resultView(derived.parts)
                 }
                 .font(typography.monoFont(size: typography.codeSize))
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -855,7 +856,8 @@ struct ToolCardView: View {
     // The content key matches codeView's BudgetedContent truncation, so the warm
     // hits the exact key the toggle will read.
     private func diffProducer(_ hunks: [JSONValue]) -> DiffProducer {
-        DiffProducer(toolCallID: card.toolCallID, themeID: "\(themeID)", hunks: hunks,
+        DiffProducer(toolCallID: card.toolCallID, themeID: "\(themeID)",
+                     face: Self.diffFace(for: card), hunks: hunks,
                      add: theme.success, remove: theme.error, context: theme.secondaryText)
     }
 
@@ -888,42 +890,16 @@ struct ToolCardView: View {
         Self.contentLang(for: card)
     }
 
-    @ViewBuilder private var outputBlocksView: some View {
-        ForEach(Array(knownOutputBlocks.enumerated()), id: \.offset) { _, block in
-            switch block["kind"]?.stringValue {
-            case "diff":
-                if let hunks = block["hunks"]?.arrayValue, !hunks.isEmpty {
-                    diffView(hunks)
-                } else if let text = block["text"]?.stringValue, !text.isEmpty {
-                    // Historical blocks carry rendered diff TEXT where live ones
-                    // carry structured hunks. Both must draw; highlight as diff
-                    // so +/- lines still read as a diff.
-                    codeView(text, lang: "diff")
-                }
-            case "code":
-                if let text = block["text"]?.stringValue, !text.isEmpty {
-                    codeView(text, lang: block["lang"]?.stringValue)
-                }
-            default:
-                EmptyView()
-            }
-        }
-        if card.output?["truncated"]?.boolValue == true {
-            Text("\u{2026} output truncated").font(.system(size: 9))
-                .foregroundStyle(theme.secondaryText)
-        }
-    }
-
     // Colored diff via the shared windowed cache (DiffProducer). The card's
     // diff is immutable, so it's produced once (per theme) and reused across
     // materializations — same cache + off-main pull as code blocks; only the
     // production differs (platform-colored lines vs highlight.js).
-    private func diffView(_ hunks: [JSONValue]) -> some View {
+    func diffView(_ hunks: [JSONValue], face: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("DIFF").font(.system(size: 9, weight: .bold))
                 .foregroundStyle(theme.secondaryText)
             AsyncAttributedText(producer: DiffProducer(
-                toolCallID: card.toolCallID, themeID: "\(themeID)", hunks: hunks,
+                toolCallID: card.toolCallID, themeID: "\(themeID)", face: face, hunks: hunks,
                 add: theme.success, remove: theme.error, context: theme.secondaryText))
         }
     }
@@ -955,7 +931,7 @@ struct ToolCardView: View {
     // CodeSyntaxHighlighter protocol is synchronous — same cache, cache-covered
     // after first render.
     @ViewBuilder
-    private func codeView(_ text: String, lang: String?, identity: String? = nil) -> some View {
+    func codeView(_ text: String, lang: String?, identity: String? = nil) -> some View {
         let font = typography.monoPlatformFont()
         BudgetedContent(text: text, budget: toolBudget) { budgeted in
             // Two stable id keys: @source (truncated view) vs @source-all (full,

@@ -70,23 +70,29 @@ public struct HighlightProducer: AttributedTextProducer {
     }
 }
 
-/// Diff colorer — pure production, no shared engine. A card's diff is
-/// immutable, so the key is just `<themeID>:<toolCallID>`; hunks + colors ride
-/// the queue hop (JSONValue and SwiftUI.Color are Sendable) and resolve to
-/// PlatformColor inside `produce()`.
+/// Diff colorer — pure production, no shared engine. A card's diff from one
+/// SOURCE is immutable, so the key is `<themeID>:<toolCallID>:@<face>`; `face`
+/// names the source (`diff`: the live sidecar or the stored args; `diff-patch`:
+/// the record's patch, which replaces it at settle with different context
+/// lines; `diff-out`: a diff in a tool's output), so a source switch never
+/// reads another source's render. Hunks + colors ride the queue hop (JSONValue
+/// and SwiftUI.Color are Sendable) and resolve to PlatformColor inside
+/// `produce()`.
 public struct DiffProducer: AttributedTextProducer {
     let toolCallID: String
     let themeID: String
+    let face: String
     let hunks: [JSONValue]
     let add: Color
     let remove: Color
     let context: Color
     let budget: Int
 
-    public init(toolCallID: String, themeID: String, hunks: [JSONValue],
+    public init(toolCallID: String, themeID: String, face: String = "diff", hunks: [JSONValue],
                 add: Color, remove: Color, context: Color, budget: Int = 800) {
         self.toolCallID = toolCallID
         self.themeID = themeID
+        self.face = face
         self.hunks = hunks
         self.add = add
         self.remove = remove
@@ -94,7 +100,7 @@ public struct DiffProducer: AttributedTextProducer {
         self.budget = budget
     }
 
-    public var cacheKey: String { "\(themeID)\u{1}\(toolCallID)\u{1}@diff" }
+    public var cacheKey: String { "\(themeID)\u{1}\(toolCallID)\u{1}@\(face)" }
     public var plainText: String { "" }
 
     public func produce() -> NSAttributedString? {

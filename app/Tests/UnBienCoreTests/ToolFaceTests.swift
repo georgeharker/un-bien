@@ -126,14 +126,17 @@ final class ToolFaceTests: XCTestCase {
         XCTAssertEqual(added?["text"]?.stringValue, "source \"$HOME/.env.sh\"")
     }
 
-    /// A running call: shell partials stream as terminal text; others wait.
-    func testRunningCardsStreamShellOnly() {
+    /// A running call streams its partial text: shell as terminal output,
+    /// anything else as plain text; nothing until text arrives.
+    func testRunningCardsStreamTheirPartialText() {
         var bash = ToolCard(toolCallID: "a", tool: "bash", args: [:])
         bash.result = SessionState.canonicalToolResult(.string("partial"))
         XCTAssertEqual(ToolFaceResolver.resolve(bash).face, .terminal(text: "partial", notices: [], diff: nil))
-        var read = ToolCard(toolCallID: "b", tool: "read", args: [:])
-        read.result = SessionState.canonicalToolResult(.string("x"))
-        XCTAssertEqual(ToolFaceResolver.resolve(read).face, .pending)
+        var agent = ToolCard(toolCallID: "b", tool: "subagent", args: [:])
+        agent.result = SessionState.canonicalToolResult(.string("3 tool uses…"))
+        XCTAssertEqual(ToolFaceResolver.resolve(agent).face, .text("3 tool uses…"))
+        let empty = ToolCard(toolCallID: "c", tool: "read", args: [:])
+        XCTAssertEqual(ToolFaceResolver.resolve(empty).face, .pending)
     }
 
     /// File text that happens to end in brackets is not mistaken for a notice.

@@ -127,37 +127,60 @@ final class ToolCardContentFaceTests: XCTestCase {
         XCTAssertFalse(ToolCardView.isRich(card(tool: "bash", args: [:])))
     }
 
+    /// The canonical result value the reducer gives every card.
+    private func result(_ text: String, details: JSONValue? = nil) -> JSONValue {
+        var fields: [String: JSONValue] = ["content": .array([.object(["type": .string("text"),
+                                                                      "text": .string(text)])])]
+        if let details { fields["details"] = details }
+        return .object(fields)
+    }
+
     func testShellCardShowsTheCommandAndThenItsOutput() {
-        // Plain output (no classified block): COMMAND + "output" sections.
-        let plain = ToolCard(toolCallID: "t1", tool: "bash",
-                             args: ["command": .string("ls")], result: .string("a\nb"), state: .ok)
+        // COMMAND, then the unhighlighted OUTPUT.
+        let plain = ToolCard(toolCallID: "t1", tool: "bash", args: ["command": .string("ls")],
+                             result: result("a\nb"), state: .ok)
         XCTAssertEqual(ToolCardView.sectionLabels(for: plain, hideInputRich: true), 2)
-        // Classified output: COMMAND, then the code block (which draws no label).
-        let blocks = ToolCard(toolCallID: "t2", tool: "bash", args: ["command": .string("make")],
-                              result: nil, state: .ok,
-                              output: .object(["v": .number(1), "blocks": .array([.object([
-                                  "kind": .string("code"), "text": .string("ok")])])]))
-        XCTAssertEqual(ToolCardView.sectionLabels(for: blocks, hideInputRich: true), 1)
-        // An edit's content face still stands in for its bare result.
-        let write = card(tool: "write", args: ["content": .string("x")])
-        XCTAssertEqual(ToolCardView.sectionLabels(for: write, hideInputRich: true), 1)
+        XCTAssertEqual(ToolCardView.resultParts(for: plain), [.label("output"), .mono("a\nb")])
+        // A truncation notice is its own row.
+        let truncated = ToolCard(toolCallID: "t2", tool: "bash", args: ["command": .string("seq 9")],
+                                 result: result("9\n\n[Showing lines 9-9 of 9. Full output: /x]",
+                                                details: .object(["truncation": .object([:])])),
+                                 state: .ok)
+        XCTAssertEqual(ToolCardView.resultParts(for: truncated),
+                       [.label("output"), .mono("9"), .notice("Showing lines 9-9 of 9. Full output: /x")])
+        XCTAssertEqual(ToolCardView.sectionLabels(for: truncated, hideInputRich: true), 3)
+        // A write's content stands in for its bare result; the success line is a notice.
+        let write = ToolCard(toolCallID: "t3", tool: "write", args: ["content": .string("x")],
+                             result: result("Successfully wrote to /a"), state: .ok)
+        XCTAssertEqual(ToolCardView.resultParts(for: write), [.notice("Successfully wrote to /a")])
+        XCTAssertEqual(ToolCardView.sectionLabels(for: write, hideInputRich: true), 2, "CONTENT + notice")
         XCTAssertNil(ToolCardView.callFaceLabel(for: write))
     }
 
-    /// A codemode card shows its SCRIPT and then its output: with classified
-    /// output (live, and on replay since tool faces stage 1) the output used
-    /// to replace the script.
-    func testCodemodeCardShowsTheScriptAndThenItsOutput() {
-        let blocks = ToolCard(toolCallID: "t3", tool: "codemode", args: ["code": .string("return 1")],
-                              result: nil, state: .ok,
-                              output: .object(["v": .number(1), "blocks": .array([.object([
-                                  "kind": .string("code"), "text": .string("1")])])]))
-        XCTAssertEqual(ToolCardView.callFaceLabel(for: blocks), "SCRIPT")
-        XCTAssertEqual(ToolCardView.sectionLabels(for: blocks, hideInputRich: true), 1, "SCRIPT + block")
-        let plain = ToolCard(toolCallID: "t4", tool: "codemode", args: ["code": .string("return 1")],
-                             result: .string("1"), state: .ok)
-        XCTAssertEqual(ToolCardView.sectionLabels(for: plain, hideInputRich: true), 2, "SCRIPT + output")
-        XCTAssertEqual(ToolCardView.callFaceLabel(for: card(tool: "grep", args: [:])), "COMMAND")
+    /// A codemode card shows its SCRIPT, its nested CALLS, then its OUTPUT
+    /// with the script header removed.
+    func testCodemodeCardShowsTheScriptCallsAndOutput() {
+        let details: JSONValue = .object(["calls": .array([.object([
+            "id": .string("c/1"), "name": .string("read"), "args": .string("{}"),
+            "status": .string("ok"), "durationMs": .number(420)])])])
+        let content: JSONValue = .array([
+            .object(["type": .string("text"), "text": .string("Script completed\nWall time 0.9 seconds\nOutput:\n")]),
+            .object(["type": .string("text"), "text": .string("42")])])
+        let card = ToolCard(toolCallID: "t4", tool: "codemode", args: ["code": .string("return 42")],
+                            result: .object(["content": content, "details": details]), state: .ok)
+        XCTAssertEqual(ToolCardView.callFaceLabel(for: card), "SCRIPT")
+        XCTAssertEqual(ToolCardView.resultParts(for: card),
+                       [.label("calls"), .mono("\u{2713} read {} 420ms"),
+                        .label("output"), .code("42", lang: nil, face: "output")])
+        XCTAssertEqual(ToolCardView.sectionLabels(for: card, hideInputRich: true), 3, "SCRIPT + CALLS + OUTPUT")
+        XCTAssertEqual(ToolCardView.callFaceLabel(for: self.card(tool: "grep", args: [:])), "COMMAND")
+    }
+
+    /// A failed call shows its error text (from the content), not the word "error".
+    func testFailedCardShowsItsErrorText() {
+        let failed = ToolCard(toolCallID: "t5", tool: "read", args: ["path": .string("/m")],
+                              result: result("ENOENT: no such file"), error: "error", state: .failed)
+        XCTAssertEqual(ToolCardView.resultParts(for: failed), [.label("error"), .error("ENOENT: no such file")])
     }
 
     func testBashFamilyPatternCoversShellTools() {

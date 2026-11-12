@@ -81,9 +81,13 @@ public enum ToolFaceResolver {
         let face: ToolFace
         switch card.state {
         case .running:
-            // Only shell output streams as text; everything else waits.
-            face = category == .shell && !joined.isEmpty
-                ? .terminal(text: joined, notices: [], diff: nil) : .pending
+            // Partial output streams as it arrives: shell as terminal text,
+            // anything else (an agent's progress) as plain text.
+            if joined.isEmpty {
+                face = .pending
+            } else {
+                face = category == .shell ? .terminal(text: joined, notices: [], diff: nil) : .text(joined)
+            }
         case .failed:
             face = .error(stripScriptHeader(texts, tool: card.tool).joined(separator: "\n"))
         case .ok:

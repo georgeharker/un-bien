@@ -197,55 +197,32 @@ enum RowHeightEstimator {
     /// here would invite wrap math that has no font to measure with.
     static func toolCardFacts(for card: ToolCard, expanded: Bool,
                               hideInputRich: Bool) -> ToolCardFacts {
-        let contentKeys = ["content", "contents", "text", "new_string", "new_str", "newText"]
-        let hasContent = contentKeys.contains {
-            (card.args[$0]?.stringValue ?? "").isEmpty == false
-        }
-        // DERIVED hunks count too — the card renders `inputHunks` (live OR
-        // derived), so reading card.hunks directly made replay cards estimate
-        // no switcher and no diff lines for a diff they visibly render.
+        // Mirrors ToolCardView.body: the INPUT section (switcher, or diff /
+        // input / call face / content), then the RESULT parts the card draws
+        // from the same ToolCardView.resultParts list.
+        // DERIVED hunks count too — the card renders `inputHunks` (record,
+        // live OR derived), so reading card.hunks directly made replay cards
+        // estimate no switcher and no diff lines for a diff they render.
         let renderedHunks = ToolCardView.hunks(for: card) ?? []
         let hasHunks = !renderedHunks.isEmpty
+        let content = ToolCardView.content(for: card)
         var facts = ToolCardFacts(
             expanded: expanded,
-            hasSwitcher: hasHunks && hasContent,
+            hasSwitcher: hasHunks && content != nil,
             labeledSections: ToolCardView.sectionLabels(for: card, hideInputRich: hideInputRich),
             imageCount: card.images.count)
-        let body: String
-        if let face = ToolCardView.content(for: card), ToolCardView.callFaceLabel(for: card) != nil {
-            // A call face (shell command, search, codemode script) draws the
-            // call's input, then the plain output when no output block
-            // renders it (the blocks are counted below).
-            let output = ToolCardView.outputBlocks(for: card).isEmpty
-                ? card.result.map { card.state == .running
-                    ? String($0.prettyString.prefix(4_000)) : $0.prettyString }
-                : nil
-            body = [face.text, output].compactMap { $0 }.joined(separator: "\n")
-        } else if hasContent {
-            body = contentKeys.compactMap { card.args[$0]?.stringValue }.first ?? ""
-        } else if ToolCardView.showsInputSection(for: card, hideInputRich: hideInputRich) {
-            // The "input" section renders the pretty-printed ARGS — previously
-            // uncounted, so a card with args but no result estimated zero lines
-            // for a section it visibly draws.
-            body = JSONValue.object(card.args).prettyString
-        } else if let result = card.result {
-            body = card.state == .running
-                ? String(result.prettyString.prefix(4_000))
-                : result.prettyString
-        } else {
-            body = ""
-        }
-        // Body text renders through BudgetedContent, which draws only the
-        // first `toolBudget` characters plus a SHOW ALL button. Estimating the
+        // Text renders through BudgetedContent, which draws only the first
+        // `toolBudget` characters plus a SHOW ALL row. Estimating the
         // untruncated string reserves height for content the card never draws.
         func tokenLines(_ text: String) -> [[Int]] {
             text.split(separator: "\n", omittingEmptySubsequences: false)
                 .map { lineTokens(String($0)) }
         }
-        var bodyTokens: [[Int]] = []
-        if !body.isEmpty {
-            bodyTokens = tokenLines(String(body.prefix(toolBudget)))
-            if body.count > toolBudget { bodyTokens.append([0]) }   // SHOW ALL row
+        func budgeted(_ text: String) -> [[Int]] {
+            guard !text.isEmpty else { return [] }
+            var lines = tokenLines(String(text.prefix(toolBudget)))
+            if text.count > toolBudget { lines.append([0]) }   // SHOW ALL row
+            return lines
         }
         // The producer prepends a "+"/"-"/" " gutter, which joins the first token.
         func hunkTokens(_ hunks: [JSONValue]) -> [[Int]] {
@@ -258,42 +235,34 @@ enum RowHeightEstimator {
                 }
             }
         }
-        var diffTokens = hunkTokens(renderedHunks)
-        // OUTPUT BLOCKS mirror outputBlocksView's switch case for case: a
-        // `diff` block carries EITHER `hunks` (live) or `text` (historical),
-        // and only the `hunks` shape draws. Reading one field for every kind
-        // cannot express that. The switcher branch draws the toggle plus one
-        // face and never reaches output blocks.
-        if !facts.hasSwitcher {
-            for block in ToolCardView.outputBlocks(for: card) {
-                switch block["kind"]?.stringValue {
-                case "diff":
-                    // Live blocks carry structured hunks; historical ones carry
-                    // the rendered diff text. Both draw, and both wrap the same
-                    // way, so both feed the word-wrap path.
-                    if let hunks = block["hunks"]?.arrayValue, !hunks.isEmpty {
-                        diffTokens += hunkTokens(hunks)
-                    } else if let text = block["text"]?.stringValue, !text.isEmpty {
-                        bodyTokens += tokenLines(String(text.prefix(toolBudget)))
-                    }
-                case "code":
-                    guard let text = block["text"]?.stringValue, !text.isEmpty else { continue }
-                    bodyTokens += tokenLines(String(text.prefix(toolBudget)))
-                default:
-                    continue
+        var tokens: [[Int]] = []
+        if facts.hasSwitcher {
+            // A SWITCHER draws exactly one face, and Diff is the default.
+            tokens = hunkTokens(renderedHunks)
+        } else {
+            if hasHunks {
+                tokens += hunkTokens(renderedHunks)
+            } else if ToolCardView.showsInputSection(for: card, hideInputRich: hideInputRich) {
+                tokens += budgeted(JSONValue.object(card.args).prettyString)
+            }
+            if let content {
+                // Call face (COMMAND / SCRIPT), or a write's CONTENT.
+                if ToolCardView.callFaceLabel(for: card) != nil || !hasHunks {
+                    tokens += budgeted(content.text)
                 }
             }
-            // The "\u{2026} output truncated" footer occupies a line.
-            if card.output?["truncated"]?.boolValue == true { bodyTokens.append([0]) }
         }
-        // A SWITCHER draws exactly one face, and Diff is the default — adding
-        // the hidden content's lines reserves height nothing occupies.
-        facts.monoLineTokens = facts.hasSwitcher ? diffTokens : bodyTokens + diffTokens
-        // The "error" section draws after the body in every branch: its label
-        // is in `labeledSections`, its text lines are here.
-        if let error = card.error, !error.isEmpty {
-            facts.monoLineTokens += tokenLines(String(error.prefix(toolBudget)))
+        for part in ToolCardView.resultParts(for: card) {
+            switch part {
+            case .mono(let text), .error(let text), .code(let text, _, _):
+                tokens += budgeted(text)
+            case .diff(let hunks, _):
+                tokens += hunkTokens(hunks)
+            case .label, .notice:
+                break   // counted in labeledSections
+            }
         }
+        facts.monoLineTokens = tokens
         return facts
     }
 
