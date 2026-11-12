@@ -27,7 +27,7 @@ extension TranscriptView {
             estimateWidth: windowDriver.prewarmWidth,
             driver: windowDriver,
             themeID: model.themeID, theme: theme, typography: typography,
-            expandRich: model.expandRichToolResults,
+            displayPolicy: model.toolDisplayPolicy,
             hideInputRich: model.hideInputWhenRich,
             isDemo: model.isDemo(session),
             sentinelBusy: model.isBusy(for: session) && !model.hasEnded(session),
@@ -100,7 +100,7 @@ struct TranscriptStackView: View, Equatable {
     let themeID: ThemeID
     let theme: AppTheme
     let typography: Typography
-    let expandRich: Bool
+    let displayPolicy: ToolDisplayPolicy
     let hideInputRich: Bool
     let isDemo: Bool
     let sentinelBusy: Bool
@@ -111,7 +111,7 @@ struct TranscriptStackView: View, Equatable {
         l.contentGeneration == r.contentGeneration
             && l.themeID == r.themeID
             && l.typography == r.typography
-            && l.expandRich == r.expandRich
+            && l.displayPolicy == r.displayPolicy
             && l.hideInputRich == r.hideInputRich
             && l.isDemo == r.isDemo
             && l.sentinelBusy == r.sentinelBusy
@@ -172,16 +172,16 @@ struct TranscriptStackView: View, Equatable {
                 }
             }, uniquingKeysWith: { first, _ in first })
         // TOOL-CARD facts resolver (the last uncovered row kind): expansion
-        // seeds EXACTLY as ToolCardView does (store override ?? expandRich &&
-        // isRich — cards OPEN by default per the pref), so the estimate matches
-        // the disclosure state the materialized card actually renders in.
+        // seeds EXACTLY as ToolCardView does (store override ?? the display
+        // policy's start state), so the estimate matches the disclosure state
+        // the materialized card actually renders in.
         // TOOL-CARD facts (shared builder — the regression harness exercises
         // the SAME path, so tests and production can't diverge).
         let toolFacts = Dictionary(
             items.compactMap { item -> (String, RowHeightEstimator.ToolWarmSpec)? in
                 guard case let .tool(card) = item else { return nil }
                 let expanded = cardUI.expanded(card.toolCallID,
-                                                default: expandRich && ToolCardView.isRich(card))
+                                                default: ToolCardView.startsExpanded(card, policy: displayPolicy))
                 let facts = RowHeightEstimator.toolCardFacts(for: card, expanded: expanded,
                                                              hideInputRich: hideInputRich)
                 // Warm fires for LEADING rows only (driver-gated).
@@ -208,7 +208,7 @@ struct TranscriptStackView: View, Equatable {
             ForEach(Array(items.enumerated()), id: \.element.id) { pair in
                 HuskRow(item: pair.element, index: pair.offset, driver: driver,
                         themeID: themeID, theme: theme, typography: typography,
-                        expandRich: expandRich, hideInputRich: hideInputRich,
+                        displayPolicy: displayPolicy, hideInputRich: hideInputRich,
                         onFork: isDemo ? nil : onFork,
                         onBranch: isDemo ? nil : onBranch,
                         branchPointIds: branchPoints)

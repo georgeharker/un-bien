@@ -38,7 +38,7 @@ private struct TranscriptPerfPreview: View {
             LazyVStack(alignment: .leading, spacing: 12) {
                 ForEach(items) { item in
                     TranscriptRow(item: item, themeID: .tokyoNight, theme: theme,
-                                  typography: typography, expandRich: true, hideInputRich: true)
+                                  typography: typography, displayPolicy: .standard, hideInputRich: true)
                         .equatable()
                         .id(item.id)
                 }

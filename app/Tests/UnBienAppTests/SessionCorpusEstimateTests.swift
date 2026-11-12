@@ -56,7 +56,7 @@ final class SessionCorpusEstimateTests: XCTestCase {
 
     private func toolCardRow(_ card: ToolCard) -> some View {
         ToolCardView(card: card, theme: theme, typography: typography,
-                     expandRich: true, hideInputRich: true,
+                     displayPolicy: .standard, hideInputRich: true,
                      store: CardUIState(), themeID: .oneDark)
     }
 
@@ -190,7 +190,7 @@ final class SessionCorpusEstimateTests: XCTestCase {
                         await prewarm(card)
                         let facts = RowHeightEstimator.toolCardFacts(
                             for: card,
-                            expanded: ToolCardView.isRich(card),
+                            expanded: ToolCardView.startsExpanded(card, policy: .standard),
                             hideInputRich: true)
                         samples.append(Sample(
                             kind: "tool:\(name)",

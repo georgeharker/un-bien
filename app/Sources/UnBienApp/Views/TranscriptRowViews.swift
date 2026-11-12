@@ -22,7 +22,7 @@ struct TranscriptRow: View, Equatable {
     let themeID: ThemeID
     let theme: AppTheme
     let typography: Typography
-    let expandRich: Bool
+    let displayPolicy: ToolDisplayPolicy
     let hideInputRich: Bool
     /// This row's entry is a fork point (>1 child) — annotate it. Per-row Bool
     /// (not the whole set) so only a row whose status flips re-renders.
@@ -34,7 +34,7 @@ struct TranscriptRow: View, Equatable {
 
     nonisolated static func == (lhs: TranscriptRow, rhs: TranscriptRow) -> Bool {
         lhs.item == rhs.item && lhs.themeID == rhs.themeID && lhs.typography == rhs.typography
-            && lhs.expandRich == rhs.expandRich && lhs.hideInputRich == rhs.hideInputRich
+            && lhs.displayPolicy == rhs.displayPolicy && lhs.hideInputRich == rhs.hideInputRich
             && lhs.isBranchPoint == rhs.isBranchPoint
     }
 
@@ -56,7 +56,7 @@ struct TranscriptRow: View, Equatable {
             assistantView(bubble)
         case let .tool(card):
             ToolCardView(card: card, theme: theme, typography: typography,
-                         expandRich: expandRich, hideInputRich: hideInputRich, store: cardUI,
+                         displayPolicy: displayPolicy, hideInputRich: hideInputRich, store: cardUI,
                          themeID: themeID)
         case let .compaction(marker):
             Label("Context compacted (\(marker.tokensBefore) tokens)", systemImage: "arrow.triangle.merge")
@@ -438,7 +438,7 @@ struct ToolCardView: View {
     let card: ToolCard
     let theme: AppTheme
     let typography: Typography
-    let expandRich: Bool
+    let displayPolicy: ToolDisplayPolicy
     let hideInputRich: Bool
     let store: CardUIState
     let themeID: ThemeID  // diff-cache key discriminator (colors are theme-derived)
@@ -497,16 +497,16 @@ struct ToolCardView: View {
     }
 
     init(card: ToolCard, theme: AppTheme, typography: Typography,
-         expandRich: Bool, hideInputRich: Bool, store: CardUIState, themeID: ThemeID) {
+         displayPolicy: ToolDisplayPolicy, hideInputRich: Bool, store: CardUIState, themeID: ThemeID) {
         self.card = card
         self.theme = theme
         self.typography = typography
-        self.expandRich = expandRich
+        self.displayPolicy = displayPolicy
         self.hideInputRich = hideInputRich
         self.store = store
         self.themeID = themeID
         _expanded = State(initialValue: store.expanded(
-            card.toolCallID, default: expandRich && Self.isRich(card)))
+            card.toolCallID, default: Self.startsExpanded(card, policy: displayPolicy)))
         _showContent = State(initialValue: store.showContent(card.toolCallID))
     }
 
@@ -673,6 +673,15 @@ struct ToolCardView: View {
         guard let hunks = hunks(for: card) else { return nil }
         return DiffProducer(toolCallID: card.toolCallID, themeID: "\(themeID)", hunks: hunks,
                             add: theme.success, remove: theme.error, context: theme.secondaryText)
+    }
+
+    /// Whether `card` starts open, before any tap: its category's default
+    /// (Settings → Tool results; failed calls may always open) is not
+    /// Collapsed, AND the card has something to show. Shared by the card, the
+    /// height estimator's facts resolver and the tests.
+    static func startsExpanded(_ card: ToolCard, policy: ToolDisplayPolicy) -> Bool {
+        guard policy.disclosure(for: card) != .collapsed else { return false }
+        return isRich(card) || card.result != nil || card.state == .failed
     }
 
     static func isRich(_ card: ToolCard) -> Bool {

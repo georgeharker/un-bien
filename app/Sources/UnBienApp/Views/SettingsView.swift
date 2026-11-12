@@ -20,6 +20,7 @@ struct SettingsView: View {
                 appearanceSection
                 typographySection
                 transcriptSection
+                toolResultsSection
                 subagentsSection
                 demoSection
                 machinesSection
@@ -197,12 +198,11 @@ struct SettingsView: View {
     private var transcriptSection: some View {
         Section {
             Toggle("Show thinking", isOn: $model.showThinking)
-            Toggle("Expand rich tool results", isOn: $model.expandRichToolResults)
             Toggle("Hide input on rich results", isOn: $model.hideInputWhenRich)
         } header: {
             Text("Transcript")
         } footer: {
-            Text("Rich results (diff / code) can auto-expand, and their raw input block can be hidden to keep cards compact.")
+            Text("A tool card with a rich result (diff / code) can hide its raw input block to stay compact.")
         }
     }
 

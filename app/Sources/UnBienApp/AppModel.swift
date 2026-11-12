@@ -232,9 +232,9 @@ public final class AppModel: ObservableObject {
     @Published public var bodyFontName: String? {
         didSet { UserDefaults.standard.set(bodyFontName, forKey: Self.bodyFontKey) }
     }
-    /// Show rich tool-result cards (diff/code) UNROLLED by default.
-    @Published public var expandRichToolResults: Bool {
-        didSet { UserDefaults.standard.set(expandRichToolResults, forKey: Self.expandRichKey) }
+    /// Per-category tool-card display defaults (Settings → Tool results).
+    @Published public var toolDisplayPolicy: ToolDisplayPolicy {
+        didSet { Self.saveToolDisplayPolicy(toolDisplayPolicy) }
     }
     /// Hide the raw input block on a tool card when its output renders richly.
     @Published public var hideInputWhenRich: Bool {
@@ -426,7 +426,6 @@ public final class AppModel: ObservableObject {
     private static let textScaleKey = "com.georgeharker.un-bien.text-scale"
     private static let monoFontKey = "com.georgeharker.un-bien.mono-font"
     private static let bodyFontKey = "com.georgeharker.un-bien.body-font"
-    private static let expandRichKey = "com.georgeharker.un-bien.expand-rich-tool-results"
     private static let hideInputRichKey = "com.georgeharker.un-bien.hide-input-when-rich"
     private static let showSubagentsKey = "com.georgeharker.un-bien.show-subagents-home"
     private static let subagentsInteractiveKey = "com.georgeharker.un-bien.subagents-interactive"
@@ -470,8 +469,7 @@ public final class AppModel: ObservableObject {
         self.textScale = min(max(scale, 0.8), 1.8)
         self.monoFontName = UserDefaults.standard.string(forKey: Self.monoFontKey)
         self.bodyFontName = UserDefaults.standard.string(forKey: Self.bodyFontKey)
-        self.expandRichToolResults =
-            UserDefaults.standard.object(forKey: Self.expandRichKey) as? Bool ?? true
+        self.toolDisplayPolicy = Self.loadToolDisplayPolicy()
         self.hideInputWhenRich =
             UserDefaults.standard.object(forKey: Self.hideInputRichKey) as? Bool ?? true
         self.showSubagentsOnHome =

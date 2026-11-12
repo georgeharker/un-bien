@@ -18,7 +18,7 @@ struct HuskRow: View {
     let themeID: ThemeID
     let theme: AppTheme
     let typography: Typography
-    let expandRich: Bool
+    let displayPolicy: ToolDisplayPolicy
     let hideInputRich: Bool
     /// Fork/Branch actions (pre-release 2026-09-18): closures keep HuskRow
     /// value-structured (no model dependency — Equatable economy preserved);
@@ -40,7 +40,7 @@ struct HuskRow: View {
 
     init(item: TranscriptItem, index: Int, driver: TranscriptWindowDriver,
          themeID: ThemeID, theme: AppTheme, typography: Typography,
-         expandRich: Bool, hideInputRich: Bool,
+         displayPolicy: ToolDisplayPolicy, hideInputRich: Bool,
          onFork: ((String) -> Void)? = nil,
          onBranch: ((String, String?) -> Void)? = nil,
          branchPointIds: Set<String> = []) {
@@ -50,7 +50,7 @@ struct HuskRow: View {
         self.themeID = themeID
         self.theme = theme
         self.typography = typography
-        self.expandRich = expandRich
+        self.displayPolicy = displayPolicy
         self.hideInputRich = hideInputRich
         self.onFork = onFork
         self.onBranch = onBranch
@@ -125,7 +125,7 @@ struct HuskRow: View {
         Group {
             if isNear {
                 TranscriptRow(item: item, themeID: themeID, theme: theme,
-                              typography: typography, expandRich: expandRich,
+                              typography: typography, displayPolicy: displayPolicy,
                               hideInputRich: hideInputRich,
                               isBranchPoint: durableEntryID.map { branchPointIds.contains($0) } ?? false)
                     .equatable()

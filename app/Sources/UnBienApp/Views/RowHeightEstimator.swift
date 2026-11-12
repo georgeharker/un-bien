@@ -191,7 +191,7 @@ enum RowHeightEstimator {
     /// Build facts from a card the SAME way the view resolver does (shared by
     /// production + the regression harness so they can't diverge).
     /// `expanded` must be seeded EXACTLY as ToolCardView does:
-    /// store.expanded(id, default: expandRich && isRich).
+    /// store.expanded(id, default: ToolCardView.startsExpanded(card, policy:)).
     /// WIDTH-INDEPENDENT by construction: facts describe the CARD; geometry is
     /// applied by estimateToolCard, which owns the style. Accepting a width
     /// here would invite wrap math that has no font to measure with.
@@ -288,6 +288,11 @@ enum RowHeightEstimator {
         // A SWITCHER draws exactly one face, and Diff is the default — adding
         // the hidden content's lines reserves height nothing occupies.
         facts.monoLineTokens = facts.hasSwitcher ? diffTokens : bodyTokens + diffTokens
+        // The "error" section draws after the body in every branch: its label
+        // is in `labeledSections`, its text lines are here.
+        if let error = card.error, !error.isEmpty {
+            facts.monoLineTokens += tokenLines(String(error.prefix(toolBudget)))
+        }
         return facts
     }
 

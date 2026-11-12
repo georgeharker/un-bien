@@ -90,16 +90,16 @@ final class HeightEstimateRegressionTests: XCTestCase {
         }
     }
 
-    private func toolCardRow(_ card: ToolCard, expandRich: Bool,
+    private func toolCardRow(_ card: ToolCard, policy: ToolDisplayPolicy,
                              hideInputRich: Bool) -> some View {
-        toolCardRow(card, expandRich: expandRich, hideInputRich: hideInputRich,
+        toolCardRow(card, policy: policy, hideInputRich: hideInputRich,
                     typography: typography)
     }
 
-    private func toolCardRow(_ card: ToolCard, expandRich: Bool, hideInputRich: Bool,
+    private func toolCardRow(_ card: ToolCard, policy: ToolDisplayPolicy, hideInputRich: Bool,
                             typography: Typography) -> some View {
         ToolCardView(card: card, theme: theme, typography: typography,
-                     expandRich: expandRich, hideInputRich: hideInputRich,
+                     displayPolicy: policy, hideInputRich: hideInputRich,
                      store: CardUIState(), themeID: .oneDark)
     }
 
@@ -369,19 +369,20 @@ final class HeightEstimateRegressionTests: XCTestCase {
         // BOTH pref states: hideInputRich gates the "input" section, so an
         // estimator blind to it is wrong in exactly one of them.
         for width in widths {
+          // BOTH input settings and a non-default display policy: the
+          // estimate must follow whichever start state the card renders in.
           for hideInputRich in [true, false] {
+           for policy in [ToolDisplayPolicy.standard, .allCollapsed] {
             for (id, card, budget) in cases {
-                let rich = ToolCardView.isRich(card)
+                let rich = ToolCardView.startsExpanded(card, policy: policy)
                 await prewarm(card)
-                let rendered = measure(toolCardRow(card, expandRich: true,
+                let rendered = measure(toolCardRow(card, policy: policy,
                                                    hideInputRich: hideInputRich), width: width)
                 let facts = RowHeightEstimator.toolCardFacts(
-                    for: card, expanded: true && rich,   // expandRich default true
-                    hideInputRich: hideInputRich)
-                _ = rich
+                    for: card, expanded: rich, hideInputRich: hideInputRich)
                 let est = RowHeightEstimator.estimateToolCard(facts, style: style, width: width)
                 let delta = rendered - est
-                let id = "\(id)\(hideInputRich ? "" : "/show-input")"
+                let id = "\(id)\(policy == .standard ? "" : "/closed")\(hideInputRich ? "" : "/show-input")"
                 // (The old TRUTH GUARD here blamed NSHostingView/DisclosureGroup
                 // for diff cards measuring short. It was a COLD CACHE: a producer
                 // miss renders Text(plainText), and DiffProducer.plainText is "".
@@ -392,6 +393,7 @@ final class HeightEstimateRegressionTests: XCTestCase {
                                   "\(id) @\(Int(width)): rendered \(Int(rendered)) vs est \(Int(est)) (Δ\(Int(delta)))")
                 XCTAssertLessThan(abs(delta), 200, "\(id) @\(Int(width)): CATASTROPHIC drift")
             }
+           }
           }
         }
     }
@@ -457,11 +459,12 @@ final class HeightEstimateRegressionTests: XCTestCase {
                     _ = await AttributedTextCache.shared.attributed(producer)
                 }
                 let rendered = measure(
-                    toolCardRow(card, expandRich: true, hideInputRich: true,
+                    toolCardRow(card, policy: .standard, hideInputRich: true,
                                 typography: typography),
                     width: 370)
                 let facts = RowHeightEstimator.toolCardFacts(
-                    for: card, expanded: ToolCardView.isRich(card), hideInputRich: true)
+                    for: card, expanded: ToolCardView.startsExpanded(card, policy: .standard),
+                    hideInputRich: true)
                 let est = RowHeightEstimator.estimateToolCard(facts, style: style, width: 370)
                 let delta = rendered - est
                 print(String(format: "HWRAP scale=%.2f %-24s rendered=%8.1f est=%8.1f d=%+8.1f",

@@ -58,8 +58,10 @@ extension AppModel {
     }
 
     /// The layout-affecting fingerprint for the height cache: text scale +
-    /// font choices + theme. Deliberately NOT width — rotation staleness
-    /// self-heals as seeded rows re-measure on scroll-through.
+    /// font choices + theme + the tool-card display settings (which cards
+    /// start open, and whether rich results hide their input). Deliberately
+    /// NOT width — rotation staleness self-heals as seeded rows re-measure on
+    /// scroll-through.
     func layoutFingerprint() -> String {
         let body = bodyFontName ?? "-"
         let mono = monoFontName ?? "-"
@@ -73,7 +75,8 @@ extension AppModel {
         // their result's details and classify like live ones (tool faces
         // stage 1), so their bodies render differently.
         let schema = "hs3.2.0"
-        return "\(themeID.rawValue)|\(body)|\(mono)|\(String(format: "%.2f", textScale))|\(schema)"
+        let tools = "\(toolDisplayPolicy.fingerprint)|hideInput=\(hideInputWhenRich)"
+        return "\(themeID.rawValue)|\(body)|\(mono)|\(String(format: "%.2f", textScale))|\(tools)|\(schema)"
     }
 
     /// IMMEDIATE persistence (no debounce) — call when the app leaves the

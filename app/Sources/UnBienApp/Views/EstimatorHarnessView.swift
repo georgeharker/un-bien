@@ -349,7 +349,7 @@ struct EstimatorHarnessView: View {
                 VStack(spacing: 8) {
                     ForEach(items) { item in
                         TranscriptRow(item: item, themeID: .tokyoNight, theme: theme,
-                                      typography: typography, expandRich: true, hideInputRich: true)
+                                      typography: typography, displayPolicy: .standard, hideInputRich: true)
                             .equatable()
                             .background(
                                 GeometryReader { geo in
