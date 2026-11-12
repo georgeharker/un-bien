@@ -20,13 +20,59 @@ enum ToolResultPart: Equatable, Sendable {
     case code(String, lang: String?, face: String)
     /// A diff in the output (e.g. `git diff`); draws its own "DIFF" label.
     case diff([JSONValue], face: String)
+    /// A Preview card's "N more lines" row: tapping it shows the result in full.
+    case more(Int)
 }
 
 extension ToolCardView {
+    /// Whether `card` draws its Preview result: its start state is Preview
+    /// (Settings → Tool results) and the user hasn't asked for all of it.
+    /// Shared by the card, the production estimate and prewarm, and the tests.
+    static func startsPreviewing(_ card: ToolCard, policy: ToolDisplayPolicy, store: CardUIState) -> Bool {
+        policy.disclosure(for: card) == .preview && !store.showsAll(card.toolCallID)
+    }
+
     /// The result section for `card`: its resolved face (ToolFaceResolver),
     /// laid out as parts. The call's input (diff / command / script / content)
-    /// is drawn above it and is not part of this list.
-    nonisolated static func resultParts(for card: ToolCard) -> [ToolResultPart] {
+    /// is drawn above it and is not part of this list. `preview` shortens the
+    /// main text to the tool's ToolPreview lines and adds a `.more` row.
+    nonisolated static func resultParts(for card: ToolCard, preview: Bool = false) -> [ToolResultPart] {
+        let parts = fullResultParts(for: card)
+        return preview ? previewParts(parts, tool: card.tool) : parts
+    }
+
+    /// `parts` as a Preview card draws them: the main text (the last plain or
+    /// highlighted part) cut to the tool's preview lines, with a `.more` row
+    /// after it. Highlighted text takes its own cache slot (face "preview").
+    /// Errors and diffs show whole.
+    nonisolated static func previewParts(_ parts: [ToolResultPart], tool: String) -> [ToolResultPart] {
+        let mainIndex = parts.lastIndex { part in
+            switch part {
+            case .mono, .code: return true
+            default: return false
+            }
+        }
+        guard let index = mainIndex else { return parts }
+        let preview = ToolPreview.forTool(tool)
+        var parts = parts
+        switch parts[index] {
+        case .mono(let text):
+            let cut = preview.cut(text)
+            guard cut.hidden > 0 else { return parts }
+            parts[index] = .mono(cut.text)
+            parts.insert(.more(cut.hidden), at: index + 1)
+        case .code(let text, let lang, _):
+            let cut = preview.cut(text)
+            guard cut.hidden > 0 else { return parts }
+            parts[index] = .code(cut.text, lang: lang, face: "preview")
+            parts.insert(.more(cut.hidden), at: index + 1)
+        default:
+            break
+        }
+        return parts
+    }
+
+    nonisolated private static func fullResultParts(for card: ToolCard) -> [ToolResultPart] {
         let view = ToolFaceResolver.resolve(card)
         var parts: [ToolResultPart] = []
         switch view.face {
@@ -73,8 +119,8 @@ extension ToolCardView {
     /// truncation and identity as `codeView` — so a warm hits the slot the
     /// card reads. Shared by the prewarm resolver and the height tests.
     static func resultProducers(for card: ToolCard, theme: AppTheme, typography: Typography,
-                                themeID: ThemeID) -> [any AttributedTextProducer] {
-        resultParts(for: card).compactMap { part -> (any AttributedTextProducer)? in
+                                themeID: ThemeID, preview: Bool = false) -> [any AttributedTextProducer] {
+        resultParts(for: card, preview: preview).compactMap { part -> (any AttributedTextProducer)? in
             switch part {
             case .code(let text, let lang, let face):
                 let truncated = text.count > toolBudget
@@ -87,7 +133,7 @@ extension ToolCardView {
                 return DiffProducer(toolCallID: card.toolCallID, themeID: "\(themeID)", face: face,
                                     hunks: hunks, add: theme.success, remove: theme.error,
                                     context: theme.secondaryText)
-            case .label, .notice, .mono, .error:
+            case .label, .notice, .mono, .error, .more:
                 return nil
             }
         }
@@ -165,6 +211,18 @@ extension ToolCardView {
                 codeView(text, lang: lang, identity: "\(card.toolCallID)\u{1}@\(face)")
             case .diff(let hunks, let face):
                 diffView(hunks, face: face)
+            case .more(let hidden):
+                // Drawn like BudgetedContent's SHOW ALL row (the estimator
+                // counts both as one mono line).
+                Button {
+                    previewing = false
+                } label: {
+                    Label(hidden == 1 ? "1 more line" : "\(hidden) more lines", systemImage: "chevron.down")
+                        .font(.caption)
+                        .foregroundStyle(.tint)
+                }
+                .buttonStyle(.borderless)
+                .padding(.top, 2)
             }
     }
 }

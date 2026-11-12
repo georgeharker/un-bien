@@ -25,6 +25,7 @@ import SwiftUI
 final class CardUIState: @unchecked Sendable {
     private var expandedByID: [String: Bool] = [:]
     private var showContentByID: [String: Bool] = [:]
+    private var showsAllByID: Set<String> = []
 
     /// Expanded state for `id`, falling back to the card's computed default the
     /// first time it's seen (rich cards start expanded when the pref is on).
@@ -38,6 +39,11 @@ final class CardUIState: @unchecked Sendable {
     func showContent(_ id: String) -> Bool { showContentByID[id] ?? false }
 
     func setShowContent(_ id: String, _ value: Bool) { showContentByID[id] = value }
+
+    /// A Preview card the user asked to see in full ("N more lines").
+    func showsAll(_ id: String) -> Bool { showsAllByID.contains(id) }
+
+    func setShowsAll(_ id: String) { showsAllByID.insert(id) }
 }
 
 private struct CardUIStateKey: EnvironmentKey {

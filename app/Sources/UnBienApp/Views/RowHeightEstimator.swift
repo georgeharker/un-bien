@@ -199,8 +199,9 @@ enum RowHeightEstimator {
     /// WIDTH-INDEPENDENT by construction: facts describe the CARD; geometry is
     /// applied by estimateToolCard, which owns the style. Accepting a width
     /// here would invite wrap math that has no font to measure with.
+    /// `preview` must be ToolCardView.startsPreviewing for the same card.
     static func toolCardFacts(for card: ToolCard, expanded: Bool,
-                              hideInputRich: Bool) -> ToolCardFacts {
+                              hideInputRich: Bool, preview: Bool = false) -> ToolCardFacts {
         // Mirrors ToolCardView.body: the INPUT section (switcher, or diff /
         // input / call face / content), then the RESULT parts the card draws
         // from the same ToolCardView.resultParts list.
@@ -262,7 +263,7 @@ enum RowHeightEstimator {
                 }
             }
         }
-        let parts = ToolCardView.resultParts(for: card)
+        let parts = ToolCardView.resultParts(for: card, preview: preview)
         facts.bodySections = sections + ToolCardView.resultSections(parts).count
         for part in parts {
             switch part {
@@ -270,6 +271,8 @@ enum RowHeightEstimator {
                 tokens += budgeted(text)
             case .diff(let hunks, _):
                 tokens += hunkTokens(hunks)
+            case .more:
+                tokens.append([0])   // one row, like BudgetedContent's SHOW ALL
             case .label, .notice:
                 break   // counted in labeledSections
             }

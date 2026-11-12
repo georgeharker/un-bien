@@ -4,9 +4,9 @@ import Foundation
 /// the card still opens or closes it, and that choice is remembered per card.
 public enum ToolDisclosure: String, CaseIterable, Codable, Sendable {
     case expanded
-    /// A short preview (pi-style: the last lines of shell output, the first of
-    /// a search). Until the preview body lands (tool faces stage 5) a preview
-    /// card opens fully, as reads and searches did before categories.
+    /// Open, with the result shortened as pi's collapsed renderers do (the
+    /// last lines of shell output, the first of a read or search: ToolPreview)
+    /// and an "N more lines" row that shows it in full.
     case preview
     case collapsed
 }

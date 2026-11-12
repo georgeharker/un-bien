@@ -451,6 +451,9 @@ struct ToolCardView: View {
     // intact); the store is touched only on materialize (read) + toggle (write).
     @State private var expanded: Bool
     @State private var showContent: Bool
+    /// Showing the short Preview result (ToolCardView+Result: previewParts);
+    /// "N more lines" clears it for good.
+    @State var previewing: Bool
     // DERIVATION CACHE (typing-during-output fix, 2026-09-10): inputHunks /
     // contentText / args+result pretty-strings used to re-derive in `body` on
     // EVERY re-render — and a RUNNING tool's growing result made
@@ -474,22 +477,30 @@ struct ToolCardView: View {
     /// changes (TranscriptRow is Equatable on it). The box only avoids
     /// re-deriving within a render.
     private final class DerivationBox {
-        var cached: (card: ToolCard, running: Bool, d: CardDerivations)?
+        struct Entry {
+            let card: ToolCard
+            let running: Bool
+            let previewing: Bool
+            let derivations: CardDerivations
+        }
+        var cached: Entry?
     }
     @State private var derivationBox = DerivationBox()
 
     private var derived: CardDerivations {
         let running = card.state == .running
-        if let c = derivationBox.cached, c.card == card, c.running == running {
-            return c.d
+        if let c = derivationBox.cached, c.card == card, c.running == running,
+           c.previewing == previewing {
+            return c.derivations
         }
         let d = CardDerivations(
             hunks: inputHunks,
             content: contentText,
             argsPretty: JSONValue.object(card.args).prettyString,
-            parts: Self.resultParts(for: card)
+            parts: Self.resultParts(for: card, preview: previewing)
         )
-        derivationBox.cached = (card, running, d)
+        derivationBox.cached = DerivationBox.Entry(card: card, running: running, previewing: previewing,
+                                                   derivations: d)
         return d
     }
 
@@ -505,6 +516,7 @@ struct ToolCardView: View {
         _expanded = State(initialValue: store.expanded(
             card.toolCallID, default: Self.startsExpanded(card, policy: displayPolicy)))
         _showContent = State(initialValue: store.showContent(card.toolCallID))
+        _previewing = State(initialValue: Self.startsPreviewing(card, policy: displayPolicy, store: store))
     }
 
     /// A card is "rich" when it has a renderable output block, an input diff, or
@@ -667,11 +679,12 @@ struct ToolCardView: View {
             }
         }
         // Result rows at the label height: labels, notices, and the "DIFF"
-        // label an output diff draws.
+        // label an output diff draws. A preview changes neither (its "more"
+        // row counts as a mono line).
         for part in resultParts(for: card) {
             switch part {
             case .label, .notice, .diff: n += 1
-            case .mono, .error, .code: break
+            case .mono, .error, .code, .more: break
             }
         }
         return n
@@ -830,11 +843,12 @@ struct ToolCardView: View {
                     // .toolCardHeaderHeight: CHANGE THAT CONSTANT if the callout
                     // font/size changes (ESTIMATE-ONLY — no literal to share).
                     Text(card.tool).font(.callout.weight(.medium)).foregroundStyle(theme.text)
-                    // MCP proxy calls: the proxied tool, smaller, on the same
-                    // line (one line, so the header height is unchanged).
-                    if let subtitle = Self.mcpSubtitle(for: card) {
-                        Text(subtitle).font(.caption).foregroundStyle(theme.secondaryText)
-                            .lineLimit(1).truncationMode(.middle)
+                    // What the call acts on (a read's path:range, an MCP
+                    // call's proxied tool), smaller, on the same line (one
+                    // line, so the header height is unchanged).
+                    if let subtitle = Self.headerSubtitle(for: card) {
+                        Text(subtitle.text).font(.caption).foregroundStyle(theme.secondaryText)
+                            .lineLimit(1).truncationMode(subtitle.isPath ? .head : .middle)
                     }
                 }
             }
@@ -851,6 +865,7 @@ struct ToolCardView: View {
         // change — never per-render).
         .onChange(of: expanded) { _, value in store.setExpanded(card.toolCallID, value) }
         .onChange(of: showContent) { _, value in store.setShowContent(card.toolCallID, value) }
+        .onChange(of: previewing) { _, value in if !value { store.setShowsAll(card.toolCallID) } }
     }
 
     // The content key matches codeView's BudgetedContent truncation, so the warm

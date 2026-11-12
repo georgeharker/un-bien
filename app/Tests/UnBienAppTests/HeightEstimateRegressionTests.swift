@@ -59,7 +59,7 @@ final class HeightEstimateRegressionTests: XCTestCase {
     /// "", so a COLD first measurement renders an empty diff and reads short.
     /// That — not DisclosureGroup — is what made each diff card's first touch
     /// unmeasurable while every later touch (warm process-wide cache) was fine.
-    private func prewarm(_ card: ToolCard) async {
+    private func prewarm(_ card: ToolCard, preview: Bool = false) async {
         if let diff = ToolCardView.diffProducer(for: card, theme: theme, themeID: .oneDark) {
             _ = await AttributedTextCache.shared.attributed(diff)
         }
@@ -71,7 +71,7 @@ final class HeightEstimateRegressionTests: XCTestCase {
         // The result section's highlighted code / output diffs, exactly as the
         // card and the production prewarm build them.
         for producer in ToolCardView.resultProducers(for: card, theme: theme, typography: typography,
-                                                     themeID: .oneDark) {
+                                                     themeID: .oneDark, preview: preview) {
             _ = await AttributedTextCache.shared.attributed(producer)
         }
     }
@@ -433,17 +433,24 @@ final class HeightEstimateRegressionTests: XCTestCase {
         let allOpen = ToolDisplayPolicy(
             defaults: Dictionary(uniqueKeysWithValues: ToolCategory.allCases.map { ($0, ToolDisclosure.expanded) }),
             expandFailed: true)
-        let policies: [(String, ToolDisplayPolicy)] = [("", .standard), ("/closed", .allCollapsed), ("/open", allOpen)]
+        // all-preview puts every category in Preview: shell and codemode
+        // tails, read / search heads, other tools' fallback head.
+        let allPreview = ToolDisplayPolicy(
+            defaults: Dictionary(uniqueKeysWithValues: ToolCategory.allCases.map { ($0, ToolDisclosure.preview) }),
+            expandFailed: true)
+        let policies: [(String, ToolDisplayPolicy)] = [("", .standard), ("/closed", .allCollapsed),
+                                                       ("/open", allOpen), ("/preview", allPreview)]
         for width in widths {
             for hideInputRich in [true, false] {
                 for (policyName, policy) in policies {
                     for (fixtureID, card) in cards {
-                        await prewarm(card)
+                        let preview = ToolCardView.startsPreviewing(card, policy: policy, store: CardUIState())
+                        await prewarm(card, preview: preview)
                         let expanded = ToolCardView.startsExpanded(card, policy: policy)
                         let rendered = measure(toolCardRow(card, policy: policy, hideInputRich: hideInputRich),
                                                width: width)
                         let facts = RowHeightEstimator.toolCardFacts(for: card, expanded: expanded,
-                                                                     hideInputRich: hideInputRich)
+                                                                     hideInputRich: hideInputRich, preview: preview)
                         let est = RowHeightEstimator.estimateToolCard(facts, style: style, width: width)
                         let delta = rendered - est
                         let id = "\(fixtureID)\(policyName)\(hideInputRich ? "" : "/show-input")"

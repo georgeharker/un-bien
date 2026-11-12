@@ -18,7 +18,7 @@ extension SettingsView {
         } header: {
             Text("Tool results")
         } footer: {
-            Text("How each kind of tool card starts. Tap a card to open or close it.")
+            Text("How each kind of tool card starts. Preview shows the last lines of shell output and the first lines of a read or search. Tap a card to open or close it.")
         }
     }
 
