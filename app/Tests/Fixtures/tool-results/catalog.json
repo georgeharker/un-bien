@@ -374,7 +374,7 @@
      "result": {
       "content": [
        {
-        "text": "2001\n2002\n\n[Showing lines 2001-4000 of 4000. Full output: /var/folders/zz/T/pi-bash-1.log]",
+        "text": "2001\n2002\n\n\n[Showing lines 2001-4000 of 4000. Full output: /var/folders/zz/T/pi-bash-1.log]",
         "type": "text"
        }
       ],
@@ -427,7 +427,7 @@
      "message": {
       "content": [
        {
-        "text": "2001\n2002\n\n[Showing lines 2001-4000 of 4000. Full output: /var/folders/zz/T/pi-bash-1.log]",
+        "text": "2001\n2002\n\n\n[Showing lines 2001-4000 of 4000. Full output: /var/folders/zz/T/pi-bash-1.log]",
         "type": "text"
        }
       ],
@@ -636,7 +636,7 @@
     "notices": [
      "120 more lines in file. Use offset=3 to continue."
     ],
-    "text": "line1\nline2\n"
+    "text": "line1\nline2"
    },
    "id": "read.ranged",
    "live": [
@@ -724,7 +724,7 @@
     "notices": [
      "Showing lines 1-2000 of 5000. Use offset=2001 to continue."
     ],
-    "text": "x = 1\n"
+    "text": "x = 1"
    },
    "id": "read.truncated",
    "live": [
@@ -1457,8 +1457,7 @@
     "category": "searches",
     "face": "lines",
     "notices": [
-     "100 matches limit reached. Use limit=200 for more, or refine pattern",
-     "Some lines truncated to 500 chars. Use read tool to see full lines"
+     "100 matches limit reached. Use limit=200 for more, or refine pattern. Some lines truncated to 500 chars. Use read tool to see full lines"
     ],
     "text": "a.ts:1: x"
    },

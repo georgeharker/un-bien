@@ -86,7 +86,7 @@ public enum ToolOutputClassifier {
     /// Parse a unified-diff text into a `diff` block: one hunk per `@@` header;
     /// within a hunk `' '`→context, `'-'`→remove, `'+'`→add, seeding line
     /// counters from the header. Preamble and `+++`/`---` markers are ignored.
-    private static func parseDiff(_ text: String) -> JSONValue? {
+    static func parseDiff(_ text: String) -> JSONValue? {
         var hunks: [JSONValue] = []
         var current: [JSONValue] = []
         var inHunk = false

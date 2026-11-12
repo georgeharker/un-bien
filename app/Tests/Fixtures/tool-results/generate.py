@@ -120,7 +120,7 @@ F.append(fixture(
     "bash.truncated", "bash: tail kept; '[Showing lines a-b of N. Full output: path]' appended; details {truncation, fullOutputPath}",
     "bash", {"command": "seq 4000"},
     # The path pi reports is under os.tmpdir() (macOS: /var/folders/…/T/).
-    [text("2001\n2002\n\n[Showing lines 2001-4000 of 4000. Full output: /var/folders/zz/T/pi-bash-1.log]")],
+    [text("2001\n2002\n\n\n[Showing lines 2001-4000 of 4000. Full output: /var/folders/zz/T/pi-bash-1.log]")],
     details={"truncation": truncation(content="2001\n2002\n"), "fullOutputPath": "/var/folders/zz/T/pi-bash-1.log"},
     expect={"face": "terminal", "category": "shell", "text": "2001\n2002\n",
             "notices": ["Showing lines 2001-4000 of 4000. Full output: /var/folders/zz/T/pi-bash-1.log"]}))
@@ -139,14 +139,14 @@ F.append(fixture(
     "read.ranged", "read: user limit stopped early -> '[N more lines in file. Use offset=K to continue.]'",
     "read", {"path": "src/a.ts", "offset": 1, "limit": 2},
     [text("line1\nline2\n\n[120 more lines in file. Use offset=3 to continue.]")],
-    expect={"face": "file", "category": "reads", "lang": "typescript", "text": "line1\nline2\n",
+    expect={"face": "file", "category": "reads", "lang": "typescript", "text": "line1\nline2",
             "notices": ["120 more lines in file. Use offset=3 to continue."]}))
 F.append(fixture(
     "read.truncated", "read: tool limit -> '[Showing lines a-b of N. Use offset=K to continue.]' + details {truncation}",
     "read", {"path": "big.py"},
     [text("x = 1\n\n[Showing lines 1-2000 of 5000. Use offset=2001 to continue.]")],
     details={"truncation": truncation(totalLines=5000, content="x = 1\n")},
-    expect={"face": "file", "category": "reads", "lang": "python", "text": "x = 1\n",
+    expect={"face": "file", "category": "reads", "lang": "python", "text": "x = 1",
             "notices": ["Showing lines 1-2000 of 5000. Use offset=2001 to continue."]}))
 F.append(fixture(
     "read.image", "read: image -> 'Read image file [mime]' note + image block",
@@ -200,7 +200,9 @@ F.append(fixture(
     [text("a.ts:1: x\n\n[100 matches limit reached. Use limit=200 for more, or refine pattern. Some lines truncated to 500 chars. Use read tool to see full lines]")],
     details={"matchLimitReached": 100, "linesTruncated": True},
     expect={"face": "lines", "category": "searches", "text": "a.ts:1: x",
-            "notices": ["100 matches limit reached. Use limit=200 for more, or refine pattern",
+            # One bracket: pi joins its notices with ". ", which also occurs
+            # inside a notice, so the block is one notice line.
+            "notices": ["100 matches limit reached. Use limit=200 for more, or refine pattern. "
                         "Some lines truncated to 500 chars. Use read tool to see full lines"]}))
 F.append(fixture(
     "find.hits", "find: one path per line", "find", {"pattern": "*.swift", "path": "app"},
