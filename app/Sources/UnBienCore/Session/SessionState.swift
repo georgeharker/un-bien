@@ -343,10 +343,10 @@ public struct SessionState: Equatable, Sendable {
             // the sidecar even live" ROOT CAUSE): an entry replay's rebirth
             // (the message_end refetch folds seconds after the live frame;
             // every get_entries fold does the same) used to REPLACE the card
-            // wholesale — stripping the live-attached aux.hunks, the result,
-            // and the output classification. Identity is stable for a
-            // toolCallId; only args refresh (the re-sync intent — a sync may
-            // carry richer args). hunks/result/output/state survive.
+            // wholesale — stripping the live-attached aux.hunks and the
+            // result. Identity is stable for a toolCallId; only args refresh
+            // (the re-sync intent — a sync may carry richer args).
+            // hunks/result/state survive.
             if case var .tool(card) = items[index] {
                 card.args = args
                 items[index] = .tool(card)

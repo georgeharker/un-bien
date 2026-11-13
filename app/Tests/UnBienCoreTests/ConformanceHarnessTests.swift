@@ -66,7 +66,11 @@ final class ConformanceHarnessTests: XCTestCase {
 
             let expectedURL = dir.appendingPathComponent("expected.json")
             if regenerate {
-                let data = try JSONEncoder().encode(projection)
+                // Sorted and indented, so a regeneration diff shows only what
+                // changed.
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes]
+                let data = try encoder.encode(projection) + Data("\n".utf8)
                 try data.write(to: expectedURL, options: .atomic)
                 print("regenerated \(name)/expected.json")
                 continue

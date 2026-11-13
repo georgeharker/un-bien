@@ -184,8 +184,8 @@ final class ToolCardContentFaceTests: XCTestCase {
     }
 
     func testBashFamilyPatternCoversShellTools() {
-        // The same pattern the OUTPUT classifier uses (shared via
-        // ToolKinds.isBashFamily — the two must never disagree).
+        // One pattern decides the shell input face, the terminal result face,
+        // the Shell display category and its preview (ToolKinds.isBashFamily).
         for tool in ["bash", "shell", "zsh", "sh", "exec", "command", "run", "terminal"] {
             XCTAssertTrue(ToolKinds.isBashFamily(tool), "\(tool) should be bash-family")
         }

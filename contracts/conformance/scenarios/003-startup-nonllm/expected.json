@@ -1,1 +1,14 @@
-{"items":[],"flags":{"streaming":false,"ended":false},"version":1,"subagents":[],"leafId":"06b2c69c"}
+{
+  "flags" : {
+    "ended" : false,
+    "streaming" : false
+  },
+  "items" : [
+
+  ],
+  "leafId" : "06b2c69c",
+  "subagents" : [
+
+  ],
+  "version" : 1
+}

@@ -1,1 +1,23 @@
-{"version":1,"flags":{"ended":false,"streaming":false},"leafId":null,"subagents":[],"items":[{"blocks":["terminal"],"state":"ok","kind":"tool","row":"t-call-2","tool":"bash","images":0}]}
+{
+  "flags" : {
+    "ended" : false,
+    "streaming" : false
+  },
+  "items" : [
+    {
+      "blocks" : [
+        "terminal"
+      ],
+      "images" : 0,
+      "kind" : "tool",
+      "row" : "t-call-2",
+      "state" : "ok",
+      "tool" : "bash"
+    }
+  ],
+  "leafId" : null,
+  "subagents" : [
+
+  ],
+  "version" : 1
+}

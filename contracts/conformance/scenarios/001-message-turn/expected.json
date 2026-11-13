@@ -1,1 +1,26 @@
-{"version":1,"items":[{"row":"user#1","text":"Reply with exactly the two words: hello world","images":0,"kind":"user"},{"row":"assistant#1","images":0,"text":"hello world","kind":"assistant","streaming":false}],"subagents":[],"leafId":"51379bfd","flags":{"streaming":false,"ended":false}}
+{
+  "flags" : {
+    "ended" : false,
+    "streaming" : false
+  },
+  "items" : [
+    {
+      "images" : 0,
+      "kind" : "user",
+      "row" : "user#1",
+      "text" : "Reply with exactly the two words: hello world"
+    },
+    {
+      "images" : 0,
+      "kind" : "assistant",
+      "row" : "assistant#1",
+      "streaming" : false,
+      "text" : "hello world"
+    }
+  ],
+  "leafId" : "51379bfd",
+  "subagents" : [
+
+  ],
+  "version" : 1
+}

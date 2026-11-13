@@ -1,1 +1,35 @@
-{"pendingAsks":[{"options":["Alpha","Beta"],"id":"ask-flow-1","method":"select","title":"Pick one (test)"}],"subagents":[{"id":"sa-1","type":"explore","status":"completed","result":"3 findings","description":"scan the module"}],"plan":{"itemCount":2,"project":"un-bien"},"version":1,"flags":{"ended":false,"streaming":false},"items":[],"leafId":null}
+{
+  "flags" : {
+    "ended" : false,
+    "streaming" : false
+  },
+  "items" : [
+
+  ],
+  "leafId" : null,
+  "pendingAsks" : [
+    {
+      "id" : "ask-flow-1",
+      "method" : "select",
+      "options" : [
+        "Alpha",
+        "Beta"
+      ],
+      "title" : "Pick one (test)"
+    }
+  ],
+  "plan" : {
+    "itemCount" : 2,
+    "project" : "un-bien"
+  },
+  "subagents" : [
+    {
+      "description" : "scan the module",
+      "id" : "sa-1",
+      "result" : "3 findings",
+      "status" : "completed",
+      "type" : "explore"
+    }
+  ],
+  "version" : 1
+}

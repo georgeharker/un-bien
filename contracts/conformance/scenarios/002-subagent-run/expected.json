@@ -1,1 +1,55 @@
-{"subagents":[{"type":"general-purpose","status":"completed","description":"How to print date in blue in zsh","result":"The question is fully answered — there's nothing…","id":"8830977d-870f-448"}],"version":1,"flags":{"ended":false,"streaming":false},"items":[{"row":"user#1","images":0,"kind":"user","text":"using an agent, answer: how do I print the date …"},{"row":"reasoning#1","streaming":false,"kind":"reasoning","text":"This is a simple zsh coloring question, but sinc…"},{"row":"assistant#1","text":"I'll launch an agent to answer this.","images":0,"kind":"assistant","streaming":false},{"row":"toolu_01RJzdcGvKjbrjTUNFTfSE4N","tool":"Agent","images":0,"state":"ok","kind":"tool","blocks":["markdown"]},{"row":"assistant#2","streaming":false,"images":0,"kind":"assistant","text":"Two ways to print the date in blue in zsh:\\n\\n``…"}],"leafId":"12d89bc0"}
+{
+  "flags" : {
+    "ended" : false,
+    "streaming" : false
+  },
+  "items" : [
+    {
+      "images" : 0,
+      "kind" : "user",
+      "row" : "user#1",
+      "text" : "using an agent, answer: how do I print the date …"
+    },
+    {
+      "kind" : "reasoning",
+      "row" : "reasoning#1",
+      "streaming" : false,
+      "text" : "This is a simple zsh coloring question, but sinc…"
+    },
+    {
+      "images" : 0,
+      "kind" : "assistant",
+      "row" : "assistant#1",
+      "streaming" : false,
+      "text" : "I'll launch an agent to answer this."
+    },
+    {
+      "blocks" : [
+        "markdown"
+      ],
+      "images" : 0,
+      "kind" : "tool",
+      "row" : "toolu_01RJzdcGvKjbrjTUNFTfSE4N",
+      "state" : "ok",
+      "tool" : "Agent"
+    },
+    {
+      "images" : 0,
+      "kind" : "assistant",
+      "row" : "assistant#2",
+      "streaming" : false,
+      "text" : "Two ways to print the date in blue in zsh:\\n\\n``…"
+    }
+  ],
+  "leafId" : "12d89bc0",
+  "subagents" : [
+    {
+      "description" : "How to print date in blue in zsh",
+      "id" : "8830977d-870f-448",
+      "result" : "The question is fully answered — there's nothing…",
+      "status" : "completed",
+      "type" : "general-purpose"
+    }
+  ],
+  "version" : 1
+}

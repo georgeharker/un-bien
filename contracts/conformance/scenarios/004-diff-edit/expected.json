@@ -1,1 +1,24 @@
-{"leafId":null,"flags":{"ended":false,"streaming":false},"items":[{"blocks":["diff","hunks"],"state":"ok","kind":"tool","row":"t-call-1","tool":"edit","images":0}],"subagents":[],"version":1}
+{
+  "flags" : {
+    "ended" : false,
+    "streaming" : false
+  },
+  "items" : [
+    {
+      "blocks" : [
+        "diff",
+        "hunks"
+      ],
+      "images" : 0,
+      "kind" : "tool",
+      "row" : "t-call-1",
+      "state" : "ok",
+      "tool" : "edit"
+    }
+  ],
+  "leafId" : null,
+  "subagents" : [
+
+  ],
+  "version" : 1
+}

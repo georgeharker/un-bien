@@ -1,1 +1,25 @@
-{"version":1,"leafId":null,"pendingAsks":[{"id":"ask-flow-1","options":["Alpha","Beta"],"method":"select","title":"Pick one"}],"subagents":[],"flags":{"ended":false,"streaming":false},"items":[]}
+{
+  "flags" : {
+    "ended" : false,
+    "streaming" : false
+  },
+  "items" : [
+
+  ],
+  "leafId" : null,
+  "pendingAsks" : [
+    {
+      "id" : "ask-flow-1",
+      "method" : "select",
+      "options" : [
+        "Alpha",
+        "Beta"
+      ],
+      "title" : "Pick one"
+    }
+  ],
+  "subagents" : [
+
+  ],
+  "version" : 1
+}
