@@ -341,8 +341,8 @@ describe("createRpcEnvelope — wiring", () => {
       result: rawResult,
       isError: false,
     })
-    // rpc.result stays raw; the end frame carries NO aux — the app classifies
-    // the result in its reducer (live + get_entries replay), design 01M177AF.
+    // rpc.result stays raw; the end frame carries NO aux — the app draws the
+    // result from the tool's spec, live and on replay.
     expect((out[0] as { rpc: { result: unknown } }).rpc.result).toBe(rawResult)
     expect("aux" in (out[0] as object)).toBe(false)
   })

@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import type { EnvelopeMessage } from "../session/rpc_envelope.js"
+import { TOOL_SCENARIO_FRAMES } from "./tool_scenario_frames.js"
 
 /**
  * The /unbien test canned-scenario runner (carved verbatim from index.ts,
@@ -208,168 +209,34 @@ export function runTestScenario(
       broadcast({ rpc: { type: "agent_settled" } })
       return "sent svg (envelope tool_execution_end + image)"
     }
-    case "tool": {
-      const tc = `tc-${Date.now()}`
-      broadcast({ rpc: { type: "turn_start" } })
-      broadcast({
-        rpc: {
-          type: "tool_execution_start",
-          toolCallId: tc,
-          toolName: "bash",
-          args: { command: "echo hello" },
-        },
-      })
-      broadcast({
-        rpc: {
-          type: "tool_execution_end",
-          toolCallId: tc,
-          result: "hello\n",
-          isError: false,
-        },
-      })
-      broadcast({ rpc: { type: "agent_settled" } })
-      return "sent tool pair (envelope)"
-    }
-    case "diff": {
-      // Exercise the rich diff rendering: aux `{hunks}` (input Edit diff) rides
-      // ALONGSIDE the raw edit `tool_execution_start`. OUTPUT is classified
-      // app-side from the result, so no aux.output rides the end frame.
-      const tc = `tc-diff-${Date.now()}`
-      const hunks = [
-        {
-          lines: [
-            { kind: "context", oldLine: 1, newLine: 1, text: "const a = 1;" },
-            { kind: "remove", oldLine: 2, text: "const b = 2;" },
-            { kind: "add", newLine: 2, text: "const b = 3;" },
-            { kind: "context", oldLine: 3, newLine: 3, text: "const c = 4;" },
-          ],
-        },
-      ]
-      broadcast({ rpc: { type: "turn_start" } })
-      broadcast({
-        rpc: {
-          type: "tool_execution_start",
-          toolCallId: tc,
-          toolName: "edit",
-          args: {
-            path: "demo.ts",
-            old_string: "const b = 2;",
-            new_string: "const b = 3;",
-          },
-        },
-        aux: { hunks },
-      })
-      broadcast({
-        rpc: {
-          type: "tool_execution_end",
-          toolCallId: tc,
-          result: "edited demo.ts",
-          isError: false,
-        },
-      })
-      broadcast({ rpc: { type: "agent_settled" } })
-      return "sent diff (edit + aux hunks — shows the Diff⇄Content toggle)"
-    }
-    case "code-shell": {
-      // bash-family result → the app classifies it into a `code` block (lang
-      // shell), syntax-highlighted. OUTPUT is app-side now — no aux stamped.
-      const tc = `tc-sh-${Date.now()}`
-      broadcast({ rpc: { type: "turn_start" } })
-      broadcast({
-        rpc: {
-          type: "tool_execution_start",
-          toolCallId: tc,
-          toolName: "bash",
-          args: { command: "ls -la" },
-        },
-      })
-      broadcast({
-        rpc: {
-          type: "tool_execution_end",
-          toolCallId: tc,
-          result:
-            "total 24\ndrwxr-xr-x  5 geo staff  160 Aug 29 10:00 .\n-rw-r--r--  1 geo staff 1024 index.ts\n-rw-r--r--  1 geo staff  512 README.md",
-          isError: false,
-        },
-      })
-      broadcast({ rpc: { type: "agent_settled" } })
-      return "sent code-shell (bash output → code block, lang shell)"
-    }
-    case "code-file": {
-      // read-family with a *.swift path → `code` block, lang inferred from the
-      // extension (swift) and highlighted.
-      const tc = `tc-rd-${Date.now()}`
-      broadcast({ rpc: { type: "turn_start" } })
-      broadcast({
-        rpc: {
-          type: "tool_execution_start",
-          toolCallId: tc,
-          toolName: "read",
-          args: { path: "/src/Greeter.swift" },
-        },
-      })
-      broadcast({
-        rpc: {
-          type: "tool_execution_end",
-          toolCallId: tc,
-          result:
-            'struct Greeter {\n    let name: String\n    func greet() -> String {\n        return "Hello, \\(name)!"\n    }\n}',
-          isError: false,
-        },
-      })
-      broadcast({ rpc: { type: "agent_settled" } })
-      return "sent code-file (read .swift → highlighted code block)"
-    }
-    case "diff-output": {
-      // A tool whose RESULT already embeds a unified diff → the app parses it
-      // into a `diff` block (re-reading persisted text; replay-safe).
-      const tc = `tc-do-${Date.now()}`
-      broadcast({ rpc: { type: "turn_start" } })
-      broadcast({
-        rpc: {
-          type: "tool_execution_start",
-          toolCallId: tc,
-          toolName: "bash",
-          args: { command: "git diff" },
-        },
-      })
-      broadcast({
-        rpc: {
-          type: "tool_execution_end",
-          toolCallId: tc,
-          result:
-            'diff --git a/app.ts b/app.ts\n--- a/app.ts\n+++ b/app.ts\n@@ -1,3 +1,3 @@\n const port = 3000;\n-const host = "127.0.0.1";\n+const host = "0.0.0.0";\n start(host, port);',
-          isError: false,
-        },
-      })
-      broadcast({ rpc: { type: "agent_settled" } })
-      return "sent diff-output (result embeds a unified diff → diff block)"
-    }
+    // Real tool calls: the live frames of the app's tool-result catalog
+    // fixtures (tool_scenario_frames.ts, checked against the catalog), each
+    // with a fresh call id and a run time, so a device shows exactly what
+    // pi's own calls look like. The older per-kind names replay the same set.
+    case "tools":
+    case "tool":
+    case "diff":
+    case "code-shell":
+    case "code-file":
+    case "diff-output":
     case "write": {
-      // write carries the new file text in args.content; no live diff → the
-      // card shows the Content view (new text as a code block, replay-safe).
-      const tc = `tc-wr-${Date.now()}`
-      const content =
-        "export function add(a: number, b: number): number {\n  return a + b;\n}"
       broadcast({ rpc: { type: "turn_start" } })
-      broadcast({
-        rpc: {
-          type: "tool_execution_start",
-          toolCallId: tc,
-          toolName: "write",
-          args: { path: "/src/math.ts", content },
-        },
-      })
-      broadcast({
-        rpc: {
-          type: "tool_execution_end",
-          toolCallId: tc,
-          result: "wrote /src/math.ts",
-          isError: false,
-        },
+      TOOL_SCENARIO_FRAMES.forEach((call, index) => {
+        const callId = `${call.id}-${Date.now()}-${index}`
+        for (const frame of call.frames) {
+          const end = frame.type === "tool_execution_end"
+          broadcast({
+            rpc: {
+              ...frame,
+              toolCallId: callId,
+              // A plausible run time, so the header shows one.
+              ...(end ? { durationMs: 120 + index * 431 } : {}),
+            },
+          })
+        }
       })
       broadcast({ rpc: { type: "agent_settled" } })
-      return "sent write (args.content → content-as-code block)"
+      return `sent tools (${TOOL_SCENARIO_FRAMES.length} real tool calls: ${TOOL_SCENARIO_FRAMES.map((c) => c.id).join(", ")})`
     }
     case "agent": {
       broadcast({ rpc: { type: "turn_start" } })
@@ -422,19 +289,14 @@ export function runTestScenario(
         "plan",
         "subagents",
         "svg",
-        "tool",
-        "diff",
-        "code-shell",
-        "code-file",
-        "diff-output",
-        "write",
+        "tools",
         "agent",
         "error",
       ])
         runTestScenario(deps, sc)
-      return "sent all (ask-notify, plan, subagents, svg, tool, diff, code-shell, code-file, diff-output, write, agent, error)"
+      return "sent all (ask-notify, plan, subagents, svg, tools, agent, error)"
     default:
-      return "usage: /unbien test <ask-select|ask-confirm|ask-input|ask-editor|ask-notify|ask-rich|plan|subagents|svg|tool|diff|code-shell|code-file|diff-output|write|agent|error|all>"
+      return "usage: /unbien test <ask-select|ask-confirm|ask-input|ask-editor|ask-notify|ask-rich|plan|subagents|svg|tools|agent|error|all>"
   }
 }
 

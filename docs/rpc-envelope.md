@@ -60,9 +60,9 @@ interface EnvelopeMessage {
   ub?: UbFrame
   /** OPTIONAL Un Bien display sidecar riding ALONGSIDE `rpc` in the same
    *  envelope (the `rpc` frame stays byte-faithful). Sole tenant: best-effort
-   *  LIVE input-Edit diff `hunks` on a `tool_execution_start` frame. OUTPUT is
-   *  classified app-side from the persisted result (no `aux.output` on the
-   *  wire) — design 01M177AF. */
+   *  LIVE input-Edit diff `hunks` on a `tool_execution_start` frame. Results
+   *  are drawn app-side from each tool's declared spec; nothing about them
+   *  rides `aux`. */
   aux?: { hunks?: unknown[] }
 }
 
@@ -135,7 +135,8 @@ and reconstructs the live plane via `createRpcEnvelope` over `RPC_EVENT_NAMES`
   (`text_*` / `thinking_*` / `toolcall_*`) · `message_end` · `turn_start` ·
   `turn_end` · `agent_start` · `agent_end` · `agent_settled` ·
   `tool_execution_start` · `tool_execution_update` (`partialResult` ACCUMULATES) ·
-  `tool_execution_end` · `compaction_end` (remapped from `session_compact`) ·
+  `tool_execution_end` (`result` as the tool returned it; `durationMs` when pi
+  measured the call) · `compaction_end` (remapped from `session_compact`) ·
   `auto_retry_start/end` · `bash_execution_update`
 - **Extension UI** `{ type:"extension_ui_request", id, method, … }` —
   fire-and-forget `notify` / `setStatus` / `setWidget` / `setTitle` (empty
@@ -253,45 +254,38 @@ richer rendering. Sole tenant now: Edit-family `tool_execution_start` frames
 carry `aux.hunks` (pre-computed input diff hunks) next to the raw tool args.
 Absent on most frames; decode tolerates its absence.
 
-**`aux.hunks` is BEST-EFFORT LIVE (design 01M177AF).** The extension computes
-the input Edit diff while the file is still fresh (it needs the pre-edit file on
-disk, which the app can't reach and which the edit destroys). It is NOT
-persisted and NOT reconstructable after the fact — a `get_entries` replay simply
-has no `aux.hunks`, and the card degrades to its Content view (the new text from
-the persisted args, shown as a code block). A diff cannot be reconstructed later,
-so there is no app-side floor for it; only capture-or-lose.
+**`aux.hunks` is BEST-EFFORT LIVE.** The extension computes the input Edit
+diff (`_enrichToolArgs`) while the file still holds the pre-edit text, which
+the app can't reach. It is not persisted, so a `get_entries` replay has none.
+It is ALL-OR-NOTHING: if any edit's old text is not in the file (pi matched it
+loosely, or the file moved on), no hunks ride, so a live diff is never missing
+an edit. The durable binding sends the same hunks, except for a start it
+reports after the call ran (`afterExecution` on the emitted event, a
+binding-only hint the frame builder drops): the file is already edited then.
 
-**OUTPUT classification is APP-SIDE — there is NO `aux.output` on the wire.**
-Because a tool `result` PERSISTS in the session log, the app classifies it in its
-own reducer (`ToolOutputClassifier` in `fillToolCard`), which runs identically
-for a live `tool_execution_end` frame AND a `get_entries` replay entry (the
-reducer synthesizes the end frame from the `toolResult`). So replay is enriched
-by construction, from one implementation, with the extension out of the loop.
-The produced container matches the shape the card renders:
+The live hunks are only the running card's diff. Once the edit settles, the
+card draws the RECORD: pi's edit result carries `details.patch` (a unified
+diff with real line numbers), identical live and on replay. Without a patch
+(older pi, other edit tools) the card shows the live hunks, or a diff derived
+from the stored args.
 
-```ts
-card.output = { v: 1, blocks: OutputBlock[], truncated?: boolean }
-type OutputBlock =
-  | { kind: "diff"; hunks: { lines: DiffLine[] }[] }  // result already IS a diff
-  | { kind: "code"; text: string; lang?: string }     // bash/read-family output
-```
+**Results are drawn app-side from each tool's declared spec — there is no
+`aux.output` on the wire.** A tool `result` persists in the session log as
+`{content, details?}` and reaches the app the same way live
+(`tool_execution_end.result`) and on replay (the `toolResult` entry). The app
+resolves it once per change (`ToolFaceResolver`, stored on the card) into a
+face: terminal output, a file, a diff, a confirmation, search lines, a script
+(codemode's calls and output), markdown (web and agent prose), an error, or
+plain text. `details` is validated against the tool's declared keys; anything
+unexpected degrades the card to its text, never to nothing. Text is cleaned
+as pi's renderers clean it (ANSI escapes, control characters, carriage
+returns) and a unified diff in any output draws as a diff. pi-durable's
+trailing `<harness>` diagnostics block is read into notices and error text.
 
-`code` carries plain output text the app SYNTAX-HIGHLIGHTS (shared HighlightEngine
-/ highlight.js, cached + theme-matched); ANSI is stripped, not parsed. Emitted
-for code-ish tools only: bash-family (`lang:"shell"`) and read-family (`lang`
-from the file extension in `args.path`); unknown language is OMITTED so the
-highlighter auto-detects. A `diff` block is produced only when the RESULT already
-embeds a unified diff (re-reading persisted text, never reconstructing). The
-classifier NEVER throws, returns nil when nothing is recognised (most tools → raw
-`rpc.result` JSON), skips unknown kinds per-block, and caps block count /
-bytes-per-block / total bytes, setting `truncated:true` rather than an unbounded
-payload.
-
-DEFERRED escape hatch (not built): if input-diff replay fidelity is ever wanted,
-the extension could `addEntry` a SIBLING aux-wrapper entry into the ledger
-(keeping the tool entry pi-faithful) that rides the ledger's own persistence and
-`get_entries` delivery — pending a check that pi's ledger accepts an Un Bien-typed
-entry it ignores and returns.
+The app's fixture catalog (`app/Tests/Fixtures/tool-results/`) pins every
+shape: `catalog.json` transcribed from pi's tool sources, `durable-catalog.json`
+captured from pi-durable's tools through the durable binding. The extension's
+`/unbien test tools` scenario replays a set of the catalog's live frames.
 
 ## App→extension command taxonomy (who acts)
 
