@@ -91,10 +91,10 @@ final class HeightEstimateRegressionTests: XCTestCase {
     }
 
     private func toolCardRow(_ card: ToolCard, policy: ToolDisplayPolicy, hideInputRich: Bool,
-                            typography: Typography) -> some View {
+                            typography: Typography, store: CardUIState = CardUIState()) -> some View {
         ToolCardView(card: card, theme: theme, typography: typography,
                      displayPolicy: policy, hideInputRich: hideInputRich,
-                     store: CardUIState(), themeID: .oneDark)
+                     store: store, themeID: .oneDark)
     }
 
     // MARK: - Corpus
@@ -442,14 +442,10 @@ final class HeightEstimateRegressionTests: XCTestCase {
         return nil
     }
 
-    /// Every stage-0 fixture (app/Tests/Fixtures/tool-results, transcribed from
-    /// each tool's declared result spec) as the card the reducer builds from
-    /// the RECORD, settled, plus a RUNNING card for fixtures that stream
-    /// partials. Each is measured at every width, with and without the input
-    /// section, under the standard, all-closed and all-open display policies
-    /// (all-open forces the MCP / agent / web / other faces open), against the
-    /// estimate for the start state the card renders in.
-    func testCatalogToolCards() async throws {
+    /// Every catalog fixture (pi and durable) as the card the reducer builds
+    /// from the record, settled, plus a running card for fixtures that
+    /// stream partials.
+    private func catalogCards() throws -> [(String, ToolCard)] {
         let dir = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Fixtures/tool-results")
@@ -476,6 +472,59 @@ final class HeightEstimateRegressionTests: XCTestCase {
                 if let running = card(in: streaming, callID) { cards.append(("\(id)/running", running)) }
             }
         }
+        return cards
+    }
+
+    /// The catalog after the taps a user can make: each card opened or
+    /// closed against its default (a stored override), and each Preview card
+    /// shown in full ("N more lines"). The estimate is seeded from the store
+    /// exactly as the production facts resolver seeds it.
+    func testCatalogToolCardsAfterTaps() async throws {
+        let cards = try catalogCards()
+        for width in widths {
+            for hideInputRich in [true, false] {
+                for (fixtureID, card) in cards {
+                    let policy = ToolDisplayPolicy.standard
+                    let start = ToolCardView.startsExpanded(card, policy: policy)
+                    var variants: [(String, CardUIState)] = []
+                    let flipped = CardUIState()
+                    flipped.setExpanded(card.toolCallID, !start, default: start)
+                    variants.append((start ? "/tapped-closed" : "/tapped-open", flipped))
+                    if ToolCardView.startsPreviewing(card, policy: policy, store: CardUIState()) {
+                        let all = CardUIState()
+                        all.setShowsAll(card.toolCallID)
+                        variants.append(("/show-all", all))
+                    }
+                    for (name, store) in variants {
+                        let expanded = store.expanded(card.toolCallID, default: start)
+                        let preview = ToolCardView.startsPreviewing(card, policy: policy, store: store)
+                        await prewarm(card, preview: preview)
+                        let rendered = measure(toolCardRow(card, policy: policy, hideInputRich: hideInputRich,
+                                                           typography: typography, store: store), width: width)
+                        let facts = RowHeightEstimator.toolCardFacts(for: card, expanded: expanded,
+                                                                     hideInputRich: hideInputRich, preview: preview)
+                        let est = RowHeightEstimator.estimateToolCard(facts, style: style, width: width)
+                        let id = "\(fixtureID)\(name)\(hideInputRich ? "" : "/show-input")"
+                        print(String(format: "HTAP w=%3.0f %-48s open=%d rendered=%7.1f est=%7.1f d=%+7.1f",
+                                     width, (id as NSString).utf8String!, expanded ? 1 : 0, rendered, est,
+                                     rendered - est))
+                        XCTAssertLessThan(abs(rendered - est), 12,
+                                          "\(id) @\(Int(width)): rendered \(Int(rendered)) vs est \(Int(est))")
+                    }
+                }
+            }
+        }
+    }
+
+    /// Every stage-0 fixture (app/Tests/Fixtures/tool-results, transcribed from
+    /// each tool's declared result spec) as the card the reducer builds from
+    /// the RECORD, settled, plus a RUNNING card for fixtures that stream
+    /// partials. Each is measured at every width, with and without the input
+    /// section, under the standard, all-closed and all-open display policies
+    /// (all-open forces the MCP / agent / web / other faces open), against the
+    /// estimate for the start state the card renders in.
+    func testCatalogToolCards() async throws {
+        let cards = try catalogCards()
         XCTAssertGreaterThan(cards.count, 30, "the catalog loaded")
         let allOpen = ToolDisplayPolicy(
             defaults: Dictionary(uniqueKeysWithValues: ToolCategory.allCases.map { ($0, ToolDisclosure.expanded) }),
