@@ -1,5 +1,5 @@
 {
-  "originHash" : "f41dc9c385fe53be65bd50c186f4207589bb2ad292014e44aa3159b56b803e69",
+  "originHash" : "ad38f1dcb50be11ddd46474f2eccbe2564393605e7fa8385f4943d15ebb28db8",
   "pins" : [
     {
       "identity" : "highlighterswift",
@@ -7,7 +7,7 @@
       "location" : "https://github.com/georgeharker/HighlighterSwift",
       "state" : {
         "branch" : "main",
-        "revision" : "2e3144df9b7ba8bfee51b8c1382c270a3819bf52"
+        "revision" : "c841509556993bf11fdff53bcfaa2881b88b0e82"
       }
     },
     {

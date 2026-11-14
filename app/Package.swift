@@ -14,8 +14,8 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/georgeharker/swift-markdown-ui", branch: "main"),
-        // FORK of smittytone/HighlighterSwift carrying augmentLanguage (PR #10
-        // upstream): highlight.js's bash built_in list omits the search/filter
+        // FORK of smittytone/HighlighterSwift carrying augment(language:withKeywords:scope:)
+        // (PR #10 upstream): highlight.js's bash built_in list omits the search/filter
         // tools (grep/find/sed/awk…), and the stock library's private JSContext
         // makes runtime grammar augmentation impossible from the app. Flip back
         // to the upstream release when the PR merges.

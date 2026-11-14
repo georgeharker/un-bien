@@ -293,17 +293,17 @@ public final class AttributedTextCache: @unchecked Sendable {
                 /// engine, BEFORE the first highlight in the language (highlight.js
                 /// compiles a grammar lazily on first use and consumes the raw scopes —
                 /// the ordering contract; engine creation is exactly that moment).
-                /// augmentLanguage is the FORK's seam (upstream PR #10) — flip the
-                /// package pin back when it merges.
+                /// `augment(language:withKeywords:scope:)` is the FORK's seam (upstream
+                /// PR #10) — flip the package pin back when it merges.
                 nonisolated static func augmentEngine(_ engine: Highlighter) {
                                 // The curated set (2026-10-23): search/filter, VCS, build/run, macOS
                                 // system, network/files — observed-frequency from this project's own
                                 // transcripts. hljs keywords match word tokens ANYWHERE in the block
                                 // (upstream's accepted tradeoff — test/which/where are English words
                                 // in the stock list), so additions stay command-shaped words.
-                                _ = engine.augmentLanguage(
-                                                "bash",
-                                                addingKeywords: "grep rg find sed awk xargs git gh cargo swift swiftc "
+                                _ = engine.augment(
+                                                language: "bash",
+                                                withKeywords: "grep rg find sed awk xargs git gh cargo swift swiftc "
                                                                 + "xcodebuild xcodegen npm npx pnpm node launchctl tmux "
                                                                 + "open defaults plutil xcrun curl jq")
                 }
