@@ -6,7 +6,7 @@ requirements where they matter.
 
 ## App
 
-### 1.6.0 (build 28)
+### 1.6.0 (build 29)
 
 **Tool output rendering**
 
@@ -61,6 +61,10 @@ requirements where they matter.
   the transcript jumps less; transcripts with large command output rebuild
   faster than in 1.5.
 - Fixed: the transcript could be dragged slightly sideways.
+- **Much lower energy use**: an open session no longer keeps the app busy.
+  The "working" dots and row height estimates used to re-render or
+  recompute continuously while a session worked; on a Mac the app went
+  from near a full CPU core to almost idle.
 
 ### 1.5.5 (build 25, 2026-11-01)
 

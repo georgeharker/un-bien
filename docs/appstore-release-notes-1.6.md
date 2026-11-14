@@ -1,4 +1,4 @@
-# App Store release notes — 1.6.0 (build 28)
+# App Store release notes — 1.6.0 (build 29)
 
 What's New text, App Store "What's New" field / TestFlight build notes.
 Everything since 1.5.5 (build 25). Paste the section below as is.
@@ -27,6 +27,7 @@ New Settings → Tool results:
 Also:
 • Card headers show how long each call took
 • A jump-to-end button when you scroll away from the newest messages
+• Much lower energy use while a session is working
 • Steadier scrolling, and a fix for the transcript drifting sideways
 
 ## One-liner (if a single field is preferred)
