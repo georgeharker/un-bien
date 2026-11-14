@@ -340,8 +340,15 @@ struct TranscriptView: View {
             if model.isDemo(session) { demoBanner }
             statusStrip
                 ScrollView {
+                    // Pinned to the visible width: a row a little wider than
+                    // the screen (a long unbroken line) would otherwise widen
+                    // the content and let the transcript drag sideways. The
+                    // height estimates already assume this width.
                     transcriptStack
+                        .containerRelativeFrame(.horizontal)
+                        .clipped()
                 }
+                .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
             .overlay(alignment: .topTrailing) {
                 #if UNBIEN_DIAGNOSTICS
                 if debugActivityHUD { DebugActivityHUD().padding(8) }
