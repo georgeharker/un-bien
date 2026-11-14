@@ -365,12 +365,10 @@ extension AppModel {
             launchReq: rid)
         // Backstop: a launch that never comes live (daemon died mid-spawn,
         // spawn failed after the gate) must not hijack a LATER announce's
-        // auto-open. Expire quietly — the session still surfaces via plain
-        // discovery when/if it does announce.
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 60_000_000_000)
-            _ = self?.pendingMachineLaunches.removeValue(forKey: rid)
-        }
+        // auto-open; when its wait ends with nothing reported, the user is
+        // told (AppModel+LaunchResults). The session still surfaces via plain
+        // discovery if it announces later.
+        trackLaunch(rid, machineName: launchMachineName(relayID: relayID, epk: epk), peer: epk)
         try? await connection.send(
             .sessionLaunch(id: rid, mode: nil,
                            cwd: (trimmedCwd?.isEmpty ?? true) ? nil : trimmedCwd,

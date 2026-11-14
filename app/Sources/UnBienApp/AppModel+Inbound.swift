@@ -360,10 +360,23 @@ extension AppModel {
             parked.continuation.resume(returning: ub)
             return
         }
-        if ub["type"]?.stringValue == "error", !pendingSessionLists.isEmpty {
-            // Daemon refusals (unknown_peer / permission_denied / list_failed)
-            // carry no in_reply_to — fail every parked list for this peer so
-            // the caller sees the refusal, not a silent "no sessions".
+        // A launch's outcome (started / fell back / refused / pi exited
+        // right after starting): AppModel+LaunchResults.
+        if handleLaunchResult(ub) { return }
+        if ub["type"]?.stringValue == "error" {
+            // An error naming its request: that stored-session list.
+            if let reqID = ub["in_reply_to"]?.stringValue {
+                if let parked = pendingSessionLists.removeValue(forKey: reqID) {
+                    parked.continuation.resume(returning: ub)
+                }
+                return
+            }
+            // No request id: an older launcher's refusal. A launch to this
+            // machine still waiting for an answer claims it; otherwise it
+            // fails every parked list for this peer (unknown_peer /
+            // permission_denied), so the caller sees the refusal, not a
+            // silent "no sessions".
+            if claimLegacyLaunchError(ub, peer: peer) { return }
             for (rid, parked) in pendingSessionLists where parked.peer == peer {
                 pendingSessionLists.removeValue(forKey: rid)
                 parked.continuation.resume(returning: ub)

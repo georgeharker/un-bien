@@ -199,6 +199,9 @@ public final class AppModel: ObservableObject {
     /// backstop task (60s) if the launch failed silently — the stale entry
     /// must not hijack a later announce.
     var pendingMachineLaunches: [String: PendingMachineLaunch] = [:]
+    /// Launches sent, by request id, for their result frames
+    /// (AppModel+LaunchResults).
+    var launchRequests: [String: LaunchRequestState] = [:]
     /// Transient notices pushed by machines (slash-command feedback):
     /// `extension_ui_request {method:"notify"}` frames with no matching open
     /// ask. SHORT notices render as auto-dismissing toasts (RootView

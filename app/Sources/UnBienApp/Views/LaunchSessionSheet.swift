@@ -97,7 +97,8 @@ struct LaunchSessionSheet: View {
             if let backend = model.daemonPresence(for: m)?.backend {
                 return "Starts a new pi session on this machine using \(backend)."
             }
-            return "Starts a new pi session on this machine using its configured backend (tmux or herdr). Set the backend in the machine's un-bien settings."
+            return "Starts a new pi session on this machine using its configured backend (tmux, herdr or Rex). "
+                + "Set the backend in the machine's un-bien settings."
         case let .federated(f):
             if let backend = model.daemonPresence(federated: f)?.backend {
                 return "Starts a new pi session on \(f.name) (remote, via federated relay) using \(backend)."
