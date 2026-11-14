@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest"
 import {
   _buildTmuxLaunchArgs,
-  _launchSession,
+  launchSession,
   _buildHerdrWorkspaceArgs,
   _buildHerdrAgentStartArgs,
   _herdrPaneIdFromCreate,
@@ -165,14 +165,17 @@ describe("launch backends — resume passthrough", () => {
     expect(argv).not.toContain("--session")
   })
 
-  test("herdr + resume is NOT refused (argv passthrough supported)", () => {
+  test("herdr + resume is NOT refused (argv passthrough supported)", async () => {
     // herdr `agent start -- <args>` passes trailing args to pi unchanged, so
     // herdr resumes exactly like tmux. A NONEXISTENT cwd proves the old
     // resume-gate is gone: validation now reaches the cwd check (error there)
     // instead of the resume refusal firing first — with zero launch side
     // effects on machines that DO have herdr installed.
-    const err = _launchSession("herdr", "/tmp/herdr-argv-passthrough-does-not-exist", undefined, "01a0128d")
-    expect(err).toMatch(/cwd does not exist/)
-    expect(err).not.toMatch(/resume/i)
+    const result = await launchSession({
+      cwd: "/tmp/herdr-argv-passthrough-does-not-exist",
+      resume: "01a0128d",
+    })
+    expect(result).toMatchObject({ ok: false, code: "cwd_missing" })
+    expect(result.message).not.toMatch(/resume/i)
   })
 })

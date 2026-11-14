@@ -484,9 +484,45 @@ The launcher only spawns sessions where remote launch is **opted in**:
   (`~/.pi/extensions/un-bien.json`)
 
 The spawn backend is machine-wide: `launch.backend` in the global config —
-`tmux` (default; one shared `un-bien` tmux session, a window per launched Pi)
-or `herdr`. The backend binary must be on PATH: `unbien-admin install` snapshots
-your PATH at install time, so re-run it after installing new tools.
+`tmux` (default; one shared `un-bien` tmux session, a window per launched Pi),
+`herdr`, or `rex`. The tmux and herdr binaries must be on PATH: `unbien-admin
+install` snapshots your PATH at install time, so re-run it after installing new
+tools.
+
+`launch.fallback` (`tmux`, `herdr`, `rex`, or `none`, the default) names a
+backend to use when the configured one is **unavailable** — not installed, or
+Rex's server not running. It is never used once a launch was attempted, so a
+session is never started twice; the result tells the app it fell back.
+
+### Rex
+
+With `launch.backend: "rex"`, each launched Pi is a window (tab) of one Rex
+session the launcher creates and owns (label `launch.rex_session`, default
+`un-bien`; it never takes over a session it didn't create). The session is
+found again by its id, kept in `~/.local/state/un-bien/rex-launch.json`, so a
+Pi renaming it doesn't matter.
+
+- **Binary**: `launch.rex_bin`, else `rex` on PATH, else the Rex app bundle.
+- **Server**: `launch.rex_server`, else `REX_SERVER`, else (macOS) the local
+  server's socket in `~/Library/Application Support/rex/server.sock`. Only a
+  local `unix://` socket is accepted. The launcher never starts a server: with
+  none running, the launch fails with `backend_unavailable` (or falls back).
+- **Shell**: Rex runs Pi through your login shell's environment (`.zshenv`,
+  `.zprofile`), as the tmux backend does. `launch.shell` picks the shell; `-i`
+  in `launch.shell_args` also reads `.zshrc`.
+- **Failures**: a Pi that exits within 20 seconds is reported to the app with
+  the end of its output, and its pane is left open to read. One that exits
+  later has its window closed.
+
+### Launch results
+
+Every `session_launch` is answered with a `session_launch_result` frame
+(`ok`, `backend`, `fell_back`, and on failure a `code`: `remote_launch_disabled`,
+`unknown_peer`, `permission_denied`, `cwd_missing`, `backend_missing`,
+`backend_unavailable`, `spawn_failed`, or `exited_early` with the tail of Pi's
+output). A Pi that dies within 20 seconds of starting gets a second result for
+the same request. On tmux the launch window keeps its pane until that check,
+then closes it. Apps that predate the frame ignore it.
 
 ### Launch names
 
@@ -561,10 +597,11 @@ fields are optional:
   "defaults": { "auto_start_relay": true },
 
   // Remote-launch backend a `session_launch` request uses on THIS machine:
-  // "tmux" (default; one shared tmux session, a window per launched Pi) or
-  // "herdr". Machine-wide choice — whether remote launch is enabled at all
-  // stays the per-cwd `allow_remote_launch` flag.
-  "launch": { "backend": "tmux" },
+  // "tmux" (default; one shared tmux session, a window per launched Pi),
+  // "herdr" or "rex"; "fallback" is used only when that backend is
+  // unavailable. Machine-wide choice — whether remote launch is enabled at
+  // all stays the per-cwd `allow_remote_launch` flag.
+  "launch": { "backend": "tmux", "fallback": "none" },
 
   // Machine-identity storage. `storage` selects the PRIMARY backend for this
   // Pi's long-term Ed25519 seed: "keychain" (OS-secured, default) or "file"

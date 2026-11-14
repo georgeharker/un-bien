@@ -1,4 +1,5 @@
 import { envLog } from "./session/debug_log.js"
+import { handleSessionLaunch } from "./launch_request.js"
 import { dispatchRpcCommand } from "./session/rpc_inbound.js"
 import { createRpcHandlers, type RpcHandlersDeps } from "./session/rpc_handlers.js"
 import type { EnvelopeMessage } from "./session/rpc_envelope.js"
@@ -6,16 +7,9 @@ import type { SessionControlPort } from "./core/port.js"
 import type { PlainPeerChannel } from "./transport/peer_channel.js"
 import { takeForkLink } from "./commands/fork_link.js"
 import {
-  _expandTilde,
-  _launchSession,
-  launchDirAllowed,
-} from "./launch.js"
-import {
-  effectiveAllowRemoteLaunch,
   effectiveAllowRemoteTerminate,
   loadLocalConfig,
 } from "./session/local_config.js"
-import { loadConfig } from "./config.js"
 import type { ExtensionUiResponseWire } from "./protocol/types.js"
 
 /**
@@ -220,42 +214,11 @@ export async function routeUnBienPlane(
   }
 
   if (type === "session_launch") {
-    const f = frame as Record<string, unknown>
-    const cwd = _expandTilde(
-      typeof f.cwd === "string" && f.cwd.length > 0 ? f.cwd : process.cwd(),
-    )
-    if (!effectiveAllowRemoteLaunch(loadLocalConfig(cwd))) {
-      envLog("session_launch(ub): remote launch disabled on this machine")
-      return
-    }
-    // Directory allow-list (design 01M211VW9), read FRESH each request.
-    if (!launchDirAllowed(cwd, loadConfig().launch?.dirs)) {
-      envLog("session_launch(ub): cwd not in launch.dirs allow-list")
-      sender.send({
-        type: "error",
-        code: "permission_denied",
-        message: "Remote launch not permitted for this directory",
-      })
-      return
-    }
-    // Backend is a MACHINE config choice (pick-one via launch.backend), not
-    // app-chosen; rpc is a fast-follow so only tmux|herdr resolve here.
-    const backend = loadConfig().launch?.backend === "herdr" ? "herdr" : "tmux"
-    const launchError = _launchSession(
-      backend,
-      cwd,
-      typeof f.name === "string" ? f.name : undefined,
-      // Launch correlation: pi is spawned with UNBIEN_LAUNCH_REQ=<id> and
-      // echoes it in room_meta, so the launching app can match the announcing
-      // room to THIS request and auto-open the chat (resume flow).
-      typeof f.resume === "string" && f.resume.trim().length > 0
-        ? f.resume.trim()
-        : undefined,
-      typeof f.id === "string" && f.id.trim().length > 0
-        ? f.id.trim()
-        : undefined,
-    )
-    if (launchError) envLog(`session_launch(ub) error: ${launchError}`)
+    // A live pi's room is already paired: the shared handler applies the
+    // opt-in and allow-list, launches, and replies with session_launch_result.
+    void handleSessionLaunch(frame as Record<string, unknown>, sender, {
+      log: (line) => envLog(`${line} (ub)`),
+    })
     return
   }
 

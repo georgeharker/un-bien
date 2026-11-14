@@ -11,17 +11,14 @@ import {
 import { buildSignedAllowList } from "../pairing/signed_allow_list.js"
 import { roomIdForControl } from "../rooms.js"
 import { _findKnownPeer } from "../pairing/peer_trust.js"
-import { _launchSession, _expandTilde, launchDirAllowed } from "../launch.js"
+import { _expandTilde, configuredBackend } from "../launch.js"
+import { handleSessionLaunch } from "../launch_request.js"
 import {
   helloEnvelope,
   isEnvelopeFrame,
   type EnvelopeMessage,
 } from "../session/rpc_envelope.js"
-import { loadConfig, resolveRelayUrl } from "../config.js"
-import {
-  loadLocalConfig,
-  effectiveAllowRemoteLaunch,
-} from "../session/local_config.js"
+import { resolveRelayUrl } from "../config.js"
 import { launcherLog } from "../session/debug_log.js"
 import type { ClientMessage, ServerMessage } from "../protocol/types.js"
 
@@ -94,10 +91,6 @@ export async function startLauncher(
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   const channels = new Map<string, PlainPeerChannel>()
 
-  /** The machine's configured launch backend (rpc is a fast-follow). */
-  function configuredBackend(): "tmux" | "herdr" {
-    return loadConfig().launch?.backend === "herdr" ? "herdr" : "tmux"
-  }
 
   /** Liveness: answer a stock `ping` with `pong`, mirroring the extension's
    *  transport-control handler (index.ts) so a health check works against an
@@ -242,52 +235,13 @@ export async function startLauncher(
     }
 
     if (frame.type !== "session_launch") return
-    const cwd = _expandTilde(
-      typeof frame.cwd === "string" && frame.cwd.length > 0
-        ? frame.cwd
-        : process.cwd(),
-    )
-    if (!effectiveAllowRemoteLaunch(loadLocalConfig(cwd))) {
-      launcherLog("launcher session_launch: remote launch disabled on this machine")
-      return
-    }
-    // Re-check pairing FRESH per launch (design 01M211VW9): the launcher has NO
-    // revoke-detach path (unlike the extension), so consult peers.json each
-    // request — a revoked owner stops launching without a daemon restart.
-    if (!(await _findKnownPeer(peer))) {
-      launcherLog(`launcher session_launch REFUSED: peer ${peer} not in known-peers (re-scan QR) — the error goes to the sender, this line is the log record`)
-      sender.send({
-        type: "error",
-        code: "unknown_peer",
-        message: "Peer not paired — re-scan QR",
-      })
-      return
-    }
-    // Directory allow-list, read FRESH each request.
-    if (!launchDirAllowed(cwd, loadConfig().launch?.dirs)) {
-      launcherLog("launcher session_launch: cwd not in launch.dirs allow-list")
-      sender.send({
-        type: "error",
-        code: "permission_denied",
-        message: "Remote launch not permitted for this directory",
-      })
-      return
-    }
-    const launchError = _launchSession(
-      configuredBackend(),
-      cwd,
-      typeof frame.name === "string" ? frame.name : undefined,
-      typeof frame.resume === "string" && frame.resume.trim().length > 0
-        ? frame.resume.trim()
-        : undefined,
-      // Launch correlation: pi is spawned with UNBIEN_LAUNCH_REQ=<id> and
-      // echoes it in room_meta, so the launching app can match the announcing
-      // room to THIS request and auto-open the chat (resume flow).
-      typeof frame.id === "string" && frame.id.trim().length > 0
-        ? frame.id.trim()
-        : undefined,
-    )
-    if (launchError) launcherLog(`launcher session_launch error: ${launchError}`)
+    // Gates (opt-in, pairing re-checked FRESH: the launcher has no
+    // revoke-detach path, allow-list), launch, and the session_launch_result
+    // replies, shared with a live pi's handler.
+    await handleSessionLaunch(frame, sender, {
+      log: (line) => launcherLog(`launcher ${line}`),
+      isPaired: () => _findKnownPeer(peer).then((known) => Boolean(known)),
+    })
     } catch (err) {
       const detail = String(err instanceof Error ? err.message : err).slice(0, 200)
       launcherLog(`launcher ub frame FAILED (${String(frame.type)}): ${detail}`)

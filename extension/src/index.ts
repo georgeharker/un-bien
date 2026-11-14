@@ -103,7 +103,6 @@ import {
   isWebSocketScheme,
   loadConfig,
 } from "./config.js"
-import { _expandTilde, _launchSession } from "./launch.js"
 import { _enrichToolArgs } from "./enrich_tool_args.js"
 import {
   _findKnownPeer,

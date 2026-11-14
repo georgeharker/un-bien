@@ -79,8 +79,19 @@ export type UnBienConfig = {
    * `allow_remote_launch` flag; `dirs` narrows WHERE within that.
    */
   launch?: {
-    backend?: "tmux" | "herdr"
+    backend?: "tmux" | "herdr" | "rex"
+    /** The backend to use when `backend` is UNAVAILABLE (binary missing, or
+     *  Rex's server unreachable): never after a launch was attempted, so a
+     *  session is never started twice. Absent / "none" ⇒ report the failure. */
+    fallback?: "tmux" | "herdr" | "rex" | "none"
     tmux_session?: string
+    /** Rex: the `rex` binary (default: PATH, then the Rex app bundle). */
+    rex_bin?: string
+    /** Rex: the server endpoint (default: the local server's socket under
+     *  ~/Library/Application Support/rex). The launcher never starts one. */
+    rex_server?: string
+    /** Rex: the label of the session launched pis go into (default "un-bien"). */
+    rex_session?: string
     dirs?: "*" | string[]
     /** The shell remote launches run through (a LOGIN shell, so the user's
      *  PATH/env load — launchd daemons otherwise spawn pi devoid of the

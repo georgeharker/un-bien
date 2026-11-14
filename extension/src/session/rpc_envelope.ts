@@ -97,6 +97,19 @@ export type UbFrame =
       resume?: string
     }
   | {
+      // launcher/ext->app: the outcome of a session_launch (launch_request.ts).
+      // Sent once when it starts or is refused, again with code exited_early
+      // when pi dies right after starting.
+      type: "session_launch_result"
+      in_reply_to: string
+      ok: boolean
+      backend?: string
+      fell_back?: { from: string; reason: string }
+      code?: string
+      message?: string
+      output?: string
+    }
+  | {
       // daemon->owner listing (prototype: cli resume-session). Backed by pi's
       // public SessionManager — the daemon is otherwise pi-independent.
       type: "sessions_list"
