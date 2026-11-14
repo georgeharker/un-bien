@@ -1,4 +1,4 @@
-# App Store release notes — 1.6.0 (build 27)
+# App Store release notes — 1.6.0 (build 28)
 
 What's New text, App Store "What's New" field / TestFlight build notes.
 Everything since 1.5.5 (build 25).
