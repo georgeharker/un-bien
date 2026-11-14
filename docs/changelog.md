@@ -6,7 +6,7 @@ requirements where they matter.
 
 ## App
 
-### 1.6.0 (build 29)
+### 1.6.0 (build 30)
 
 **Tool output rendering**
 
@@ -51,6 +51,17 @@ requirements where they matter.
   you watch.
 - This replaces the single "Expand rich tool results" switch. If you had
   it off, everything starts closed, failed calls included.
+
+**Launching sessions**
+
+- **Launches say what happened.** Launching a session on a machine now
+  reports back: a notice when its configured backend wasn't available and
+  another was used, and an error with the reason when the launch fails (remote
+  launch off, directory not allowed or missing, backend not installed or not
+  running), including pi's own output when it exits right after starting. A
+  launch that never comes online says so instead of nothing (needs un-bien
+  0.25.6 on the machine; older launchers report refusals only).
+- **Rex** can host launched sessions (configured on the machine).
 
 **Transcript**
 
