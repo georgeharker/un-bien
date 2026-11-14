@@ -24,6 +24,7 @@ requirements where they matter.
   A result that is a patch shows as a diff whichever tool returned it.
   Failed calls show why they failed. Results no longer show as raw JSON,
   including while a command is still running.
+
 - **Card headers name what the call acts on**: a file and line range, a
   URL or search query, an agent's task, an MCP call's tool; and how long a
   finished call took.
