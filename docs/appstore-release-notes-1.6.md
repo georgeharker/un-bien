@@ -1,28 +1,35 @@
 # App Store release notes — 1.6.0 (build 28)
 
 What's New text, App Store "What's New" field / TestFlight build notes.
-Everything since 1.5.5 (build 25).
+Everything since 1.5.5 (build 25). Paste the section below as is.
 
-## iOS + macOS
+## What's New (paste)
 
-- Tool results now look like what they are, live and when reopened: clean
-  shell output, highlighted files, diffs, search matches, scripts with their
-  calls and output, and formatted web pages and agent reports. Failed calls
-  show why. Results no longer show as raw JSON.
-- New Settings → Tool results: choose whether each kind of tool card starts
-  open, as a short preview, or closed (this replaces "Expand rich tool
-  results"), and whether agent cards show their prompt.
-- Preview shows the last lines of shell output and the first lines of a
-  read or search, with a tap to see the rest.
-- Card headers name the file and line range, URL, task or MCP tool a call
-  acts on, and how long it took.
-- A jump-to-end button appears while you're scrolled away from the newest
-  messages.
-- Durable sessions render their tool results just like pi sessions.
-- Steadier, faster scrolling: heights are estimated much more closely,
-  including multi-line messages you send.
+Better tool output, and you choose what opens.
+
+Tool results now look like what they are, live and when you reopen a
+conversation:
+• Shell commands with clean terminal output
+• Files read with syntax highlighting, file and line range in the header
+• Edits as diffs with line numbers
+• Search matches, scripts with their calls and output
+• Web pages and agent reports as formatted text
+• Failed calls show why they failed — no more raw JSON
+
+New Settings → Tool results:
+• Choose Open, Preview or Closed for each kind of tool: shell, file reads,
+  edits, writes, searches, code mode, MCP, agents, web and other
+• Preview shows the last lines of shell output or the first lines of a
+  read or search, with a tap to see the rest
+• Always open failed calls, and show the prompt each agent was given
+• Cards you open or close by hand stay that way
+
+Also:
+• Card headers show how long each call took
+• A jump-to-end button when you scroll away from the newest messages
+• Steadier scrolling, and a fix for the transcript drifting sideways
 
 ## One-liner (if a single field is preferred)
 
-Tool results that read like what they are, per-kind display settings with
-pi-style previews, agent prompts, and a jump-to-end button.
+Tool output that reads like what it is, plus per-tool control over what
+opens, previews or stays closed.
