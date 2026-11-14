@@ -32,7 +32,7 @@ requirements where they matter.
   error reported by a call that still succeeded shows in red.
 - **Durable sessions** (pi-durable hosts) render tool results the same way
   as pi sessions, including live edit diffs and call durations (needs
-  un-bien 0.25.2 and unbien-durable 0.1.4).
+  un-bien 0.25.3 and unbien-durable 0.1.5).
 
 **Control what opens by default** (Settings → Tool results)
 
