@@ -63,4 +63,30 @@ final class TranscriptEstimateSkipTests: XCTestCase {
         XCTAssertEqual(driver.heightSnapshot(), ["measured": 120],
                        "the persisted height cache must never restore an estimate as exact")
     }
+
+    /// Appending rows reuses every known height: the driver asks for an
+    /// estimate only for the new rows, not the transcript it already measured.
+    func testAppendingRowsEstimatesOnlyTheNewOnes() {
+        let driver = TranscriptWindowDriver()
+        let style = markdownProseStyle(theme: ThemeID.oneDark.theme, typography: Typography())
+        var asked: [(id: String, needsEstimate: Bool)] = []
+        let resolve: (String, Bool) -> RowHeightEstimator.ToolWarmSpec? = { id, needs in
+            asked.append((id, needs))
+            return RowHeightEstimator.ToolWarmSpec(facts: needs ? .init(expanded: false) : nil, warm: nil)
+        }
+        let rows = (0..<10).map { "tool-\($0)" }
+        driver.update(viewportHeight: 2_000)
+        driver.update(scrollY: 0)
+        driver.sync(order: rows, scope: "s", style: style, warmPairFor: { _ in nil },
+                    toolFactsFor: resolve, width: 370)
+        XCTAssertEqual(Set(asked.filter(\.needsEstimate).map(\.id)), Set(rows), "a fresh transcript estimates every row")
+        // The rows render and record their real heights.
+        for id in rows { driver.record(id: id, height: 100) }
+        asked.removeAll()
+        driver.sync(order: rows + ["tool-10", "tool-11"], scope: "s", style: style, warmPairFor: { _ in nil },
+                    toolFactsFor: resolve, width: 370)
+        XCTAssertEqual(Set(asked.filter(\.needsEstimate).map(\.id)), ["tool-10", "tool-11"],
+                       "only the appended rows need estimates")
+        XCTAssertTrue(asked.contains { $0.id == "tool-3" && !$0.needsEstimate }, "known rows are still warmed, not estimated")
+    }
 }
