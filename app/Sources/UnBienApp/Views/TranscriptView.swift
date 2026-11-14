@@ -896,27 +896,15 @@ struct TranscriptView: View {
 /// the transcript's end and live arrivals may follow.
 struct BusyIndicatorBox: View {
     let theme: AppTheme
-    @State private var phase = false
 
     var body: some View {
-        HStack(spacing: 5) {
-            ForEach(0..<3, id: \.self) { dot in
-                Circle()
-                    .fill(theme.secondaryText)
-                    .frame(width: 5, height: 5)
-                    .opacity(phase ? 0.25 : 1.0)
-                    .animation(
-                        .easeInOut(duration: 0.6)
-                            .repeatForever(autoreverses: true)
-                            .delay(Double(dot) * 0.2),
-                        value: phase)
-            }
-        }
+        // Core Animation dots: a SwiftUI repeatForever here re-rendered the
+        // whole window every frame while a session worked (PulsingDots).
+        PulsingDots(color: theme.secondaryText)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(theme.surface.opacity(0.7), in: RoundedRectangle(cornerRadius: 12))
         .frame(maxWidth: 1100, alignment: .leading)
         .accessibilityLabel("Session working")
-        .onAppear { phase = true }
     }
 }

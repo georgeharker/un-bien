@@ -16,35 +16,78 @@ import Foundation
 /// so once a block has scrolled past, its bounds are known for later offset /
 /// layout math without rebuilding it.
 public struct RowBoundsStore: Sendable, Equatable {
+    /// Where a retained height came from. Measured and restored heights are
+    /// exact (a restored one was measured in an earlier run); an estimate
+    /// stands in for a row that hasn't rendered yet and is replaced by its
+    /// measurement, or by a better estimate, but never replaces an exact one.
+    public enum Source: Sendable, Equatable {
+        case measured
+        case restored
+        case estimated
+    }
+
+    public struct Entry: Sendable, Equatable {
+        public let height: Double
+        public let source: Source
+    }
+
     /// Bumped whenever a layout-affecting input changes; a new generation means
     /// the retained heights are stale and were dropped.
     public private(set) var generation: Int = 0
-    private var heights: [String: Double] = [:]
+    private var entries: [String: Entry] = [:]
 
     public init() {}
 
-    public var count: Int { heights.count }
+    public var count: Int { entries.count }
 
     /// Record (or update) a measured row height. Retained until `invalidate`/`clear`.
     public mutating func record(id: String, height: Double) {
-        heights[id] = height
+        entries[id] = Entry(height: height, source: .measured)
     }
 
-    public func height(id: String) -> Double? { heights[id] }
+    /// Record an estimate for a row that has no exact height (none yet, or
+    /// only an earlier estimate). Returns whether it was kept.
+    @discardableResult
+    public mutating func estimate(id: String, height: Double) -> Bool {
+        guard needsEstimate(id: id) else { return false }
+        entries[id] = Entry(height: height, source: .estimated)
+        return true
+    }
 
-    public func contains(id: String) -> Bool { heights[id] != nil }
+    /// Whether an estimate for `id` would be kept: no height, or only an
+    /// estimate. Callers skip building one otherwise.
+    public func needsEstimate(id: String) -> Bool {
+        entries[id].map { $0.source == .estimated } ?? true
+    }
 
-    /// All retained heights — the persistence-tier capture source (see
-    /// TranscriptWindowDriver.seedHeights for the restore side).
-    public var allHeights: [String: Double] { heights }
+    public func height(id: String) -> Double? { entries[id]?.height }
+
+    public func entry(id: String) -> Entry? { entries[id] }
+
+    public func contains(id: String) -> Bool { entries[id] != nil }
+
+    /// Every retained height, estimates included (layout math).
+    public var allHeights: [String: Double] { entries.mapValues(\.height) }
+
+    /// The exact heights (measured or restored), the persistence-tier capture
+    /// source (see TranscriptWindowDriver.seedHeights for the restore side).
+    /// Estimates are never persisted: a restored height is treated as exact.
+    public var exactHeights: [String: Double] {
+        entries.compactMapValues { $0.source == .estimated ? nil : $0.height }
+    }
 
     /// Bulk-seed retained heights (persistence restore). Measured values
     /// overwrite seeds as rows re-measure, so any staleness (e.g. a rotation
     /// the fingerprint can't see) self-heals on scroll-through.
     public mutating func seed(_ heights: [String: Double]) {
         for (id, height) in heights where height > 0 {
-            self.heights[id] = height
+            entries[id] = Entry(height: height, source: .restored)
         }
+    }
+
+    /// Carry `from`'s entry, with its source, to `to` (a row re-keyed in place).
+    public mutating func carry(from: String, to: String) {
+        if let entry = entries[from] { entries[to] = entry }
     }
 
     /// Offset-from-top of `id` = summed heights of the blocks before it in
@@ -55,7 +98,7 @@ public struct RowBoundsStore: Sendable, Equatable {
         guard let end = order.firstIndex(of: id) else { return nil }
         var total = 0.0
         for other in order[..<end] {
-            guard let height = heights[other] else { return nil }
+            guard let height = entries[other]?.height else { return nil }
             total += height
         }
         return total
@@ -65,7 +108,7 @@ public struct RowBoundsStore: Sendable, Equatable {
     public func totalHeight(order: [String]) -> Double? {
         var total = 0.0
         for id in order {
-            guard let height = heights[id] else { return nil }
+            guard let height = entries[id]?.height else { return nil }
             total += height
         }
         return total
@@ -75,12 +118,12 @@ public struct RowBoundsStore: Sendable, Equatable {
     /// generation and drop all retained heights so they re-measure.
     public mutating func invalidate() {
         generation += 1
-        heights.removeAll(keepingCapacity: true)
+        entries.removeAll(keepingCapacity: true)
     }
 
     /// Conversation closed / left the view — drop everything.
     public mutating func clear() {
-        heights.removeAll()
+        entries.removeAll()
     }
 
     // MARK: - Geometric window (windowed transcript layout)
@@ -114,7 +157,7 @@ public struct RowBoundsStore: Sendable, Equatable {
         var i = c
         while i < order.count {
             if i > c, budget <= 0 { break }
-            budget -= (heights[order[i]] ?? fallbackHeight) + spacing
+            budget -= (entries[order[i]]?.height ?? fallbackHeight) + spacing
             last = i
             i += 1
         }
@@ -124,7 +167,7 @@ public struct RowBoundsStore: Sendable, Equatable {
         i = c - 1
         while i >= 0 {
             if upBudget <= 0 { break }
-            upBudget -= (heights[order[i]] ?? fallbackHeight) + spacing
+            upBudget -= (entries[order[i]]?.height ?? fallbackHeight) + spacing
             first = i
             i -= 1
         }
@@ -150,7 +193,7 @@ public struct RowBoundsStore: Sendable, Equatable {
         var first: Int?
         var last = -1
         for (i, id) in order.enumerated() {
-            let h = heights[id] ?? fallbackHeight
+            let h = entries[id]?.height ?? fallbackHeight
             if first == nil, top + h > windowMin { first = i }
             if top < windowMax { last = i }
             top += h + spacing
@@ -172,7 +215,7 @@ public struct RowBoundsStore: Sendable, Equatable {
         for (i, id) in order.enumerated() {
             guard top < scrollY + viewportHeight else { break }
             last = i
-            top += (heights[id] ?? fallbackHeight) + spacing
+            top += (entries[id]?.height ?? fallbackHeight) + spacing
         }
         return last
     }

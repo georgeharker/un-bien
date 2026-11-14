@@ -114,7 +114,10 @@ final class TranscriptWindowDriver {
     /// TOOL-ROW facts resolver (the last estimate-covered row kind): row id →
     /// ToolCardFacts (expansion seeded EXACTLY as ToolCardView does — cards
     /// OPEN by default per the pref). View-fed; the driver stays facts-agnostic.
-    var toolFactsFor: ((String) -> RowHeightEstimator.ToolWarmSpec?)?
+    /// The Bool asks for the row's estimator input: false when the row
+    /// already holds a height an estimate may not replace (needsEstimate),
+    /// so only the warm is built.
+    var toolFactsFor: ((String, Bool) -> RowHeightEstimator.ToolWarmSpec?)?
     /// CODE-SEGMENT warm (A-tier): (code, language) -> warms the content-
     /// addressed HighlightProducer slot the row's AsyncAttributedText reads at
     /// attach — no plain flash, no swap re-layout. View-fed (needs theme).
@@ -163,9 +166,7 @@ final class TranscriptWindowDriver {
         // "history went blank" symptom).
         if order.count == self.order.count {
             for (i, newID) in order.enumerated() where newID != self.order[i] {
-                if let h = bounds.height(id: self.order[i]) {
-                    bounds.record(id: newID, height: h)
-                }
+                bounds.carry(from: self.order[i], to: newID)
             }
         }
         self.order = order
@@ -253,19 +254,23 @@ final class TranscriptWindowDriver {
             if delta > RenderActivity.worstHeightDelta {
                 RenderActivity.worstHeightDelta = delta
                 RenderActivity.worstHeightDeltaRow = id
-                RenderActivity.worstHeightDeltaWasSeeded = estimateSeeded[id] != nil
+                RenderActivity.worstHeightDeltaWasSeeded = bounds.entry(id: id)?.source == .estimated
             }
         }
-        guard oldHeight != height else { return }   // no-op re-measure
         // Estimator accuracy (analytic tier): the real measure landed on an
         // estimate-seeded row — accumulate |Δ| (eΔ) and the signed bias (b).
         // Both updated from the SAME (height, estimate) pair — |b| ≤ eΔ always.
-        if let estimated = estimateSeeded.removeValue(forKey: id) {
+        let previous = bounds.entry(id: id)
+        if let previous, previous.source == .estimated {
             RenderActivity.heightEstimatesMeasured += 1
-            let delta = height - estimated
+            let delta = height - previous.height
             RenderActivity.heightEstimateErrSum += Int(abs(delta))
             RenderActivity.heightEstimateBiasSum += Int(delta)
         }
+        // A measure EQUAL to the stored height is a no-op, unless that height
+        // was an estimate: it becomes exact (else needsEstimate would keep
+        // re-estimating the row on every rebuild).
+        guard oldHeight != height || previous?.source == .estimated else { return }
         #if DEBUG
         if height > 20_000 {
             dbgDriverLog("SUSPECT height \(Int(height))pt id=\(id) — garbage measure? contentHeight inflated")
@@ -336,7 +341,9 @@ final class TranscriptWindowDriver {
     /// Height-cache capture (persistence tier): every measured height the
     /// registry holds. The VIEW filters this to replay-stable ids before it
     /// reaches the store (pending synthetics would persist as stale junk).
-    func heightSnapshot() -> [String: Double] { bounds.allHeights }
+    /// The exact heights (measured or restored): what the persisted height
+    /// cache keeps. Estimates never persist.
+    func heightSnapshot() -> [String: Double] { bounds.exactHeights }
 
     /// Height-cache seeding (persistence restore): bulk-load retained
     /// heights so the restore's binding jump lands on EXACT geometry instead
@@ -352,7 +359,7 @@ final class TranscriptWindowDriver {
     func sync(order: [String], scope: String = "",
               style: MarkdownProseStyle? = nil,
               warmPairFor: ((String) -> RowHeightEstimator.WarmRow?)? = nil,
-              toolFactsFor: ((String) -> RowHeightEstimator.ToolWarmSpec?)? = nil,
+              toolFactsFor: ((String, Bool) -> RowHeightEstimator.ToolWarmSpec?)? = nil,
               codeWarmFor: ((String, String?) -> Void)? = nil,
               width: Double = 0) {
         if !scope.isEmpty { sessionScope = scope }
@@ -454,16 +461,23 @@ final class TranscriptWindowDriver {
                 rowByBubble[pair.id] = id
             }
         }
-        guard !rows.isEmpty else { return }
+        // ESTIMATES only for rows that need one (needsEstimate): a row with a
+        // measured or restored height keeps it, so estimating it again is
+        // discarded work. Rows still get their render warm below.
+        let needsEstimateBubble = Set(rows.compactMap { row in
+            rowByBubble[row.id].flatMap { needsEstimate(rowID: $0) ? row.id : nil }
+        })
         // TEXT-TIER ESTIMATES (the uncapped fast cut): compose over the fork's
-        // markdownEstimateMetrics for EVERY leading row — no parse dependency,
-        // microseconds each, one sequential detached task (concurrency 1, no
-        // burst). Seeds land as computed; the capped entity-parse estimate
-        // below only fills rows this pass somehow missed.
+        // markdownEstimateMetrics for every leading row that needs one — no
+        // parse dependency, microseconds each, one sequential detached task
+        // (concurrency 1, no burst). Seeds land as computed; the capped
+        // entity-parse estimate below only fills rows this pass missed. Tool
+        // rows ride the same flight, so it runs even with no text rows.
         if prewarmWidth > 0 {
-            estimateTextTier(rows: rows, rowByBubble: rowByBubble, style: style,
-                             leading: leading)
+            estimateTextTier(rows: rows.filter { needsEstimateBubble.contains($0.id) },
+                             rowByBubble: rowByBubble, style: style, leading: leading)
         }
+        guard !rows.isEmpty else { return }
         // The entity store parses text; row SHAPE is the estimator's concern.
         // Plain rows (user bubbles) never render entities, and an entity
         // estimate would treat their text as markdown: they only warm their
@@ -475,15 +489,29 @@ final class TranscriptWindowDriver {
                 rows: plainImages.map { (id: $0.id, text: "", images: $0.images) },
                 style: style, width: 0)
         }
-        MarkdownEntityStore.shared.prewarm(
-            scope: sessionScope,
-            rows: rows.filter { !$0.spec.plain }.map { (id: $0.id, text: $0.text, images: $0.images) },
-            style: style, width: prewarmWidth,
-            onEstimate: { bubble, estimate in
-                guard let rowID = rowByBubble[bubble] else { return }
-                self.seedEstimate(rowID: rowID, estimate: estimate)
-            },
-            warmCode: codeWarmFor)
+        // Entity warm for every leading markdown row (renders from a cache
+        // hit); the estimate side channel only for rows that need one.
+        let markdownRows = rows.filter { !$0.spec.plain }
+        let (estimating, warmOnly) = (markdownRows.filter { needsEstimateBubble.contains($0.id) },
+                                      markdownRows.filter { !needsEstimateBubble.contains($0.id) })
+        if !estimating.isEmpty {
+            MarkdownEntityStore.shared.prewarm(
+                scope: sessionScope,
+                rows: estimating.map { (id: $0.id, text: $0.text, images: $0.images) },
+                style: style, width: prewarmWidth,
+                onEstimate: { bubble, estimate in
+                    guard let rowID = rowByBubble[bubble] else { return }
+                    self.seedEstimate(rowID: rowID, estimate: estimate)
+                },
+                warmCode: codeWarmFor)
+        }
+        if !warmOnly.isEmpty {
+            MarkdownEntityStore.shared.prewarm(
+                scope: sessionScope,
+                rows: warmOnly.map { (id: $0.id, text: $0.text, images: $0.images) },
+                style: style, width: 0,
+                warmCode: codeWarmFor)
+        }
     }
 
     /// Coalescing text-tier estimator flight (2026-09-10 fix: the first cut
@@ -532,8 +560,8 @@ final class TranscriptWindowDriver {
         var toolWarms: [@MainActor () -> Void] = []
         if let factsFor = toolFactsFor {
             for id in leading {
-                guard let spec = factsFor(id) else { continue }
-                toolEstimates.append((id: id, facts: spec.facts))
+                guard let spec = factsFor(id, needsEstimate(rowID: id)) else { continue }
+                if let facts = spec.facts { toolEstimates.append((id: id, facts: facts)) }
                 if let warm = spec.warm { toolWarms.append(warm) }
             }
         }
@@ -635,18 +663,21 @@ final class TranscriptWindowDriver {
     /// persists — it exists to shrink the first-measure mutation (device
     /// truth: 274pt avg → target ≪ 50pt). Accuracy is gauged when the real
     /// measure lands (`eΔ` on the HUD) — the estimator stays honest.
-    private var estimateSeeded: [String: Double] = [:]
+    /// Whether an estimate for `rowID` would be kept: the row holds no
+    /// height, or only one of our own estimates. A measured or restored
+    /// height always wins (seedEstimate), so building an estimate for such a
+    /// row is wasted work; it gets one again when the heights are invalidated.
+    func needsEstimate(rowID: String) -> Bool {
+        bounds.needsEstimate(id: rowID)
+    }
+
     func seedEstimate(rowID: String, estimate: Double) {
         guard estimate > 0 else { return }
         // An estimate may be CORRECTED by a later, better estimate (e.g. a card
         // settling rich → the facts flip collapsed→expanded; a re-flight with
-        // fresher facts) — estimateSeeded membership proves the existing bounds
-        // entry is OURS, not a measure or a persisted seed. Measured truth and
-        // persisted seeds always win and are never overwritten.
-        let ours = estimateSeeded[rowID] != nil
-        guard bounds.height(id: rowID) == nil || ours else { return }
-        bounds.record(id: rowID, height: estimate)
-        estimateSeeded[rowID] = estimate
+        // fresher facts); the store keeps each height's source, and measured
+        // truth and restored heights are never overwritten.
+        guard bounds.estimate(id: rowID, height: estimate) else { return }
         RenderActivity.heightEstimatesSeeded += 1
     }
 

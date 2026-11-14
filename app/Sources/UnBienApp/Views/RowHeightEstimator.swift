@@ -73,7 +73,9 @@ enum RowHeightEstimator {
     /// single-source via ToolCardView statics). Driver calls warm() for
     /// LEADING rows only; nil warm = materialization warms as before.
     struct ToolWarmSpec {
-        let facts: ToolCardFacts
+        /// The estimator input; nil when the driver didn't ask for it (the
+        /// row already has a height an estimate may not replace).
+        let facts: ToolCardFacts?
         /// MAIN-ACTOR by declaration, not by convention: the warm spawns its own
         /// producer tasks and must never ride into the off-main estimator
         /// flight. Typing it here is what keeps the Sendable half (`facts`)

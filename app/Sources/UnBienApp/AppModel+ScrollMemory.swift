@@ -81,7 +81,9 @@ extension AppModel {
         // hs3.6.0: web / agent results draw as markdown; prose soft breaks
         // and inline markup estimate as drawn. hs3.7.0: user bubbles estimate
         // as plain text, notices wrap, agent prompts draw, output is trimmed.
-        let schema = "hs3.7.0"
+        // hs3.8.0: only exact (measured or restored) heights persist; earlier
+        // captures could include estimates.
+        let schema = "hs3.8.0"
         let tools = "\(toolDisplayPolicy.fingerprint)|hideInput=\(hideInputWhenRich)"
         return "\(themeID.rawValue)|\(body)|\(mono)|\(String(format: "%.2f", textScale))|\(tools)|\(schema)"
     }

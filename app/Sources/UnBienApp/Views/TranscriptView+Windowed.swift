@@ -190,27 +190,39 @@ struct TranscriptStackView: View, Equatable {
                 default: return nil
                 }
             }, uniquingKeysWith: { first, _ in first })
-        // TOOL-CARD facts resolver (the last uncovered row kind): expansion
-        // seeds EXACTLY as ToolCardView does (store override ?? the display
-        // policy's start state), so the estimate matches the disclosure state
-        // the materialized card actually renders in.
-        // TOOL-CARD facts (shared builder — the regression harness exercises
-        // the SAME path, so tests and production can't diverge).
-        let toolFacts = Dictionary(
-            items.compactMap { item -> (String, RowHeightEstimator.ToolWarmSpec)? in
+        // TOOL-CARD resolver, resolved LAZILY: the driver asks only for the
+        // leading-window rows, and asks for the estimator input only when the
+        // row has no height an estimate may replace (needsEstimate), so a
+        // rebuild never splits the text of cards whose height is already
+        // known. Expansion seeds EXACTLY as ToolCardView does (store override
+        // ?? the display policy's start state), so the estimate matches the
+        // disclosure state the materialized card renders in; the shared
+        // builder keeps tests and production on one path.
+        let cards = Dictionary(
+            items.compactMap { item -> (String, ToolCard)? in
                 guard case let .tool(card) = item else { return nil }
-                let expanded = cardUI.expanded(card.toolCallID,
-                                                default: ToolCardView.startsExpanded(card, policy: displayPolicy))
-                let preview = ToolCardView.startsPreviewing(card, policy: displayPolicy, store: cardUI)
-                let prompts = displayPolicy.showAgentPrompts
-                let facts = RowHeightEstimator.toolCardFacts(for: card, expanded: expanded,
-                                                             hideInputRich: hideInputRich, preview: preview,
-                                                             showAgentPrompts: prompts)
-                // Warm fires for LEADING rows only (driver-gated).
-                let warm = Self.cardWarm(card: card, theme: theme, themeID: themeID, typography: typography,
-                                         preview: preview, showAgentPrompts: prompts, scope: sessionScope)
-                return (item.id, RowHeightEstimator.ToolWarmSpec(facts: facts, warm: warm))
+                return (item.id, card)
             }, uniquingKeysWith: { first, _ in first })
+        let policy = displayPolicy
+        let hideInput = hideInputRich
+        let cardStore = cardUI
+        let scope = sessionScope
+        let resolveToolFacts: (String, Bool) -> RowHeightEstimator.ToolWarmSpec? = {
+            [theme, themeID, typography] id, needsFacts in
+            guard let card = cards[id] else { return nil }
+            let preview = ToolCardView.startsPreviewing(card, policy: policy, store: cardStore)
+            let facts = needsFacts
+                ? RowHeightEstimator.toolCardFacts(
+                    for: card,
+                    expanded: cardStore.expanded(card.toolCallID,
+                                                 default: ToolCardView.startsExpanded(card, policy: policy)),
+                    hideInputRich: hideInput, preview: preview, showAgentPrompts: policy.showAgentPrompts)
+                : nil
+            // Warm fires for LEADING rows only (driver-gated).
+            let warm = Self.cardWarm(card: card, theme: theme, themeID: themeID, typography: typography,
+                                     preview: preview, showAgentPrompts: policy.showAgentPrompts, scope: scope)
+            return RowHeightEstimator.ToolWarmSpec(facts: facts, warm: warm)
+        }
         // CODE-SEGMENT warm factory: builds the SAME content-addressed
         // HighlightProducer EntityStack constructs (theme + mono metrics), so
         // warming hits the exact AsyncAttributedText cache slot at attach.
@@ -223,7 +235,7 @@ struct TranscriptStackView: View, Equatable {
         }
         let _ = driver.sync(order: items.map(\.id), scope: sessionScope, style: style,
                             warmPairFor: { warmPairs[$0] ?? nil },
-                            toolFactsFor: { toolFacts[$0] ?? nil },
+                            toolFactsFor: resolveToolFacts,
                             codeWarmFor: codeWarm,
                             width: estimateWidth)
         VStack(alignment: .leading, spacing: 12) {

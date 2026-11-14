@@ -199,5 +199,58 @@ final class WindowRangeTallRowTests: XCTestCase {
         XCTAssertTrue(range.contains(6), "tall row with top inside the downward band is included")
         XCTAssertFalse(range.contains(7), "rows beyond the straddler stay out")
     }
-}
 
+    // MARK: - Height source
+
+    func testEachHeightKeepsItsSource() {
+        var store = RowBoundsStore()
+        store.record(id: "m", height: 100)
+        store.seed(["r": 80])
+        XCTAssertTrue(store.estimate(id: "e", height: 50))
+        XCTAssertEqual(store.entry(id: "m")?.source, .measured)
+        XCTAssertEqual(store.entry(id: "r")?.source, .restored)
+        XCTAssertEqual(store.entry(id: "e")?.source, .estimated)
+    }
+
+    func testAnEstimateNeverReplacesAnExactHeight() {
+        var store = RowBoundsStore()
+        store.record(id: "m", height: 100)
+        store.seed(["r": 80])
+        XCTAssertFalse(store.estimate(id: "m", height: 1))
+        XCTAssertFalse(store.estimate(id: "r", height: 1))
+        XCTAssertEqual(store.height(id: "m"), 100)
+        XCTAssertEqual(store.height(id: "r"), 80)
+        XCTAssertFalse(store.needsEstimate(id: "m"))
+        XCTAssertFalse(store.needsEstimate(id: "r"))
+    }
+
+    func testAnEstimateIsRefinedThenReplacedByItsMeasure() {
+        var store = RowBoundsStore()
+        XCTAssertTrue(store.needsEstimate(id: "e"))
+        XCTAssertTrue(store.estimate(id: "e", height: 50))
+        XCTAssertTrue(store.estimate(id: "e", height: 60), "a better estimate replaces ours")
+        XCTAssertEqual(store.height(id: "e"), 60)
+        store.record(id: "e", height: 60)
+        XCTAssertEqual(store.entry(id: "e")?.source, .measured)
+        XCTAssertFalse(store.needsEstimate(id: "e"))
+    }
+
+    func testOnlyExactHeightsPersist() {
+        var store = RowBoundsStore()
+        store.record(id: "m", height: 100)
+        store.seed(["r": 80])
+        store.estimate(id: "e", height: 50)
+        XCTAssertEqual(store.exactHeights, ["m": 100, "r": 80])
+        XCTAssertEqual(store.allHeights, ["m": 100, "r": 80, "e": 50])
+    }
+
+    func testARekeyedRowKeepsItsSource() {
+        var store = RowBoundsStore()
+        store.estimate(id: "old-e", height: 50)
+        store.record(id: "old-m", height: 100)
+        store.carry(from: "old-e", to: "new-e")
+        store.carry(from: "old-m", to: "new-m")
+        XCTAssertEqual(store.entry(id: "new-e"), .init(height: 50, source: .estimated))
+        XCTAssertEqual(store.entry(id: "new-m"), .init(height: 100, source: .measured))
+    }
+}
