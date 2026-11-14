@@ -9,6 +9,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
+  _rexSessionsLabelled,
   _buildRexNewArgs,
   _buildRexWindowArgs,
   _outputTail,
@@ -34,10 +35,13 @@ case "$1" in
       echo "Error: no Rex server is running at /x/server.sock, and autostart is disabled" >&2; exit 1
     fi
     echo '{"host_id":"host-1","pid":1}' ;;
-  session)
-    if [ -n "$FAKE_REX_INSPECT_FAIL" ]; then echo 'Error: session not found' >&2; exit 3; fi
-    echo '{}' ;;
-  new) echo '{"session_id":"session:s1","initial_windows":[{"window_id":"window:w1","block_ids":["block:b1"]}]}' ;;
+  ls)
+    # Sessions this fake created (FAKE_REX_SESSIONS), plus any pre-existing ones.
+    printf '{"sessions":[%s%s]}\n' "$FAKE_REX_EXISTING" "$(cat "$FAKE_REX_SESSIONS" 2>/dev/null)" ;;
+  new)
+    sep=""; [ -s "$FAKE_REX_SESSIONS" ] || [ -n "$FAKE_REX_EXISTING" ] && sep=","
+    printf '%s{"session_id":"session:s1","label":"%s"}' "$sep" "$2" >> "$FAKE_REX_SESSIONS"
+    echo '{"session_id":"session:s1","initial_windows":[{"window_id":"window:w1","block_ids":["block:b1"]}]}' ;;
   window)
     if [ "$2" = new ]; then echo '{"window_id":"window:w2","block_ids":["block:b2"],"revision":2}'; else echo '{}'; fi ;;
   wait)
@@ -49,7 +53,7 @@ esac
 
 const SAVED: Record<string, string | undefined> = {}
 const ENV_KEYS = ["PI_CODING_AGENT_DIR", "UNBIEN_STATE_DIR", "FAKE_REX_LOG", "FAKE_REX_NO_SERVER",
-  "FAKE_REX_INSPECT_FAIL", "FAKE_REX_EXIT", "REX_SERVER"]
+  "FAKE_REX_SESSIONS", "FAKE_REX_EXISTING", "FAKE_REX_EXIT", "REX_SERVER"]
 let dir = ""
 
 function configure(launch: Record<string, unknown>): void {
@@ -88,7 +92,8 @@ beforeEach(() => {
   process.env.PI_CODING_AGENT_DIR = join(dir, "agent")
   process.env.UNBIEN_STATE_DIR = join(dir, "state")
   process.env.FAKE_REX_LOG = join(dir, "rex.log")
-  for (const k of ["FAKE_REX_NO_SERVER", "FAKE_REX_INSPECT_FAIL", "FAKE_REX_EXIT", "REX_SERVER"]) delete process.env[k]
+  process.env.FAKE_REX_SESSIONS = join(dir, "sessions")
+  for (const k of ["FAKE_REX_NO_SERVER", "FAKE_REX_EXISTING", "FAKE_REX_EXIT", "REX_SERVER"]) delete process.env[k]
   configure({ backend: "rex" })
 })
 
@@ -165,7 +170,7 @@ describe("rex argv", () => {
   })
 
   it("keeps the last lines of output", () => {
-    const text = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join("\n") + "\n\n"
+    const text = `${Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join("\n")}\n\n`
     const tail = _outputTail(text).split("\n")
     expect(tail).toHaveLength(40)
     expect(tail.at(-1)).toBe("line 60")
@@ -185,11 +190,35 @@ describe("rex launch", () => {
       { host_id: "host-1", session_id: "session:s1" })
   })
 
-  it("recreates the session when the stored one is gone", async () => {
+  it("recreates the session when none has the label any more", async () => {
     await launchSession({ cwd: dir, name: "one" })
-    process.env.FAKE_REX_INSPECT_FAIL = "1"
+    writeFileSync(join(dir, "sessions"), "")   // the session was closed (or renamed)
     await launchSession({ cwd: dir, name: "two" })
     expect(calls().filter((c) => c[0] === "new")).toHaveLength(2)
+  })
+
+  it("puts pis into an existing session with the configured label, whoever made it", async () => {
+    process.env.FAKE_REX_EXISTING = '{"session_id":"session:mine","label":"work"}'
+    configure({ backend: "rex", rex_session: "work" })
+    await launchSession({ cwd: dir, name: "one" })
+    expect(calls().some((c) => c[0] === "new")).toBe(false)
+    expect(calls().find((c) => c[0] === "window")?.slice(0, 4)).toEqual(["window", "new", "-s", "session:mine"])
+  })
+
+  it("creates the session with the configured label when none exists", async () => {
+    configure({ backend: "rex", rex_session: "pi agents" })
+    await launchSession({ cwd: dir, name: "one" })
+    expect(calls().find((c) => c[0] === "new")?.slice(0, 2)).toEqual(["new", "pi agents"])
+  })
+
+  it("matches labels exactly and prefers the session it used last", () => {
+    const ls = JSON.stringify({ sessions: [
+      { session_id: "session:a", label: "un-bien" },
+      { session_id: "session:b", label: "un-bien 2" },
+      { session_id: "session:c", label: "un-bien" },
+    ] })
+    expect(_rexSessionsLabelled(ls, "un-bien")).toEqual(["session:a", "session:c"])
+    expect(_rexSessionsLabelled("junk", "un-bien")).toEqual([])
   })
 
   it("reports an unreachable server without creating anything", async () => {

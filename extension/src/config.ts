@@ -90,7 +90,8 @@ export type UnBienConfig = {
     /** Rex: the server endpoint (default: the local server's socket under
      *  ~/Library/Application Support/rex). The launcher never starts one. */
     rex_server?: string
-    /** Rex: the label of the session launched pis go into (default "un-bien"). */
+    /** Rex: the label of the session launched pis go into (default
+     *  "un-bien"): an existing session with that label, else one created. */
     rex_session?: string
     dirs?: "*" | string[]
     /** The shell remote launches run through (a LOGIN shell, so the user's

@@ -496,11 +496,12 @@ session is never started twice; the result tells the app it fell back.
 
 ### Rex
 
-With `launch.backend: "rex"`, each launched Pi is a window (tab) of one Rex
-session the launcher creates and owns (label `launch.rex_session`, default
-`un-bien`; it never takes over a session it didn't create). The session is
-found again by its id, kept in `~/.local/state/un-bien/rex-launch.json`, so a
-Pi renaming it doesn't matter.
+With `launch.backend: "rex"`, each launched Pi is a window (tab) of the Rex
+session labelled `launch.rex_session` (default `un-bien`): an existing session
+with that label, yours included, or one created with it when none exists. The
+label is looked up on every launch, so renaming or closing the session just
+means the next launch creates a fresh one. When several sessions share the
+label, the one used last wins.
 
 - **Binary**: `launch.rex_bin`, else `rex` on PATH, else the Rex app bundle.
 - **Server**: `launch.rex_server`, else `REX_SERVER`, else (macOS) the local

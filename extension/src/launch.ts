@@ -277,7 +277,7 @@ export function launchDirAllowed(
   const target = resolve(_expandTilde(cwd))
   return dirs.some((d) => {
     const base = resolve(_expandTilde(d))
-    return target === base || target.startsWith(base + "/")
+    return target === base || target.startsWith(`${base}/`)
   })
 }
 
@@ -392,12 +392,9 @@ export async function launchSession(
     : undefined
   let result: LaunchResult
   try {
-    result =
-      backend === "tmux"
-        ? await launchTmux(req, later)
-        : backend === "herdr"
-          ? await launchHerdr(req)
-          : await launchRex(req, later)
+    if (backend === "tmux") result = await launchTmux(req, later)
+    else if (backend === "herdr") result = await launchHerdr(req)
+    else result = await launchRex(req, later)
   } catch (error) {
     result = {
       ok: false,
@@ -541,9 +538,9 @@ function _watchTmuxWindow(windowId: string, onLater?: (result: LaunchResult) => 
 
 // ── Rex ─────────────────────────────────────────────────────────────────────
 //
-// Rex (superlogical.com/rex) hosts each pi as a WINDOW of one Rex session the
-// launcher creates and owns (label `launch.rex_session`, default "un-bien";
-// it never adopts a session it didn't create). Every rex call passes
+// Rex (superlogical.com/rex) hosts each pi as a WINDOW of the Rex session
+// labelled `launch.rex_session` (default "un-bien"): an existing session with
+// that label (whoever made it), else one created with it. Every rex call passes
 // `--autostart=false` and the server endpoint: run outside a Rex terminal the
 // CLI's default socket is not the running server's, and autostart would
 // start a second, hidden server. The command is a real argv (no shell
@@ -674,7 +671,9 @@ interface RexRun {
 function _rexRun(bin: string, endpoint: string | null, args: string[], timeoutMs = 15_000): Promise<RexRun> {
   return new Promise((resolveRun) => {
     execFile(bin, [..._rexGlobalArgs(endpoint), ...args], { timeout: timeoutMs }, (err, stdout, stderr) => {
-      const code = err ? (typeof (err as { code?: unknown }).code === "number" ? (err as { code: number }).code : -1) : 0
+      const exitCode = (err as { code?: unknown } | null)?.code
+      let code = 0
+      if (err) code = typeof exitCode === "number" ? exitCode : -1
       resolveRun({ code, stdout: String(stdout), stderr: String(stderr) })
     })
   })
@@ -697,8 +696,8 @@ async function rexUnavailable(): Promise<{ code: LaunchErrorCode; message: strin
   return null
 }
 
-/** The launcher's Rex session, kept across restarts: a session found by id,
- *  so a pi renaming it (the Rex skill asks agents to) never loses it. */
+/** The session the launcher last used, kept across restarts: the tie-break
+ *  when several sessions share the configured label. */
 interface RexLaunchState {
   endpoint: string | null
   host_id: string
@@ -739,12 +738,33 @@ function _rexHostId(whoamiJson: string): string {
   }
 }
 
-/** The stored session id when it belongs to this server and still exists. */
-async function _rexStoredSession(bin: string, endpoint: string | null, hostId: string): Promise<string | null> {
+/** The ids of the sessions `rex ls --json` lists under exactly `label`, in
+ *  list order. Exported for tests. */
+export function _rexSessionsLabelled(lsJson: string, label: string): string[] {
+  try {
+    const sessions = (JSON.parse(lsJson) as { sessions?: { session_id?: unknown; label?: unknown }[] }).sessions ?? []
+    return sessions
+      .filter((x) => x.label === label && typeof x.session_id === "string")
+      .map((x) => x.session_id as string)
+  } catch {
+    return []
+  }
+}
+
+/** The session labelled `label` on this server: the one last used when
+ *  several share it, else the first listed; null when none does. */
+async function _rexSessionByLabel(
+  bin: string, endpoint: string | null, hostId: string, label: string,
+): Promise<string | null> {
+  const ls = await _rexRun(bin, endpoint, ["ls", "--json"])
+  if (ls.code !== 0) return null
+  const matches = _rexSessionsLabelled(ls.stdout, label)
   const stored = _readRexState()
-  if (!stored || !hostId || stored.host_id !== hostId || stored.endpoint !== endpoint) return null
-  const inspect = await _rexRun(bin, endpoint, ["session", "inspect", stored.session_id, "--json"])
-  return inspect.code === 0 ? stored.session_id : null
+  if (stored && hostId && stored.host_id === hostId && stored.endpoint === endpoint &&
+      matches.includes(stored.session_id)) {
+    return stored.session_id
+  }
+  return matches[0] ?? null
 }
 
 /** One Rex launch at a time, so two first launches create one session. */
@@ -770,7 +790,7 @@ async function _launchRexNow(req: LaunchRequest, onLater?: (result: LaunchResult
   const hostId = _rexHostId(who.stdout)
   const label = _rexLabel(req.name, req.cwd)
   const sessionLabel = (loadConfig().launch?.rex_session ?? "").trim() || "un-bien"
-  const sessionId = await _rexStoredSession(bin, endpoint, hostId)
+  const sessionId = await _rexSessionByLabel(bin, endpoint, hostId, sessionLabel)
   let ids: ReturnType<typeof _rexIdsFromJson>
   if (sessionId) {
     const made = await _rexRun(bin, endpoint, _buildRexWindowArgs(sessionId, label, req))
@@ -780,8 +800,8 @@ async function _launchRexNow(req: LaunchRequest, onLater?: (result: LaunchResult
     const made = await _rexRun(bin, endpoint, _buildRexNewArgs(sessionLabel, label, req))
     if (made.code !== 0) return fail(made, "new")
     ids = _rexIdsFromJson(made.stdout)
-    if (ids.sessionId && hostId) _writeRexState({ endpoint, host_id: hostId, session_id: ids.sessionId })
   }
+  if (ids.sessionId && hostId) _writeRexState({ endpoint, host_id: hostId, session_id: ids.sessionId })
   launcherLog(`launch rex: '${label}' in ${ids.sessionId ?? "?"} (window ${ids.windowId ?? "?"})`)
   if (ids.sessionId && ids.windowId && ids.blockId) {
     _watchRexBlock(bin, endpoint, ids.sessionId, ids.windowId, ids.blockId, onLater)
