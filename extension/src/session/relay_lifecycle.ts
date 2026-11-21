@@ -24,15 +24,12 @@
  * (public state snapshot; index).
  */
 import { join } from "node:path"
+import { lifecycleLog } from "./lifecycle_log.js"
 import { AppPresenceWatch } from "./app_presence.js"
 import { readFileSync } from "node:fs"
 import { hostname } from "node:os"
 import { fileURLToPath } from "node:url"
-import type {
-  ExtensionAPI,
-  ExtensionCommandContext,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent"
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent"
 import { qrSession } from "../pairing/qr.js"
 import {
   addPeer,
@@ -356,7 +353,8 @@ export function _detachPeerChannel(
 /**
  * Full teardown: stop listener, detach channel, close relay → idle.
  */
-export function _goIdle(deps: RelayLifecycleDeps): void {
+export function _goIdle(deps: RelayLifecycleDeps, reason = "unspecified"): void {
+  lifecycleLog("idle", { reason, from: deps.state })
   deps.rootLifecycleGeneration += 1
   _relayLifecycleGeneration += 1
 
@@ -427,6 +425,7 @@ export function _onRelayClose(
 ): void {
   if (deps.relay !== closedRelay) return // delayed close from a replaced Relay
   if (deps.state === "idle") return // already torn down (e.g. /unbien stop)
+  lifecycleLog("relay_closed", { reconnect: deps.relayUrl ? "scheduled" : "no url" })
 
   _relayLifecycleGeneration += 1
   deps.stopAutoListener?.()
@@ -541,6 +540,7 @@ async function _attemptReconnect(
     return
   }
 
+  lifecycleLog("relay_reconnected", { after_attempts: _reconnectAttempt })
   _reconnectAttempt = 0
 
   // One must-be-called setup shared with the initial-start path (see
@@ -683,13 +683,13 @@ export async function _handleControl(
       if (deps.getState() === "idle") {
         deps.rootLifecycleGeneration += 1
         _relayLifecycleGeneration += 1
-      } else _goIdle(deps)
+      } else _goIdle(deps, "control relay:off")
       _emitRelayState(deps, true)
       return
     case "relay:toggle":
       if (deps.getState() === "idle")
         await _cmdStart(deps.commandDeps, _controlCtx())
-      else _goIdle(deps)
+      else _goIdle(deps, "control relay:toggle")
       _emitRelayState(deps, true)
       return
     case "relay:status":

@@ -560,6 +560,12 @@ back. Pairing and identity live in the state root and are never touched.
 | macOS    | `tail -f ~/.local/state/un-bien/launcher.log`           |
 | Windows  | `Get-Content ~\.local\state\un-bien\launcher.log -Wait` |
 
+`~/.local/state/un-bien/lifecycle.log` (every platform) records each pi
+session's un-bien lifecycle: pi's `session_start` / `session_shutdown` with
+pi's reason, why un-bien went idle, relay close and reconnect, and mesh join,
+leave and failover, one timestamped line per event with the pid. Rare events
+only (a handful per session); rotated at 2 MB.
+
 ### Caveats
 
 - **Pairing still happens interactively.** The launcher doesn't show a QR; it

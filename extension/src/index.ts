@@ -31,6 +31,7 @@
  */
 
 import { randomUUID } from "node:crypto"
+import { lifecycleLog } from "./session/lifecycle_log.js"
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -885,7 +886,7 @@ async function _renameAgent(newName: string): Promise<void> {
   // first (also detaches the bridge) so the broker re-register below starts
   // clean; bring it back up after with the new name.
   const wasStarted = _getState() !== "idle"
-  if (wasStarted) _goIdle(relayDeps)
+  if (wasStarted) _goIdle(relayDeps, "rename")
 
   let assigned = newName
   try {
@@ -1403,7 +1404,7 @@ const deps: CommandDeps = {
   deriveRoomId: _deriveRoomId,
   currentModelName: _currentModelName,
   rootState: _rootState,
-  goIdle: () => _goIdle(relayDeps),
+  goIdle: (reason?: string) => _goIdle(relayDeps, reason),
   onRelayClose: (closedRelay) => _onRelayClose(relayDeps, closedRelay),
   setupRelayConnection: (relay) => _setupRelayConnection(relayDeps, relay),
   refreshFooter: _refreshFooter,
@@ -1902,7 +1903,13 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // "stale after session replacement" crash when the app taps Compact after a
   // New session. Fires on startup/new/fork/reload/resume; the ctx is always
   // bound to the current session.
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", (event, ctx) => {
+    lifecycleLog("session_start", {
+      reason: (event as { reason?: string } | undefined)?.reason ?? "unknown",
+      sid: ctx?.sessionManager?.getSessionId(),
+      root: _isRootSession(pi) || !_rootSessionId,
+      disposed: _disposed,
+    })
     // Register THIS session's record (root + every subagent get their own
     // session_start with their own ctx). Each records its OWN sessionManager —
     // no cross-session clobber (was the unguarded `_sessionManager = ...` bug).
@@ -2093,7 +2100,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // up exactly ONE connection bound to the restored session. Idempotent +
   // best-effort: every step is guarded so a partially-initialised instance
   // (e.g. shutdown lands mid-`_cmdRoot`) tears down without throwing.
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async (event) => {
     // A subagent child's session_shutdown owns NOTHING at the module level: the
     // connection, mesh node, cwd lock, lifecycle generations, and base ctx are
     // the ROOT's, and its child room outlives the turn (reaped by the root's
@@ -2105,6 +2112,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // root-lifecycle authority (Tier 2), NOT the per-sid data path, so an
     // early return is correct here — there is no session-local state to cache.
     if (!_isRootSession(pi)) return
+    const shutdownReason = (event as { reason?: string } | undefined)?.reason ?? "unknown"
+    lifecycleLog("session_shutdown", { reason: shutdownReason, state: _state, mesh: _meshNode ? "joined" : "none" })
     // Revoke async authority synchronously, before any teardown await. `_disposed`
     // blocks the outgoing continuation immediately; the root and candidate
     // generations keep queued work stale even if a same-module session_start
@@ -2169,7 +2178,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     if (_state === "idle") {
       _meshNode?.detachBridge()
     } else {
-      _goIdle(relayDeps)
+      _goIdle(relayDeps, `session_shutdown ${shutdownReason}`)
     }
 
     const meshNode = _meshNode
@@ -2179,8 +2188,9 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     let meshClose: Promise<void> | null = null
     try {
       meshClose = meshNode?.close() ?? null
-    } catch {
-      /* best-effort */
+      if (meshNode) lifecycleLog("mesh_leave_started", { address: meshNode.address() })
+    } catch (err) {
+      lifecycleLog("mesh_leave_failed", { error: String(err) })
     }
 
     if (_cwdLock) {
@@ -2194,8 +2204,9 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     }
     try {
       await meshClose
-    } catch {
-      /* best-effort */
+      lifecycleLog("session_shutdown_done", { reason: shutdownReason, mesh_left: meshClose ? "yes" : "none" })
+    } catch (err) {
+      lifecycleLog("mesh_leave_failed", { error: String(err) })
     }
   })
 

@@ -12,6 +12,7 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent"
+import { lifecycleLog } from "../session/lifecycle_log.js"
 import { SettingsManager } from "@earendil-works/pi-coding-agent"
 import {
   conditionalRemovePeer,
@@ -623,7 +624,7 @@ export async function _cmdStop(
   // Revoke Relay/SelfRevoke/bridge authority while the global node is still
   // visible and before close() begins UDS leave.
   if (relayUp) {
-    deps.goIdle()
+    deps.goIdle("/unbien stop")
   } else {
     deps.relayLifecycleGeneration += 1
     deps.meshNode?.detachBridge()
@@ -814,6 +815,7 @@ export async function _cmdJoin(
     // accident and causes cross-folder name ping-pong across restarts. The clean
     // name (wizard / explicit `agent_name`) already lives in config or re-derives
     // from `basename(cwd)`; the event above carries the live `#N` for the UI.
+    lifecycleLog("mesh_joined", { requested: requestedName, assigned, role: peer.currentRole() })
     deps.pi?.sendMessage({
       customType: "un-bien:name-assigned",
       content:

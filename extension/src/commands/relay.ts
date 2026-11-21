@@ -89,7 +89,7 @@ export async function _cmdRelay(
       if (deps.getState() === "idle") {
         ctx.ui.notify("[un-bien] Relay already disconnected.", "info")
       } else {
-        deps.goIdle()
+        deps.goIdle("/unbien relay stop")
         ctx.ui.notify(
           "[un-bien] Relay disconnected (local mesh untouched).",
           "info",

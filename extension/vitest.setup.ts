@@ -31,6 +31,11 @@ for (const key of [
   delete process.env[key]
 }
 
+// The lifecycle log (session/lifecycle_log.ts) writes under the state root,
+// which unset UNBIEN_STATE_DIR leaves at the developer's real one: keep tests
+// out of it.
+process.env["UNBIEN_LIFECYCLE_LOG"] = "0"
+
 // NOTE: we deliberately do NOT pin a per-worker UNBIEN_STATE_DIR here — it
 // has the HIGHEST precedence in unbienStateHome() and would override the
 // homedir() mocks that pairing/storage.test.ts sets up for its own isolation.

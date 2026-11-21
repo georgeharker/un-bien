@@ -133,7 +133,8 @@ export interface CommandDeps {
     sessionManager?: { getSessionId(): string } | null
   }
   /** Full teardown of relay-side state (relay off, bridge detached). */
-  goIdle(): void
+  /** Go idle; `reason` is recorded in the lifecycle log. */
+  goIdle(reason?: string): void
   /** Reconnect backoff entry for a closed relay. */
   onRelayClose(closedRelay: RelayClient): void
   /** THE single must-be-called setup for a freshly authenticated relay
