@@ -28,12 +28,64 @@ struct EntityStack: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// Splits a prose run at its paragraph breaks into pieces at most about
+    /// `maxHeight` points tall. Height is bounded without layout, so the split
+    /// doesn't move with the width: every hard line counts as
+    /// ceil(length / chars-per-line) lines at the narrowest phone width
+    /// (`minWidth`) and the body size, at the estimator's line height. A piece
+    /// is cut at the first paragraph break past the cap; one paragraph taller
+    /// than the cap stays whole.
+    /// "A\n\nB" becomes "A" and "\nB": the second piece's leading newline is
+    /// the blank line between them, so the pieces stacked with no spacing
+    /// show the same lines as the whole.
+    nonisolated static func proseChunks(_ prose: AttributedString, bodySize: Double,
+                            maxHeight: Double = 1000, minWidth: Double = 320) -> [AttributedString] {
+        let lineHeight = bodySize * RowHeightEstimator.lineBodyFactor
+        // ~0.5 em per character: a generous count of characters per line, so
+        // the line total (and height) errs high.
+        let charsPerLine = max(1, Int(minWidth / (bodySize * 0.5)))
+        let maxLines = max(1, Int(maxHeight / lineHeight))
+        let chars = prose.characters
+        var chunks: [AttributedString] = []
+        var start = chars.startIndex
+        var lines = 0          // completed hard lines' wrapped line count
+        var lineLength = 0     // characters on the current hard line
+        var cursor = chars.startIndex
+        while cursor < chars.endIndex {
+            let next = chars.index(after: cursor)
+            if chars[cursor] == "\n" {
+                lines += max(1, (lineLength + charsPerLine - 1) / charsPerLine)
+                lineLength = 0
+                if lines >= maxLines, next < chars.endIndex, chars[next] == "\n" {
+                    chunks.append(AttributedString(prose[start..<cursor]))
+                    start = next
+                    lines = 0
+                }
+            } else {
+                lineLength += 1
+            }
+            cursor = next
+        }
+        chunks.append(AttributedString(prose[start..<chars.endIndex]))
+        return chunks
+    }
+
     @ViewBuilder
     private func entityView(_ entity: MarkdownEntity) -> some View {
         switch entity {
         case .prose(let attributed):
-            Text(attributed).textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            // A prose run is every consecutive paragraph joined by "\n\n";
+            // as ONE Text a long message is a single view thousands of points
+            // tall, which iOS can leave undrawn until much of it is on screen
+            // (the bubble's background draws, its text doesn't). Paragraph-
+            // sized Texts stacked with no spacing render the same lines.
+            VStack(alignment: .leading, spacing: 0) {
+                let chunks = Self.proseChunks(attributed, bodySize: typography.bodySize)
+                ForEach(Array(chunks.enumerated()), id: \.offset) { _, chunk in
+                    Text(chunk).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
 
         case .heading(let level, let text):
             Text(text).textSelection(.enabled)
