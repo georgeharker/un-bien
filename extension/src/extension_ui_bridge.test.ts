@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { createExtensionUiBridge, wrapStockUi } from "./extension_ui_bridge.js"
 import type {
   ExtensionUiResponseWire,
@@ -441,15 +441,24 @@ describe("extension_ui_bridge", () => {
       expect(bridge.pendingRequests()).toEqual([])
     })
 
-    it("does not replay a flow dropped by the TTL", () => {
+    it("still replays and answers a flow left open for an hour", () => {
+      // The phone attaching long after the agent asked: pi still holds the
+      // dialog open, so the bridge must too (no expiry notify either).
       vi.useFakeTimers()
       const bus = fakeBus()
-      const bridge = createExtensionUiBridge(fakePi(bus), () => {})!
+      const sent: ServerMessage[] = []
+      const bridge = createExtensionUiBridge(fakePi(bus), (m) => sent.push(m))!
 
       bus.emit("@eko24ive/pi-ask:started", singleQuestionFlow())
-      vi.advanceTimersByTime(10 * 60 * 1000 + 1)
+      sent.length = 0
+      vi.advanceTimersByTime(60 * 60 * 1000)
 
-      expect(bridge.pendingRequests()).toEqual([])
+      expect(sent).toEqual([])
+      expect(
+        bridge.pendingRequests().map((r) => (r as { id: string }).id),
+      ).toEqual(["tool:tc_1"])
+      bridge.respond({ type: "extension_ui_response", id: "tool:tc_1", value: "Alpha" })
+      expect(bus.emitted.filter((e) => e.name === SUBMIT)).toHaveLength(1)
       vi.useRealTimers()
     })
 
@@ -488,58 +497,6 @@ describe("extension_ui_bridge", () => {
         flowId: "tool:tc_1",
         response: { kind: "answer", answers: { goal: { values: ["a"] } } },
       })
-    })
-  })
-
-  describe("flow TTL", () => {
-    afterEach(() => {
-      vi.useRealTimers()
-    })
-
-    it("warns the app (matching notify) when a flow's TTL expires", () => {
-      vi.useFakeTimers()
-      const bus = fakeBus()
-      const sent: ServerMessage[] = []
-      const bridge = createExtensionUiBridge(fakePi(bus), (m) => sent.push(m))!
-
-      bus.emit("@eko24ive/pi-ask:started", singleQuestionFlow())
-      sent.length = 0
-
-      vi.advanceTimersByTime(10 * 60 * 1000 + 1)
-
-      expect(sent).toHaveLength(1)
-      expect(sent[0]).toMatchObject({
-        type: "extension_ui_request",
-        id: "tool:tc_1",
-        method: "notify",
-        notify_type: "warning",
-      })
-      // ...and the flow is gone: a degraded response through the SAME bridge
-      // is dropped (rich responses still work — they carry flow_id).
-      bridge.respond({
-        type: "extension_ui_response",
-        id: "tool:tc_1",
-        value: "Alpha",
-      })
-      expect(bus.emitted.filter((e) => e.name === SUBMIT)).toHaveLength(0)
-    })
-
-    it("does NOT warn when the flow resolved before the TTL", () => {
-      vi.useFakeTimers()
-      const bus = fakeBus()
-      const sent: ServerMessage[] = []
-      createExtensionUiBridge(fakePi(bus), (m) => sent.push(m))
-
-      bus.emit("@eko24ive/pi-ask:started", singleQuestionFlow())
-      bus.emit("@eko24ive/pi-ask:completed", {
-        version: 1,
-        flowId: "tool:tc_1",
-      })
-      sent.length = 0
-
-      vi.advanceTimersByTime(10 * 60 * 1000 + 1)
-
-      expect(sent).toHaveLength(0)
     })
   })
 
