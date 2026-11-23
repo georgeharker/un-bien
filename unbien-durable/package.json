@@ -16,8 +16,8 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc --noEmit",
+    "build": "node ./node_modules/typescript/bin/tsc -p tsconfig.build.json",
+    "typecheck": "node ./node_modules/typescript/bin/tsc --noEmit",
     "dev": "tsx src/host.ts",
     "test": "vitest run"
   },
@@ -34,6 +34,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.8.0",
+    "@typescript/native": "npm:typescript@^7.0.2",
     "tsx": "^4.22.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.6"

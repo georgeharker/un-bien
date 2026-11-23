@@ -37,11 +37,6 @@ const PI_ASK_COMPLETED = "@eko24ive/pi-ask:completed"
 const PI_ASK_SUBMIT = "@eko24ive/pi-ask:submit"
 const PI_ASK_SUBMIT_RESULT = "@eko24ive/pi-ask:submit-result"
 
-/** Drop a flow from `activeFlows` if pi-ask never resolves it (e.g. a flow
- *  disposed on session_shutdown — pi-ask does not emit `completed` for those).
- *  Bounds memory; generous vs. a human answer time. */
-const FLOW_TTL_MS = 10 * 60 * 1000
-
 /** Minimal view of `pi.events` this bridge needs. */
 type EventBus = ExtensionAPI["events"]
 
@@ -63,7 +58,12 @@ interface ActiveFlow {
 // options and no correlation id — so the bridge drives off the ctx.ui wrap
 // (wrapStockUi), not the events. Id space is crypto.randomUUID(), disjoint
 // from pi-ask flowIds, so inbound responses route unambiguously.
-const STOCK_TTL_MS = 10 * 60 * 1000
+//
+// Neither kind of request expires: each stays pending (and replays on
+// session_sync) for as long as the dialog is open in pi, however long that is.
+// pi-ask never times an ask out and only drops a flow without `completed` when
+// the session shuts down, and the bridge is disposed and rebuilt on every root
+// session_start, so nothing outlives its session.
 
 /** One stock ctx.ui dialog awaiting an answer from either the local TUI or the
  *  remote app. `request` is replayed on session_sync so a peer attaching mid-
@@ -106,7 +106,7 @@ export interface ExtensionUiBridge {
   // ── Stock ctx.ui (no pi-ask) ─────────────────────────────────────────────
   /** Open a stock ctx.ui dialog to the app. Broadcasts an `extension_ui_request`
    *  and returns a Promise that resolves when the app answers (via `respond`)
-   *  or the TTL fires (undefined), plus the id (for `dismissStock`). */
+   *  or the bridge is disposed (undefined), plus the id (for `dismissStock`). */
   openStock(input: StockRequestInput): { promise: Promise<unknown>; id: string }
   /** Local TUI (or /stop) won the race: drop the pending entry and notify the
    *  app to close its modal. No-op if the app already answered. */
@@ -138,78 +138,13 @@ export function createExtensionUiBridge(
   // option value, and so completed/submit-result can be tolerated if they arrive
   // after the app already answered.
   const activeFlows = new Map<string, ActiveFlow>()
-  // Per-flow TTL timers (FLOW_TTL_MS). pi-ask disposes flows on session_shutdown
-  // WITHOUT emitting `completed`, so without this the `activeFlows` map would
-  // leak one entry per abandoned flow. Bounded, defensive.
-  const flowTimers = new Map<string, ReturnType<typeof setTimeout>>()
-
-  function clearFlowTtl(flowId: string): void {
-    const t = flowTimers.get(flowId)
-    if (t !== undefined) {
-      clearTimeout(t)
-      flowTimers.delete(flowId)
-    }
-  }
-  function armFlowTtl(flowId: string): void {
-    clearFlowTtl(flowId)
-    flowTimers.set(
-      flowId,
-      setTimeout(() => {
-        if (!activeFlows.delete(flowId)) return // already resolved
-        flowTimers.delete(flowId)
-        // Tell the app the bridge forgot this flow instead of stranding its
-        // modal silently: a matching WARNING notify keeps the modal open with
-        // a retry hint. Rich clients can still retry (the response carries
-        // flow_id and pi-ask's flow may still be pending on the desktop);
-        // degraded clients at least get closure.
-        broadcast({
-          type: "extension_ui_request",
-          id: flowId,
-          method: "notify",
-          message:
-            "Clarification expired on the bridge — retry or answer on desktop.",
-          notify_type: "warning",
-        })
-      }, FLOW_TTL_MS),
-    )
-  }
-
   // Stock ctx.ui dialogs awaiting an answer from the local TUI OR the app.
   // Disjoint id space (crypto.randomUUID) from pi-ask flowIds.
   const stockPending = new Map<string, StockPending>()
-  const stockTimers = new Map<string, ReturnType<typeof setTimeout>>()
-
-  function clearStockTtl(id: string): void {
-    const t = stockTimers.get(id)
-    if (t !== undefined) {
-      clearTimeout(t)
-      stockTimers.delete(id)
-    }
-  }
-  function armStockTtl(id: string): void {
-    clearStockTtl(id)
-    stockTimers.set(
-      id,
-      setTimeout(() => {
-        if (!stockPending.delete(id)) return // already resolved
-        stockTimers.delete(id)
-        // Resolve the racing wrap with undefined (the caller treats it as
-        // cancelled) and tell the app to drop its modal — same dismiss-notify
-        // shape pi-ask uses, so no new app-side contract.
-        broadcast({
-          type: "extension_ui_request",
-          id,
-          method: "notify",
-          message: "Dialog expired — retry or answer on desktop.",
-          notify_type: "warning",
-        })
-      }, STOCK_TTL_MS),
-    )
-  }
 
   // Open a stock ctx.ui dialog to the app. Broadcasts the request and returns a
-  // Promise that resolves when the app answers (via respond) OR when the TTL
-  // fires (undefined). The wrap (wrapStockUi) races this against the local TUI.
+  // Promise that resolves when the app answers (via respond) OR when the bridge
+  // is disposed (undefined). The wrap (wrapStockUi) races this against the local TUI.
   function openStock(
     input: StockRequestInput,
   ): { promise: Promise<unknown>; id: string } {
@@ -217,7 +152,6 @@ export function createExtensionUiBridge(
     const request = buildStockRequest(id, input)
     const promise = new Promise<unknown>((resolve) => {
       stockPending.set(id, { id, request, resolve })
-      armStockTtl(id)
     })
     broadcast(request)
     return { promise, id }
@@ -228,7 +162,6 @@ export function createExtensionUiBridge(
   // entry is gone), so a late local answer after a remote answer is harmless.
   function dismissStock(id: string): void {
     if (!stockPending.delete(id)) return
-    clearStockTtl(id)
     broadcast({
       type: "extension_ui_request",
       id,
@@ -257,7 +190,6 @@ export function createExtensionUiBridge(
       questions: event.questions,
     }
     activeFlows.set(flow.flowId, flow)
-    armFlowTtl(flow.flowId)
     broadcast(requestForFlow(flow))
   })
 
@@ -265,7 +197,6 @@ export function createExtensionUiBridge(
     const e = raw as { version?: number; flowId?: unknown } | null
     if (!e || e.version !== 1 || typeof e.flowId !== "string") return
     const flowId = e.flowId
-    clearFlowTtl(flowId)
     activeFlows.delete(flowId)
     // Same id as the originating request (the flowId). The app treats a `notify`
     // whose id matches an open interactive request as "that flow resolved —
@@ -328,7 +259,6 @@ export function createExtensionUiBridge(
     const stock = stockPending.get(msg.id)
     if (stock) {
       stockPending.delete(msg.id)
-      clearStockTtl(msg.id)
       stock.resolve(stockValueOf(msg))
       return
     }
@@ -415,12 +345,6 @@ export function createExtensionUiBridge(
     // practice, so this is a defensive detail rather than a live case. Stock
     // ctx.ui dialogs ride along so a peer attaching mid-dialog sees them.
     pendingRequests: () => {
-      // Reset TTL timers on replay (backfill/session_sync): the app
-      // reconnected, so give it a fresh window. Without this, a TTL armed
-      // when the flow first opened could fire during/after backfill —
-      // dismissing the app's modal while the TUI ask is still active.
-      for (const flow of activeFlows.values()) armFlowTtl(flow.flowId)
-      for (const id of stockPending.keys()) armStockTtl(id)
       return [...activeFlows.values()]
         .map(requestForFlow)
         .concat([...stockPending.values()].map((p) => p.request))
@@ -445,7 +369,6 @@ export function createExtensionUiBridge(
         const stock = stockPending.get(id)
         if (!stock) continue
         stockPending.delete(id)
-        clearStockTtl(id)
         stock.resolve(undefined)
         broadcast({
           type: "extension_ui_request",
@@ -461,11 +384,7 @@ export function createExtensionUiBridge(
       unsubStarted()
       unsubCompleted()
       unsubResult()
-      for (const t of flowTimers.values()) clearTimeout(t)
-      flowTimers.clear()
       activeFlows.clear()
-      for (const t of stockTimers.values()) clearTimeout(t)
-      stockTimers.clear()
       // Unblock stock callers on teardown so the wrap's race doesn't dangle.
       for (const s of stockPending.values()) s.resolve(undefined)
       stockPending.clear()

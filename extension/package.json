@@ -1,6 +1,6 @@
 {
   "name": "@geohar/un-bien",
-  "version": "0.25.18",
+  "version": "0.25.19",
   "description": "Mobile remote control and local agent mesh for the Pi coding agent. Pair your phone via QR over a relay, watch tool calls in real time, run multi-Pi sessions over a local Unix Domain Socket broker, and let agents talk to each other through structured request/reply. Derived from remote-pi by Jacob Moura (https://github.com/jacobaraujo7/remote_pi), MIT.",
   "type": "module",
   "main": "dist/index.js",
@@ -32,8 +32,8 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc --noEmit",
+    "build": "node ./node_modules/typescript/bin/tsc -p tsconfig.build.json",
+    "typecheck": "node ./node_modules/typescript/bin/tsc --noEmit",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
     "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build"
@@ -88,6 +88,7 @@
   "devDependencies": {
     "@types/node": "^25.8.0",
     "@types/ws": "^8.18.1",
+    "@typescript/native": "npm:typescript@^7.0.2",
     "tsx": "^4.22.0",
     "typescript": "^6.0.3",
     "vite": "^8.0.16",

@@ -56,7 +56,9 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Type check
-        run: pnpm -C extension exec tsc --noEmit
+        # The project's TypeScript 6, not node_modules/.bin/tsc (the TS 7
+        # @typescript/native alias that pi-lens uses for its language server).
+        run: pnpm -C extension typecheck
 
       - name: Vitest (extension suite, incl. conformance emit-direction)
         run: pnpm -C extension test
