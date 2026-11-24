@@ -1,7 +1,7 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.29.0@sha256:572cebbc2b15e6f84c077742952674889cb63cd5e9b80abdffcbe587b6f19183
 
 # ── Build stage ────────────────────────────────────────────────────────────
-FROM rust:1-slim-bookworm AS builder
+FROM rust:1.100.0-slim-bookworm@sha256:7c7d4eb4d05b7781187a327809466cfddf29753f6defdc3d19a0e291951b7a37 AS builder
 
 WORKDIR /app
 
@@ -15,7 +15,7 @@ COPY migrations ./migrations
 RUN cargo build --release
 
 # ── Runtime stage ──────────────────────────────────────────────────────────
-FROM debian:bookworm-slim
+FROM debian:bookworm-20261123-slim@sha256:e67eeead736ff7bbe258ef088bff683635c561b1fcfefad0806c1df4ab49ce0e
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates curl && \
