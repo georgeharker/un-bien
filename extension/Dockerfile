@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.29.0@sha256:572cebbc2b15e6f84c077742952674889cb63cd5e9b80abdffcbe587b6f19183
 
 # un-bien launcher daemon — the headless machine-presence peer.
 #
@@ -31,7 +31,7 @@
 # daemon tracks; pi session storage + logs land under /config (PI's
 # agent dir) — mount volumes at both to survive image updates.
 
-FROM node:22-slim
+FROM node:22.23.5-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
 
 # tmux + a login shell: the launch path spawns sessions in tmux inside a
 # login shell (the tmux-launch lesson — a bare argv spawn misses PATH).

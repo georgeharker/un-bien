@@ -1,0 +1,15 @@
+# Base images are pinned by exact tag + digest (reproducible builds), so they
+# don't pick up upstream fixes on their own. Dependabot proposes each bump
+# (tag and digest together) as a PR instead.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directories:
+      - /relay
+      - /extension
+    schedule:
+      interval: weekly
+    groups:
+      base-images:
+        patterns:
+          - "*"
